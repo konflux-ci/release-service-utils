@@ -39,7 +39,7 @@ check_requirements() {
         fi
     done
 
-    oc status &>/dev/null || echo "Error: Not logged in into a cluster" >&2 && exit 4
+    oc status &>/dev/null || (echo "Error: Not logged in into a cluster" >&2 && exit 4)
 }
 
 #######################################
