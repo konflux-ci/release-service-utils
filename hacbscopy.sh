@@ -62,6 +62,8 @@ copy_application() {
     echo "Copying application '$application' to namespace '$WORKSPACE'"
     eval "kubectl get application $application --namespace=$namespace -o json | $CLEANUP_COMMAND | kubectl apply -n $WORKSPACE -f -"
 
+    sleep 5
+
     echo "Copying application '$application' components"
     copy_components "$namespace" "$application"
 }
