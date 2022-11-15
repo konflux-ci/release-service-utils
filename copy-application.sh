@@ -4,7 +4,7 @@
 
 SHORT_OPTS=a:,h
 LONG_OPTS=applications:,all,help
-OPTS=$(getopt --alternative --name hacbscopy --options $SHORT_OPTS --longoptions $LONG_OPTS -- "$@")
+OPTS=$(getopt --alternative --name copy-application --options $SHORT_OPTS --longoptions $LONG_OPTS -- "$@")
 
 CLEANUP_ANNOTATIONS=(
     "\"com.redhat.appstudio/component-initial-build-processed\"": "\"true\""
@@ -183,7 +183,7 @@ parse_arguments() {
 #######################################
 show_help() {
     echo "Usage:"
-    echo "  hacbscopy [OPTION]... WORKSPACE"
+    echo "  copy-application [OPTION]... WORKSPACE"
     echo -e "\nCopy all applications and components from one workspace to another.\n"
     echo "Options:"
     echo "  -a,--applications if specified, only the given applications will be targeted"
