@@ -192,6 +192,6 @@ show_help() {
     echo -e "\n  -h, --help        display this help"
 }
 
-check_requirements
 parse_arguments
+check_requirements
 copy_applications
