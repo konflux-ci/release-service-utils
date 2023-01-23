@@ -8,4 +8,5 @@ RUN dnf -y --setopt=tsflags=nodocs install \
 # Set HOME variable to something else than `/` to avoid 'permission denied' problems when writing files.
 ENV HOME=/tekton/home
 
-RUN git clone https://github.com/hacbs-release/release-utils ~/release-utils
+# The ~ dir seems to be mounted over in tekton tasks, so put in /home
+RUN git clone https://github.com/hacbs-release/release-utils /home/release-utils
