@@ -165,6 +165,10 @@ def main():  # pragma: no cover
     if not image_already_exists(args, parsed_data["digest"]):
         create_container_image(args, parsed_data)
 
+    # Make sure image is now available
+    if not image_already_exists(args, parsed_data["digest"]):
+        raise Exception("Image metadata was not successfully added to Pyxis.")
+
 
 if __name__ == "__main__":  # pragma: no cover
     main()
