@@ -3,8 +3,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'Dockerfile'
 jobs:
   push-dockerfile:
     name: Push dockerfile
