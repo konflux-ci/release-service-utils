@@ -76,6 +76,8 @@ def image_already_exists(args, digest: str) -> bool:
     )
     if "_id" in query_results[0]:
         LOGGER.info(f"The image id is: {query_results[0]['_id']}")
+    else:
+        raise Exception("Image metadata was found in Pyxis, but the id key was missing.")
 
     return True
 
@@ -146,7 +148,13 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
             }
         )
 
-    return pyxis.post(upload_url, container_image_payload)
+    rsp = pyxis.post(upload_url, container_image_payload)
+
+    # Make sure container metadata was successfully added to Pyxis
+    if "_id" in rsp:
+        LOGGER.info(f"The image id is: {rsp['_id']}")
+    else:
+        raise Exception("Image metadata was not successfully added to Pyxis.")
 
 
 def main():  # pragma: no cover
@@ -164,10 +172,6 @@ def main():  # pragma: no cover
 
     if not image_already_exists(args, parsed_data["digest"]):
         create_container_image(args, parsed_data)
-
-    # Make sure image is now available
-    if not image_already_exists(args, parsed_data["digest"]):
-        raise Exception("Image metadata was not successfully added to Pyxis.")
 
 
 if __name__ == "__main__":  # pragma: no cover
