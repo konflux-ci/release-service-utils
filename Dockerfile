@@ -11,3 +11,5 @@ ENV HOME=/tekton/home
 
 # The ~ dir seems to be mounted over in tekton tasks, so put in /home
 RUN git clone https://github.com/hacbs-release/release-utils /home/release-utils
+
+ENV PATH=$PATH:/home/release-utils/pyxis
