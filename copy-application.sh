@@ -7,7 +7,7 @@ LONG_OPTS=applications:,all,help
 OPTS=$(getopt --alternative --name copy-application --options $SHORT_OPTS --longoptions $LONG_OPTS -- "$@")
 
 CLEANUP_ANNOTATIONS=(
-    "\"com.redhat.appstudio/component-initial-build-processed\"": "\"true\""
+    "\"appstudio.openshift.io/component-initial-build\"": "\"true\""
 )
 CLEANUP_KEYS=(
     ".metadata.finalizers",
