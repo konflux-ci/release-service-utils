@@ -2,13 +2,12 @@ import logging
 import os
 import sys
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import urljoin
 from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
+from urllib3.util.retry import Retry
 
 import requests
 
-LOGGER = logging.getLogger("operator-cert")
+LOGGER = logging.getLogger("pyxis")
 
 
 def _get_session(pyxis_url: str, auth_required: bool = True) -> requests.Session:
@@ -102,9 +101,7 @@ def put(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
     return resp.json()
 
 
-def get(
-    url: str, params: Optional[Dict[str, str]] = None, auth_required: bool = True
-) -> Any:
+def get(url: str, params: Optional[Dict[str, str]] = None, auth_required: bool = True) -> Any:
     """Pyxis GET request
 
     Args:
@@ -128,7 +125,7 @@ def add_session_retries(
     session: requests.Session,
     total: int = 10,
     backoff_factor: int = 1,
-    status_forcelist: Optional[Tuple[int]] = (408, 500, 502, 503, 504),
+    status_forcelist: Optional[Tuple[int, ...]] = (408, 500, 502, 503, 504),
 ) -> None:
     """Adds retries to a requests HTTP/HTTPS session.
     The default values provide exponential backoff for a max wait of ~8.5 mins
@@ -155,10 +152,10 @@ def add_session_retries(
     session.mount("https://", adapter)
 
 
-def setup_logger(level: str = "INFO", log_format: Any = None) -> Any:
+def setup_logger(level: int = logging.INFO, log_format: Any = None) -> Any:
     """Set up and configure 'pyxis' logger.
     Args:
-        level (str, optional): Logging level. Defaults to "INFO".
+        level (str, optional): Logging level. Defaults to logging.INFO.
         log_format (Any, optional): Logging message format. Defaults to None.
     :return: Logger object
     """

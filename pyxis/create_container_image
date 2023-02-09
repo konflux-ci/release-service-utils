@@ -4,12 +4,12 @@ from urllib.parse import quote
 from datetime import datetime
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict
 from urllib.parse import urljoin
 
 import pyxis
 
-LOGGER = logging.getLogger("pyxis")
+LOGGER = logging.getLogger("create_container_image")
 
 
 def setup_argparser() -> Any:  # pragma: no cover
@@ -106,9 +106,9 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
     date_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
 
     if "digest" not in parsed_data:
-        raise Exception(f"Digest was not found in the passed skopeo inspect json")
+        raise Exception("Digest was not found in the passed skopeo inspect json")
     if "name" not in parsed_data:
-        raise Exception(f"Name was not found in the passed skopeo inspect json")
+        raise Exception("Name was not found in the passed skopeo inspect json")
     docker_image_digest = parsed_data["digest"]
     # digest isn't accepted in the parsed_data payload to pyxis
     del parsed_data["digest"]
@@ -117,7 +117,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
     # name isn't accepted in the parsed_data payload to pyxis
     del parsed_data["name"]
 
-    upload_url = urljoin(args.pyxis_url, f"v1/images")
+    upload_url = urljoin(args.pyxis_url, "v1/images")
     container_image_payload = {
         "repositories": [
             {
