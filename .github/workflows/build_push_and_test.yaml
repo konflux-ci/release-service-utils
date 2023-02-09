@@ -1,0 +1,59 @@
+name: Build, push and test image
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+env:
+  QUAY_ORG: hacbs-release
+  QUAY_REPO: release-utils
+jobs:
+  build-and-push-image:
+    name: Build and push image
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@v3
+      - name: Login to Quay
+        uses: docker/login-action@v1
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_ROBOT_USER }}
+          password: ${{ secrets.QUAY_ROBOT_TOKEN }}
+      - name: Build image and push it to Quay on pull request
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          file: Dockerfile
+          tags: |
+            quay.io/${{ env.QUAY_ORG }}/${{ env.QUAY_REPO }}:${{ github.sha }}
+          labels: |
+            quay.expires-after: 14d
+      - name: Build image and push it to Quay on main branch
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          file: Dockerfile
+          tags: |
+            quay.io/${{ env.QUAY_ORG }}/${{ env.QUAY_REPO }}:main
+            quay.io/${{ env.QUAY_ORG }}/${{ env.QUAY_REPO }}:latest
+            quay.io/${{ env.QUAY_ORG }}/${{ env.QUAY_REPO }}:${{ github.sha }}
+  test_image:
+    name: Test image
+    runs-on: ubuntu-20.04
+    needs: build-and-push-image
+    # Namespace and repo are hardcoded. env context cannot be used because of a bug
+    # https://github.com/community/community/discussions/17311
+    container: quay.io/hacbs-release/release-utils:${{ github.sha }}
+    steps:
+      - name: Sanity test of python scripts
+        run: |
+          create_container_image --help
