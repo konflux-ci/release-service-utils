@@ -57,13 +57,11 @@ spec:
             name: ${service_account}
 EOF
 echo "Binding created"
-sleep 3
 echo "Waiting for AwaitingTokenData phase"
 kubectl wait --for=jsonpath='{.status.phase}'=AwaitingTokenData Spiaccesstokenbinding/${binding_name} -n $target_namespace --timeout=60s
 
 if [ $? -ne 0 ] ; then
-  echo "Error: could get token data after 60s. Verify your input."
-  exit 1
+  echo "warning: could not get token data after 60s. Continuing..."
 fi
 
 upload_url=$(kubectl get spiaccesstokenbinding/${binding_name} -n $target_namespace -o json | jq -r .status.uploadUrl)
@@ -77,8 +75,7 @@ echo "Waiting for Injected phase"
 kubectl wait --for=jsonpath='{.status.phase}'=Injected Spiaccesstokenbinding/${binding_name} -n $target_namespace --timeout=60s
 
 if [ $? -ne 0 ] ; then
-  echo "Error: could verify if secret was injected after 60s. Verify your input."
-  exit 1
+  echo "warning: could not verify if secret was injected after 60s. Continuing..."
 fi
 
 linked_secret_name=$(kubectl get spiaccesstokenbinding/${binding_name} -n  ${target_namespace}   -o  json | jq -r  .status.syncedObjectRef.name)
