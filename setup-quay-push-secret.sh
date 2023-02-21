@@ -48,6 +48,7 @@ spec:
       - type: rw
         area: registryMetadata
   repoUrl: $quay_org_url
+  lifetime: '-1'
   secret:
     type: kubernetes.io/dockerconfigjson
     name: ${robot_secret_name}
