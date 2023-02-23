@@ -152,25 +152,21 @@ def add_session_retries(
     session.mount("https://", adapter)
 
 
-def setup_logger(level: int = logging.INFO, log_format: Any = None) -> Any:
+def setup_logger(level: int = logging.INFO, log_format: Any = None):
     """Set up and configure 'pyxis' logger.
     Args:
         level (str, optional): Logging level. Defaults to logging.INFO.
         log_format (Any, optional): Logging message format. Defaults to None.
     :return: Logger object
     """
-
-    logger = logging.getLogger("pyxis")
-    logger.propagate = False
-    logger.setLevel(level)
-
     if log_format is None:
         log_format = "%(asctime)s [%(name)s] %(levelname)s %(message)s"
 
-    stream_formatter = logging.Formatter(log_format)
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setLevel(level)
-    stream_handler.setFormatter(stream_formatter)
-    logger.addHandler(stream_handler)
 
-    return logger
+    logging.basicConfig(
+        level=level,
+        format=log_format,
+        handlers=[stream_handler],
+    )
