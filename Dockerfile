@@ -1,5 +1,7 @@
 FROM registry.access.redhat.com/ubi8/ubi
 
+ARG COSIGNVERSION=1.13.1
+
 RUN dnf -y --setopt=tsflags=nodocs install \
     git \
     jq \
@@ -7,6 +9,9 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     python39-requests \
     skopeo \
     && dnf clean all
+
+# cosign is used for sbom download
+RUN rpm -ivh https://github.com/sigstore/cosign/releases/download/v${COSIGNVERSION}/cosign-${COSIGNVERSION}.x86_64.rpm
 
 # Set HOME variable to something else than `/` to avoid 'permission denied' problems when writing files.
 ENV HOME=/tekton/home
