@@ -77,7 +77,9 @@ def image_already_exists(args, digest: str) -> bool:
     if "_id" in query_results[0]:
         LOGGER.info(f"The image id is: {query_results[0]['_id']}")
     else:
-        raise Exception("Image metadata was found in Pyxis, but the id key was missing.")
+        raise Exception(
+            "Image metadata was found in Pyxis, but the id key was missing."
+        )
 
     return True
 

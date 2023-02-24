@@ -101,7 +101,9 @@ def put(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
     return resp.json()
 
 
-def get(url: str, params: Optional[Dict[str, str]] = None, auth_required: bool = True) -> Any:
+def get(
+    url: str, params: Optional[Dict[str, str]] = None, auth_required: bool = True
+) -> Any:
     """Pyxis GET request
 
     Args:
