@@ -17,9 +17,7 @@ def test_get_session_cert(mock_path_exists: MagicMock, monkeypatch: Any) -> None
 
 
 @patch("os.path.exists")
-def test_get_session_cert_not_exist(
-    mock_path_exists: MagicMock, monkeypatch: Any
-) -> None:
+def test_get_session_cert_not_exist(mock_path_exists: MagicMock, monkeypatch: Any) -> None:
     mock_path_exists.return_value = False
     monkeypatch.setenv("PYXIS_CERT_PATH", "/path/to/cert.pem")
     monkeypatch.setenv("PYXIS_KEY_PATH", "/path/to/key.key")
@@ -45,8 +43,8 @@ def test_post(mock_session: MagicMock) -> None:
 def test_post_error(mock_session: MagicMock) -> None:
     response = Response()
     response.status_code = 400
-    mock_session.return_value.post.return_value.raise_for_status.side_effect = (
-        HTTPError(response=response)
+    mock_session.return_value.post.return_value.raise_for_status.side_effect = HTTPError(
+        response=response
     )
     with pytest.raises(HTTPError):
         pyxis.post("https://foo.com/v1/bar", {})
