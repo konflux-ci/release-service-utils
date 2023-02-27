@@ -1,7 +1,5 @@
-import json
 import pytest
 from datetime import datetime
-from unittest import mock
 from unittest.mock import patch, MagicMock
 
 from create_container_image import (
@@ -33,7 +31,8 @@ def test_image_already_exists(mock_get: MagicMock):
     assert exists
     mock_get.assert_called_with(
         mock_pyxis_url
-        + "v1/images?page_size=1&filter=docker_image_digest%3D%3D%22some_digest%22%3Bnot%28deleted%3D%3Dtrue%29"
+        + "v1/images?page_size=1&filter="
+        + "docker_image_digest%3D%3D%22some_digest%22%3Bnot%28deleted%3D%3Dtrue%29"
     )
 
     # Image doesn't exist
