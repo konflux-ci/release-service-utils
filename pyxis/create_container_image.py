@@ -25,9 +25,7 @@ def setup_argparser() -> Any:  # pragma: no cover
         default="https://pyxis.com",
         help="Base URL for Pyxis container metadata API",
     )
-    parser.add_argument(
-        "--certified", help="Is the ContainerImage certified?", required=True
-    )
+    parser.add_argument("--certified", help="Is the ContainerImage certified?", required=True)
     parser.add_argument(
         "--tag",
         help="The ContainerImage tag name to upload",
@@ -71,15 +69,12 @@ def image_already_exists(args, digest: str) -> bool:
         return False
 
     LOGGER.info(
-        "Image with given docker_image_digest already exists."
-        "Skipping the image creation."
+        "Image with given docker_image_digest already exists." "Skipping the image creation."
     )
     if "_id" in query_results[0]:
         LOGGER.info(f"The image id is: {query_results[0]['_id']}")
     else:
-        raise Exception(
-            "Image metadata was found in Pyxis, but the id key was missing."
-        )
+        raise Exception("Image metadata was found in Pyxis, but the id key was missing.")
 
     return True
 

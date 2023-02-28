@@ -22,8 +22,8 @@ def test_image_already_exists(mock_get: MagicMock):
     args.pyxis_url = mock_pyxis_url
     digest = "some_digest"
 
-    # Image already exist
-    mock_rsp.json.return_value = {"data": [{}]}
+    # Image already exists
+    mock_rsp.json.return_value = {"data": [{"_id": 0}]}
 
     # Act
     exists = image_already_exists(args, digest)
@@ -47,8 +47,8 @@ def test_image_already_exists(mock_get: MagicMock):
 @patch("create_container_image.pyxis.post")
 @patch("create_container_image.datetime")
 def test_create_container_image(mock_datetime: MagicMock, mock_post: MagicMock):
-    # Arrange
-    mock_post.return_value = "ok"
+    # Mock an _id in the response for logger check
+    mock_post.return_value = {"_id": 0}
 
     # mock date
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
@@ -59,13 +59,12 @@ def test_create_container_image(mock_datetime: MagicMock, mock_post: MagicMock):
     args.certified = "false"
 
     # Act
-    rsp = create_container_image(
+    create_container_image(
         args,
         {"architecture": "ok", "digest": "some_digest", "name": "quay.io/some_repo"},
     )
 
     # Assert
-    assert rsp == "ok"
     mock_post.assert_called_with(
         mock_pyxis_url + "v1/images",
         {
@@ -95,8 +94,8 @@ def test_create_container_image(mock_datetime: MagicMock, mock_post: MagicMock):
 @patch("create_container_image.pyxis.post")
 @patch("create_container_image.datetime")
 def test_create_container_image_latest(mock_datetime: MagicMock, mock_post: MagicMock):
-    # Arrange
-    mock_post.return_value = "ok"
+    # Mock an _id in the response for logger check
+    mock_post.return_value = {"_id": 0}
 
     # mock date
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
@@ -108,7 +107,7 @@ def test_create_container_image_latest(mock_datetime: MagicMock, mock_post: Magi
     args.is_latest = "true"
 
     # Act
-    rsp = create_container_image(
+    create_container_image(
         args,
         {
             "architecture": "ok",
@@ -118,7 +117,6 @@ def test_create_container_image_latest(mock_datetime: MagicMock, mock_post: Magi
     )
 
     # Assert
-    assert rsp == "ok"
     mock_post.assert_called_with(
         mock_pyxis_url + "v1/images",
         {
