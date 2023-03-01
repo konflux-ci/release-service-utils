@@ -20,6 +20,6 @@ ENV HOME=/tekton/home
 RUN git clone https://github.com/hacbs-release/release-utils /home/release-utils
 
 # Copy the create_container_image script so we can use it without extension in release-bundles
-COPY /home/release-utils/pyxis/create_container_image.py /home/release-utils/pyxis/create_container_image
+RUN cp /home/release-utils/pyxis/create_container_image.py /home/release-utils/pyxis/create_container_image
 
 ENV PATH=$PATH:/home/release-utils/pyxis
