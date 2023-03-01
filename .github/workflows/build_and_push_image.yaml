@@ -25,6 +25,7 @@ jobs:
           context: .
           push: true
           file: Dockerfile
+          no-cache: true
           tags: |
             quay.io/${{ env.QUAY_ORG }}/${{ env.QUAY_REPO }}:main
             quay.io/${{ env.QUAY_ORG }}/${{ env.QUAY_REPO }}:latest
