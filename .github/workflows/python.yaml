@@ -1,4 +1,4 @@
-name: Lint Checks for Pull Requests
+name: Python Checks for Pull Requests
 on:
   pull_request:
     types:
@@ -6,7 +6,7 @@ on:
       - synchronize
       - reopened
 jobs:
-  lint:
+  python:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repo
@@ -19,3 +19,7 @@ jobs:
           python-version: "3.9" # Same as in Dockerfile
       - name: flake8 Lint
         uses: py-actions/flake8@v2
+      - name: Run pytest
+        run: |
+          python -m pip install pytest requests
+          pytest
