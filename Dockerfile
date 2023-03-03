@@ -19,7 +19,8 @@ ENV HOME=/tekton/home
 # The ~ dir seems to be mounted over in tekton tasks, so put in /home
 RUN git clone https://github.com/redhat-appstudio/release-service-utils /home/release-service-utils
 
-# Copy the create_container_image script so we can use it without extension in release-service-bundles
+# Copy the create_container_image and upload_sbom scripts so we can use them without extension in release-service-bundles
 RUN cp /home/release-service-utils/pyxis/create_container_image.py /home/release-service-utils/pyxis/create_container_image
+RUN cp /home/release-service-utils/pyxis/upload_sbom.py /home/release-service-utils/pyxis/upload_sbom
 
 ENV PATH=$PATH:/home/release-service-utils/pyxis
