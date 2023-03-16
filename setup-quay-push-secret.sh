@@ -1,20 +1,16 @@
 #!/bin/bash
 
 # This script collects input needed to create a dockerconfigjson secret
-# and link it to a newly created service account using SPI
+# and link it to a service account using SPI.
+# If the SA exists, it will be linked to it.
+# If it does not exist, a new managed SA will be created
+# and the secret will be linked.
 
 # Defaults
 #
 export TARGET_NAMESPACE_DEFAULT=managed-release-team-tenant
 export QUAY_ORG_URL_EXAMPLE=https://quay.io/repository/hacbs-release-tests
 export SERVICE_ACCOUNT_DEFAULT=release-service-account
-
-export token=$(oc whoami -t)
-
-if [ -z "${token}" ]; then
-  echo "Error: Not logged in to cluster"
-  exit 1
-fi
 
 read -p "Please enter the target workspace: [${TARGET_NAMESPACE_DEFAULT}] " target_namespace
 target_namespace=${target_namespace:-${TARGET_NAMESPACE_DEFAULT}}
@@ -29,12 +25,39 @@ read -p "Please enter your quay robot username: [] " quay_oauth_user
 
 read -s -p "Please enter your quay robot token: [] " quay_oauth_token
 
-export binding_name=binding-dockerconfigjson-$$
-export robot_secret_name=robot-account-pull-secret-$$
+echo ""
+echo ""
+echo "Checking to see if ServiceAccount $service_account exists in $target_namespace"
+service_account_type="reference"
+if [ -z "$(oc get sa/${service_account} 2> /dev/null)" ] ; then
+  service_account_type="managed"
+  echo "SA/$service_account does not exist, SA will be of $service_account_type type"
+else
+  echo "SA/$service_account exists, SA will be of $service_account_type type"
+fi
 
 echo ""
+echo "Going to create temporary Secret to upload token in $target_namespace"
+
+cat <<EOF | kubectl create -n $target_namespace -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  generateName: upload-secret-
+  labels:
+    spi.appstudio.redhat.com/upload-secret: token
+    spi.appstudio.redhat.com/token-name: quay-token-$$
+type: Opaque
+stringData:
+  providerUrl: https://quay.io/
+  userName: ${quay_oauth_user}
+  tokenData: ${quay_oauth_token}
+EOF
+echo "Temporary Secret created"
+
 echo "Going to create SPIAccessTokenBinding in $target_namespace"
 
+binding_name=${service_account}-${service_account_type}-binding
 cat <<EOF | kubectl apply -n $target_namespace -f -
 apiVersion: appstudio.redhat.com/v1beta1
 kind: SPIAccessTokenBinding
@@ -43,41 +66,17 @@ metadata:
 spec:
   permissions:
     required:
-      - type: rw
-        area: registry
-      - type: rw
-        area: registryMetadata
-  repoUrl: $quay_org_url
-  lifetime: '-1'
+    - area: repository
+      type: r
+  repoUrl: ${quay_org_url}
   secret:
     type: kubernetes.io/dockerconfigjson
-    name: ${robot_secret_name}
     linkedTo:
-      - serviceAccount:
-          managed:
-            name: ${service_account}
+    - serviceAccount:
+        ${service_account_type}:
+          name: ${service_account}
 EOF
+
 echo "Binding created"
-echo "Waiting for AwaitingTokenData phase"
-kubectl wait --for=jsonpath='{.status.phase}'=AwaitingTokenData Spiaccesstokenbinding/${binding_name} -n $target_namespace --timeout=60s
-
-if [ $? -ne 0 ] ; then
-  echo "warning: could not get token data after 60s. Continuing..."
-fi
-
-upload_url=$(kubectl get spiaccesstokenbinding/${binding_name} -n $target_namespace -o json | jq -r .status.uploadUrl)
-echo "Upload url: ${upload_url}"
-curl --insecure \
-  -H 'Content-Type: application/json' \
-  -H "Authorization: bearer $token" \
-  -d "{ \"access_token\": \"${quay_oauth_token}\" ,  \"username\": \"${quay_oauth_user}\" }" \
-  ${upload_url}
-echo "Waiting for Injected phase"
-kubectl wait --for=jsonpath='{.status.phase}'=Injected Spiaccesstokenbinding/${binding_name} -n $target_namespace --timeout=60s
-
-if [ $? -ne 0 ] ; then
-  echo "warning: could not verify if secret was injected after 60s. Continuing..."
-fi
-
-linked_secret_name=$(kubectl get spiaccesstokenbinding/${binding_name} -n  ${target_namespace}   -o  json | jq -r  .status.syncedObjectRef.name)
-echo "Linked secret: ${linked_secret_name}"
+sleep 2
+kubectl wait  --for=jsonpath='{.status.phase}'=Injected  SPIAccessTokenBinding/${binding_name} -n $target_namespace  --timeout=60s
