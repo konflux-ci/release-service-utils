@@ -17,9 +17,9 @@ RUN rpm -ivh https://github.com/sigstore/cosign/releases/download/v${COSIGNVERSI
 ENV HOME=/tekton/home
 
 # The ~ dir seems to be mounted over in tekton tasks, so put in /home
-RUN git clone https://github.com/hacbs-release/release-utils /home/release-utils
+RUN git clone https://github.com/redhat-appstudio/release-service-utils /home/release-service-utils
 
-# Copy the create_container_image script so we can use it without extension in release-bundles
-RUN cp /home/release-utils/pyxis/create_container_image.py /home/release-utils/pyxis/create_container_image
+# Copy the create_container_image script so we can use it without extension in release-service-bundles
+RUN cp /home/release-service-utils/pyxis/create_container_image.py /home/release-service-utils/pyxis/create_container_image
 
-ENV PATH=$PATH:/home/release-utils/pyxis
+ENV PATH=$PATH:/home/release-service-utils/pyxis
