@@ -179,7 +179,7 @@ def test_prepare_parsed_data():
         "Digest": "sha:abc",
         "DockerVersion": "1",
         "Layers": ["1", "2"],
-        "Name": "quay.io/hacbs-release/release-utils",
+        "Name": "quay.io/hacbs-release/release-service-utils",
         "Architecture": "test",
         "Env": ["a=test"],
     }
@@ -194,5 +194,5 @@ def test_prepare_parsed_data():
         "docker_version": "1",
         "env_variables": ["a=test"],
         "layers": ["1", "2"],
-        "name": "quay.io/hacbs-release/release-utils",
+        "name": "quay.io/hacbs-release/release-service-utils",
     }
