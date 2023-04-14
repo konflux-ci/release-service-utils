@@ -40,7 +40,7 @@ UNSUPPORTED_FIELDS = [
 ]
 
 
-def parse_arguments() -> argparse.Namespace:
+def parse_arguments() -> argparse.Namespace:  # pragma: no cover
     """Parse CLI arguments
 
     :return: Dictionary of parsed arguments
