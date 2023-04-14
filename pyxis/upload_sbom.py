@@ -286,10 +286,19 @@ def load_sbom_components(sbom_path: str) -> list[dict]:
         LOGGER.error("Unable to load components from sbom file")
         raise
 
-    # bom-ref is not required, but has to be unique for
-    # a given sbom. In most cases it is defined.
-    # Pyxis team suggested we at least check this,
-    # since Pyxis has no checks for component uniqueness.
+    check_bom_ref_duplicates(components)
+
+    return components
+
+
+def check_bom_ref_duplicates(components: list[dict]):
+    """Check if any two components use the same bom-ref string
+
+    bom-ref is not required, but has to be unique for
+    a given sbom. In most cases it is defined.
+    Pyxis team suggested we at least check this,
+    since Pyxis has no checks for component uniqueness.
+    """
     bom_refs = [c["bom-ref"] for c in components if c.get("bom-ref") is not None]
     seen = set()
     for x in bom_refs:
@@ -300,8 +309,6 @@ def load_sbom_components(sbom_path: str) -> list[dict]:
             raise ValueError(msg)
         else:
             seen.add(x)
-
-    return components
 
 
 def convert_keys(item: Any) -> Any:
