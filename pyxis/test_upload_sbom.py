@@ -71,7 +71,7 @@ def test_upload_sbom__manifest_and_one_component_exist(
     mock_get_existing_bom_refs,
     mock_create_content_manifest_component,
 ):
-    """Creation of manifest and the first component is skipped"""
+    """Creation of both the manifest and the first component is skipped"""
     mock_get_image.return_value = {
         "_id": IMAGE_ID,
         "content_manifest": {
@@ -266,6 +266,7 @@ def test_get_existing_bom_refs__success(mock_get_existing_components):
         {"bom_ref": "a"},
         {"bom_ref": "b"},
         {"bom_ref": "c"},
+        {},  # Component with no bom_ref
         {"bom_ref": "a"},
     ]
 
@@ -323,7 +324,9 @@ def test_get_existing_component_count__some_components():
 
 
 def test_get_existing_component_count__no_components():
-    image = {}
+    image = {
+        "_id": IMAGE_ID,
+    }
 
     count = get_existing_component_count(image)
 
