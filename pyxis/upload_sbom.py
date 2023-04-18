@@ -64,9 +64,8 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
 
 def upload_sbom(graphql_api: str, image_id: str, sbom_path: str):
     image = get_image(graphql_api, image_id)
-    LOGGER.debug(f"Image response: {image}")
 
-    if "content_manifest" in image and "_id" in image["content_manifest"]:
+    if image["content_manifest"] is not None and "_id" in image["content_manifest"]:
         content_manifest_id = image["content_manifest"]["_id"]
         LOGGER.info("Content manifest already exists. Skipping creation.")
     else:
@@ -141,13 +140,9 @@ query ($id: ObjectIDFilterScalar!) {
     variables = {"id": image_id}
     body = {"query": query, "variables": variables}
 
-    resp = pyxis.post(graphql_api, body)
-    resp = resp["data"]["get_image"]
-    if resp["error"] is not None:
-        LOGGER.error(f"Unable to get image from Pyxis: {resp['error']['detail']}")
-        raise RuntimeError("Unable to get image from Pyxis")
+    image = pyxis.graphql_query(graphql_api, body, "get_image")
 
-    return resp["data"]
+    return image
 
 
 def create_content_manifest(graphql_api: str, image_id: str) -> str:
@@ -167,15 +162,9 @@ mutation ($input: ContentManifestInput! ) {
     variables = {"input": {"image": {"_id": image_id}}}
     body = {"query": mutation, "variables": variables}
 
-    resp = pyxis.post(graphql_api, body)
-    resp = resp["data"]["create_content_manifest"]
-    if resp["error"] is not None:
-        LOGGER.error(
-            f"Creation of Content Manifest resulted in an error: {resp['error']['detail']}"
-        )
-        raise RuntimeError("Error when creating Content Manifest in Pyxis")
+    data = pyxis.graphql_query(graphql_api, body, "create_content_manifest")
 
-    return resp["data"]["_id"]
+    return data["_id"]
 
 
 def get_existing_components(graphql_api: str, content_manifest_id: str, page_size: int = 50):
@@ -210,16 +199,10 @@ query ($input: ObjectIDFilterScalar!, $page: Int!, $page_size: Int!) {
         variables = {"input": content_manifest_id, "page": page, "page_size": page_size}
         body = {"query": query, "variables": variables}
 
-        resp = pyxis.post(graphql_api, body)
-        resp = resp["data"]["find_content_manifest_components"]
-        if resp["error"] is not None:
-            LOGGER.error(
-                f"Creation of Content Manifest resulted in an error: {resp['error']['detail']}"
-            )
-            raise RuntimeError("Error when creating Content Manifest in Pyxis")
-        LOGGER.info(f"Adding: {resp['data']}")
-        components.extend(resp["data"])
-        has_more = len(resp["data"]) == page_size
+        data = pyxis.graphql_query(graphql_api, body, "find_content_manifest_components")
+
+        components.extend(data)
+        has_more = len(data) == page_size
         page += 1
     LOGGER.debug(f"Existing components ({len(components)}):")
     LOGGER.debug(components)
@@ -251,21 +234,15 @@ mutation ($id: ObjectIDFilterScalar!, $input: ContentManifestComponentInput! ) {
     variables = {"id": content_manifest_id, "input": component}
     body = {"query": mutation, "variables": variables}
 
-    resp = pyxis.post(graphql_api, body)
+    data = pyxis.graphql_query(
+        graphql_api, body, "create_content_manifest_component_for_manifest"
+    )
 
-    resp = resp["data"]["create_content_manifest_component_for_manifest"]
-    if resp["error"] is not None:
-        LOGGER.error(
-            "Creation of Content Manifest Component resulted in an error:"
-            f" {resp['error']['detail']}"
-        )
-        raise RuntimeError("Error when creating Content Manifest Component in Pyxis")
-
-    return resp["data"]["_id"]
+    return data["_id"]
 
 
 def get_existing_component_count(image: dict) -> int:
-    if "content_manifest_components" in image:
+    if image["content_manifest_components"] is not None:
         return len(image["content_manifest_components"])
     else:
         return 0
@@ -361,7 +338,7 @@ def main():  # pragma: no cover
 
     LOGGER.debug(f"Pyxis GraphQL API: {args.pyxis_graphql_api}")
 
-    upload_sbom(args.pyxis_graphql_api, args.image_id, args.sbom_path)
+    upload_sbom(args.pyxis_graphql_api, image_id, args.sbom_path)
 
 
 if __name__ == "__main__":  # pragma: no cover

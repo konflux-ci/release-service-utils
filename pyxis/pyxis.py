@@ -64,10 +64,12 @@ def post(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """
     session = _get_session(url)
 
-    LOGGER.debug(f"POST Pyxis request: {url}")
+    LOGGER.debug(f"POST request URL: {url}")
+    LOGGER.debug(f"POST request body: {body}")
     resp = session.post(url, json=body)
 
     try:
+        LOGGER.debug(f"POST request response: {resp.text}")
         resp.raise_for_status()
     except requests.HTTPError:
         LOGGER.exception(
@@ -75,6 +77,34 @@ def post(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
         )
         raise
     return resp.json()
+
+
+def graphql_query(graphql_api: str, body: Dict[str, Any], query: str) -> Dict[str, Any]:
+    """Make a request to Pyxis GraphQL API
+
+    This will make a POST request and then check the result
+    for errors and return the data json if no errors found.
+
+    Args:
+        graphql_api (str): Pyxis GraphQL API URL
+        body (Dict[str, Any]): Request payload
+        query (str): Name of the Pyxis GraphQL query/mutation used
+
+    :return: Pyxis response
+    """
+    resp = post(graphql_api, body)
+
+    error_msg = f"Pyxis GraphQL query '{query}' failed"
+    if resp.get("data") is None or query not in resp["data"]:
+        LOGGER.error(error_msg)
+        LOGGER.error(f"Pyxis response: {resp}")
+        raise RuntimeError(error_msg)
+    elif resp["data"][query]["error"] is not None:
+        error_msg = f"{error_msg}: {resp['data'][query]['error']['detail']}"
+        LOGGER.error(error_msg)
+        raise RuntimeError(error_msg)
+
+    return resp["data"][query]["data"]
 
 
 def put(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -124,7 +154,7 @@ def get(url: str, params: Optional[Dict[str, str]] = None, auth_required: bool =
 def add_session_retries(
     session: requests.Session,
     total: int = 10,
-    backoff_factor: int = 1,
+    backoff_factor: float = 1.0,
     status_forcelist: Optional[Tuple[int, ...]] = (408, 500, 502, 503, 504),
 ) -> None:
     """Adds retries to a requests HTTP/HTTPS session.

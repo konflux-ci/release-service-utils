@@ -6,6 +6,14 @@ import pyxis
 from requests import HTTPError, Response, Session
 
 
+API_URL = "https://foo.com/v1/bar"
+REQUEST_BODY = {
+    "a": "1",
+    "b": "2",
+}
+QUERY = "myquery"
+
+
 @patch("os.path.exists")
 def test_get_session_cert(mock_path_exists: MagicMock, monkeypatch: Any) -> None:
     mock_path_exists.return_value = True
@@ -34,7 +42,7 @@ def test_get_session_no_auth(monkeypatch: Any) -> None:
 @patch("pyxis._get_session")
 def test_post(mock_session: MagicMock) -> None:
     mock_session.return_value.post.return_value.json.return_value = {"key": "val"}
-    resp = pyxis.post("https://foo.com/v1/bar", {})
+    resp = pyxis.post(API_URL, {})
 
     assert resp == {"key": "val"}
 
@@ -47,13 +55,64 @@ def test_post_error(mock_session: MagicMock) -> None:
         response=response
     )
     with pytest.raises(HTTPError):
-        pyxis.post("https://foo.com/v1/bar", {})
+        pyxis.post(API_URL, {})
+
+
+@patch("pyxis.post")
+def test_graphql_query__success(mock_post: MagicMock):
+    mock_data = {
+        "output": "something",
+    }
+    mock_post.return_value = {
+        "data": {
+            QUERY: {
+                "data": mock_data,
+                "error": None,
+            }
+        }
+    }
+
+    data = pyxis.graphql_query(API_URL, REQUEST_BODY, QUERY)
+
+    assert data == mock_data
+    mock_post.assert_called_once_with(API_URL, REQUEST_BODY)
+
+
+@patch("pyxis.post")
+def test_graphql_query__general_graphql_error(mock_post: MagicMock):
+    """For example, if there is a syntax error in the query,
+    the response won't even include the query property"""
+    mock_post.return_value = {"data": None, "errors": [{"message": "Major failure"}]}
+
+    with pytest.raises(RuntimeError):
+        pyxis.graphql_query(API_URL, REQUEST_BODY, QUERY)
+
+    mock_post.assert_called_once_with(API_URL, REQUEST_BODY)
+
+
+@patch("pyxis.post")
+def test_graphql_query__pyxis_error(mock_post: MagicMock):
+    """For example, if the image id does not exist in Pyxis
+    there will be an error property under the query property"""
+    mock_post.return_value = {
+        "data": {
+            QUERY: {
+                "data": None,
+                "error": {"detail": "Not found"},
+            }
+        }
+    }
+
+    with pytest.raises(RuntimeError):
+        pyxis.graphql_query(API_URL, REQUEST_BODY, QUERY)
+
+    mock_post.assert_called_once_with(API_URL, REQUEST_BODY)
 
 
 @patch("pyxis._get_session")
 def test_put(mock_session: MagicMock) -> None:
     mock_session.return_value.put.return_value.json.return_value = {"key": "val"}
-    resp = pyxis.put("https://foo.com/v1/bar", {})
+    resp = pyxis.put(API_URL, {})
 
     assert resp == {"key": "val"}
 
@@ -66,13 +125,13 @@ def test_put_error(mock_session: MagicMock) -> None:
         response=response
     )
     with pytest.raises(HTTPError):
-        pyxis.put("https://foo.com/v1/bar", {})
+        pyxis.put(API_URL, {})
 
 
 @patch("pyxis._get_session")
 def test_get(mock_session: MagicMock) -> None:
     mock_session.return_value.get.return_value = {"key": "val"}
-    resp = pyxis.get("https://foo.com/v1/bar")
+    resp = pyxis.get(API_URL)
 
     assert resp == {"key": "val"}
 
