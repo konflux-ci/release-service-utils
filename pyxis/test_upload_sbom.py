@@ -21,7 +21,11 @@ IMAGE_ID = "123456abcd"
 SBOM_PATH = "mypath"
 MANIFEST_ID = "abcd1234"
 COMPONENT_ID = "abcd2222"
-IMAGE_DICT = {"_id": IMAGE_ID}
+IMAGE_DICT = {
+    "_id": IMAGE_ID,
+    "content_manifest": None,
+    "content_manifest_components": None,
+}
 COMPONENT_DICT = {"bom_ref": "mybomref"}
 
 
@@ -326,6 +330,7 @@ def test_get_existing_component_count__some_components():
 def test_get_existing_component_count__no_components():
     image = {
         "_id": IMAGE_ID,
+        "content_manifest_components": None,
     }
 
     count = get_existing_component_count(image)
