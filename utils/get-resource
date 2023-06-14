@@ -1,0 +1,43 @@
+#!/usr/bin/env sh
+#
+# Script: kubectl_script.sh
+#
+# Description: This script receives three parameters: <resource_type>,
+#              <namespaced_name>, and [jsonpath]. It uses `kubectl` to load
+#              the specified Kubernetes resource and print it. If a jsonpath
+#              is supplied, only that part will be printed.
+#
+# Usage: kubectl_script.sh <resource_type> <namespaced_name> [jsonpath]
+#
+# Parameters:
+#   <resource_type>   - The Kubernetes resource type (e.g., pod, deployment, service)
+#   <namespaced_name> - The namespaced name of the resource in the form "namespace/name"
+#   [jsonpath]        - Optional JSONPath expression to filter the output
+#
+# Requirements:
+#   - This script requires the 'kubectl' cli. Ensure that 'kubectl' is
+#     installed on your system.
+
+
+# Check if all three parameters are provided
+if [ $# -lt 2 ]; then
+  echo "Usage: $0 <resource_type> <namespaced_name> [jsonpath]"
+  exit 1
+fi
+
+# Assign the parameters to variables
+resource_type=$1
+namespaced_name=$2
+jsonpath=$3
+
+# Split the namespaced name into namespace and name variables
+IFS='/' read -r namespace name <<< "$namespaced_name"
+
+# Build the kubectl command based on the parameters
+
+# If a jsonpath is provided, append it to the kubectl command
+if [ ! -z "$jsonpath" ]; then
+  kubectl get $resource_type -n $namespace $name -o jsonpath="$jsonpath"
+else
+  kubectl get $resource_type -n $namespace $name -o json
+fi

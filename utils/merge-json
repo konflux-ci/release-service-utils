@@ -1,0 +1,49 @@
+#!/usr/bin/env sh
+#
+# Script: merge_json.sh
+#
+# Description: This script merges two JSON strings into a new JSON object,
+#              overriding keys from the first JSON with keys from the second
+#              JSON if there's a collision.
+#
+# Usage: merge_json.sh <json1> <json2>
+#
+# Parameters:
+#   <json1> - First JSON string
+#   <json2> - Second JSON string
+#
+# Requirements:
+#   - This script requires the 'jq' command-line JSON processor.
+#     Ensure that 'jq' is installed on your system.
+#
+# Notes:
+#   - Both JSON strings must be valid JSON.
+#   - If either JSON string is not valid, the script will exit with an error.
+
+
+# Check if both JSON strings are provided as arguments
+if [ $# -ne 2 ]; then
+  echo "Usage: $0 <json1> <json2>"
+  exit 1
+fi
+
+# Store the JSON strings in variables
+json1="$1"
+json2="$2"
+
+# Validate JSON input
+if ! echo "$json1" | jq -e . >/dev/null 2>&1; then
+  echo "Error: Invalid JSON in parameter 1"
+  exit 1
+fi
+
+if ! echo "$json2" | jq -e . >/dev/null 2>&1; then
+  echo "Error: Invalid JSON in parameter 2"
+  exit 1
+fi
+
+# Merge the JSON objects
+merged_json=$(printf '%s\n%s' "$json1" "$json2" | jq -s add)
+
+# Print the merged JSON
+echo "$merged_json"

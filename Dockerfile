@@ -20,12 +20,9 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     && dnf clean all
 
 
-# The ~ dir seems to be mounted over in tekton tasks, so put in /home
-RUN git clone https://github.com/redhat-appstudio/release-service-utils /home/release-service-utils &&\
-# Copy the create_container_image and upload_sbom scripts so we can use them without extension in release-service-bundles
-    cp /home/release-service-utils/pyxis/create_container_image.py /home/release-service-utils/pyxis/create_container_image &&\
-    cp /home/release-service-utils/pyxis/upload_sbom.py /home/release-service-utils/pyxis/upload_sbom
+COPY pyxis /home/pyxis
+COPY utils /home/utils
 
 # Set HOME variable to something else than `/` to avoid 'permission denied' problems when writing files.
 ENV HOME=/tekton/home
-ENV PATH=$PATH:/home/release-service-utils/pyxis
+ENV PATH="$PATH:/home/pyxis:/home/utils"
