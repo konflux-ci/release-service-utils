@@ -1,5 +1,4 @@
 #!/bin/bash
-
 # This script collects input needed to create a dockerconfigjson secret
 # and link it to a service account using SPI.
 # If the SA exists, it will be linked to it.
@@ -69,6 +68,7 @@ spec:
     - area: repository
       type: r
   repoUrl: ${quay_org_url}
+  lifetime: "-1"
   secret:
     type: kubernetes.io/dockerconfigjson
     linkedTo:
