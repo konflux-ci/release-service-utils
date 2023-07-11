@@ -127,8 +127,19 @@ query ($id: ObjectIDFilterScalar!) {
             content_manifest {
                 _id
             }
-            content_manifest_components {
-                _id
+            edges {
+                content_manifest {
+                    data {
+                        _id
+                        edges {
+                            components {
+                                data {
+                                    _id
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         error {
@@ -242,10 +253,11 @@ mutation ($id: ObjectIDFilterScalar!, $input: ContentManifestComponentInput! ) {
 
 
 def get_existing_component_count(image: dict) -> int:
-    if image["content_manifest_components"] is not None:
-        return len(image["content_manifest_components"])
-    else:
+    content_manifest_data = image["edges"]["content_manifest"]["data"]
+    if content_manifest_data is None:
         return 0
+    else:
+        return len(content_manifest_data["edges"]["components"]["data"])
 
 
 def load_sbom_components(sbom_path: str) -> list[dict]:

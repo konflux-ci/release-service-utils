@@ -24,7 +24,7 @@ COMPONENT_ID = "abcd2222"
 IMAGE_DICT = {
     "_id": IMAGE_ID,
     "content_manifest": None,
-    "content_manifest_components": None,
+    "edges": {"content_manifest": {"data": None}},
 }
 COMPONENT_DICT = {"bom_ref": "mybomref"}
 
@@ -81,7 +81,20 @@ def test_upload_sbom__manifest_and_one_component_exist(
         "content_manifest": {
             "_id": MANIFEST_ID,
         },
-        "content_manifest_components": [{"_id": COMPONENT_ID}],
+        "edges": {
+            "content_manifest": {
+                "data": {
+                    "_id": MANIFEST_ID,
+                    "edges": {
+                        "components": {
+                            "data": [
+                                COMPONENT_ID,
+                            ]
+                        }
+                    },
+                }
+            }
+        },
     }
     mock_load_sbom_components.return_value = [
         {"bom-ref": "aaa"},
@@ -116,7 +129,14 @@ def test_upload_sbom__all_components_exist(
         "content_manifest": {
             "_id": MANIFEST_ID,
         },
-        "content_manifest_components": [{"_id": COMPONENT_ID}, {"_id": "123"}],
+        "edges": {
+            "content_manifest": {
+                "data": {
+                    "_id": MANIFEST_ID,
+                    "edges": {"components": {"data": [{"_id": COMPONENT_ID}, {"_id": "123"}]}},
+                }
+            }
+        },
     }
     mock_load_sbom_components.return_value = [
         {"bom-ref": "aaa"},
@@ -166,7 +186,14 @@ def test_upload_sbom__existing_bom_ref_is_skipped(
         "content_manifest": {
             "_id": MANIFEST_ID,
         },
-        "content_manifest_components": [{"_id": COMPONENT_ID}],
+        "edges": {
+            "content_manifest": {
+                "data": {
+                    "_id": MANIFEST_ID,
+                    "edges": {"components": {"data": [{"_id": COMPONENT_ID}]}},
+                }
+            }
+        },
     }
     mock_load_sbom_components.return_value = [
         {"bom-ref": "bbb"},
@@ -316,10 +343,15 @@ def test_create_content_manifest_component__error(mock_post):
 
 def test_get_existing_component_count__some_components():
     image = {
-        "content_manifest_components": [
-            COMPONENT_DICT,
-            COMPONENT_DICT,
-        ]
+        "edges": {
+            "content_manifest": {
+                "data": {
+                    "edges": {
+                        "components": {"data": [{"_id": COMPONENT_ID}, {"_id": "abcd2223"}]}
+                    }
+                }
+            }
+        }
     }
 
     count = get_existing_component_count(image)
@@ -327,11 +359,16 @@ def test_get_existing_component_count__some_components():
     assert count == 2
 
 
-def test_get_existing_component_count__no_components():
-    image = {
-        "_id": IMAGE_ID,
-        "content_manifest_components": None,
-    }
+def test_get_existing_component_count__manifest_exists_but_no_components():
+    image = {"edges": {"content_manifest": {"data": {"edges": {"components": {"data": []}}}}}}
+
+    count = get_existing_component_count(image)
+
+    assert count == 0
+
+
+def test_get_existing_component_count__no_manifest_or_component():
+    image = {"edges": {"content_manifest": {"data": None}}}
 
     count = get_existing_component_count(image)
 
