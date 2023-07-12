@@ -5,10 +5,8 @@ from upload_sbom import (
     upload_sbom,
     get_image,
     create_content_manifest,
-    get_existing_components,
     get_existing_bom_refs,
     create_content_manifest_component,
-    get_existing_component_count,
     load_sbom_components,
     check_bom_ref_duplicates,
     convert_keys,
@@ -24,7 +22,7 @@ COMPONENT_ID = "abcd2222"
 IMAGE_DICT = {
     "_id": IMAGE_ID,
     "content_manifest": None,
-    "edges": {"content_manifest": {"data": None}},
+    "edges": {"content_manifest_components": {"data": []}},
 }
 COMPONENT_DICT = {"bom_ref": "mybomref"}
 
@@ -44,7 +42,9 @@ def test_upload_sbom__success(
     """
     Basic use case - nothing exists in Pyxis yet and all components are successfully created
     """
-    mock_get_image.return_value = IMAGE_DICT
+    image = IMAGE_DICT.copy()
+    image["components"] = []
+    mock_get_image.return_value = image
     mock_create_content_manifest.return_value = MANIFEST_ID
     mock_load_sbom_components.return_value = [
         {"bom-ref": "aaa"},
@@ -64,7 +64,6 @@ def test_upload_sbom__success(
 
 
 @patch("upload_sbom.create_content_manifest_component")
-@patch("upload_sbom.get_existing_bom_refs")
 @patch("upload_sbom.load_sbom_components")
 @patch("upload_sbom.create_content_manifest")
 @patch("upload_sbom.get_image")
@@ -72,39 +71,23 @@ def test_upload_sbom__manifest_and_one_component_exist(
     mock_get_image,
     mock_create_content_manifest,
     mock_load_sbom_components,
-    mock_get_existing_bom_refs,
     mock_create_content_manifest_component,
 ):
-    """Creation of both the manifest and the first component is skipped"""
+    """Creation of the manifest and the first component is skipped"""
     mock_get_image.return_value = {
         "_id": IMAGE_ID,
         "content_manifest": {
             "_id": MANIFEST_ID,
         },
-        "edges": {
-            "content_manifest": {
-                "data": {
-                    "_id": MANIFEST_ID,
-                    "edges": {
-                        "components": {
-                            "data": [
-                                COMPONENT_ID,
-                            ]
-                        }
-                    },
-                }
-            }
-        },
+        "components": [{"_id": COMPONENT_ID, "bom_ref": "aaa"}],
     }
     mock_load_sbom_components.return_value = [
         {"bom-ref": "aaa"},
         {"bom-ref": "bbb"},
     ]
-    mock_get_existing_bom_refs.return_value = {"aaa"}
 
     upload_sbom(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
 
-    mock_get_existing_bom_refs.assert_called_once_with(GRAPHQL_API, MANIFEST_ID)
     mock_create_content_manifest.assert_not_called()
     mock_create_content_manifest_component.assert_called_once_with(
         GRAPHQL_API, MANIFEST_ID, {"bom_ref": "bbb"}
@@ -112,7 +95,6 @@ def test_upload_sbom__manifest_and_one_component_exist(
 
 
 @patch("upload_sbom.create_content_manifest_component")
-@patch("upload_sbom.get_existing_bom_refs")
 @patch("upload_sbom.load_sbom_components")
 @patch("upload_sbom.create_content_manifest")
 @patch("upload_sbom.get_image")
@@ -120,7 +102,6 @@ def test_upload_sbom__all_components_exist(
     mock_get_image,
     mock_create_content_manifest,
     mock_load_sbom_components,
-    mock_get_existing_bom_refs,
     mock_create_content_manifest_component,
 ):
     """Creation of manifest and all components is skipped"""
@@ -129,14 +110,7 @@ def test_upload_sbom__all_components_exist(
         "content_manifest": {
             "_id": MANIFEST_ID,
         },
-        "edges": {
-            "content_manifest": {
-                "data": {
-                    "_id": MANIFEST_ID,
-                    "edges": {"components": {"data": [{"_id": COMPONENT_ID}, {"_id": "123"}]}},
-                }
-            }
-        },
+        "components": [{"_id": COMPONENT_ID}, {"_id": "123"}],
     }
     mock_load_sbom_components.return_value = [
         {"bom-ref": "aaa"},
@@ -145,7 +119,6 @@ def test_upload_sbom__all_components_exist(
 
     upload_sbom(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
 
-    mock_get_existing_bom_refs.assert_not_called()
     mock_create_content_manifest.assert_not_called()
     mock_create_content_manifest_component.assert_not_called()
 
@@ -165,7 +138,6 @@ def generate_pyxis_response(query_name, data=None, error=False):
 
 
 @patch("upload_sbom.create_content_manifest_component")
-@patch("upload_sbom.get_existing_bom_refs")
 @patch("upload_sbom.load_sbom_components")
 @patch("upload_sbom.create_content_manifest")
 @patch("upload_sbom.get_image")
@@ -173,7 +145,6 @@ def test_upload_sbom__existing_bom_ref_is_skipped(
     mock_get_image,
     mock_create_content_manifest,
     mock_load_sbom_components,
-    mock_get_existing_bom_refs,
     mock_create_content_manifest_component,
 ):
     """One component already exists in Pyxis. Our sbom contains two
@@ -186,35 +157,76 @@ def test_upload_sbom__existing_bom_ref_is_skipped(
         "content_manifest": {
             "_id": MANIFEST_ID,
         },
-        "edges": {
-            "content_manifest": {
-                "data": {
-                    "_id": MANIFEST_ID,
-                    "edges": {"components": {"data": [{"_id": COMPONENT_ID}]}},
-                }
-            }
-        },
+        "components": [{"_id": COMPONENT_ID, "bom_ref": "aaa"}],
     }
     mock_load_sbom_components.return_value = [
         {"bom-ref": "bbb"},
         {"bom-ref": "aaa"},
     ]
-    mock_get_existing_bom_refs.return_value = {"aaa"}
 
     upload_sbom(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
 
-    mock_get_existing_bom_refs.assert_called_once_with(GRAPHQL_API, MANIFEST_ID)
     mock_create_content_manifest.assert_not_called()
     mock_create_content_manifest_component.assert_not_called()
 
 
 @patch("pyxis.post")
 def test_get_image__success(mock_post):
+    """The Pyxis query is called twice and then the loop stops"""
+    image1 = {
+        "_id": IMAGE_ID,
+        "content_manifest": {
+            "_id": MANIFEST_ID,
+        },
+        "edges": {
+            "content_manifest_components": {
+                "data": [
+                    {"_id": "aa"},
+                    {"_id": "bb"},
+                ]
+            }
+        },
+    }
+    image2 = {
+        "_id": IMAGE_ID,
+        "content_manifest": {
+            "_id": MANIFEST_ID,
+        },
+        "edges": {
+            "content_manifest_components": {
+                "data": [
+                    {"_id": "cc"},
+                ]
+            }
+        },
+    }
+    mock_post.side_effect = [
+        generate_pyxis_response("get_image", image1),
+        generate_pyxis_response("get_image", image2),
+    ]
+
+    image = get_image(GRAPHQL_API, IMAGE_ID, page_size=2)
+
+    assert image["components"] == [
+        {"_id": "aa"},
+        {"_id": "bb"},
+        {"_id": "cc"},
+    ]
+    assert image["_id"] == IMAGE_ID
+    assert image["content_manifest"] == {"_id": MANIFEST_ID}
+    assert mock_post.call_count == 2
+
+
+@patch("pyxis.post")
+def test_get_image__no_manifest_and_no_components(mock_post):
+    """There are no components, so the query is called once"""
     mock_post.return_value = generate_pyxis_response("get_image", IMAGE_DICT)
 
-    image = get_image(GRAPHQL_API, IMAGE_ID)
+    image = get_image(GRAPHQL_API, IMAGE_ID, page_size=2)
 
-    assert image == IMAGE_DICT
+    assert image["components"] == []
+    assert image["_id"] == IMAGE_ID
+    assert image["content_manifest"] is None
     mock_post.assert_called_once()
 
 
@@ -250,50 +262,9 @@ def test_create_content_manifest__error(mock_post):
     mock_post.assert_called_once()
 
 
-@patch("pyxis.post")
-def test_get_existing_components__success(mock_post):
-    """The Pyxis query is called twice and then the loop stops"""
-    data1 = ["a", "b"]
-    data2 = ["c"]
-    mock_post.side_effect = [
-        generate_pyxis_response("find_content_manifest_components", data1),
-        generate_pyxis_response("find_content_manifest_components", data2),
-    ]
-
-    components = get_existing_components(GRAPHQL_API, MANIFEST_ID, page_size=2)
-
-    assert components == data1 + data2
-    assert mock_post.call_count == 2
-
-
-@patch("pyxis.post")
-def test_get_existing_components__no_components(mock_post):
-    """Pyxis returns an empty list, so the loop stops and returns that"""
-    mock_post.return_value = generate_pyxis_response("find_content_manifest_components", [])
-
-    components = get_existing_components(GRAPHQL_API, MANIFEST_ID)
-
-    assert components == []
-    mock_post.assert_called_once()
-
-
-@patch("pyxis.post")
-def test_get_existing_components__error(mock_post):
-    """Pyxis returns an error"""
-    mock_post.return_value = generate_pyxis_response(
-        "find_content_manifest_components", error=True
-    )
-
-    with pytest.raises(RuntimeError):
-        get_existing_components(GRAPHQL_API, MANIFEST_ID)
-
-    mock_post.assert_called_once()
-
-
-@patch("upload_sbom.get_existing_components")
-def test_get_existing_bom_refs__success(mock_get_existing_components):
+def test_get_existing_bom_refs__success():
     """bom_refs are correctly extracted from components, duplicates are removed"""
-    mock_get_existing_components.return_value = [
+    components = [
         {"bom_ref": "a"},
         {"bom_ref": "b"},
         {"bom_ref": "c"},
@@ -301,18 +272,13 @@ def test_get_existing_bom_refs__success(mock_get_existing_components):
         {"bom_ref": "a"},
     ]
 
-    bom_refs = get_existing_bom_refs(GRAPHQL_API, MANIFEST_ID)
+    bom_refs = get_existing_bom_refs(components)
 
     assert bom_refs == {"a", "b", "c"}
 
 
-@patch("upload_sbom.get_existing_components")
-def test_get_existing_bom_refs__no_components_result_in_empty_set(
-    mock_get_existing_components,
-):
-    mock_get_existing_components.return_value = []
-
-    bom_refs = get_existing_bom_refs(GRAPHQL_API, MANIFEST_ID)
+def test_get_existing_bom_refs__no_components_result_in_empty_set():
+    bom_refs = get_existing_bom_refs([])
 
     assert bom_refs == set()
 
@@ -339,40 +305,6 @@ def test_create_content_manifest_component__error(mock_post):
         create_content_manifest_component(GRAPHQL_API, MANIFEST_ID, COMPONENT_DICT)
 
     mock_post.assert_called_once()
-
-
-def test_get_existing_component_count__some_components():
-    image = {
-        "edges": {
-            "content_manifest": {
-                "data": {
-                    "edges": {
-                        "components": {"data": [{"_id": COMPONENT_ID}, {"_id": "abcd2223"}]}
-                    }
-                }
-            }
-        }
-    }
-
-    count = get_existing_component_count(image)
-
-    assert count == 2
-
-
-def test_get_existing_component_count__manifest_exists_but_no_components():
-    image = {"edges": {"content_manifest": {"data": {"edges": {"components": {"data": []}}}}}}
-
-    count = get_existing_component_count(image)
-
-    assert count == 0
-
-
-def test_get_existing_component_count__no_manifest_or_component():
-    image = {"edges": {"content_manifest": {"data": None}}}
-
-    count = get_existing_component_count(image)
-
-    assert count == 0
 
 
 @patch("json.load")
