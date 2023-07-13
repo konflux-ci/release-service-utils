@@ -72,7 +72,7 @@ def upload_sbom(graphql_api: str, image_id: str, sbom_path: str):
         content_manifest_id = create_content_manifest(graphql_api, image_id)
     LOGGER.info(f"Content manifest ID: {content_manifest_id}")
 
-    existing_component_count = get_existing_component_count(image)
+    existing_component_count = len(image["components"])
 
     sbom_components = load_sbom_components(sbom_path)
     sbom_component_count = len(sbom_components)
@@ -86,7 +86,7 @@ def upload_sbom(graphql_api: str, image_id: str, sbom_path: str):
         return
 
     if existing_component_count > 0:
-        existing_bom_refs = get_existing_bom_refs(graphql_api, content_manifest_id)
+        existing_bom_refs = get_existing_bom_refs(image["components"])
         LOGGER.info(
             f"Skipping {existing_component_count} components already present in Pyxis."
         )
@@ -118,17 +118,28 @@ def upload_sbom(graphql_api: str, image_id: str, sbom_path: str):
             LOGGER.info(f"Component ID: {component_id}")
 
 
-def get_image(graphql_api: str, image_id: str) -> dict:
+def get_image(graphql_api: str, image_id: str, page_size: int = 50) -> dict:
+    """Get ContainerImage object from Pyxis using GraphQL API
+
+    This will also include the content manifest id and all the components
+    via edges. The edges are paged, so the whole query is run repeatedly
+    until there are no more components.
+    """
     query = """
-query ($id: ObjectIDFilterScalar!) {
+query ($id: ObjectIDFilterScalar!, $page: Int!, $page_size: Int!) {
     get_image(id: $id) {
         data {
             _id
             content_manifest {
                 _id
             }
-            content_manifest_components {
-                _id
+            edges {
+                content_manifest_components(page: $page, page_size: $page_size) {
+                    data {
+                        _id
+                        bom_ref
+                    }
+                }
             }
         }
         error {
@@ -137,10 +148,21 @@ query ($id: ObjectIDFilterScalar!) {
     }
 }
     """
-    variables = {"id": image_id}
-    body = {"query": query, "variables": variables}
+    has_more = True
+    page = 0
+    components = []
+    image = {}
+    while has_more:
+        variables = {"id": image_id, "page": page, "page_size": page_size}
+        body = {"query": query, "variables": variables}
 
-    image = pyxis.graphql_query(graphql_api, body, "get_image")
+        image = pyxis.graphql_query(graphql_api, body, "get_image")
+
+        components_batch = image["edges"]["content_manifest_components"]["data"]
+        components.extend(components_batch)
+        has_more = len(components_batch) == page_size
+        page += 1
+    image["components"] = components
 
     return image
 
@@ -167,50 +189,7 @@ mutation ($input: ContentManifestInput! ) {
     return data["_id"]
 
 
-def get_existing_components(graphql_api: str, content_manifest_id: str, page_size: int = 50):
-    """Get ContentManifestComponent objects from Pyxis using GraphQL API"""
-    query = """
-query ($input: ObjectIDFilterScalar!, $page: Int!, $page_size: Int!) {
-  find_content_manifest_components(
-        page: $page,
-        page_size: $page_size,
-        sort_by: [],
-        filter: {content_manifest: { _id: {eq: $input}}}
-  ) {
-    error {
-      detail
-      status
-    }
-
-    page_size
-    page
-
-    data {
-      _id
-      bom_ref
-    }
-  }
-}
-"""
-    has_more = True
-    page = 0
-    components = []
-    while has_more:
-        variables = {"input": content_manifest_id, "page": page, "page_size": page_size}
-        body = {"query": query, "variables": variables}
-
-        data = pyxis.graphql_query(graphql_api, body, "find_content_manifest_components")
-
-        components.extend(data)
-        has_more = len(data) == page_size
-        page += 1
-    LOGGER.debug(f"Existing components ({len(components)}):")
-    LOGGER.debug(components)
-    return components
-
-
-def get_existing_bom_refs(graphql_api: str, content_manifest_id: str) -> set[str]:
-    components = get_existing_components(graphql_api, content_manifest_id)
+def get_existing_bom_refs(components: list) -> set[str]:
     bom_refs = [c["bom_ref"] for c in components if c.get("bom_ref") is not None]
     return set(bom_refs)
 
@@ -239,13 +218,6 @@ mutation ($id: ObjectIDFilterScalar!, $input: ContentManifestComponentInput! ) {
     )
 
     return data["_id"]
-
-
-def get_existing_component_count(image: dict) -> int:
-    if image["content_manifest_components"] is not None:
-        return len(image["content_manifest_components"])
-    else:
-        return 0
 
 
 def load_sbom_components(sbom_path: str) -> list[dict]:
