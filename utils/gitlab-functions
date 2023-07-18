@@ -1,0 +1,52 @@
+#!/usr/bin/env sh
+#
+# Functions to manage gitlab repos.
+#
+# This library requires the `glab` cli (https://docs.gitlab.com/ee/integration/glab/)
+
+gitlab_usage() {
+    echo -e "Usage:"
+    echo -e "\t~$ export GITLAB_HOST=<host>"
+    echo -e "\t~$ export ACCESS_TOKEN=<github key>"
+    echo -e "\t~$ . gitlab-functions"
+}
+
+gitlab_auth() {
+    gitlab_host=$1
+    glab auth login -h $gitlab_host --stdin <<< "${ACCESS_TOKEN}"
+}
+
+gitlab_create_mr() {
+    OPTIONS=$(getopt -l "head:,title:,description:" -o "h:t:d:" -a -- "$@")
+    eval set -- "$OPTIONS"
+    while true; do
+        case "$1" in
+            -h|--head)
+                shift
+                HEAD="$1";
+                ;;
+            -t|--title)
+                shift
+                TITLE="$1";
+                ;;
+            -d|--description)
+                shift
+                DESCRIPTION="$1";
+                ;;
+            --)
+                shift
+                break
+                ;;
+        esac
+        shift
+    done
+    glab mr create --title "${TITLE}" -b ${HEAD} --description "${DESCRIPTION}" | \
+        awk '/merge_request/ {print "merge_request: "$1}' |yq -o json
+}
+
+gitlab_init() {
+  # it should not continue if ACCESS_TOKEN or GITLAB_HOST is missing
+  [ -z "${ACCESS_TOKEN}" -o -z "${GITLAB_HOST}" ] && gitlab_usage && return 1
+
+  gitlab_auth ${GITLAB_HOST}
+}
