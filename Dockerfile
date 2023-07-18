@@ -21,6 +21,9 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     skopeo \
     && dnf clean all
 
+ADD data/certs/2015-IT-Root-CA.pem data/certs/2022-IT-Root-CA.pem /etc/pki/ca-trust/source/anchors/
+RUN update-ca-trust
+
 COPY pyxis /home/pyxis
 COPY utils /home/utils
 
