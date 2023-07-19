@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import patch, call, Mock
 
 from upload_sbom import (
+    upload_sbom_with_retry,
     upload_sbom,
     get_image,
     create_content_manifest,
@@ -25,6 +26,35 @@ IMAGE_DICT = {
     "edges": {"content_manifest_components": {"data": []}},
 }
 COMPONENT_DICT = {"bom_ref": "mybomref"}
+
+
+@patch("upload_sbom.upload_sbom")
+def test_upload_sbom_with_retry__success(mock_upload_sbom):
+    """upload_sbom succeeds on first attempt"""
+    upload_sbom_with_retry(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
+
+    mock_upload_sbom.assert_called_once_with(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
+
+
+@patch("upload_sbom.upload_sbom")
+def test_upload_sbom_with_retry__success_after_one_attempt(mock_upload_sbom):
+    """upload_sbom succeeds after one retry"""
+    mock_upload_sbom.side_effect = [RuntimeError("error"), None]
+
+    upload_sbom_with_retry(GRAPHQL_API, IMAGE_ID, SBOM_PATH, backoff_factor=0)
+
+    assert mock_upload_sbom.call_count == 2
+
+
+@patch("upload_sbom.upload_sbom")
+def test_upload_sbom_with_retry__fails(mock_upload_sbom):
+    """upload_sbom fails constantly, so the retry eventually fails"""
+    mock_upload_sbom.side_effect = RuntimeError("error")
+
+    with pytest.raises(RuntimeError):
+        upload_sbom_with_retry(GRAPHQL_API, IMAGE_ID, SBOM_PATH, retries=2, backoff_factor=0)
+
+    assert mock_upload_sbom.call_count == 2
 
 
 @patch("upload_sbom.create_content_manifest_component")

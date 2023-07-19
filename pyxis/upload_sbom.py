@@ -24,6 +24,7 @@ import os
 import json
 import re
 from pathlib import Path
+import time
 from typing import Any
 
 import pyxis
@@ -59,7 +60,33 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
     )
     parser.add_argument("--sbom-path", help="Path to the sbom file", required=True)
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument(
+        "--retry",
+        "-r",
+        action="store_true",
+        help="Retry the whole sbom uploading in case it fails",
+    )
     return parser.parse_args()
+
+
+def upload_sbom_with_retry(
+    graphql_api: str,
+    image_id: str,
+    sbom_path: str,
+    retries: int = 3,
+    backoff_factor: float = 5.0,
+):
+    last_err = RuntimeError()
+    for attempt in range(retries):
+        try:
+            time.sleep(backoff_factor * attempt)
+            upload_sbom(graphql_api, image_id, sbom_path)
+            return
+        except RuntimeError as e:
+            LOGGER.warning(f"Attempt {attempt+1} failed.")
+            last_err = e
+    LOGGER.error("Out of attempts. Raising the error.")
+    raise last_err
 
 
 def upload_sbom(graphql_api: str, image_id: str, sbom_path: str):
@@ -310,7 +337,10 @@ def main():  # pragma: no cover
 
     LOGGER.debug(f"Pyxis GraphQL API: {args.pyxis_graphql_api}")
 
-    upload_sbom(args.pyxis_graphql_api, image_id, args.sbom_path)
+    if args.retry:
+        upload_sbom_with_retry(args.pyxis_graphql_api, image_id, args.sbom_path)
+    else:
+        upload_sbom(args.pyxis_graphql_api, image_id, args.sbom_path)
 
 
 if __name__ == "__main__":  # pragma: no cover
