@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, call
+from unittest.mock import patch, call, Mock
 
 from upload_sbom import (
     upload_sbom,
@@ -124,7 +124,7 @@ def test_upload_sbom__all_components_exist(
 
 
 def generate_pyxis_response(query_name, data=None, error=False):
-    response = {
+    response_json = {
         "data": {
             query_name: {
                 "data": data,
@@ -133,7 +133,10 @@ def generate_pyxis_response(query_name, data=None, error=False):
         }
     }
     if error:
-        response["data"][query_name]["error"] = {"detail": "Major failure!"}
+        response_json["data"][query_name]["error"] = {"detail": "Major failure!"}
+    response = Mock()
+    response.json.return_value = response_json
+
     return response
 
 

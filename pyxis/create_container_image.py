@@ -145,7 +145,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
             }
         )
 
-    rsp = pyxis.post(upload_url, container_image_payload)
+    rsp = pyxis.post(upload_url, container_image_payload).json()
 
     # Make sure container metadata was successfully added to Pyxis
     if "_id" in rsp:

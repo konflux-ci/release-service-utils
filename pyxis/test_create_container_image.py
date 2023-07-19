@@ -48,7 +48,7 @@ def test_image_already_exists(mock_get: MagicMock):
 @patch("create_container_image.datetime")
 def test_create_container_image(mock_datetime: MagicMock, mock_post: MagicMock):
     # Mock an _id in the response for logger check
-    mock_post.return_value = {"_id": 0}
+    mock_post.return_value.json.return_value = {"_id": 0}
 
     # mock date
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
@@ -95,7 +95,7 @@ def test_create_container_image(mock_datetime: MagicMock, mock_post: MagicMock):
 @patch("create_container_image.datetime")
 def test_create_container_image_latest(mock_datetime: MagicMock, mock_post: MagicMock):
     # Mock an _id in the response for logger check
-    mock_post.return_value = {"_id": 0}
+    mock_post.return_value.json.return_value = {"_id": 0}
 
     # mock date
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
