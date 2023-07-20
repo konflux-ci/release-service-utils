@@ -41,10 +41,9 @@ def test_get_session_no_auth(monkeypatch: Any) -> None:
 
 @patch("pyxis._get_session")
 def test_post(mock_session: MagicMock) -> None:
-    mock_session.return_value.post.return_value.json.return_value = {"key": "val"}
     resp = pyxis.post(API_URL, {})
 
-    assert resp == {"key": "val"}
+    assert resp == mock_session.return_value.post.return_value
 
 
 @patch("pyxis._get_session")
@@ -63,7 +62,7 @@ def test_graphql_query__success(mock_post: MagicMock):
     mock_data = {
         "output": "something",
     }
-    mock_post.return_value = {
+    mock_post.return_value.json.return_value = {
         "data": {
             QUERY: {
                 "data": mock_data,
@@ -82,7 +81,10 @@ def test_graphql_query__success(mock_post: MagicMock):
 def test_graphql_query__general_graphql_error(mock_post: MagicMock):
     """For example, if there is a syntax error in the query,
     the response won't even include the query property"""
-    mock_post.return_value = {"data": None, "errors": [{"message": "Major failure"}]}
+    mock_post.return_value.json.return_value = {
+        "data": None,
+        "errors": [{"message": "Major failure"}],
+    }
 
     with pytest.raises(RuntimeError):
         pyxis.graphql_query(API_URL, REQUEST_BODY, QUERY)
@@ -94,7 +96,7 @@ def test_graphql_query__general_graphql_error(mock_post: MagicMock):
 def test_graphql_query__pyxis_error(mock_post: MagicMock):
     """For example, if the image id does not exist in Pyxis
     there will be an error property under the query property"""
-    mock_post.return_value = {
+    mock_post.return_value.json.return_value = {
         "data": {
             QUERY: {
                 "data": None,
