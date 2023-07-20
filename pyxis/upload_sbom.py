@@ -64,7 +64,7 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
         "--retry",
         "-r",
         action="store_true",
-        help="Retry the whole sbom uploading in case it fails",
+        help="If set, retry the whole sbom uploading in case it fails",
     )
     return parser.parse_args()
 
