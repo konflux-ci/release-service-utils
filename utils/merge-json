@@ -43,7 +43,7 @@ if ! echo "$json2" | jq -e . >/dev/null 2>&1; then
 fi
 
 # Merge the JSON objects
-merged_json=$(printf '%s\n%s' "$json1" "$json2" | jq -s add)
+merged_json=$(printf '%s\n%s' "$json1" "$json2" | jq -cs add)
 
 # Print the merged JSON
 echo "$merged_json"
