@@ -12,6 +12,7 @@ import argparse
 import re
 import sys
 
+
 def get_path_line_num(yamlfile, yamlpath):
     """Returns the line number of the given yaml path in a yaml file"""
 
@@ -64,13 +65,13 @@ def get_path_line_num(yamlfile, yamlpath):
 
 
 def main():
-    """ main function"""
+    """main function"""
 
     parser = argparse.ArgumentParser(description="Parameters for yamlline.")
-    parser.add_argument("-f", "--file", dest="filename",
-                      help="YAML file to read", metavar="FILE")
-    parser.add_argument("-p", "--path", dest="path",
-                      help="YAML path to get the line number")
+    parser.add_argument(
+        "-f", "--file", dest="filename", help="YAML file to read", metavar="FILE"
+    )
+    parser.add_argument("-p", "--path", dest="path", help="YAML path to get the line number")
     args = parser.parse_args()
 
     if args.filename is None or args.path is None:
@@ -79,6 +80,7 @@ def main():
 
     line_number = get_path_line_num(args.filename, args.path)
     print(line_number)
+
 
 if __name__ == "__main__":
     main()
