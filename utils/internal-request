@@ -1,0 +1,136 @@
+#!/bin/bash
+
+# This script creates an InternalRequest resource in a Kubernetes cluster
+# using the 'kubectl' command line tool. The resource is created with
+# parameters passed to the script, and optionally waits for the resource to
+# reach a 'completed' status.
+#
+# Usage:
+#   ./internal-request.sh -r request [-p <key=value> ...] [-s sync] [-t timeout]
+#
+# Parameters:
+#   -r  Request: the name of the request.
+#   -p  Parameters: can be specified multiple times. Each '-p' flag represents a
+#       parameter that will be added to the 'parameters' field in the
+#       InternalRequest resource. The value of the parameter is treated as a string,
+#       and it can be a valid JSON object or array. When passing complex parameter
+#       values, make sure to enclose them in quotes.
+#   -s  Sync: a flag that indicates whether the script has to finish to complete
+#       the tasks or exit immediately after creating the resource. Default is true.
+#   -t  Timeout: Defaults to 600 seconds.
+#   -h  Display this help message.
+#
+# Prerequisites:
+#   - kubectl: The Kubernetes command line tool must be installed and properly
+#     configured to communicate with your cluster.
+#   - jq: This script uses jq to parse JSON. It must be installed on the system
+#     running the script.
+#
+# Note: This script is intended to be used with a specific Kubernetes API
+# that includes the 'InternalRequest' resource type.
+
+set -e
+
+TIMEOUT=600
+SYNC=true
+PARAMS=""
+
+function usage {
+    echo "Usage: $0 -r request [-p parameters] [-s sync] [-t timeout]"
+    echo
+    echo "  -r  Request: the name of the request."
+    echo "  -p  Params: can be specified multiple times. Each '-p' flag represents a"
+    echo "      parameter that will be added to the 'parameters' field in the"
+    echo "      InternalRequest resource."
+    echo "  -s  Sync: a flag that indicates whether the script has to finish to complete the tasks or exit immediately after creating the resource. Default is true."
+    echo "  -t  Timeout: Defaults to 600 seconds."
+    echo "  -h  Display this help message."
+    exit 1
+}
+
+
+# Parsing arguments
+PARAMS=() # initialize PARAMS as an empty array
+while getopts r:p:s:t:h flag
+do
+    case "${flag}" in
+        r) REQUEST=${OPTARG};;
+        p) PARAMS+=("${OPTARG}");; # append each parameter to the PARAMS array
+        s) SYNC=${OPTARG};;
+        t) TIMEOUT=${OPTARG};;
+        h) usage;;
+        *) usage;;
+    esac
+done
+
+# Check if mandatory parameters are set
+if [ -z "$REQUEST" ]
+then
+    usage
+fi
+
+# Convert parameters to JSON format
+# Create a bash array
+declare -a PARAM_JSON_ARRAY
+
+# Create a JSON object for each parameter and append to the bash array
+for param in "${PARAMS[@]}"
+do
+    KEY=$(echo "$param" | cut -d'=' -f1)
+    VALUE=$(echo "$param" | cut -d'=' -f2-)
+    PARAM_JSON_ARRAY+=("$(jq -n --arg key "$KEY" --arg value "$VALUE" '{($key): $value}')")
+done
+
+# Combine all JSON objects in the bash array into one JSON object
+PARAM_JSON=$(echo "${PARAM_JSON_ARRAY[@]}" | jq -s 'add')
+
+# Create JSON payload for the InternalRequest
+PAYLOAD=$(jq -n \
+    --arg request "$REQUEST" \
+    --argjson parameters "$PARAM_JSON" \
+    '{
+      "apiVersion": "appstudio.redhat.com/v1alpha1",
+      "kind": "InternalRequest",
+      "metadata": {
+        "generateName": ($request + "-")
+      },
+      "spec": {
+        "request": $request,
+        "params": $parameters
+      }
+    }'
+)
+
+# Create InternalRequest using kubectl
+RESOURCE=$(echo "$PAYLOAD" | kubectl create -f - -o json)
+INTERNAL_REQUEST_NAME=$(echo "$RESOURCE" | jq -r '.metadata.name')
+
+echo "InternalRequest '$INTERNAL_REQUEST_NAME' created."
+
+if [ "$SYNC" = "true" ]; then
+  echo "Sync flag set to true. Waiting for the InternalRequest to be completed."
+
+  # Wait until status is set or timeout
+  END_TIME=$(date -ud "$TIMEOUT seconds" +%s)
+  while true; do
+    STATUS=$(kubectl get internalrequest "$INTERNAL_REQUEST_NAME" -o json | jq -r '.status')
+
+    if [ "$STATUS" != "null" ]; then
+      CONDITIONS=$(kubectl get internalrequest "$INTERNAL_REQUEST_NAME" -o json | jq -r '.status.conditions')
+      if [ "$(echo "$CONDITIONS" | jq 'length')" -eq 1 ]; then
+        CONDITION_REASON=$(echo "$CONDITIONS" | jq -r '.[0].reason')
+        if [ "$CONDITION_REASON" != "Running" ]; then
+          echo "InternalRequest completed."
+          exit 0
+        fi
+      fi
+    fi
+
+    if [ "$(date +%s)" -gt "$END_TIME" ]; then
+      echo "Timeout while waiting for the InternalRequest to complete."
+      exit 1
+    fi
+
+    sleep 5
+  done
+fi
