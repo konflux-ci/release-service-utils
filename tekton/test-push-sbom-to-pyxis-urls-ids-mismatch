@@ -1,0 +1,16 @@
+# Description: This script is meant to set up mocks at the beginning
+#              of each step of the push-sbom-to-pyxis task.
+
+function cosign() {
+  echo Mock cosign called with: $*
+
+  echo Error: cosign should not be called
+  exit 1
+}
+
+function upload_sbom() {
+  echo Mock upload_sbom called with: $*
+
+  echo Error: upload_sbom should not be called
+  exit 1
+}

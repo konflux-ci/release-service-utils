@@ -26,7 +26,8 @@ RUN update-ca-trust
 
 COPY pyxis /home/pyxis
 COPY utils /home/utils
+COPY tekton /home/tekton
 
 # Set HOME variable to something else than `/` to avoid 'permission denied' problems when writing files.
 ENV HOME=/tekton/home
-ENV PATH="$PATH:/home/pyxis:/home/utils"
+ENV PATH="$PATH:/home/pyxis:/home/utils:/home/tekton"
