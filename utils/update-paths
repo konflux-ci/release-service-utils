@@ -1,0 +1,68 @@
+#!/bin/bash
+#
+# script:      update-paths
+# 
+# description: This script searches for "{{ }}" enclosed yq expression in fileUpdates paths then
+#              executes and replaces it with its result
+#
+# parameters:  
+#
+# -p, --paths  Json String containing fileUpdates paths with optional yq expression(s) enclosed by "{{ }}"
+#              The `paths` json string should be properly quoted
+#              Example:  --paths='[{"path":"foo.yaml","replacements":[{"key":"bar","replacement":"{{ .components[0]| .containerImage }}"}]}]'
+#
+# -f, --file:  Path to the mapping_snapshots.json file
+#
+print_help(){
+    echo -e "$0 [ -p, --paths ] PATHS [ -f, --file ] FILE\n"
+    echo -e "\t-p, --paths\tJson String containing fileUpdates paths with optional yq expression(s) enclosed by \"\${{ }}\""
+    echo -e "\t\t\tThe \`paths\` json string should be properly escaped/quoted"
+    echo -e "\t\t\tExample:  --paths='[{\"path\":\"foo.yaml\",\"replacements\":[{\"key\":\"bar\",\"replacement\":\"{{ .components[0]| .containerImage }}\"}]}]'"
+    echo -e "\t-f, --file\tPath to mapping_snapshots.json file\n"
+}
+
+OPTIONS=$(getopt -l "paths:,file:" -o "p:f:" -a -- "$@")
+eval set -- "$OPTIONS"
+while true; do
+    case "$1" in
+        -p|--paths)
+            shift
+            PATHS=$1
+            ;;
+        -f|--file)
+            shift
+            FILE="$1"
+            ;;
+        --)
+            shift
+            break
+            ;;
+    esac
+    shift
+done
+
+if [ -z "${PATHS}" ] || [ -z "${FILE}" ]; then
+    print_help
+    exit
+fi
+
+pathsLength=$(jq -cr '. |length' <<< "${PATHS}")
+for(( p=0; p<pathsLength; p++)); do
+
+  path=$(jq ".[${p}]" <<< "${PATHS}")
+  replacementsLength=$(jq '.replacements | length' <<< "${path}")
+  for(( r=0; r<replacementsLength; r++ )); do
+      replacement=$(jq -cr ".replacements[${r}].replacement" <<< "${path}")
+      if grep -q '{{.*}}' <<< "${replacement}"; then
+          yqExp=$(sed 's|.*{{\(.*\)}}.*|\1|' <<< "${replacement}")
+
+          # execute the yq expression and replace the "replacement string" with the result
+          yqResult=$(yq -oy -r "${yqExp}" "${FILE}")
+          newReplacement=$(sed "s|{{.*}}|"${yqResult}"|g" <<< "${replacement}")
+
+          newReplacementJson=$(jq -R <<< ${newReplacement})
+          PATHS=$(jq -cr ".[${p}].replacements[$r].replacement = ${newReplacementJson}" <<< "${PATHS}")
+      fi
+  done
+done
+echo "${PATHS}"
