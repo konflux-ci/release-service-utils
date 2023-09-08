@@ -48,8 +48,8 @@ gitlab_create_mr() {
         esac
         shift
     done
-    git remote add glab-base "${UPSTREAM_REPO}"
-    glab mr create --title "${TITLE}" --source-branch ${HEAD} --target-branch ${TARGET_BRANCH} \
+    git remote add glab-base "${UPSTREAM_REPO}" 1>&2 || true
+    glab mr create --title "${TITLE}" --source-branch "${HEAD}" --target-branch "${TARGET_BRANCH}" \
         --description "${DESCRIPTION}" -R "${UPSTREAM_REPO}" | \
         awk '/merge_request/ {print "merge_request: "$1}' |yq -o json
 }

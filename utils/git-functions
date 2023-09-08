@@ -11,8 +11,8 @@ git_functions_usage() {
 }
 
 git_config_ident() {
-    git config user.name "${GIT_AUTHOR_NAME}" 
-    git config user.email "${GIT_AUTHOR_EMAIL}"
+    git config --global user.name "${GIT_AUTHOR_NAME}"
+    git config --global user.email "${GIT_AUTHOR_EMAIL}"
 }
 
 git_commit_and_push() {
@@ -35,10 +35,9 @@ git_commit_and_push() {
         esac
         shift
     done
-    git checkout -b $BRANCH
-    git_config_ident
-    git commit -a -m "$COMMIT_MSG"
-    git push origin $BRANCH
+    git checkout -b "${BRANCH}"
+    git commit -a -m "${COMMIT_MSG}"
+    git push origin "${BRANCH}"
 }
 
 git_clone_and_checkout() {
@@ -64,19 +63,56 @@ git_clone_and_checkout() {
 
     echo "Cloning the Repository..."
 
-    REPO_DIR=$(basename ${REPOSITORY} .git)
+    REPO_DIR=$(basename "${REPOSITORY}" .git)
 
     # rewrites the repo url with the auth token
     CLONE_URL="https://oauth2:${ACCESS_TOKEN}@${REPOSITORY#*://}"
-    git clone --depth 1 $CLONE_URL
-    cd $REPO_DIR
-    git checkout $REVISION
+    git clone --depth 1 "${CLONE_URL}"
+    cd "${REPO_DIR}"
+    git checkout "${REVISION}"
+}
+
+git_rebase() {
+    OPTIONS=$(getopt -l "name:,remote:,revision:" -o "n:r:v:" -a -- "$@")
+    eval set -- "$OPTIONS"
+    while true; do
+        case "$1" in
+            -n|--name)
+                shift
+                NAME=$1
+                ;;
+            -r|--remote)
+                shift
+                REMOTE=$1
+                ;;
+            -v|--revision)
+                shift
+                REVISION="$1"
+                ;;
+            --)
+                shift
+                break
+                ;;
+        esac
+        shift
+    done
+
+    # Rebase current branch with given upstream and branch.
+    #
+    # The endpoint should be authenticated and the remote
+    # should have read access at least.
+    git remote add "${NAME}" "https://oauth2:${ACCESS_TOKEN}@${REMOTE#*://}"
+    git fetch "${NAME}" "${REVISION}"
+    git rebase "${NAME}"/"${REVISION}"
 }
 
 git_functions_init() {
   # an actual user should be set
-  [ -z "${GIT_AUTHOR_NAME}" -o -z "${GIT_AUTHOR_EMAIL}" ] && git_functions_usage && return 1
+  [ -z "${GIT_AUTHOR_NAME}" ] || [ -z "${GIT_AUTHOR_EMAIL}" ] && git_functions_usage && return 1
 
   # it should not continue if ACCESS_TOKEN
   [ -z "${ACCESS_TOKEN}" ] && git_functions_usage && return 1
+
+  # set identity
+  git_config_ident
 }
