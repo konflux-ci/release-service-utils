@@ -11,6 +11,12 @@ import pyxis
 
 LOGGER = logging.getLogger("create_container_image")
 
+# Media types that are used for multi arch images
+MANIFEST_LIST_TYPES = [
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+]
+
 
 def setup_argparser() -> Any:  # pragma: no cover
     """Setup argument parser
@@ -42,6 +48,12 @@ def setup_argparser() -> Any:  # pragma: no cover
         help="Should the `latest` tag of the ContainerImage be overwritten?",
         required=True,
     )
+    parser.add_argument(
+        "--media-type",
+        help="The mediaType string returned by `skopeo inspect --raw`. "
+        "Used to determine if it's a single arch or multiarch image.",
+        required=True,
+    )
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
     return parser
 
@@ -52,9 +64,10 @@ def image_already_exists(args, digest: str) -> bool:
 
     :return: True if one exists, else false
     """
+    digest_field = get_digest_field(args.media_type)
 
     # quote is needed to urlparse the quotation marks
-    filter_str = quote(f'docker_image_digest=="{digest}";' f"not(deleted==true)")
+    filter_str = quote(f'repositories.{digest_field}=="{digest}";not(deleted==true)')
 
     check_url = urljoin(args.pyxis_url, f"v1/images?page_size=1&filter={filter_str}")
 
@@ -131,8 +144,6 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
             }
         ],
         "certified": json.loads(args.certified.lower()),
-        "docker_image_digest": docker_image_digest,
-        "image_id": docker_image_digest,
         "architecture": parsed_data["architecture"],
         "parsed_data": parsed_data,
     }
@@ -145,6 +156,9 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
             }
         )
 
+    digest_field = get_digest_field(args.media_type)
+    container_image_payload["repositories"][0][digest_field] = docker_image_digest
+
     rsp = pyxis.post(upload_url, container_image_payload).json()
 
     # Make sure container metadata was successfully added to Pyxis
@@ -152,6 +166,20 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
         LOGGER.info(f"The image id is: {rsp['_id']}")
     else:
         raise Exception("Image metadata was not successfully added to Pyxis.")
+
+
+def get_digest_field(media_type: str) -> str:
+    """This will return one of the two possible digest fields
+    to use in the repository object which is embedded in the
+    ContainerImage object.
+
+    manifest_schema2_digest is used for single arch images,
+    manifest_list_digest is used for multi arch images
+    """
+    if media_type in MANIFEST_LIST_TYPES:
+        return "manifest_list_digest"
+    else:
+        return "manifest_schema2_digest"
 
 
 def main():  # pragma: no cover

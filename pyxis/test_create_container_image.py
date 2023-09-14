@@ -6,47 +6,67 @@ from create_container_image import (
     image_already_exists,
     create_container_image,
     prepare_parsed_data,
+    get_digest_field,
 )
 
 
 mock_pyxis_url = "https://catalog.redhat.com/api/containers/"
 
 
+@patch("create_container_image.get_digest_field")
 @patch("create_container_image.pyxis.get")
-def test_image_already_exists(mock_get: MagicMock):
+def test_image_already_exists__image_does_exist(mock_get, mock_get_digest_field: MagicMock):
     # Arrange
     mock_rsp = MagicMock()
     mock_get.return_value = mock_rsp
-
     args = MagicMock()
     args.pyxis_url = mock_pyxis_url
     digest = "some_digest"
+    mock_get_digest_field.return_value = "digest_field"
 
     # Image already exists
     mock_rsp.json.return_value = {"data": [{"_id": 0}]}
 
     # Act
     exists = image_already_exists(args, digest)
+
     # Assert
     assert exists
-    mock_get.assert_called_with(
+    mock_get_digest_field.assert_called_once_with(args.media_type)
+    mock_get.assert_called_once_with(
         mock_pyxis_url
         + "v1/images?page_size=1&filter="
-        + "docker_image_digest%3D%3D%22some_digest%22%3Bnot%28deleted%3D%3Dtrue%29"
+        + "repositories.digest_field%3D%3D%22some_digest%22%3Bnot%28deleted%3D%3Dtrue%29"
     )
+
+
+@patch("create_container_image.get_digest_field")
+@patch("create_container_image.pyxis.get")
+def test_image_already_exists__image_does_not_exist(
+    mock_get, mock_get_digest_field: MagicMock
+):
+    # Arrange
+    mock_rsp = MagicMock()
+    mock_get.return_value = mock_rsp
+    args = MagicMock()
+    args.pyxis_url = mock_pyxis_url
+    digest = "some_digest"
+    mock_get_digest_field.return_value = "digest_field"
 
     # Image doesn't exist
     mock_rsp.json.return_value = {"data": []}
 
     # Act
     exists = image_already_exists(args, digest)
+
     # Assert
     assert not exists
 
 
+@patch("create_container_image.get_digest_field")
 @patch("create_container_image.pyxis.post")
 @patch("create_container_image.datetime")
-def test_create_container_image(mock_datetime: MagicMock, mock_post: MagicMock):
+def test_create_container_image(mock_datetime, mock_post, mock_get_digest_field: MagicMock):
     # Mock an _id in the response for logger check
     mock_post.return_value.json.return_value = {"_id": 0}
 
@@ -57,6 +77,7 @@ def test_create_container_image(mock_datetime: MagicMock, mock_post: MagicMock):
     args.pyxis_url = mock_pyxis_url
     args.tag = "some_version"
     args.certified = "false"
+    mock_get_digest_field.return_value = "digest_field"
 
     # Act
     create_container_image(
@@ -80,20 +101,23 @@ def test_create_container_image(mock_datetime: MagicMock, mock_post: MagicMock):
                             "name": "some_version",
                         }
                     ],
+                    "digest_field": "some_digest",
                 }
             ],
             "certified": False,
-            "docker_image_digest": "some_digest",
-            "image_id": "some_digest",
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
         },
     )
+    mock_get_digest_field.assert_called_once_with(args.media_type)
 
 
+@patch("create_container_image.get_digest_field")
 @patch("create_container_image.pyxis.post")
 @patch("create_container_image.datetime")
-def test_create_container_image_latest(mock_datetime: MagicMock, mock_post: MagicMock):
+def test_create_container_image_latest(
+    mock_datetime, mock_post, mock_get_digest_field: MagicMock
+):
     # Mock an _id in the response for logger check
     mock_post.return_value.json.return_value = {"_id": 0}
 
@@ -105,6 +129,7 @@ def test_create_container_image_latest(mock_datetime: MagicMock, mock_post: Magi
     args.tag = "some_version"
     args.certified = "false"
     args.is_latest = "true"
+    mock_get_digest_field.return_value = "digest_field"
 
     # Act
     create_container_image(
@@ -136,11 +161,10 @@ def test_create_container_image_latest(mock_datetime: MagicMock, mock_post: Magi
                             "name": "latest",
                         },
                     ],
+                    "digest_field": "some_digest",
                 }
             ],
             "certified": False,
-            "docker_image_digest": "some_digest",
-            "image_id": "some_digest",
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
         },
@@ -196,3 +220,23 @@ def test_prepare_parsed_data():
         "layers": ["1", "2"],
         "name": "quay.io/hacbs-release/release-service-utils",
     }
+
+
+def test_get_digest_field():
+    """This will test that the common mediaType strings are translated to the correct
+    digest field to be used in the image.repository object"""
+    assert (
+        get_digest_field("application/vnd.docker.distribution.manifest.v2+json")
+        == "manifest_schema2_digest"
+    )
+    assert (
+        get_digest_field("application/vnd.oci.image.manifest.v1+json")
+        == "manifest_schema2_digest"
+    )
+    assert (
+        get_digest_field("application/vnd.docker.distribution.manifest.list.v2+json")
+        == "manifest_list_digest"
+    )
+    assert (
+        get_digest_field("application/vnd.oci.image.index.v1+json") == "manifest_list_digest"
+    )
