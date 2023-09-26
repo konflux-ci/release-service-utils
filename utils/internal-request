@@ -2,8 +2,17 @@
 
 # This script creates an InternalRequest resource in a Kubernetes cluster
 # using the 'kubectl' command line tool. The resource is created with
-# parameters passed to the script, and optionally waits for the resource to
-# reach a 'completed' status.
+# parameters passed to the script.
+#
+# In sync mode (default) the script waits for the InternalRequest to reach a 'completed'
+# status and will provide an exit code based on the InternalRequest status:
+#
+# Succeeded: error code 0
+# Failed: error code 21
+# Rejected: error code 22
+#
+# In async mode it creates an InternalRequest and exits with code 0 without waiting
+# for status updates.
 #
 # Usage:
 #   ./internal-request.sh -r request [-p <key=value> ...] [-s sync] [-t timeout]
@@ -113,15 +122,32 @@ if [ "$SYNC" = "true" ]; then
   # Wait until status is set or timeout
   END_TIME=$(date -ud "$TIMEOUT seconds" +%s)
   while true; do
-    STATUS=$(kubectl get internalrequest "$INTERNAL_REQUEST_NAME" -o json | jq -r '.status')
+    STATUS=$(kubectl get internalrequest "$INTERNAL_REQUEST_NAME" -o json | jq '.status')
 
     if [ "$STATUS" != "null" ]; then
-      CONDITIONS=$(kubectl get internalrequest "$INTERNAL_REQUEST_NAME" -o json | jq -r '.status.conditions')
+      CONDITIONS=$(kubectl get internalrequest "$INTERNAL_REQUEST_NAME" -o json | jq '.status.conditions')
       if [ "$(echo "$CONDITIONS" | jq 'length')" -eq 1 ]; then
         CONDITION_REASON=$(echo "$CONDITIONS" | jq -r '.[0].reason')
-        if [ "$CONDITION_REASON" != "Running" ]; then
-          echo "InternalRequest completed."
-          exit 0
+        if [ "$CONDITION_REASON" == "Running" ]; then
+          continue
+        else
+            case $CONDITION_REASON in
+                "Succeeded")
+                    echo "InternalRequest succeeded"
+                    EXIT_CODE=0
+                    ;;
+                "Failed")
+                    echo "InternalRequest failed"
+                    EXIT_CODE=21
+                    ;;
+                "Rejected")
+                    echo "InternalRequest rejected"
+                    EXIT_CODE=22
+                    ;;
+            esac
+            echo "Conditions:"
+            echo $CONDITIONS
+            exit $EXIT_CODE
         fi
       fi
     fi
