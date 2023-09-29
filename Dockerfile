@@ -19,6 +19,7 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     git \
     jq \
     python39-devel \
+    diffutils \
     python39-requests \
     skopeo \
     krb5-workstation \
