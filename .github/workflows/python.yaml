@@ -1,3 +1,4 @@
+---
 name: Python Checks for Pull Requests
 on:
   pull_request:
@@ -16,7 +17,7 @@ jobs:
       - name: Setup python environment for flake8 check
         uses: actions/setup-python@v4
         with:
-          python-version: "3.9" # Same as in Dockerfile
+          python-version: "3.9"  # Same as in Dockerfile
       - name: flake8 Lint
         uses: py-actions/flake8@v2
       - name: Run pytest
