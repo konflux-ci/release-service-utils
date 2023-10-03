@@ -1,0 +1,23 @@
+apiVersion: rhtap.redhat.com/v1alpha1
+kind: Advisory
+metadata:
+  name: {{ advisory_name }}
+spec:
+  product_id: {{ advisory.spec.product_id }}
+  cpe: {{ advisory.spec.cpe }}
+  type: {{ advisory.spec.type }}
+{%- if 'issues' in advisory.spec %}
+  issues:
+    {{ advisory.spec.issues | to_nice_yaml(indent=2) | indent(4) | trim }}
+{%- endif %}
+  content:
+    {{ advisory.spec.content | to_nice_yaml(indent=2) | indent(4) | trim }}
+  synopsis: {{ advisory.spec.synopsis }}
+  topic: >-
+    {{ advisory.spec.topic | wordwrap(76) | indent(4) }}
+  description: >-
+    {{ advisory.spec.description | wordwrap(76) | indent(4) }}
+  solution: >-
+    {{ advisory.spec.solution | wordwrap(76) | indent(4) }}
+  references:
+    {{ advisory.spec.references | to_nice_yaml | indent(4) }}
