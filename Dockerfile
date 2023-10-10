@@ -20,16 +20,21 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     jq \
     python39-devel \
     diffutils \
+    python39-pip \
     python39-requests \
     skopeo \
     krb5-workstation \
     && dnf clean all
+
+RUN pip3 install jinja2 \
+    jinja2-ansible-filters
 
 ADD data/certs/2015-IT-Root-CA.pem data/certs/2022-IT-Root-CA.pem /etc/pki/ca-trust/source/anchors/
 RUN update-ca-trust
 
 COPY pyxis /home/pyxis
 COPY utils /home/utils
+COPY templates /home/templates
 
 # Set HOME variable to something else than `/` to avoid 'permission denied' problems when writing files.
 ENV HOME=/tekton/home
