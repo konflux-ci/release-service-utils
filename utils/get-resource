@@ -1,11 +1,12 @@
 #!/usr/bin/env sh
 #
-# Script: kubectl_script.sh
+# Script: get_resource
 #
 # Description: This script receives three parameters: <resource_type>,
 #              <namespaced_name>, and [jsonpath]. It uses `kubectl` to load
 #              the specified Kubernetes resource and print it. If a jsonpath
-#              is supplied, only that part will be printed.
+#              is supplied, only that part will be printed. If a jsonpath is
+#              supplied and the `kubectl` command fails, `{}` will be printed.
 #
 # Usage: kubectl_script.sh <resource_type> <namespaced_name> [jsonpath]
 #
@@ -37,7 +38,8 @@ IFS='/' read -r namespace name <<< "$namespaced_name"
 
 # If a jsonpath is provided, append it to the kubectl command
 if [ ! -z "$jsonpath" ]; then
-  kubectl get $resource_type -n $namespace $name -o jsonpath="$jsonpath" --allow-missing-template-keys=false || echo "{}"
+  kubectl get $resource_type -n $namespace $name -o jsonpath="$jsonpath" \
+  --allow-missing-template-keys=false 2> /dev/null || echo "{}"
 else
   kubectl get $resource_type -n $namespace $name -o json
 fi
