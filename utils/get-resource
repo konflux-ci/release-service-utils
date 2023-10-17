@@ -37,7 +37,7 @@ IFS='/' read -r namespace name <<< "$namespaced_name"
 
 # If a jsonpath is provided, append it to the kubectl command
 if [ ! -z "$jsonpath" ]; then
-  kubectl get $resource_type -n $namespace $name -o jsonpath="$jsonpath"
+  kubectl get $resource_type -n $namespace $name -o jsonpath="$jsonpath" --allow-missing-template-keys=false || echo "{}"
 else
   kubectl get $resource_type -n $namespace $name -o json
 fi
