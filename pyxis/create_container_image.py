@@ -1,4 +1,39 @@
 #!/usr/bin/env python3
+"""
+Python script to create a Container Image object in Pyxis
+
+Note about releasing to registry.redhat.io (using `--rh-push true` CLI argument):
+
+Our goal is to be able to download images from registry.redhat.io. For that to happen,
+an image needs to be pushed to quay.io/redhat-prod/$PRODUCT----$IMAGE, e.g.
+quay.io/redhat-prod/rhtas-tech-preview----tuf-server-rhel9. When creating
+the Container Image object in Pyxis, the registry needs to be set to
+registry.access.redhat.com and the repository would be rhtas-tech-preview/tuf-server-rhel9
+in the example above ("----" converted to "/"). This also requires a corresponding
+Container Repository object to exist in Pyxis. This will typically be created as part
+of product onboarding to RHTAP.
+
+For stage, if you want to be able to pull an image from registry.stage.redhat.io,
+the image is pushed to quay.io/redhat-pending, the Container Image is created
+in stage Pyxis, but the registry value in Pyxis is still set to registry.access.redhat.com.
+
+Why is the registry set to registry.access.redhat.com and not registry.redhat.io?
+Mostly for historical reasons.
+
+When Red Hat started releasing container images, they were all available
+in a publicly available registry: registry.access.redhat.com .
+Later, Red Hat introduced the so called "terms based registry": registry.redhat.io
+The new registry requires users to agree to terms and the access is authenticated.
+At first, all images were available in both registries. Nowaways, most images that
+are released are only available from registry.redhat.io. This is controlled by
+the `requires_terms` flag in the Pyxis Container Repository object:
+https://pyxis.api.redhat.com/docs/objects/ContainerRepository.html?tab=Fields
+
+For RHTAP, we currently expect to only release to registry.redhat.io and not the public
+registry. But if we did want to release to registry.access.redhat.com, there would
+likely be no change required in our pipeline - only the Container Repository
+object in Pyxis would need to have `requires_terms` set to false.
+"""
 import argparse
 from urllib.parse import quote
 from datetime import datetime
@@ -53,6 +88,15 @@ def setup_argparser() -> Any:  # pragma: no cover
         help="The mediaType string returned by `skopeo inspect --raw`. "
         "Used to determine if it's a single arch or multiarch image.",
         required=True,
+    )
+    parser.add_argument(
+        "--rh-push",
+        help="If set to true, the registry and repository entries in the Pyxis Container "
+        "Image object will be converted to use Red Hat's official registry. E.g. a mapped "
+        "repository of quay.io/redhat-pending/product---my-image will be converted to use "
+        "registry registry.access.redhat.com and repository product/my-image. Also, "
+        "the image will be marked as published.",
+        default="false",
     )
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
     return parser
@@ -122,8 +166,19 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
     docker_image_digest = parsed_data["digest"]
     # digest isn't accepted in the parsed_data payload to pyxis
     del parsed_data["digest"]
-    docker_image_registry = parsed_data["name"].split("/")[0]
-    docker_image_repo = parsed_data["name"].split("/", 1)[1]
+
+    if args.rh_push == "false":
+        image_registry = parsed_data["name"].split("/")[0]
+        image_repo = parsed_data["name"].split("/", 1)[1]
+        published = False
+    else:
+        image_registry = "registry.access.redhat.com"
+        # E.g. if the name in the skopeo inspect result is
+        # "quay.io/redhat-prod/rhtas-tech-preview----cosign-rhel9",
+        # image_repo will be "rhtas-tech-preview/cosign-rhel9"
+        image_repo = parsed_data["name"].split("/")[-1].replace("----", "/")
+        published = True
+
     # name isn't accepted in the parsed_data payload to pyxis
     del parsed_data["name"]
 
@@ -131,9 +186,9 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
     container_image_payload = {
         "repositories": [
             {
-                "published": False,
-                "registry": docker_image_registry,
-                "repository": docker_image_repo,
+                "published": published,
+                "registry": image_registry,
+                "repository": image_repo,
                 "push_date": date_now,
                 "tags": [
                     {
