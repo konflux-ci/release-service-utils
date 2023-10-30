@@ -77,6 +77,7 @@ def test_create_container_image(mock_datetime, mock_post, mock_get_digest_field:
     args.pyxis_url = mock_pyxis_url
     args.tag = "some_version"
     args.certified = "false"
+    args.rh_push = "false"
     mock_get_digest_field.return_value = "digest_field"
 
     # Act
@@ -129,6 +130,7 @@ def test_create_container_image_latest(
     args.tag = "some_version"
     args.certified = "false"
     args.is_latest = "true"
+    args.rh_push = "false"
     mock_get_digest_field.return_value = "digest_field"
 
     # Act
@@ -169,6 +171,62 @@ def test_create_container_image_latest(
             "parsed_data": {"architecture": "ok"},
         },
     )
+
+
+@patch("create_container_image.get_digest_field")
+@patch("create_container_image.pyxis.post")
+@patch("create_container_image.datetime")
+def test_create_container_image_rh_push(
+    mock_datetime, mock_post, mock_get_digest_field: MagicMock
+):
+    # Mock an _id in the response for logger check
+    mock_post.return_value.json.return_value = {"_id": 0}
+
+    # mock date
+    mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
+
+    args = MagicMock()
+    args.pyxis_url = mock_pyxis_url
+    args.tag = "some_version"
+    args.certified = "false"
+    args.rh_push = "true"
+    mock_get_digest_field.return_value = "digest_field"
+
+    # Act
+    create_container_image(
+        args,
+        {
+            "architecture": "ok",
+            "digest": "some_digest",
+            "name": "quay.io/redhat-pending/some-product----some-image",
+        },
+    )
+
+    # Assert
+    mock_post.assert_called_with(
+        mock_pyxis_url + "v1/images",
+        {
+            "repositories": [
+                {
+                    "published": True,
+                    "registry": "registry.access.redhat.com",
+                    "repository": "some-product/some-image",
+                    "push_date": "1970-10-10T10:10:10.000000+00:00",
+                    "tags": [
+                        {
+                            "added_date": "1970-10-10T10:10:10.000000+00:00",
+                            "name": "some_version",
+                        }
+                    ],
+                    "digest_field": "some_digest",
+                }
+            ],
+            "certified": False,
+            "architecture": "ok",
+            "parsed_data": {"architecture": "ok"},
+        },
+    )
+    mock_get_digest_field.assert_called_once_with(args.media_type)
 
 
 def test_create_container_image_no_digest():
