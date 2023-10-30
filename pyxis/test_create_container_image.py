@@ -106,6 +106,7 @@ def test_create_container_image(mock_datetime, mock_post, mock_get_digest_field:
                 }
             ],
             "certified": False,
+            "image_id": "some_digest",
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
         },
@@ -167,6 +168,7 @@ def test_create_container_image_latest(
                 }
             ],
             "certified": False,
+            "image_id": "some_digest",
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
         },
@@ -222,6 +224,7 @@ def test_create_container_image_rh_push(
                 }
             ],
             "certified": False,
+            "image_id": "some_digest",
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
         },
