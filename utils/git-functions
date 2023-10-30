@@ -106,6 +106,43 @@ git_rebase() {
     git rebase "${NAME}"/"${REVISION}"
 }
 
+git_push_with_retries() {
+    OPTIONS=$(getopt -l "branch:,retries:,url:" -o "b:r:u:" -a -- "$@")
+    eval set -- "$OPTIONS"
+    while true; do
+        case "$1" in
+            -b|--branch)
+                shift
+                BRANCH=$1
+                ;;
+            -r|--retries)
+                shift
+                RETRIES=$1
+                ;;
+            -u|--url)
+                shift
+                URL=$1
+                ;;
+            --)
+                shift
+                break
+                ;;
+        esac
+        shift
+    done
+
+    attempt=0
+    until [ "$attempt" -gt "$RETRIES" ] ; do
+      git push "$URL" && break
+      attempt=$((attempt+1))
+      git pull --rebase origin $BRANCH
+    done
+    if [ "$attempt" -gt "$RETRIES" ] ; then
+      echo "Max retries exceeded."
+      return 1
+    fi
+}
+
 git_functions_init() {
   # an actual user should be set
   [ -z "${GIT_AUTHOR_NAME}" ] || [ -z "${GIT_AUTHOR_EMAIL}" ] && git_functions_usage && return 1
