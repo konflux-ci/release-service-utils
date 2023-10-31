@@ -7,7 +7,8 @@ Note about releasing to registry.redhat.io (using `--rh-push true` CLI argument)
 Our goal is to be able to download images from registry.redhat.io. For that to happen,
 an image needs to be pushed to quay.io/redhat-prod/$PRODUCT----$IMAGE, e.g.
 quay.io/redhat-prod/rhtas-tech-preview----tuf-server-rhel9. When creating
-the Container Image object in Pyxis, the registry needs to be set to
+the Container Image object in Pyxis, we need a second repository item
+under `repositories` where the registry needs to be set to
 registry.access.redhat.com and the repository would be rhtas-tech-preview/tuf-server-rhel9
 in the example above ("----" converted to "/"). This also requires a corresponding
 Container Repository object to exist in Pyxis. This will typically be created as part
@@ -91,9 +92,10 @@ def setup_argparser() -> Any:  # pragma: no cover
     )
     parser.add_argument(
         "--rh-push",
-        help="If set to true, the registry and repository entries in the Pyxis Container "
-        "Image object will be converted to use Red Hat's official registry. E.g. a mapped "
-        "repository of quay.io/redhat-pending/product---my-image will be converted to use "
+        help="If set to true, a second item will be created in ContainerImage.repositories "
+        "with the registry and repository entries converted to use Red Hat's official "
+        "registry. E.g. a mapped repository of "
+        "quay.io/redhat-pending/product---my-image will be converted to use "
         "registry registry.access.redhat.com and repository product/my-image. Also, "
         "the image will be marked as published.",
         default="false",
@@ -167,18 +169,9 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
     # digest isn't accepted in the parsed_data payload to pyxis
     del parsed_data["digest"]
 
-    if args.rh_push == "false":
-        image_registry = parsed_data["name"].split("/")[0]
-        image_repo = parsed_data["name"].split("/", 1)[1]
-        published = False
-    else:
-        image_registry = "registry.access.redhat.com"
-        # E.g. if the name in the skopeo inspect result is
-        # "quay.io/redhat-prod/rhtas-tech-preview----cosign-rhel9",
-        # image_repo will be "rhtas-tech-preview/cosign-rhel9"
-        image_repo = parsed_data["name"].split("/")[-1].replace("----", "/")
-        published = True
-
+    image_name = parsed_data["name"]
+    image_registry = image_name.split("/")[0]
+    image_repo = image_name.split("/", 1)[1]
     # name isn't accepted in the parsed_data payload to pyxis
     del parsed_data["name"]
 
@@ -186,7 +179,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
     container_image_payload = {
         "repositories": [
             {
-                "published": published,
+                "published": False,
                 "registry": image_registry,
                 "repository": image_repo,
                 "push_date": date_now,
@@ -214,6 +207,18 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
 
     digest_field = get_digest_field(args.media_type)
     container_image_payload["repositories"][0][digest_field] = docker_image_digest
+
+    # For images released to registry.redhat.io we need a second repository item
+    # with published=true and registry and repository converted.
+    # E.g. if the name in the skopeo inspect result is
+    # "quay.io/redhat-prod/rhtas-tech-preview----cosign-rhel9",
+    # repository will be "rhtas-tech-preview/cosign-rhel9"
+    if args.rh_push == "true":
+        repo = container_image_payload["repositories"][0].copy()
+        repo["published"] = True
+        repo["registry"] = "registry.access.redhat.com"
+        repo["repository"] = image_name.split("/")[-1].replace("----", "/")
+        container_image_payload["repositories"].append(repo)
 
     rsp = pyxis.post(upload_url, container_image_payload).json()
 

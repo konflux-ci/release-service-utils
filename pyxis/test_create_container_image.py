@@ -210,6 +210,19 @@ def test_create_container_image_rh_push(
         {
             "repositories": [
                 {
+                    "published": False,
+                    "registry": "quay.io",
+                    "repository": "redhat-pending/some-product----some-image",
+                    "push_date": "1970-10-10T10:10:10.000000+00:00",
+                    "tags": [
+                        {
+                            "added_date": "1970-10-10T10:10:10.000000+00:00",
+                            "name": "some_version",
+                        }
+                    ],
+                    "digest_field": "some_digest",
+                },
+                {
                     "published": True,
                     "registry": "registry.access.redhat.com",
                     "repository": "some-product/some-image",
@@ -221,7 +234,7 @@ def test_create_container_image_rh_push(
                         }
                     ],
                     "digest_field": "some_digest",
-                }
+                },
             ],
             "certified": False,
             "image_id": "some_digest",
