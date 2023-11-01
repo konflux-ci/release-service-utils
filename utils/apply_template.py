@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from jinja2 import Template
+from jinja2 import Template, DebugUndefined
 from jinja2_ansible_filters import AnsibleCoreFiltersExtension
 import argparse
 import json
@@ -38,7 +38,9 @@ def main():  # pragma: no cover
     args = setup_argparser()
 
     with open(args.template) as t:
-        template = Template(t.read(), extensions=[AnsibleCoreFiltersExtension])
+        template = Template(
+            t.read(), extensions=[AnsibleCoreFiltersExtension], undefined=DebugUndefined
+        )
     content = template.render(json.loads(args.data))
 
     filename = args.output
