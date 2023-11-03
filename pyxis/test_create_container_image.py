@@ -75,7 +75,7 @@ def test_create_container_image(mock_datetime, mock_post, mock_get_digest_field:
 
     args = MagicMock()
     args.pyxis_url = mock_pyxis_url
-    args.tag = "some_version"
+    args.tags = "some_version"
     args.certified = "false"
     args.rh_push = "false"
     mock_get_digest_field.return_value = "digest_field"
@@ -128,7 +128,7 @@ def test_create_container_image_latest(
 
     args = MagicMock()
     args.pyxis_url = mock_pyxis_url
-    args.tag = "some_version"
+    args.tags = "some_version"
     args.certified = "false"
     args.is_latest = "true"
     args.rh_push = "false"
@@ -178,7 +178,7 @@ def test_create_container_image_latest(
 @patch("create_container_image.get_digest_field")
 @patch("create_container_image.pyxis.post")
 @patch("create_container_image.datetime")
-def test_create_container_image_rh_push(
+def test_create_container_image_rh_push_multiple_tags(
     mock_datetime, mock_post, mock_get_digest_field: MagicMock
 ):
     # Mock an _id in the response for logger check
@@ -189,7 +189,7 @@ def test_create_container_image_rh_push(
 
     args = MagicMock()
     args.pyxis_url = mock_pyxis_url
-    args.tag = "some_version"
+    args.tags = "tagprefix tagprefix-timestamp"
     args.certified = "false"
     args.rh_push = "true"
     mock_get_digest_field.return_value = "digest_field"
@@ -217,8 +217,12 @@ def test_create_container_image_rh_push(
                     "tags": [
                         {
                             "added_date": "1970-10-10T10:10:10.000000+00:00",
-                            "name": "some_version",
-                        }
+                            "name": "tagprefix",
+                        },
+                        {
+                            "added_date": "1970-10-10T10:10:10.000000+00:00",
+                            "name": "tagprefix-timestamp",
+                        },
                     ],
                     "digest_field": "some_digest",
                 },
@@ -230,8 +234,12 @@ def test_create_container_image_rh_push(
                     "tags": [
                         {
                             "added_date": "1970-10-10T10:10:10.000000+00:00",
-                            "name": "some_version",
-                        }
+                            "name": "tagprefix",
+                        },
+                        {
+                            "added_date": "1970-10-10T10:10:10.000000+00:00",
+                            "name": "tagprefix-timestamp",
+                        },
                     ],
                     "digest_field": "some_digest",
                 },
