@@ -69,8 +69,9 @@ def setup_argparser() -> Any:  # pragma: no cover
     )
     parser.add_argument("--certified", help="Is the ContainerImage certified?", required=True)
     parser.add_argument(
-        "--tag",
-        help="The ContainerImage tag name to upload",
+        "--tags",
+        help="Tags to include in the ContainerImage object. It can be a single tag "
+        "or multiple tags separated by space",
         required=True,
     )
     parser.add_argument(
@@ -176,6 +177,18 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
     del parsed_data["name"]
 
     upload_url = urljoin(args.pyxis_url, "v1/images")
+
+    tags = args.tags.split()
+    if args.is_latest == "true":
+        tags.append("latest")
+    pyxis_tags = [
+        {
+            "added_date": date_now,
+            "name": tag,
+        }
+        for tag in tags
+    ]
+
     container_image_payload = {
         "repositories": [
             {
@@ -183,12 +196,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
                 "registry": image_registry,
                 "repository": image_repo,
                 "push_date": date_now,
-                "tags": [
-                    {
-                        "added_date": date_now,
-                        "name": args.tag,
-                    },
-                ],
+                "tags": pyxis_tags,
             }
         ],
         "certified": json.loads(args.certified.lower()),
@@ -196,14 +204,6 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
         "architecture": parsed_data["architecture"],
         "parsed_data": parsed_data,
     }
-
-    if args.is_latest == "true":
-        container_image_payload["repositories"][0]["tags"].append(
-            {
-                "added_date": date_now,
-                "name": "latest",
-            }
-        )
 
     digest_field = get_digest_field(args.media_type)
     container_image_payload["repositories"][0][digest_field] = docker_image_digest
