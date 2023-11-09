@@ -86,9 +86,9 @@ def test_graphql_query__success(mock_post: MagicMock):
         }
     }
 
-    data = pyxis.graphql_query(API_URL, REQUEST_BODY, QUERY)
+    data = pyxis.graphql_query(API_URL, REQUEST_BODY)
 
-    assert data == mock_data
+    assert data[QUERY]["data"] == mock_data
     mock_post.assert_called_once_with(API_URL, REQUEST_BODY)
 
 
@@ -102,7 +102,7 @@ def test_graphql_query__general_graphql_error(mock_post: MagicMock):
     }
 
     with pytest.raises(RuntimeError):
-        pyxis.graphql_query(API_URL, REQUEST_BODY, QUERY)
+        pyxis.graphql_query(API_URL, REQUEST_BODY)
 
     mock_post.assert_called_once_with(API_URL, REQUEST_BODY)
 
@@ -121,7 +121,7 @@ def test_graphql_query__pyxis_error(mock_post: MagicMock):
     }
 
     with pytest.raises(RuntimeError):
-        pyxis.graphql_query(API_URL, REQUEST_BODY, QUERY)
+        pyxis.graphql_query(API_URL, REQUEST_BODY)
 
     mock_post.assert_called_once_with(API_URL, REQUEST_BODY)
 

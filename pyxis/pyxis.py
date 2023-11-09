@@ -82,7 +82,7 @@ def post(url: str, body: Dict[str, Any]) -> requests.Response:
     return resp
 
 
-def graphql_query(graphql_api: str, body: Dict[str, Any], query: str) -> Dict[str, Any]:
+def graphql_query(graphql_api: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """Make a request to Pyxis GraphQL API
 
     This will make a POST request and then check the result
@@ -91,26 +91,22 @@ def graphql_query(graphql_api: str, body: Dict[str, Any], query: str) -> Dict[st
     Args:
         graphql_api (str): Pyxis GraphQL API URL
         body (Dict[str, Any]): Request payload
-        query (str): Name of the Pyxis GraphQL query/mutation used
 
     :return: Pyxis response
     """
     resp = post(graphql_api, body)
     resp_json = resp.json()
 
-    error_msg = f"Pyxis GraphQL query '{query}' failed"
-    if resp_json.get("data") is None or query not in resp_json["data"]:
+    error_msg = "Pyxis GraphQL query failed"
+    if resp_json.get("data") is None or any(
+        [query["error"] is not None for query in resp_json["data"].values()]
+    ):
         LOGGER.error(error_msg)
         LOGGER.error(f"Pyxis response: {resp_json}")
         LOGGER.error(f"Pyxis trace_id: {resp.headers.get('trace_id')}")
         raise RuntimeError(error_msg)
-    elif resp_json["data"][query]["error"] is not None:
-        error_msg = f"{error_msg}: {resp_json['data'][query]['error']['detail']}"
-        LOGGER.error(error_msg)
-        LOGGER.error(f"Pyxis trace_id: {resp.headers.get('trace_id')}")
-        raise RuntimeError(error_msg)
 
-    return resp_json["data"][query]["data"]
+    return resp_json["data"]
 
 
 def put(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
