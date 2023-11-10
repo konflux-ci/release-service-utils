@@ -1,0 +1,20 @@
+mutation (
+    $id: ObjectIDFilterScalar!,
+    {% for component in components %}
+    $input{{ loop.index0 }}: ContentManifestComponentInput!{% if not loop.last %},{% endif %}
+    {% endfor %}
+) {
+    {% for component in components %}
+    create{{ loop.index0 }}: create_content_manifest_component_for_manifest(
+        id: $id,
+        input: $input{{ loop.index0 }}
+    ) {
+        data {
+            _id
+        }
+        error {
+            detail
+        }
+    }
+    {% endfor %}
+}
