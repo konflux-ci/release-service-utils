@@ -241,9 +241,8 @@ def create_content_manifest_components(
         LOGGER.info(f"Adding component {i+1} to {i+len(batch)}")
         mutation = template.render(components=batch)
 
-        variables = {"id": content_manifest_id}
-        for j, component in enumerate(batch):
-            variables[f"input{j}"] = component
+        variables = {f"input{j}": component for j, component in enumerate(batch)}
+        variables["id"] = content_manifest_id
 
         body = {"query": mutation, "variables": variables}
 
