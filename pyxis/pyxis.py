@@ -9,14 +9,15 @@ import requests
 
 LOGGER = logging.getLogger("pyxis")
 
+session = None
 
-def _get_session(pyxis_url: str, auth_required: bool = True) -> requests.Session:
+
+def _get_session(auth_required: bool = True) -> requests.Session:
     """Create a Pyxis http session with auth based on env variables.
 
     Auth is optional and can be set to use either API key or certificate + key.
 
     Args:
-        url (str): Pyxis API URL
         auth_required (bool): Whether authentication should be required for the session
 
     Raises:
@@ -62,7 +63,9 @@ def post(url: str, body: Dict[str, Any]) -> requests.Response:
 
     :return: Pyxis response
     """
-    session = _get_session(url)
+    global session
+    if session is None:
+        session = _get_session()
 
     LOGGER.debug(f"POST request URL: {url}")
     LOGGER.debug(f"POST request body: {body}")
@@ -119,7 +122,9 @@ def put(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
 
     :return: Pyxis response
     """
-    session = _get_session(url)
+    global session
+    if session is None:
+        session = _get_session()
 
     LOGGER.debug(f"PATCH Pyxis request: {url}")
     resp = session.put(url, json=body)
@@ -144,7 +149,10 @@ def get(url: str, params: Optional[Dict[str, str]] = None, auth_required: bool =
 
     :return: Pyxis GET request response
     """
-    session = _get_session(url, auth_required=auth_required)
+    global session
+    if session is None:
+        session = _get_session()
+
     LOGGER.debug(f"GET Pyxis request url: {url}")
     LOGGER.debug(f"GET Pyxis request params: {params}")
     resp = session.get(url, params=params)
