@@ -78,6 +78,7 @@ def test_create_container_image(mock_datetime, mock_post, mock_get_digest_field:
     args.tags = "some_version"
     args.certified = "false"
     args.rh_push = "false"
+    args.source_container_enabled = "true"
     mock_get_digest_field.return_value = "digest_field"
 
     # Act
@@ -103,6 +104,7 @@ def test_create_container_image(mock_datetime, mock_post, mock_get_digest_field:
                         }
                     ],
                     "digest_field": "some_digest",
+                    "source_container_image_enabled": True,
                 }
             ],
             "certified": False,
@@ -165,6 +167,7 @@ def test_create_container_image_latest(
                         },
                     ],
                     "digest_field": "some_digest",
+                    "source_container_image_enabled": False,
                 }
             ],
             "certified": False,
@@ -225,6 +228,7 @@ def test_create_container_image_rh_push_multiple_tags(
                         },
                     ],
                     "digest_field": "some_digest",
+                    "source_container_image_enabled": False,
                 },
                 {
                     "published": True,
@@ -242,6 +246,7 @@ def test_create_container_image_rh_push_multiple_tags(
                         },
                     ],
                     "digest_field": "some_digest",
+                    "source_container_image_enabled": False,
                 },
             ],
             "certified": False,

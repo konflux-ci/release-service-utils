@@ -86,6 +86,11 @@ def setup_argparser() -> Any:  # pragma: no cover
         required=True,
     )
     parser.add_argument(
+        "--source-container-enabled",
+        help="Were source container images published alongside the image?",
+        default="false",
+    )
+    parser.add_argument(
         "--media-type",
         help="The mediaType string returned by `skopeo inspect --raw`. "
         "Used to determine if it's a single arch or multiarch image.",
@@ -197,6 +202,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
                 "repository": image_repo,
                 "push_date": date_now,
                 "tags": pyxis_tags,
+                "source_container_image_enabled": (args.source_container_enabled == "true"),
             }
         ],
         "certified": json.loads(args.certified.lower()),
