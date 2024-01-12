@@ -24,9 +24,9 @@
 #       InternalRequest resource. The value of the parameter is treated as a string,
 #       and it can be a valid JSON object or array. When passing complex parameter
 #       values, make sure to enclose them in quotes.
-#   -i  identifier: if set, a label will be added to the IR with key $LABEL_KEY
-#       (see below in the script) and value set to this string. Optional.
-#       E.g. a TaskRun UID.
+#   -l  labels: can be specified multiple times. Each '-l' flag represents a
+#       label that will be added to the 'metadata.labels' field in the
+#       InternalRequest resource. The value of the parameter must be a string. Optional.
 #   -s  Sync: a flag that indicates whether the script has to finish to complete
 #       the tasks or exit immediately after creating the resource. Default is true.
 #   -t  Timeout: Defaults to 600 seconds.
@@ -44,21 +44,19 @@
 set -e
 
 TIMEOUT=600
-LABEL_KEY="internal-services.appstudio.openshift.io/group-id"
-LABEL_VALUE=""
 SYNC=true
 PARAMS=""
 
 function usage {
-    echo "Usage: $0 -r request [-p parameters] [-s sync] [-t timeout]"
+    echo "Usage: $0 -r request [-p parameters] [-l labels] [-s sync] [-t timeout]"
     echo
     echo "  -r  Request: the name of the request."
     echo "  -p  Params: can be specified multiple times. Each '-p' flag represents a"
     echo "      parameter that will be added to the 'parameters' field in the"
     echo "      InternalRequest resource."
-    echo "  -i  identifier: if set, a label will be added to the IR with key $LABEL_KEY"
-    echo "      and value set to this string. Optional."
-    echo "      E.g. a TaskRun UID."
+    echo "  -l  Labels: can be specified multiple times. Each '-l' flag represents a"
+    echo "      label that will be added to the 'metadata.labels' field in the"
+    echo "      InternalRequest resource. Optional."
     echo "  -s  Sync: a flag that indicates whether the script has to finish to complete the tasks or exit immediately after creating the resource. Default is true."
     echo "  -t  Timeout: Defaults to 600 seconds."
     echo "  -h  Display this help message."
@@ -68,12 +66,13 @@ function usage {
 
 # Parsing arguments
 PARAMS=() # initialize PARAMS as an empty array
-while getopts r:p:i:s:t:h flag
+LABELS=() # initialize LABELS as an empty array
+while getopts r:p:l:s:t:h flag
 do
     case "${flag}" in
         r) REQUEST=${OPTARG};;
         p) PARAMS+=("${OPTARG}");; # append each parameter to the PARAMS array
-        i) LABEL_VALUE=${OPTARG};;
+        l) LABELS+=("${OPTARG}");; # append each label to the LABELS array
         s) SYNC=${OPTARG};;
         t) TIMEOUT=${OPTARG};;
         h) usage;;
@@ -87,11 +86,12 @@ then
     usage
 fi
 
-# Convert parameters to JSON format
+# Convert parameters and labels to JSON format
 # Create a bash array
 declare -a PARAM_JSON_ARRAY
+declare -a LABEL_JSON_ARRAY
 
-# Create a JSON object for each parameter and append to the bash array
+# Create a JSON object for each item and append to their bash arrays
 for param in "${PARAMS[@]}"
 do
     KEY=$(echo "$param" | cut -d'=' -f1)
@@ -99,8 +99,16 @@ do
     PARAM_JSON_ARRAY+=("$(jq -n --arg key "$KEY" --arg value "$VALUE" '{($key): $value}')")
 done
 
+for label in "${LABELS[@]}"
+do
+    KEY=$(echo "$label" | cut -d'=' -f1)
+    VALUE=$(echo "$label" | cut -d'=' -f2-)
+    LABEL_JSON_ARRAY+=("$(jq -n --arg key "$KEY" --arg value "$VALUE" '{($key): $value}')")
+done
+
 # Combine all JSON objects in the bash array into one JSON object
 PARAM_JSON=$(echo "${PARAM_JSON_ARRAY[@]}" | jq -s 'add')
+LABEL_JSON=$(echo "${LABEL_JSON_ARRAY[@]}" | jq -s 'add')
 
 # Create JSON payload for the InternalRequest
 PAYLOAD=$(jq -n \
@@ -118,11 +126,10 @@ PAYLOAD=$(jq -n \
       }
     }'
 )
-if [ -n $LABEL_VALUE ]; then
+if [[ -n ${LABELS[@]} ]]; then
     PAYLOAD=$(jq \
-        --arg label_key "$LABEL_KEY" \
-        --arg label_value "$LABEL_VALUE" \
-        '.metadata.labels += {($label_key): $label_value}' <<< $PAYLOAD)
+        --argjson labels "$LABEL_JSON" \
+        '.metadata.labels += $labels' <<< $PAYLOAD)
 fi
 
 # Create InternalRequest using kubectl
