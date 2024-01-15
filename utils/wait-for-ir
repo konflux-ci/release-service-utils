@@ -11,17 +11,17 @@
 #   - Timeout reached: exit code 124
 #
 # Usage:
-#   ./wait-for-ir [-n name] [-i identifier] [-t timeout]
+#   ./wait-for-ir [-n name] [-l labels] [-t timeout]
 #
 # Parameters:
 #   -n  name: The name of the InternalRequest to watch.
-#   -i  identifier: If set, the IRs to watch will be determined by a label
-#       of this value and key $LABEL_KEY (see below in the script). Optional.
-#       E.g. a TaskRun UID.
+#   -l  labels: Can be specified multiple times. If set, the
+#       IRs to watch will be determined by a label of this key
+#       and value. Optional. E.g. a TaskRun UID
 #   -t  Timeout: Defaults to 600 seconds.
 #   -h  Display this help message.
 #
-#   One of -n or -i has to be specified, but not both.
+#   One of -n or -l has to be specified, but not both.
 #
 # Prerequisites:
 #   - kubectl: The Kubernetes command line tool must be installed and properly
@@ -35,17 +35,15 @@
 set -e
 
 NAME=""
-LABEL_KEY="internal-services.appstudio.openshift.io/group-id"
-LABEL_VALUE=""
 TIMEOUT=600
 
 function usage {
-    echo "Usage: $0 [-n name] [-i identifier] [-t timeout]"
+    echo "Usage: $0 [-n name] [-l labels] [-t timeout]"
     echo
     echo "  -n  name: The name of the InternalRequest to watch."
-    echo "  -i  identifier: If set, the IRs to watch will be determined by a label"
-    echo "      of this value and key $LABEL_KEY. Optional."
-    echo "      E.g. a TaskRun UID."
+    echo "  -l  labels: Can be specified multiple times. If set, the"
+    echo "      IRs to watch will be determined by a label of this key"
+    echo "      and value. Optional. E.g. a TaskRun UID"
     echo "  -t  Timeout: Defaults to 600 seconds."
     echo "  -h  Display this help message."
     echo
@@ -65,11 +63,12 @@ function print_conditions {
 }
 
 # Parsing arguments
-while getopts n:i:t:h flag
+LABELS=""
+while getopts n:l:t:h flag
 do
     case "${flag}" in
         n) NAME=${OPTARG};;
-        i) LABEL_VALUE=${OPTARG};;
+        l) LABELS+="${OPTARG},";; # append each label to the LABELS array
         t) TIMEOUT=${OPTARG};;
         h) usage;;
         *) usage;;
@@ -77,10 +76,12 @@ do
 done
 
 # Check that name or label is set, but not both
-if [[ -z "$NAME" && -z $LABEL_VALUE || -n $NAME && -n $LABEL_VALUE ]]
+if [[ -z "$NAME" && -z "$LABELS" || -n $NAME && -n $LABELS ]]
 then
     usage
 fi
+
+LABELS=${LABELS%,} # remove final ,
 
 # Wait until status is set for all IRs or timeout is reached
 END_TIME=$(date -ud "$TIMEOUT seconds" +%s)
@@ -91,7 +92,7 @@ while true; do
         # Wrap the single IR in a JSON array
         IRS=$(kubectl get internalrequest "$NAME" -o json | jq -c '[.]' )
     else
-        IRS=$(kubectl get internalrequest -l"${LABEL_KEY}=${LABEL_VALUE}" -o json | jq -c ".items" )
+        IRS=$(kubectl get internalrequest -l "${LABELS}" -o json | jq -c ".items" )
     fi
 
     IRS_LENGTH=$(jq '. |length' <<< "$IRS")
