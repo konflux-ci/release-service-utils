@@ -3,21 +3,21 @@ kind: Advisory
 metadata:
   name: {{ advisory_name }}
 spec:
-  product_id: {{ advisory.spec.product_id }}
-  cpe: {{ advisory.spec.cpe }}
-  type: {{ advisory.spec.type }}
-{%- if 'issues' in advisory.spec %}
+  product_id: {{ releaseNotes.product_id }}
+  cpe: {{ releaseNotes.cpe }}
+  type: {{ releaseNotes.type }}
+{%- if 'issues' in releaseNotes %}
   issues:
-    {{ advisory.spec.issues | to_nice_yaml(indent=2) | indent(4) | trim }}
+    {{ releaseNotes.issues | to_nice_yaml(indent=2) | indent(4) | trim }}
 {%- endif %}
   content:
-    {{ advisory.spec.content | to_nice_yaml(indent=2) | indent(4) | trim }}
-  synopsis: {{ advisory.spec.synopsis }}
+    {{ releaseNotes.content | to_nice_yaml(indent=2) | indent(4) | trim }}
+  synopsis: {{ releaseNotes.synopsis }}
   topic: >-
-    {{ advisory.spec.topic | wordwrap(76) | indent(4) }}
+    {{ releaseNotes.topic | wordwrap(76) | indent(4) }}
   description: >-
-    {{ advisory.spec.description | wordwrap(76) | indent(4) }}
+    {{ releaseNotes.description | wordwrap(76) | indent(4) }}
   solution: >-
-    {{ advisory.spec.solution | wordwrap(76) | indent(4) }}
+    {{ releaseNotes.solution | wordwrap(76) | indent(4) }}
   references:
-    {{ advisory.spec.references | to_nice_yaml | indent(4) }}
+    {{ releaseNotes.references | to_nice_yaml | indent(4) }}
