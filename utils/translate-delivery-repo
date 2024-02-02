@@ -1,0 +1,30 @@
+#!/bin/bash
+#
+# script:      translate-delivery-repo
+# 
+# description: This script translates repo references to the proper public registry reference.
+#              It turns quay.io/redhat-prod/product----repo into registry.redhat.io/product/repo for production repos and
+#              quay.io/redhat-pending/product----repo -> registry.stage.redhat.io/product/repo for stage repos.
+#
+# example command:  
+#              translate-delivery-repo REPO where REPO is quay.io/redhat-prod/product----repo for example
+#
+
+REPO=$1
+
+if [ -z "${REPO}" ]; then
+    echo -e "Please pass a repo to translate like 'quay.io/redhat-prod/product----repo'"
+    exit
+fi
+
+if [[ "${REPO}" != "quay.io/redhat-prod"* && "${REPO}" != "quay.io/redhat-pending"* ]] ||
+    [[ "${REPO}" != *"----"* ]] ; then
+    echo Malformatted repo to translate. Expected format is quay.io/redhat-[prod,pending]/product----repo
+    exit 1
+fi
+
+REPO=${REPO/quay.io\/redhat-prod/registry.redhat.io}
+REPO=${REPO/quay.io\/redhat-pending/registry.stage.redhat.io}
+REPO=${REPO//----//}
+
+echo "${REPO}"
