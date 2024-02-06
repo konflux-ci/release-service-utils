@@ -61,7 +61,7 @@ spec:
         - name: name
           value: summary
         - name: bundle
-          value: quay.io/redhat-appstudio-tekton-catalog/task-summary:0.1@sha256:f65a69aaf71cbab382eff685eee522ad35068a4d91d233e76cef7d42ff15a686
+          value: quay.io/redhat-appstudio-tekton-catalog/task-summary:0.1@sha256:29a64be421fdc203cb26c61b746c650e239ae924a73a825ad93bffb9e7ae7214
         - name: kind
           value: task
         resolver: bundles
@@ -93,10 +93,6 @@ spec:
     - default: "false"
       description: Skip checks against built image
       name: skip-checks
-      type: string
-    - default: "true"
-      description: Skip optional checks, set false if you want to run optional checks
-      name: skip-optional
       type: string
     - default: "false"
       description: Execute the build with network isolation
@@ -143,18 +139,12 @@ spec:
         value: $(params.rebuild)
       - name: skip-checks
         value: $(params.skip-checks)
-      - name: skip-optional
-        value: $(params.skip-optional)
-      - name: pipelinerun-name
-        value: $(context.pipelineRun.name)
-      - name: pipelinerun-uid
-        value: $(context.pipelineRun.uid)
       taskRef:
         params:
         - name: name
           value: init
         - name: bundle
-          value: quay.io/redhat-appstudio-tekton-catalog/task-init:0.1@sha256:c35cc37d6f40fef0f2ed614b502b058e13fe7af29c0888bc4799fd625b6f3374
+          value: quay.io/redhat-appstudio-tekton-catalog/task-init:0.2@sha256:3d8f01fa59596a998d30dc700fcf7377f09d60008337290eebaeaf604512ce2b
         - name: kind
           value: task
         resolver: bundles
@@ -196,7 +186,7 @@ spec:
         - name: name
           value: prefetch-dependencies
         - name: bundle
-          value: quay.io/redhat-appstudio-tekton-catalog/task-prefetch-dependencies:0.1@sha256:9630dd7d50002fdffb4a406fb0c538703ef98bf2f4318249ac3a2c229938dbea
+          value: quay.io/redhat-appstudio-tekton-catalog/task-prefetch-dependencies:0.1@sha256:0b7bec23b6c08f37138a86e569835842763b3aa42f4455fd70ba3986350e07c7
         - name: kind
           value: task
         resolver: bundles
@@ -231,7 +221,7 @@ spec:
         - name: name
           value: buildah
         - name: bundle
-          value: quay.io/redhat-appstudio-tekton-catalog/task-buildah:0.1@sha256:e45cf454d90b81d0e23107856c009083c279cbe07f9bc48538b1977d69713f35
+          value: quay.io/redhat-appstudio-tekton-catalog/task-buildah:0.1@sha256:1ee1d570b3cf7feaf85a22c828076e798a57266ffcfea41c1aa0e9f85b0a885a
         - name: kind
           value: task
         resolver: bundles
@@ -285,7 +275,7 @@ spec:
         - name: name
           value: inspect-image
         - name: bundle
-          value: quay.io/redhat-appstudio-tekton-catalog/task-inspect-image:0.1@sha256:ab050621d5f6addf0b6c07451e91a6b134b4d5f402c780abdbf9842a8ff18504
+          value: quay.io/redhat-appstudio-tekton-catalog/task-inspect-image:0.1@sha256:af1f47ffbb296460b57e0029c18900eba1248b43fff6f537db281f395c61cbd8
         - name: kind
           value: task
         resolver: bundles
