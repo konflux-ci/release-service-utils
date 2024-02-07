@@ -14,13 +14,13 @@ REPO=$1
 
 if [ -z "${REPO}" ]; then
     echo -e "Please pass a repo to translate like 'quay.io/redhat-prod/product----repo'"
-    exit
+    exit 1
 fi
 
 if [[ "${REPO}" != "quay.io/redhat-prod"* && "${REPO}" != "quay.io/redhat-pending"* ]] ||
     [[ "${REPO}" != *"----"* ]] ; then
-    echo Malformatted repo to translate. Expected format is quay.io/redhat-[prod,pending]/product----repo
-    exit 1
+    echo -n "Warning: Repo to translate is not in expected format. Expected format is " >&2
+    echo "quay.io/redhat-[prod,pending]/product----repo" >&2
 fi
 
 REPO=${REPO/quay.io\/redhat-prod/registry.redhat.io}
