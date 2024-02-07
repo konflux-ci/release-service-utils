@@ -19,12 +19,13 @@ fi
 
 if [[ "${REPO}" != "quay.io/redhat-prod"* && "${REPO}" != "quay.io/redhat-pending"* ]] ||
     [[ "${REPO}" != *"----"* ]] ; then
-    echo -n "Warning: Repo to translate is not in expected format. Expected format is " >&2
-    echo "quay.io/redhat-[prod,pending]/product----repo" >&2
+    echo -n "Warning: Repo to translate is not in expected format. If this is not an index " >&2
+    echo "image, the expected format is: quay.io/redhat-[prod,pending]/product----repo" >&2
 fi
 
 REPO=${REPO/quay.io\/redhat-prod/registry.redhat.io}
 REPO=${REPO/quay.io\/redhat-pending/registry.stage.redhat.io}
+REPO=${REPO/quay.io\/redhat/registry.redhat.io} # Index image repos don't have -prod or -pending
 REPO=${REPO//----//}
 
 echo "${REPO}"
