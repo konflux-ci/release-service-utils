@@ -3,23 +3,23 @@ kind: Advisory
 metadata:
   name: {{ advisory_name }}
 spec:
-  product_id: {{ advisory.spec.product_id }}
-  product_name: {{ advisory.spec.product_name }}
-  product_version: {{ advisory.spec.product_version }}
-  cpe: {{ advisory.spec.cpe }}
-  type: {{ advisory.spec.type }}
-{%- if 'issues' in advisory.spec %}
+  product_id: {{ advisory.product_id }}
+  product_name: {{ advisory.product_name }}
+  product_version: {{ advisory.product_version }}
+  cpe: {{ advisory.cpe }}
+  type: {{ advisory.type }}
+{%- if 'issues' in advisory %}
   issues:
-    {{ advisory.spec.issues | to_nice_yaml(indent=2) | indent(4) | trim }}
+    {{ advisory.issues | to_nice_yaml(indent=2) | indent(4) | trim }}
 {%- endif %}
   content:
-    {{ advisory.spec.content | to_nice_yaml(indent=2) | indent(4) | trim }}
-  synopsis: {{ advisory.spec.synopsis }}
+    {{ advisory.content | to_nice_yaml(indent=2) | indent(4) | trim }}
+  synopsis: {{ advisory.synopsis }}
   topic: >-
-    {{ advisory.spec.topic | wordwrap(76) | indent(4) }}
+    {{ advisory.topic | wordwrap(76) | indent(4) }}
   description: >-
-    {{ advisory.spec.description | wordwrap(76) | indent(4) }}
+    {{ advisory.description | wordwrap(76) | indent(4) }}
   solution: >-
-    {{ advisory.spec.solution | wordwrap(76) | indent(4) }}
+    {{ advisory.solution | wordwrap(76) | indent(4) }}
   references:
-    {{ advisory.spec.references | to_nice_yaml | indent(4) }}
+    {{ advisory.references | to_nice_yaml | indent(4) }}
