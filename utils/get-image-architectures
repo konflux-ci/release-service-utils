@@ -1,0 +1,27 @@
+#!/bin/bash
+#
+# script:      get-image-architectures
+# 
+# description: This script fetches all architectures for a passed image.
+#              It will output each arch on its own line.
+#
+# example command:  
+#              get-image-architectures IMAGE where IMAGE is quay.io/org/repo@sha256:abcde for example
+#
+
+IMAGE=$1
+
+if [ -z "${IMAGE}" ] || [[ "${IMAGE}" == docker://* ]] ; then
+    echo -e "Please pass an image (without the docker:// prefix) to find the architectures for"
+    exit 1
+fi
+
+RAW_OUTPUT=$(skopeo inspect --no-tags --raw docker://${IMAGE})
+
+if [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.oci.image.manifest.v1+json" ] ; then
+    # Single arch, so need to run skopeo inspect again without --raw
+    skopeo inspect --no-tags docker://${IMAGE} | jq -r '.Architecture'
+else
+    # Multi arch
+    jq -r '.manifests[].platform.architecture' <<< $RAW_OUTPUT
+fi
