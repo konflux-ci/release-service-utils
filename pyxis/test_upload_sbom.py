@@ -24,7 +24,15 @@ COMPONENT_ID = "abcd2222"
 IMAGE_DICT = {
     "_id": IMAGE_ID,
     "content_manifest": None,
-    "edges": {"content_manifest_components": {"data": []}},
+    "edges": {
+        "content_manifest_components": {
+            "data": None,
+            "error": {
+                "status": 400,
+                "detail": "Value content_manifest._id is not in the parent object",
+            },
+        }
+    },
 }
 COMPONENT_DICT = {"bom_ref": "mybomref"}
 

@@ -168,10 +168,15 @@ query ($id: ObjectIDFilterScalar!, $page: Int!, $page_size: Int!) {
                         _id
                         bom_ref
                     }
+                    error {
+                        status
+                        detail
+                    }
                 }
             }
         }
         error {
+            status
             detail
         }
     }
@@ -187,6 +192,10 @@ query ($id: ObjectIDFilterScalar!, $page: Int!, $page_size: Int!) {
 
         data = pyxis.graphql_query(graphql_api, body)
         image = data["get_image"]["data"]
+
+        if image["content_manifest"] is None:
+            # There will be no components, so no need to proceed
+            break
 
         components_batch = image["edges"]["content_manifest_components"]["data"]
         components.extend(components_batch)
