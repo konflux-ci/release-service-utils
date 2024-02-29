@@ -67,9 +67,8 @@ git_clone_and_checkout() {
 
     # rewrites the repo url with the auth token
     CLONE_URL="https://oauth2:${ACCESS_TOKEN}@${REPOSITORY#*://}"
-    git clone --depth 1 "${CLONE_URL}"
+    git clone --depth 1 --branch "${REVISION}" "${CLONE_URL}"
     cd "${REPO_DIR}"
-    git checkout "${REVISION}"
 }
 
 git_rebase() {
