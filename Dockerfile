@@ -37,11 +37,13 @@ COPY utils /home/utils
 COPY templates /home/templates
 
 # It is mandatory to set these labels
-LABEL description="RHTAP Release Service Utils"
-LABEL io.k8s.description="RHTAP Release Service Utils"
+LABEL name="Konflux Release Service Utils"
+LABEL description="Konflux Release Service Utils"
+LABEL io.k8s.description="Konflux Release Service Utils"
 LABEL io.k8s.display-name="release-service-utils"
-LABEL io.openshift.tags="rhtap"
-LABEL summary="RHTAP Release Service Utils"
+LABEL io.openshift.tags="konflux"
+LABEL summary="Konflux Release Service Utils"
+LABEL com.redhat.component="release-service-utils"
 
 # Set HOME variable to something else than `/` to avoid 'permission denied' problems when writing files.
 ENV HOME=/tekton/home
