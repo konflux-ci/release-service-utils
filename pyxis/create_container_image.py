@@ -151,7 +151,7 @@ def prepare_parsed_data(skopeo_result: Dict[str, Any]) -> Dict[str, Any]:
         "layers": skopeo_result.get("Layers", []),
         "name": skopeo_result.get("Name", ""),
         "architecture": skopeo_result.get("Architecture", ""),
-        "env_variables": skopeo_result.get("Env", []),
+        "env_variables": skopeo_result.get("Env", []) or [],
     }
 
 

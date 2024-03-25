@@ -304,6 +304,31 @@ def test_prepare_parsed_data():
     }
 
 
+def test_prepare_parsed_data_with_null_env():
+    # Arrange
+    file_content = {
+        "Digest": "sha:abc",
+        "DockerVersion": "1",
+        "Layers": ["1", "2"],
+        "Name": "quay.io/hacbs-release/release-service-utils",
+        "Architecture": "test",
+        "Env": None,
+    }
+
+    # Act
+    parsed_data = prepare_parsed_data(file_content)
+
+    # Assert
+    assert parsed_data == {
+        "architecture": "test",
+        "digest": "sha:abc",
+        "docker_version": "1",
+        "env_variables": [],
+        "layers": ["1", "2"],
+        "name": "quay.io/hacbs-release/release-service-utils",
+    }
+
+
 def test_get_digest_field():
     """This will test that the common mediaType strings are translated to the correct
     digest field to be used in the image.repository object"""
