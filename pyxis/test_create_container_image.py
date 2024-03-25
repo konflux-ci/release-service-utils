@@ -6,52 +6,45 @@ from create_container_image import (
     image_already_exists,
     create_container_image,
     prepare_parsed_data,
-    get_digest_field,
 )
 
 
 mock_pyxis_url = "https://catalog.redhat.com/api/containers/"
 
 
-@patch("create_container_image.get_digest_field")
 @patch("create_container_image.pyxis.get")
-def test_image_already_exists__image_does_exist(mock_get, mock_get_digest_field: MagicMock):
+def test_image_already_exists__image_does_exist(mock_get):
     # Arrange
     mock_rsp = MagicMock()
     mock_get.return_value = mock_rsp
     args = MagicMock()
     args.pyxis_url = mock_pyxis_url
-    digest = "some_digest"
-    mock_get_digest_field.return_value = "digest_field"
+    args.architecture_digest = "some_digest"
 
     # Image already exists
     mock_rsp.json.return_value = {"data": [{"_id": 0}]}
 
     # Act
-    exists = image_already_exists(args, digest)
+    exists = image_already_exists(args, args.architecture_digest)
 
     # Assert
     assert exists
-    mock_get_digest_field.assert_called_once_with(args.media_type)
     mock_get.assert_called_once_with(
         mock_pyxis_url
         + "v1/images?page_size=1&filter="
-        + "repositories.digest_field%3D%3D%22some_digest%22%3Bnot%28deleted%3D%3Dtrue%29"
+        + "repositories.manifest_schema2_digest%3D%3D%22some_digest%22"
+        + "%3Bnot%28deleted%3D%3Dtrue%29"
     )
 
 
-@patch("create_container_image.get_digest_field")
 @patch("create_container_image.pyxis.get")
-def test_image_already_exists__image_does_not_exist(
-    mock_get, mock_get_digest_field: MagicMock
-):
+def test_image_already_exists__image_does_not_exist(mock_get):
     # Arrange
     mock_rsp = MagicMock()
     mock_get.return_value = mock_rsp
     args = MagicMock()
     args.pyxis_url = mock_pyxis_url
     digest = "some_digest"
-    mock_get_digest_field.return_value = "digest_field"
 
     # Image doesn't exist
     mock_rsp.json.return_value = {"data": []}
@@ -63,10 +56,9 @@ def test_image_already_exists__image_does_not_exist(
     assert not exists
 
 
-@patch("create_container_image.get_digest_field")
 @patch("create_container_image.pyxis.post")
 @patch("create_container_image.datetime")
-def test_create_container_image(mock_datetime, mock_post, mock_get_digest_field: MagicMock):
+def test_create_container_image(mock_datetime, mock_post):
     # Mock an _id in the response for logger check
     mock_post.return_value.json.return_value = {"_id": 0}
 
@@ -78,7 +70,8 @@ def test_create_container_image(mock_datetime, mock_post, mock_get_digest_field:
     args.tags = "some_version"
     args.certified = "false"
     args.rh_push = "false"
-    mock_get_digest_field.return_value = "digest_field"
+    args.architecture_digest = "arch specific digest"
+    args.media_type = "single architecture"
 
     # Act
     create_container_image(
@@ -102,7 +95,8 @@ def test_create_container_image(mock_datetime, mock_post, mock_get_digest_field:
                             "name": "some_version",
                         }
                     ],
-                    "digest_field": "some_digest",
+                    # Note, no manifest_list_digest here. Single arch.
+                    "manifest_schema2_digest": "arch specific digest",
                 }
             ],
             "certified": False,
@@ -111,15 +105,11 @@ def test_create_container_image(mock_datetime, mock_post, mock_get_digest_field:
             "parsed_data": {"architecture": "ok"},
         },
     )
-    mock_get_digest_field.assert_called_once_with(args.media_type)
 
 
-@patch("create_container_image.get_digest_field")
 @patch("create_container_image.pyxis.post")
 @patch("create_container_image.datetime")
-def test_create_container_image_latest(
-    mock_datetime, mock_post, mock_get_digest_field: MagicMock
-):
+def test_create_container_image_latest(mock_datetime, mock_post):
     # Mock an _id in the response for logger check
     mock_post.return_value.json.return_value = {"_id": 0}
 
@@ -132,7 +122,8 @@ def test_create_container_image_latest(
     args.certified = "false"
     args.is_latest = "true"
     args.rh_push = "false"
-    mock_get_digest_field.return_value = "digest_field"
+    args.architecture_digest = "arch specific digest"
+    args.media_type = "application/vnd.oci.image.index.v1+json"
 
     # Act
     create_container_image(
@@ -164,7 +155,8 @@ def test_create_container_image_latest(
                             "name": "latest",
                         },
                     ],
-                    "digest_field": "some_digest",
+                    "manifest_list_digest": "some_digest",
+                    "manifest_schema2_digest": "arch specific digest",
                 }
             ],
             "certified": False,
@@ -175,12 +167,9 @@ def test_create_container_image_latest(
     )
 
 
-@patch("create_container_image.get_digest_field")
 @patch("create_container_image.pyxis.post")
 @patch("create_container_image.datetime")
-def test_create_container_image_rh_push_multiple_tags(
-    mock_datetime, mock_post, mock_get_digest_field: MagicMock
-):
+def test_create_container_image_rh_push_multiple_tags(mock_datetime, mock_post):
     # Mock an _id in the response for logger check
     mock_post.return_value.json.return_value = {"_id": 0}
 
@@ -192,7 +181,8 @@ def test_create_container_image_rh_push_multiple_tags(
     args.tags = "tagprefix tagprefix-timestamp"
     args.certified = "false"
     args.rh_push = "true"
-    mock_get_digest_field.return_value = "digest_field"
+    args.architecture_digest = "arch specific digest"
+    args.media_type = "application/vnd.oci.image.index.v1+json"
 
     # Act
     create_container_image(
@@ -224,7 +214,8 @@ def test_create_container_image_rh_push_multiple_tags(
                             "name": "tagprefix-timestamp",
                         },
                     ],
-                    "digest_field": "some_digest",
+                    "manifest_list_digest": "some_digest",
+                    "manifest_schema2_digest": "arch specific digest",
                 },
                 {
                     "published": True,
@@ -241,7 +232,8 @@ def test_create_container_image_rh_push_multiple_tags(
                             "name": "tagprefix-timestamp",
                         },
                     ],
-                    "digest_field": "some_digest",
+                    "manifest_list_digest": "some_digest",
+                    "manifest_schema2_digest": "arch specific digest",
                 },
             ],
             "certified": False,
@@ -250,7 +242,6 @@ def test_create_container_image_rh_push_multiple_tags(
             "parsed_data": {"architecture": "ok"},
         },
     )
-    mock_get_digest_field.assert_called_once_with(args.media_type)
 
 
 def test_create_container_image_no_digest():
@@ -327,23 +318,3 @@ def test_prepare_parsed_data_with_null_env():
         "layers": ["1", "2"],
         "name": "quay.io/hacbs-release/release-service-utils",
     }
-
-
-def test_get_digest_field():
-    """This will test that the common mediaType strings are translated to the correct
-    digest field to be used in the image.repository object"""
-    assert (
-        get_digest_field("application/vnd.docker.distribution.manifest.v2+json")
-        == "manifest_schema2_digest"
-    )
-    assert (
-        get_digest_field("application/vnd.oci.image.manifest.v1+json")
-        == "manifest_schema2_digest"
-    )
-    assert (
-        get_digest_field("application/vnd.docker.distribution.manifest.list.v2+json")
-        == "manifest_list_digest"
-    )
-    assert (
-        get_digest_field("application/vnd.oci.image.index.v1+json") == "manifest_list_digest"
-    )
