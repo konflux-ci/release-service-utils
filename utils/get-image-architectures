@@ -2,8 +2,8 @@
 #
 # script:      get-image-architectures
 # 
-# description: This script fetches all architectures for a passed image.
-#              It will output each arch on its own line.
+# description: This script fetches all architectures and their digests for a passed image.
+#              It will output each arch on its own line, as json.
 #
 # example command:  
 #              get-image-architectures IMAGE where IMAGE is quay.io/org/repo@sha256:abcde for example
@@ -20,8 +20,14 @@ RAW_OUTPUT=$(skopeo inspect --no-tags --raw docker://${IMAGE})
 
 if [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.oci.image.manifest.v1+json" ] ; then
     # Single arch, so need to run skopeo inspect again without --raw
-    skopeo inspect --no-tags docker://${IMAGE} | jq -r '.Architecture'
+    RAW_OUTPUT=$(skopeo inspect --no-tags docker://${IMAGE})
+    architecture=$(jq -r '.Architecture' <<< $RAW_OUTPUT)
+    os=$(jq -r '.Os' <<< $RAW_OUTPUT)
+    digest=$(jq -r '.Digest' <<< $RAW_OUTPUT)
+
+    jq -r -n --arg architecture "$architecture" --arg os "$os" --arg digest "$digest" \
+        '{"platform": {"architecture": $ARGS.named["architecture"], "os": $ARGS.named["os"]}, "digest": $ARGS.named["digest"]}'
 else
     # Multi arch
-    jq -r '.manifests[].platform.architecture' <<< $RAW_OUTPUT
+    jq -r '.manifests[]' <<< $RAW_OUTPUT
 fi
