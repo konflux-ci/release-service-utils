@@ -7,7 +7,8 @@ from upload_sbom import (
     get_image,
     create_content_manifest,
     get_existing_bom_refs,
-    create_content_manifest_component,
+    create_content_manifest_components,
+    get_template,
     load_sbom_components,
     check_bom_ref_duplicates,
     convert_keys,
@@ -23,7 +24,15 @@ COMPONENT_ID = "abcd2222"
 IMAGE_DICT = {
     "_id": IMAGE_ID,
     "content_manifest": None,
-    "edges": {"content_manifest_components": {"data": []}},
+    "edges": {
+        "content_manifest_components": {
+            "data": None,
+            "error": {
+                "status": 400,
+                "detail": "Value content_manifest._id is not in the parent object",
+            },
+        }
+    },
 }
 COMPONENT_DICT = {"bom_ref": "mybomref"}
 
@@ -57,7 +66,7 @@ def test_upload_sbom_with_retry__fails(mock_upload_sbom):
     assert mock_upload_sbom.call_count == 2
 
 
-@patch("upload_sbom.create_content_manifest_component")
+@patch("upload_sbom.create_content_manifest_components")
 @patch("upload_sbom.get_existing_bom_refs")
 @patch("upload_sbom.load_sbom_components")
 @patch("upload_sbom.create_content_manifest")
@@ -67,7 +76,7 @@ def test_upload_sbom__success(
     mock_create_content_manifest,
     mock_load_sbom_components,
     mock_get_existing_bom_refs,
-    mock_create_content_manifest_component,
+    mock_create_content_manifest_components,
 ):
     """
     Basic use case - nothing exists in Pyxis yet and all components are successfully created
@@ -86,14 +95,18 @@ def test_upload_sbom__success(
 
     mock_create_content_manifest.assert_called_once_with(GRAPHQL_API, IMAGE_ID)
     mock_get_existing_bom_refs.assert_not_called()
-    assert mock_create_content_manifest_component.call_args_list == [
-        call(GRAPHQL_API, MANIFEST_ID, {"bom_ref": "aaa"}),
-        call(GRAPHQL_API, MANIFEST_ID, {"bom_ref": "bbb"}),
-        call(GRAPHQL_API, MANIFEST_ID, {"type": "library"}),
-    ]
+    mock_create_content_manifest_components.assert_called_once_with(
+        GRAPHQL_API,
+        MANIFEST_ID,
+        [
+            {"bom_ref": "aaa"},
+            {"bom_ref": "bbb"},
+            {"type": "library"},
+        ],
+    )
 
 
-@patch("upload_sbom.create_content_manifest_component")
+@patch("upload_sbom.create_content_manifest_components")
 @patch("upload_sbom.load_sbom_components")
 @patch("upload_sbom.create_content_manifest")
 @patch("upload_sbom.get_image")
@@ -101,7 +114,7 @@ def test_upload_sbom__manifest_and_one_component_exist(
     mock_get_image,
     mock_create_content_manifest,
     mock_load_sbom_components,
-    mock_create_content_manifest_component,
+    mock_create_content_manifest_components,
 ):
     """Creation of the manifest and the first component is skipped"""
     mock_get_image.return_value = {
@@ -119,12 +132,12 @@ def test_upload_sbom__manifest_and_one_component_exist(
     upload_sbom(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
 
     mock_create_content_manifest.assert_not_called()
-    mock_create_content_manifest_component.assert_called_once_with(
-        GRAPHQL_API, MANIFEST_ID, {"bom_ref": "bbb"}
+    mock_create_content_manifest_components.assert_called_once_with(
+        GRAPHQL_API, MANIFEST_ID, [{"bom_ref": "bbb"}]
     )
 
 
-@patch("upload_sbom.create_content_manifest_component")
+@patch("upload_sbom.create_content_manifest_components")
 @patch("upload_sbom.load_sbom_components")
 @patch("upload_sbom.create_content_manifest")
 @patch("upload_sbom.get_image")
@@ -132,7 +145,7 @@ def test_upload_sbom__all_components_exist(
     mock_get_image,
     mock_create_content_manifest,
     mock_load_sbom_components,
-    mock_create_content_manifest_component,
+    mock_create_content_manifest_components,
 ):
     """Creation of manifest and all components is skipped"""
     mock_get_image.return_value = {
@@ -150,7 +163,7 @@ def test_upload_sbom__all_components_exist(
     upload_sbom(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
 
     mock_create_content_manifest.assert_not_called()
-    mock_create_content_manifest_component.assert_not_called()
+    mock_create_content_manifest_components.assert_not_called()
 
 
 def generate_pyxis_response(query_name, data=None, error=False):
@@ -170,7 +183,7 @@ def generate_pyxis_response(query_name, data=None, error=False):
     return response
 
 
-@patch("upload_sbom.create_content_manifest_component")
+@patch("upload_sbom.create_content_manifest_components")
 @patch("upload_sbom.load_sbom_components")
 @patch("upload_sbom.create_content_manifest")
 @patch("upload_sbom.get_image")
@@ -178,7 +191,7 @@ def test_upload_sbom__existing_bom_ref_is_skipped(
     mock_get_image,
     mock_create_content_manifest,
     mock_load_sbom_components,
-    mock_create_content_manifest_component,
+    mock_create_content_manifest_components,
 ):
     """One component already exists in Pyxis. Our sbom contains two
     components. So we want to upload only the second one to Pyxis,
@@ -200,7 +213,7 @@ def test_upload_sbom__existing_bom_ref_is_skipped(
     upload_sbom(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
 
     mock_create_content_manifest.assert_not_called()
-    mock_create_content_manifest_component.assert_not_called()
+    mock_create_content_manifest_components.assert_called_with(GRAPHQL_API, MANIFEST_ID, [])
 
 
 @patch("pyxis.post")
@@ -316,28 +329,83 @@ def test_get_existing_bom_refs__no_components_result_in_empty_set():
     assert bom_refs == set()
 
 
-@patch("pyxis.post")
-def test_create_content_manifest_component__success(mock_post):
-    mock_post.return_value = generate_pyxis_response(
-        "create_content_manifest_component_for_manifest", {"_id": COMPONENT_ID}
+@patch("pyxis.graphql_query")
+@patch("upload_sbom.get_template")
+def test_create_content_manifest_components__success(mock_get_template, mock_graphql_query):
+    create_content_manifest_components(
+        GRAPHQL_API, MANIFEST_ID, [COMPONENT_DICT], batch_size=2
     )
 
-    id = create_content_manifest_component(GRAPHQL_API, MANIFEST_ID, COMPONENT_DICT)
+    mock_get_template.assert_called_once_with()
+    mock_get_template.return_value.render.assert_called_once_with(components=[COMPONENT_DICT])
+    mock_graphql_query.assert_called_once()
 
-    assert id == COMPONENT_ID
-    mock_post.assert_called_once()
+
+@patch("pyxis.graphql_query")
+@patch("upload_sbom.get_template")
+def test_create_content_manifest_component__multiple_batches(
+    mock_get_template, mock_graphql_query
+):
+    comp1 = {"bom_ref": "aaa"}
+    comp2 = {"bom_ref": "bbb"}
+    comp3 = {"type": "library"}
+    components = [comp1, comp2, comp3]
+
+    create_content_manifest_components(GRAPHQL_API, MANIFEST_ID, components, batch_size=2)
+
+    mock_get_template.assert_called_once_with()
+    assert mock_get_template.return_value.render.call_args_list == [
+        call(components=[comp1, comp2]),
+        call(components=[comp3]),
+    ]
+    assert mock_graphql_query.call_count == 2
+    assert mock_graphql_query.call_args_list == [
+        call(
+            GRAPHQL_API,
+            {
+                "query": mock_get_template.return_value.render.return_value,
+                "variables": {
+                    "id": MANIFEST_ID,
+                    "input0": comp1,
+                    "input1": comp2,
+                },
+            },
+        ),
+        call(
+            GRAPHQL_API,
+            {
+                "query": mock_get_template.return_value.render.return_value,
+                "variables": {
+                    "id": MANIFEST_ID,
+                    "input0": comp3,
+                },
+            },
+        ),
+    ]
 
 
-@patch("pyxis.post")
-def test_create_content_manifest_component__error(mock_post):
-    mock_post.return_value = generate_pyxis_response(
-        "create_content_manifest_component_for_manifest", error=True
-    )
+@patch("pyxis.graphql_query")
+@patch("upload_sbom.get_template")
+def test_create_content_manifest_component__no_components(
+    mock_get_template, mock_graphql_query
+):
+    create_content_manifest_components(GRAPHQL_API, MANIFEST_ID, [])
 
-    with pytest.raises(RuntimeError):
-        create_content_manifest_component(GRAPHQL_API, MANIFEST_ID, COMPONENT_DICT)
+    mock_get_template.assert_not_called()
+    mock_graphql_query.assert_not_called()
 
-    mock_post.assert_called_once()
+
+@patch("upload_sbom.Template")
+@patch("builtins.open")
+@patch("upload_sbom.os")
+def test_get_template(mock_os, mock_open, mock_template):
+    template_path = mock_os.path.join.return_value
+
+    template = get_template()
+
+    mock_open.assert_called_with(template_path)
+    assert template == mock_template.return_value
+    mock_open.return_value.__enter__.return_value.read.assert_called_once_with()
 
 
 @patch("json.load")

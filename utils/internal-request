@@ -24,6 +24,9 @@
 #       InternalRequest resource. The value of the parameter is treated as a string,
 #       and it can be a valid JSON object or array. When passing complex parameter
 #       values, make sure to enclose them in quotes.
+#   -l  labels: can be specified multiple times. Each '-l' flag represents a
+#       label that will be added to the 'metadata.labels' field in the
+#       InternalRequest resource. The value of the parameter must be a string. Optional.
 #   -s  Sync: a flag that indicates whether the script has to finish to complete
 #       the tasks or exit immediately after creating the resource. Default is true.
 #   -t  Timeout: Defaults to 600 seconds.
@@ -45,12 +48,15 @@ SYNC=true
 PARAMS=""
 
 function usage {
-    echo "Usage: $0 -r request [-p parameters] [-s sync] [-t timeout]"
+    echo "Usage: $0 -r request [-p parameters] [-l labels] [-s sync] [-t timeout]"
     echo
     echo "  -r  Request: the name of the request."
     echo "  -p  Params: can be specified multiple times. Each '-p' flag represents a"
     echo "      parameter that will be added to the 'parameters' field in the"
     echo "      InternalRequest resource."
+    echo "  -l  Labels: can be specified multiple times. Each '-l' flag represents a"
+    echo "      label that will be added to the 'metadata.labels' field in the"
+    echo "      InternalRequest resource. Optional."
     echo "  -s  Sync: a flag that indicates whether the script has to finish to complete the tasks or exit immediately after creating the resource. Default is true."
     echo "  -t  Timeout: Defaults to 600 seconds."
     echo "  -h  Display this help message."
@@ -60,11 +66,13 @@ function usage {
 
 # Parsing arguments
 PARAMS=() # initialize PARAMS as an empty array
-while getopts r:p:s:t:h flag
+LABELS=() # initialize LABELS as an empty array
+while getopts r:p:l:s:t:h flag
 do
     case "${flag}" in
         r) REQUEST=${OPTARG};;
         p) PARAMS+=("${OPTARG}");; # append each parameter to the PARAMS array
+        l) LABELS+=("${OPTARG}");; # append each label to the LABELS array
         s) SYNC=${OPTARG};;
         t) TIMEOUT=${OPTARG};;
         h) usage;;
@@ -78,11 +86,12 @@ then
     usage
 fi
 
-# Convert parameters to JSON format
+# Convert parameters and labels to JSON format
 # Create a bash array
 declare -a PARAM_JSON_ARRAY
+declare -a LABEL_JSON_ARRAY
 
-# Create a JSON object for each parameter and append to the bash array
+# Create a JSON object for each item and append to their bash arrays
 for param in "${PARAMS[@]}"
 do
     KEY=$(echo "$param" | cut -d'=' -f1)
@@ -90,8 +99,16 @@ do
     PARAM_JSON_ARRAY+=("$(jq -n --arg key "$KEY" --arg value "$VALUE" '{($key): $value}')")
 done
 
+for label in "${LABELS[@]}"
+do
+    KEY=$(echo "$label" | cut -d'=' -f1)
+    VALUE=$(echo "$label" | cut -d'=' -f2-)
+    LABEL_JSON_ARRAY+=("$(jq -n --arg key "$KEY" --arg value "$VALUE" '{($key): $value}')")
+done
+
 # Combine all JSON objects in the bash array into one JSON object
 PARAM_JSON=$(echo "${PARAM_JSON_ARRAY[@]}" | jq -s 'add')
+LABEL_JSON=$(echo "${LABEL_JSON_ARRAY[@]}" | jq -s 'add')
 
 # Create JSON payload for the InternalRequest
 PAYLOAD=$(jq -n \
@@ -109,6 +126,11 @@ PAYLOAD=$(jq -n \
       }
     }'
 )
+if [[ -n ${LABELS[@]} ]]; then
+    PAYLOAD=$(jq \
+        --argjson labels "$LABEL_JSON" \
+        '.metadata.labels += $labels' <<< $PAYLOAD)
+fi
 
 # Create InternalRequest using kubectl
 RESOURCE=$(echo "$PAYLOAD" | kubectl create -f - -o json)
@@ -117,46 +139,8 @@ INTERNAL_REQUEST_NAME=$(echo "$RESOURCE" | jq -r '.metadata.name')
 echo "InternalRequest '$INTERNAL_REQUEST_NAME' created."
 
 if [ "$SYNC" = "true" ]; then
-  echo "Sync flag set to true. Waiting for the InternalRequest to be completed."
+    echo "Sync flag set to true. Waiting for the InternalRequest to be completed."
 
-  # Wait until status is set or timeout
-  END_TIME=$(date -ud "$TIMEOUT seconds" +%s)
-  while true; do
-    STATUS=$(kubectl get internalrequest "$INTERNAL_REQUEST_NAME" -o json | jq '.status')
-
-    if [ "$STATUS" != "null" ]; then
-      CONDITIONS=$(kubectl get internalrequest "$INTERNAL_REQUEST_NAME" -o json | jq '.status.conditions')
-      if [ "$(echo "$CONDITIONS" | jq 'length')" -eq 1 ]; then
-        CONDITION_REASON=$(echo "$CONDITIONS" | jq -r '.[0].reason')
-        if [ "$CONDITION_REASON" == "Running" ]; then
-          continue
-        else
-            case $CONDITION_REASON in
-                "Succeeded")
-                    echo "InternalRequest succeeded"
-                    EXIT_CODE=0
-                    ;;
-                "Failed")
-                    echo "InternalRequest failed"
-                    EXIT_CODE=21
-                    ;;
-                "Rejected")
-                    echo "InternalRequest rejected"
-                    EXIT_CODE=22
-                    ;;
-            esac
-            echo "Conditions:"
-            echo $CONDITIONS
-            exit $EXIT_CODE
-        fi
-      fi
-    fi
-
-    if [ "$(date +%s)" -gt "$END_TIME" ]; then
-      echo "Timeout while waiting for the InternalRequest to complete."
-      exit 1
-    fi
-
-    sleep 5
-  done
+    SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+    $SCRIPT_DIR/wait-for-ir -n $INTERNAL_REQUEST_NAME -t $TIMEOUT
 fi

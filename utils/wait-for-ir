@@ -1,0 +1,142 @@
+#!/bin/bash
+
+# This script waits for one or more InternalRequests to complete.
+#
+# The IRs to watch can be specified either by name or by a label selector.
+#
+# The script waits for the InternalRequests to reach a 'completed'
+# status and will provide an exit code as follows:
+#   - All succeeded: exit code 0
+#   - At least one IR failed or rejected: exit code 21
+#   - Timeout reached: exit code 124
+#
+# Usage:
+#   ./wait-for-ir [-n name] [-l labels] [-t timeout]
+#
+# Parameters:
+#   -n  name: The name of the InternalRequest to watch.
+#   -l  labels: Can be specified multiple times. If set, the
+#       IRs to watch will be determined by a label of this key
+#       and value. Optional. E.g. a TaskRun UID
+#   -t  Timeout: Defaults to 600 seconds.
+#   -h  Display this help message.
+#
+#   One of -n or -l has to be specified, but not both.
+#
+# Prerequisites:
+#   - kubectl: The Kubernetes command line tool must be installed and properly
+#     configured to communicate with your cluster.
+#   - jq: This script uses jq to parse JSON. It must be installed on the system
+#     running the script.
+#
+# Note: This script is intended to be used with a specific Kubernetes API
+# that includes the 'InternalRequest' resource type.
+
+set -e
+
+NAME=""
+TIMEOUT=600
+
+function usage {
+    echo "Usage: $0 [-n name] [-l labels] [-t timeout]"
+    echo
+    echo "  -n  name: The name of the InternalRequest to watch."
+    echo "  -l  labels: Can be specified multiple times. If set, the"
+    echo "      IRs to watch will be determined by a label of this key"
+    echo "      and value. Optional. E.g. a TaskRun UID"
+    echo "  -t  Timeout: Defaults to 600 seconds."
+    echo "  -h  Display this help message."
+    echo
+    echo "  One of -n or -l has to be specified, but not both."
+    exit 1
+}
+
+
+function print_conditions {
+    IRS=$1
+    IRS_LENGTH=$(jq '. |length' <<< "$IRS")
+    echo Conditions:
+    for(( i=0; i<$IRS_LENGTH; i++)); do
+        echo -n "  "$(jq -r ".[$i].metadata.name" <<< "$IRS")": "
+        jq -c ".[$i].status.conditions" <<< "$IRS"
+    done
+}
+
+# Parsing arguments
+LABELS=""
+while getopts n:l:t:h flag
+do
+    case "${flag}" in
+        n) NAME=${OPTARG};;
+        l) LABELS+="${OPTARG},";; # append each label to the LABELS array
+        t) TIMEOUT=${OPTARG};;
+        h) usage;;
+        *) usage;;
+    esac
+done
+
+# Check that name or label is set, but not both
+if [[ -z "$NAME" && -z "$LABELS" || -n $NAME && -n $LABELS ]]
+then
+    usage
+fi
+
+LABELS=${LABELS%,} # remove final ,
+
+# Wait until status is set for all IRs or timeout is reached
+END_TIME=$(date -ud "$TIMEOUT seconds" +%s)
+SUCCESS=true
+while true; do
+    echo Checking IR statuses...
+    if [ -n "$NAME" ]; then
+        # Wrap the single IR in a JSON array
+        IRS=$(kubectl get internalrequest "$NAME" -o json | jq -c '[.]' )
+    else
+        IRS=$(kubectl get internalrequest -l "${LABELS}" -o json | jq -c ".items" )
+    fi
+
+    IRS_LENGTH=$(jq '. |length' <<< "$IRS")
+    echo Found $IRS_LENGTH InternalRequests matching the name or label
+    echo Conditions:
+    DONE_COUNT=0
+    for(( i=0; i<$IRS_LENGTH; i++)); do
+        IR=$(jq -c ".[$i]" <<< "$IRS")
+        CONDITION_REASON=$(jq -r '.status.conditions[0].reason // ""' <<< "$IR")
+        echo -n "  "$(jq -r ".metadata.name" <<< "$IR")": "
+        if [ -z $CONDITION_REASON ]; then
+            echo "no condition yet"
+        elif [ $CONDITION_REASON = "Running" ]; then
+            echo "running"
+        elif [ $CONDITION_REASON = "Succeeded" ]; then
+            echo "succeeded"
+            ((++DONE_COUNT))
+        else
+            echo $CONDITION_REASON
+            ((++DONE_COUNT))
+            SUCCESS=false
+        fi
+    done
+
+    if [ $DONE_COUNT -eq $IRS_LENGTH ]; then
+        echo All InternalRequests have been completed
+        if [ $SUCCESS = true ]; then
+            print_conditions "$IRS"
+            echo Result: success
+            exit 0
+        else
+            echo ERROR: At least one InternalRequest failed
+            print_conditions "$IRS"
+            echo Result: failure
+            exit 21
+        fi
+    fi
+
+    if [ "$(date +%s)" -gt "$END_TIME" ]; then
+        echo "ERROR: Timeout while waiting for the InternalRequests to complete"
+        print_conditions "$IRS"
+        echo result: timeout
+        exit 124
+    fi
+
+    sleep 5
+done

@@ -2,8 +2,13 @@ apiVersion: rhtap.redhat.com/v1alpha1
 kind: Advisory
 metadata:
   name: {{ advisory_name }}
+  ship_date: "{{ advisory_ship_date }}"
+  updated_date: "{{ advisory_ship_date }}"
 spec:
   product_id: {{ advisory.spec.product_id }}
+  product_name: {{ advisory.spec.product_name }}
+  product_version: {{ advisory.spec.product_version }}
+  product_stream: {{ advisory.spec.product_stream }}
   cpe: {{ advisory.spec.cpe }}
   type: {{ advisory.spec.type }}
 {%- if 'issues' in advisory.spec %}

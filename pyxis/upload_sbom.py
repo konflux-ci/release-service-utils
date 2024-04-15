@@ -26,6 +26,7 @@ import re
 from pathlib import Path
 import time
 from typing import Any
+from jinja2 import Template
 
 import pyxis
 
@@ -39,6 +40,7 @@ UNSUPPORTED_FIELDS = [
     "signature",
     "components",
 ]
+TEMPLATE_FILE = "create_content_manifest_components.graphql.jinja"
 
 
 def parse_arguments() -> argparse.Namespace:  # pragma: no cover
@@ -120,12 +122,14 @@ def upload_sbom(graphql_api: str, image_id: str, sbom_path: str):
     else:
         existing_bom_refs = set()
 
+    components = []
+
     for i in range(existing_component_count, sbom_component_count):
+        LOGGER.info(f"Processing component {i+1}/{sbom_component_count}")
+
         component = sbom_components[i]
         component = convert_keys(component)
         remove_unsupported_fields(component)
-
-        LOGGER.info(f"Processing component {i+1}/{sbom_component_count}")
 
         # bom-ref is not required, but has to be unique for
         # a given sbom. In most cases it is defined.
@@ -138,11 +142,9 @@ def upload_sbom(graphql_api: str, image_id: str, sbom_path: str):
             else:
                 existing_bom_refs.add(component["bom_ref"])
 
-        component_id = create_content_manifest_component(
-            graphql_api, content_manifest_id, component
-        )
-        if component_id is not None:
-            LOGGER.info(f"Component ID: {component_id}")
+        components.append(component)
+
+    create_content_manifest_components(graphql_api, content_manifest_id, components)
 
 
 def get_image(graphql_api: str, image_id: str, page_size: int = 50) -> dict:
@@ -166,10 +168,15 @@ query ($id: ObjectIDFilterScalar!, $page: Int!, $page_size: Int!) {
                         _id
                         bom_ref
                     }
+                    error {
+                        status
+                        detail
+                    }
                 }
             }
         }
         error {
+            status
             detail
         }
     }
@@ -183,7 +190,12 @@ query ($id: ObjectIDFilterScalar!, $page: Int!, $page_size: Int!) {
         variables = {"id": image_id, "page": page, "page_size": page_size}
         body = {"query": query, "variables": variables}
 
-        image = pyxis.graphql_query(graphql_api, body, "get_image")
+        data = pyxis.graphql_query(graphql_api, body)
+        image = data["get_image"]["data"]
+
+        if image["content_manifest"] is None:
+            # There will be no components, so no need to proceed
+            break
 
         components_batch = image["edges"]["content_manifest_components"]["data"]
         components.extend(components_batch)
@@ -211,9 +223,9 @@ mutation ($input: ContentManifestInput! ) {
     variables = {"input": {"image": {"_id": image_id}}}
     body = {"query": mutation, "variables": variables}
 
-    data = pyxis.graphql_query(graphql_api, body, "create_content_manifest")
+    data = pyxis.graphql_query(graphql_api, body)
 
-    return data["_id"]
+    return data["create_content_manifest"]["data"]["_id"]
 
 
 def get_existing_bom_refs(components: list) -> set[str]:
@@ -221,30 +233,37 @@ def get_existing_bom_refs(components: list) -> set[str]:
     return set(bom_refs)
 
 
-def create_content_manifest_component(
-    graphql_api: str, content_manifest_id: str, component: dict
-) -> str:
-    """Create ContentManifestComponent object in Pyxis using GraphQL API"""
-    mutation = """
-mutation ($id: ObjectIDFilterScalar!, $input: ContentManifestComponentInput! ) {
-    create_content_manifest_component_for_manifest(id: $id, input: $input) {
-        data {
-            _id
-        }
-        error {
-            detail
-        }
-    }
-}
-"""
-    variables = {"id": content_manifest_id, "input": component}
-    body = {"query": mutation, "variables": variables}
+def create_content_manifest_components(
+    graphql_api: str, content_manifest_id: str, components: list[dict], batch_size: int = 5
+):
+    """Create ContentManifestComponent objects in Pyxis using GraphQL API.
 
-    data = pyxis.graphql_query(
-        graphql_api, body, "create_content_manifest_component_for_manifest"
-    )
+    Components will be created in batches.
+    """
+    if not components:
+        LOGGER.info("No components to be created - skipping component creation")
+        return
+    LOGGER.info(f"Creating {len(components)} components in Pyxis...")
+    template = get_template()
+    for i in range(0, len(components), batch_size):
+        batch = components[i : i + batch_size]
+        LOGGER.info(f"Adding component {i+1} to {i+len(batch)}")
+        mutation = template.render(components=batch)
 
-    return data["_id"]
+        variables = {f"input{j}": component for j, component in enumerate(batch)}
+        variables["id"] = content_manifest_id
+
+        body = {"query": mutation, "variables": variables}
+
+        pyxis.graphql_query(graphql_api, body)
+
+
+def get_template() -> Template:
+    script_dir = os.path.dirname(__file__)
+    template_path = os.path.join(script_dir, "../templates/", TEMPLATE_FILE)
+    with open(template_path) as t:
+        template = Template(t.read())
+    return template
 
 
 def load_sbom_components(sbom_path: str) -> list[dict]:

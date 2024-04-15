@@ -1,0 +1,45 @@
+#!/bin/bash
+#
+# script:      translate-delivery-repo
+# 
+# description: This script translates repo references to the proper public registry references.
+#              It turns quay.io/redhat-prod/product----repo into registry.redhat.io/product/repo for production repos and
+#              quay.io/redhat-pending/product----repo -> registry.stage.redhat.io/product/repo for stage repos. It outputs a
+#              json string with two entries. Each entry is of the form repo: [redhat.io, access.redhat.com],
+#              url: <translated-delivery-repo>. 
+#
+# example command:  
+#              translate-delivery-repo REPO where REPO is quay.io/redhat-prod/product----repo for example
+#
+
+REPO=$1
+
+if [ -z "${REPO}" ]; then
+    echo -e "Please pass a repo to translate like 'quay.io/redhat-prod/product----repo'"
+    exit 1
+fi
+
+REPO=${REPO//----//}
+
+case "${REPO}" in
+  "quay.io/redhat-prod/"*)
+    IO_URL=${REPO/quay.io\/redhat-prod/registry.redhat.io}
+    ACCESS_URL=$(echo "${IO_URL}" | sed 's/^registry.redhat.io/registry.access.redhat.com/')
+    ;;
+  "quay.io/redhat-pending/"*)
+    IO_URL=${REPO/quay.io\/redhat-pending/registry.stage.redhat.io}
+    ACCESS_URL=$(echo "${IO_URL}" | sed 's/^registry.stage.redhat.io/registry.access.stage.redhat.com/')
+    ;;
+  "quay.io/redhat/"*) # Index image repos don't have -prod or -pending
+    IO_URL=${REPO/quay.io\/redhat/registry.redhat.io}
+    ACCESS_URL=$(echo "${IO_URL}" | sed 's/^registry.redhat.io/registry.access.redhat.com/')
+    ;;
+  *)
+    echo -n "Warning: Repo to translate is not in expected format. If this is not an index " >&2
+    echo "image, the expected format is: quay.io/redhat-[prod,pending]/product----repo" >&2
+    IO_URL=$REPO
+    ACCESS_URL=""
+    ;;
+esac
+
+echo '[{"repo":"redhat.io","url":"'$IO_URL'"},{"repo":"access.redhat.com","url":"'$ACCESS_URL'"}]'

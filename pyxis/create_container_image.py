@@ -69,8 +69,9 @@ def setup_argparser() -> Any:  # pragma: no cover
     )
     parser.add_argument("--certified", help="Is the ContainerImage certified?", required=True)
     parser.add_argument(
-        "--tag",
-        help="The ContainerImage tag name to upload",
+        "--tags",
+        help="Tags to include in the ContainerImage object. It can be a single tag "
+        "or multiple tags separated by space",
         required=True,
     )
     parser.add_argument(
@@ -82,6 +83,12 @@ def setup_argparser() -> Any:  # pragma: no cover
     parser.add_argument(
         "--is-latest",
         help="Should the `latest` tag of the ContainerImage be overwritten?",
+        required=True,
+    )
+    parser.add_argument(
+        "--architecture-digest",
+        help="The digest of the specific architecture of the image, regardless "
+        "of whether it is a single or multiarch image.",
         required=True,
     )
     parser.add_argument(
@@ -110,10 +117,9 @@ def image_already_exists(args, digest: str) -> bool:
 
     :return: True if one exists, else false
     """
-    digest_field = get_digest_field(args.media_type)
 
     # quote is needed to urlparse the quotation marks
-    filter_str = quote(f'repositories.{digest_field}=="{digest}";not(deleted==true)')
+    filter_str = quote(f'repositories.manifest_schema2_digest=="{digest}";not(deleted==true)')
 
     check_url = urljoin(args.pyxis_url, f"v1/images?page_size=1&filter={filter_str}")
 
@@ -150,7 +156,7 @@ def prepare_parsed_data(skopeo_result: Dict[str, Any]) -> Dict[str, Any]:
         "layers": skopeo_result.get("Layers", []),
         "name": skopeo_result.get("Name", ""),
         "architecture": skopeo_result.get("Architecture", ""),
-        "env_variables": skopeo_result.get("Env", []),
+        "env_variables": skopeo_result.get("Env", []) or [],
     }
 
 
@@ -176,6 +182,18 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
     del parsed_data["name"]
 
     upload_url = urljoin(args.pyxis_url, "v1/images")
+
+    tags = args.tags.split()
+    if args.is_latest == "true":
+        tags.append("latest")
+    pyxis_tags = [
+        {
+            "added_date": date_now,
+            "name": tag,
+        }
+        for tag in tags
+    ]
+
     container_image_payload = {
         "repositories": [
             {
@@ -183,12 +201,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
                 "registry": image_registry,
                 "repository": image_repo,
                 "push_date": date_now,
-                "tags": [
-                    {
-                        "added_date": date_now,
-                        "name": args.tag,
-                    },
-                ],
+                "tags": pyxis_tags,
             }
         ],
         "certified": json.loads(args.certified.lower()),
@@ -197,16 +210,13 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
         "parsed_data": parsed_data,
     }
 
-    if args.is_latest == "true":
-        container_image_payload["repositories"][0]["tags"].append(
-            {
-                "added_date": date_now,
-                "name": "latest",
-            }
-        )
-
-    digest_field = get_digest_field(args.media_type)
-    container_image_payload["repositories"][0][digest_field] = docker_image_digest
+    container_image_payload["repositories"][0][
+        "manifest_schema2_digest"
+    ] = args.architecture_digest
+    if args.media_type in MANIFEST_LIST_TYPES:
+        container_image_payload["repositories"][0][
+            "manifest_list_digest"
+        ] = docker_image_digest
 
     # For images released to registry.redhat.io we need a second repository item
     # with published=true and registry and repository converted.
@@ -229,20 +239,6 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
         raise Exception("Image metadata was not successfully added to Pyxis.")
 
 
-def get_digest_field(media_type: str) -> str:
-    """This will return one of the two possible digest fields
-    to use in the repository object which is embedded in the
-    ContainerImage object.
-
-    manifest_schema2_digest is used for single arch images,
-    manifest_list_digest is used for multi arch images
-    """
-    if media_type in MANIFEST_LIST_TYPES:
-        return "manifest_list_digest"
-    else:
-        return "manifest_schema2_digest"
-
-
 def main():  # pragma: no cover
     """Main func"""
 
@@ -256,7 +252,7 @@ def main():  # pragma: no cover
 
     parsed_data = prepare_parsed_data(skopeo_result)
 
-    if not image_already_exists(args, parsed_data["digest"]):
+    if not image_already_exists(args, args.architecture_digest):
         create_container_image(args, parsed_data)
 
 

@@ -9,14 +9,15 @@ import requests
 
 LOGGER = logging.getLogger("pyxis")
 
+session = None
 
-def _get_session(pyxis_url: str, auth_required: bool = True) -> requests.Session:
+
+def _get_session(auth_required: bool = True) -> requests.Session:
     """Create a Pyxis http session with auth based on env variables.
 
     Auth is optional and can be set to use either API key or certificate + key.
 
     Args:
-        url (str): Pyxis API URL
         auth_required (bool): Whether authentication should be required for the session
 
     Raises:
@@ -62,7 +63,9 @@ def post(url: str, body: Dict[str, Any]) -> requests.Response:
 
     :return: Pyxis response
     """
-    session = _get_session(url)
+    global session
+    if session is None:
+        session = _get_session()
 
     LOGGER.debug(f"POST request URL: {url}")
     LOGGER.debug(f"POST request body: {body}")
@@ -79,7 +82,7 @@ def post(url: str, body: Dict[str, Any]) -> requests.Response:
     return resp
 
 
-def graphql_query(graphql_api: str, body: Dict[str, Any], query: str) -> Dict[str, Any]:
+def graphql_query(graphql_api: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """Make a request to Pyxis GraphQL API
 
     This will make a POST request and then check the result
@@ -88,26 +91,22 @@ def graphql_query(graphql_api: str, body: Dict[str, Any], query: str) -> Dict[st
     Args:
         graphql_api (str): Pyxis GraphQL API URL
         body (Dict[str, Any]): Request payload
-        query (str): Name of the Pyxis GraphQL query/mutation used
 
     :return: Pyxis response
     """
     resp = post(graphql_api, body)
     resp_json = resp.json()
 
-    error_msg = f"Pyxis GraphQL query '{query}' failed"
-    if resp_json.get("data") is None or query not in resp_json["data"]:
+    error_msg = "Pyxis GraphQL query failed"
+    if resp_json.get("data") is None or any(
+        [query["error"] is not None for query in resp_json["data"].values()]
+    ):
         LOGGER.error(error_msg)
         LOGGER.error(f"Pyxis response: {resp_json}")
         LOGGER.error(f"Pyxis trace_id: {resp.headers.get('trace_id')}")
         raise RuntimeError(error_msg)
-    elif resp_json["data"][query]["error"] is not None:
-        error_msg = f"{error_msg}: {resp_json['data'][query]['error']['detail']}"
-        LOGGER.error(error_msg)
-        LOGGER.error(f"Pyxis trace_id: {resp.headers.get('trace_id')}")
-        raise RuntimeError(error_msg)
 
-    return resp_json["data"][query]["data"]
+    return resp_json["data"]
 
 
 def put(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -119,7 +118,9 @@ def put(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
 
     :return: Pyxis response
     """
-    session = _get_session(url)
+    global session
+    if session is None:
+        session = _get_session()
 
     LOGGER.debug(f"PATCH Pyxis request: {url}")
     resp = session.put(url, json=body)
@@ -144,7 +145,10 @@ def get(url: str, params: Optional[Dict[str, str]] = None, auth_required: bool =
 
     :return: Pyxis GET request response
     """
-    session = _get_session(url, auth_required=auth_required)
+    global session
+    if session is None:
+        session = _get_session()
+
     LOGGER.debug(f"GET Pyxis request url: {url}")
     LOGGER.debug(f"GET Pyxis request params: {params}")
     resp = session.get(url, params=params)
