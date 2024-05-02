@@ -49,7 +49,7 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
     :return: Dictionary of parsed arguments
     """
 
-    parser = argparse.ArgumentParser(description="Upload sbom metadata to Pyxis")
+    parser = argparse.ArgumentParser(description="Upload sbom metadata to Pyxis via graphql")
 
     parser.add_argument(
         "--pyxis-graphql-api",
@@ -66,7 +66,7 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
         "--retry",
         "-r",
         action="store_true",
-        help="If set, retry the whole sbom uploading in case it fails",
+        help="If set, retry the upload in case it fails",
     )
     return parser.parse_args()
 
