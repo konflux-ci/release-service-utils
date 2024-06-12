@@ -24,11 +24,17 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     python39-requests \
     skopeo \
     krb5-workstation \
+    rsync \
     && dnf clean all
+
+RUN curl -LO https://github.com/release-engineering/exodus-rsync/releases/latest/download/exodus-rsync && \
+    chmod +x exodus-rsync && mv exodus-rsync /usr/local/bin/rsync && \
+    git clone https://github.com/release-engineering/pubtools-content-gateway.git
 
 RUN pip3 install jinja2 \
     jinja2-ansible-filters \
-    packageurl-python
+    packageurl-python \
+    pubtools-content-gateway 
 
 ADD data/certs/2015-IT-Root-CA.pem data/certs/2022-IT-Root-CA.pem /etc/pki/ca-trust/source/anchors/
 RUN update-ca-trust
