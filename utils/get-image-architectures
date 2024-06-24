@@ -18,7 +18,20 @@ fi
 
 RAW_OUTPUT=$(skopeo inspect --no-tags --raw docker://${IMAGE})
 
-if [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.oci.image.manifest.v1+json" ] ; then
+ARTIFACT_TYPE=$(jq -r '.artifactType' <<< $RAW_OUTPUT)
+if [ "$ARTIFACT_TYPE" != "null" ] ; then
+    # OCI artifact (not a normal image)
+    digest=$(echo $IMAGE | awk -F '@' '{print $2}')
+    if [[ ! "$digest" =~ ^sha256: ]] ; then
+        echo "Could not determine digest for $IMAGE of artifactType ${ARTIFACT_TYPE}"
+        exit 1;
+    fi
+
+    # Just report that the image is for linxu/amd64, which is not exactly true - but,
+    # downstream release-service-catalog tasks expect to find something. Use this as a default.
+    jq -cr -n --arg digest "$digest" \
+        '{"platform": {"architecture": "amd64", "os": "linux"}, "digest": $ARGS.named["digest"]}'
+elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.oci.image.manifest.v1+json" ] ; then
     # Single arch, so need to run skopeo inspect again without --raw
     RAW_OUTPUT=$(skopeo inspect --no-tags docker://${IMAGE})
     architecture=$(jq -r '.Architecture' <<< $RAW_OUTPUT)
