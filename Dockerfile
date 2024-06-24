@@ -1,3 +1,4 @@
+FROM quay.io/konflux-ci/oras:latest@sha256:04cbd5efbcf1a38944b050e3adbc3071218643f6aa92e95d5d25b173574bca5e as oras
 FROM registry.access.redhat.com/ubi8/ubi:8.10-901.1717584420
 
 ARG COSIGN_VERSION=2.1.1
@@ -14,6 +15,9 @@ RUN curl -L https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_
     curl -L https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz  | tar -C /usr -xzf - --strip=1 gh_${GH_VERSION}_linux_amd64/bin/gh &&\
     chmod +x /usr/bin/{yq,kubectl,opm,glab,gh} &&\
     rpm -ivh https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-${COSIGN_VERSION}.x86_64.rpm
+
+COPY --from=oras /usr/bin/oras /usr/bin/oras
+COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
 
 RUN dnf -y --setopt=tsflags=nodocs install \
     git \

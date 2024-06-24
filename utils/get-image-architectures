@@ -23,8 +23,9 @@ if [ "$ARTIFACT_TYPE" != "null" ] ; then
     # OCI artifact (not a normal image)
     digest=$(echo $IMAGE | awk -F '@' '{print $2}')
     if [[ ! "$digest" =~ ^sha256: ]] ; then
-        echo "Could not determine digest for $IMAGE of artifactType ${ARTIFACT_TYPE}"
-        exit 1;
+        AUTH_FILE=$(mktemp)
+        select-oci-auth $IMAGE > $AUTH_FILE
+        digest=$(oras resolve --registry-config "$AUTH_FILE" "$IMAGE")
     fi
 
     # Just report that the image is for linux/amd64, which is not exactly true - but,
