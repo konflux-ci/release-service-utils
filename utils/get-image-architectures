@@ -27,7 +27,7 @@ if [ "$ARTIFACT_TYPE" != "null" ] ; then
         exit 1;
     fi
 
-    # Just report that the image is for linxu/amd64, which is not exactly true - but,
+    # Just report that the image is for linux/amd64, which is not exactly true - but,
     # downstream release-service-catalog tasks expect to find something. Use this as a default.
     jq -cr -n --arg digest "$digest" \
         '{"platform": {"architecture": "amd64", "os": "linux"}, "digest": $ARGS.named["digest"]}'
