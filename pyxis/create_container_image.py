@@ -205,7 +205,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
             }
         ],
         "certified": json.loads(args.certified.lower()),
-        "image_id": docker_image_digest,
+        "image_id": args.architecture_digest,
         "architecture": parsed_data["architecture"],
         "parsed_data": parsed_data,
     }
