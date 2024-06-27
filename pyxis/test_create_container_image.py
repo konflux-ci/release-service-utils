@@ -100,7 +100,7 @@ def test_create_container_image(mock_datetime, mock_post):
                 }
             ],
             "certified": False,
-            "image_id": "some_digest",
+            "image_id": "arch specific digest",
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
         },
@@ -160,7 +160,7 @@ def test_create_container_image_latest(mock_datetime, mock_post):
                 }
             ],
             "certified": False,
-            "image_id": "some_digest",
+            "image_id": "arch specific digest",
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
         },
@@ -237,7 +237,7 @@ def test_create_container_image_rh_push_multiple_tags(mock_datetime, mock_post):
                 },
             ],
             "certified": False,
-            "image_id": "some_digest",
+            "image_id": "arch specific digest",
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
         },
