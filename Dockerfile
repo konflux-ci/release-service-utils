@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi8/ubi:8.9-1028
+FROM registry.access.redhat.com/ubi8/ubi:8.10-901.1717584420
 
 ARG COSIGN_VERSION=2.1.1
 ARG KUBECTL_VERSION=1.27.2
