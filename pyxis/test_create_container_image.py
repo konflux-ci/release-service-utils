@@ -277,9 +277,11 @@ def test_prepare_parsed_data():
     args.architecture = "test"
     args.architecture_digest = "sha:abc"
     args.name = "quay.io/hacbs-release/release-service-utils"
-    file_content = json.dumps({
-        "layers": [{"digest": "1"}, {"digest": "2"}],
-    })
+    file_content = json.dumps(
+        {
+            "layers": [{"digest": "1"}, {"digest": "2"}],
+        }
+    )
 
     # Act
     with patch("builtins.open", mock_open(read_data=file_content)):
