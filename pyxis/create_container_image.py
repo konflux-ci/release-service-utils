@@ -75,8 +75,8 @@ def setup_argparser() -> Any:  # pragma: no cover
         required=True,
     )
     parser.add_argument(
-        "--skopeo-result",
-        help="File with result of `skopeo inspect` running against image"
+        "--oras-manifest-fetch",
+        help="File with result of `oras manifest fetch` running against image"
         " represented by ContainerImage to be created",
         required=True,
     )
@@ -86,9 +86,25 @@ def setup_argparser() -> Any:  # pragma: no cover
         required=True,
     )
     parser.add_argument(
+        "--name",
+        help='The "name" of the image: the registry/repository-name.',
+        required=True,
+    )
+    parser.add_argument(
+        "--digest",
+        help="The digest of the pullspec, without regard to platform. "
+        "Could be digest of either single or multiarch image.",
+        required=True,
+    )
+    parser.add_argument(
         "--architecture-digest",
         help="The digest of the specific architecture of the image, regardless "
         "of whether it is a single or multiarch image.",
+        required=True,
+    )
+    parser.add_argument(
+        "--architecture",
+        help="The architecture of the image.",
         required=True,
     )
     parser.add_argument(
@@ -144,19 +160,20 @@ def image_already_exists(args, digest: str) -> bool:
     return True
 
 
-def prepare_parsed_data(skopeo_result: Dict[str, Any]) -> Dict[str, Any]:
-    """Function to extract the data this script needs from provided skopeo inspect output
+def prepare_parsed_data(args) -> Dict[str, Any]:
+    """Function to extract the data this script needs from provided oras manifest fetch output
 
     :return: Dict of tuples containing pertinent data
     """
 
+    with open(args.oras_manifest_fetch) as json_file:
+        oras_manifest_fetch = json.load(json_file)
+
     return {
-        "digest": skopeo_result.get("Digest", ""),
-        "docker_version": skopeo_result.get("DockerVersion", ""),
-        "layers": skopeo_result.get("Layers", []),
-        "name": skopeo_result.get("Name", ""),
-        "architecture": skopeo_result.get("Architecture", ""),
-        "env_variables": skopeo_result.get("Env", []) or [],
+        "name": args.name,
+        "digest": args.architecture_digest,
+        "architecture": args.architecture,
+        "layers": [layer["digest"] for layer in oras_manifest_fetch.get("layers", [])],
     }
 
 
@@ -168,9 +185,9 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
     date_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
 
     if "digest" not in parsed_data:
-        raise Exception("Digest was not found in the passed skopeo inspect json")
+        raise Exception("Digest was not found in the passed oras manifest json")
     if "name" not in parsed_data:
-        raise Exception("Name was not found in the passed skopeo inspect json")
+        raise Exception("Name was not found in the passed oras manifest json")
     docker_image_digest = parsed_data["digest"]
     # digest isn't accepted in the parsed_data payload to pyxis
     del parsed_data["digest"]
@@ -220,7 +237,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
 
     # For images released to registry.redhat.io we need a second repository item
     # with published=true and registry and repository converted.
-    # E.g. if the name in the skopeo inspect result is
+    # E.g. if the name in the oras manifest result is
     # "quay.io/redhat-prod/rhtas-tech-preview----cosign-rhel9",
     # repository will be "rhtas-tech-preview/cosign-rhel9"
     if args.rh_push == "true":
@@ -247,10 +264,7 @@ def main():  # pragma: no cover
     log_level = logging.DEBUG if args.verbose else logging.INFO
     pyxis.setup_logger(level=log_level)
 
-    with open(args.skopeo_result) as json_file:
-        skopeo_result = json.load(json_file)
-
-    parsed_data = prepare_parsed_data(skopeo_result)
+    parsed_data = prepare_parsed_data(args)
 
     if not image_already_exists(args, args.architecture_digest):
         create_container_image(args, parsed_data)

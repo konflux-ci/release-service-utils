@@ -1,6 +1,7 @@
 import pytest
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+import json
+from unittest.mock import patch, mock_open, MagicMock
 
 from create_container_image import (
     image_already_exists,
@@ -272,49 +273,24 @@ def test_create_container_image_no_name():
 
 def test_prepare_parsed_data():
     # Arrange
-    file_content = {
-        "Digest": "sha:abc",
-        "DockerVersion": "1",
-        "Layers": ["1", "2"],
-        "Name": "quay.io/hacbs-release/release-service-utils",
-        "Architecture": "test",
-        "Env": ["a=test"],
-    }
+    args = MagicMock()
+    args.architecture = "test"
+    args.architecture_digest = "sha:abc"
+    args.name = "quay.io/hacbs-release/release-service-utils"
+    file_content = json.dumps(
+        {
+            "layers": [{"digest": "1"}, {"digest": "2"}],
+        }
+    )
 
     # Act
-    parsed_data = prepare_parsed_data(file_content)
+    with patch("builtins.open", mock_open(read_data=file_content)):
+        parsed_data = prepare_parsed_data(args)
 
     # Assert
     assert parsed_data == {
         "architecture": "test",
         "digest": "sha:abc",
-        "docker_version": "1",
-        "env_variables": ["a=test"],
-        "layers": ["1", "2"],
-        "name": "quay.io/hacbs-release/release-service-utils",
-    }
-
-
-def test_prepare_parsed_data_with_null_env():
-    # Arrange
-    file_content = {
-        "Digest": "sha:abc",
-        "DockerVersion": "1",
-        "Layers": ["1", "2"],
-        "Name": "quay.io/hacbs-release/release-service-utils",
-        "Architecture": "test",
-        "Env": None,
-    }
-
-    # Act
-    parsed_data = prepare_parsed_data(file_content)
-
-    # Assert
-    assert parsed_data == {
-        "architecture": "test",
-        "digest": "sha:abc",
-        "docker_version": "1",
-        "env_variables": [],
         "layers": ["1", "2"],
         "name": "quay.io/hacbs-release/release-service-utils",
     }
