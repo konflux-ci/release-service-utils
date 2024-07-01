@@ -141,6 +141,32 @@ def test_upload_sbom__manifest_and_one_component_exist(
 @patch("upload_sbom.load_sbom_components")
 @patch("upload_sbom.create_content_manifest")
 @patch("upload_sbom.get_image")
+def test_upload_sbom__manifest_and_no_components_returned(
+    mock_get_image,
+    mock_create_content_manifest,
+    mock_load_sbom_components,
+    mock_create_content_manifest_components,
+):
+    """Creation of the manifest and the first component is skipped"""
+    mock_get_image.return_value = {
+        "_id": IMAGE_ID,
+        "content_manifest": {
+            "_id": MANIFEST_ID,
+        },
+        "components": [{"_id": COMPONENT_ID, "bom_ref": "aaa"}],
+    }
+    mock_load_sbom_components.return_value = []
+
+    upload_sbom(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
+
+    mock_create_content_manifest.assert_not_called()
+    mock_create_content_manifest_components.assert_not_called()
+
+
+@patch("upload_sbom.create_content_manifest_components")
+@patch("upload_sbom.load_sbom_components")
+@patch("upload_sbom.create_content_manifest")
+@patch("upload_sbom.get_image")
 def test_upload_sbom__all_components_exist(
     mock_get_image,
     mock_create_content_manifest,
@@ -420,6 +446,21 @@ def test_load_sbom_components__success(mock_open, mock_check_bom_ref_duplicates,
     mock_load.assert_called_once_with(mock_open.return_value.__enter__.return_value)
     mock_check_bom_ref_duplicates.assert_called_once_with(loaded_components)
     assert fake_components == loaded_components
+
+
+@patch("json.load")
+@patch("upload_sbom.check_bom_ref_duplicates")
+@patch("builtins.open")
+def test_load_sbom_components__no_components_key(
+    mock_open, mock_check_bom_ref_duplicates, mock_load
+):
+    mock_load.return_value = {}
+
+    loaded_components = load_sbom_components(SBOM_PATH)
+
+    mock_load.assert_called_once_with(mock_open.return_value.__enter__.return_value)
+    mock_check_bom_ref_duplicates.assert_called_once_with(loaded_components)
+    assert loaded_components == []
 
 
 @patch("json.load")

@@ -276,7 +276,7 @@ def load_sbom_components(sbom_path: str) -> list[dict]:
     try:
         with open(sbom_path) as f:
             sbom = json.load(f)
-        components = sbom["components"]
+        components = sbom["components"] if "components" in sbom else []
     except Exception:
         LOGGER.error("Unable to load components from sbom file")
         raise
