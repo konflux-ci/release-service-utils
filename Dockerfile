@@ -1,5 +1,5 @@
 FROM quay.io/konflux-ci/oras:latest@sha256:1619b84cea3777387f643d7a1ecde98dd10904439f31607e66530cd2299c7b91 as oras
-FROM registry.access.redhat.com/ubi8/ubi:8.10-901.1717584420
+FROM registry.access.redhat.com/ubi8/ubi:8.10-1020
 
 ARG COSIGN_VERSION=2.1.1
 ARG KUBECTL_VERSION=1.27.2
