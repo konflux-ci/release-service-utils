@@ -1,5 +1,5 @@
 FROM quay.io/konflux-ci/oras:latest@sha256:1619b84cea3777387f643d7a1ecde98dd10904439f31607e66530cd2299c7b91 as oras
-FROM registry.access.redhat.com/ubi8/ubi:8.10-1020
+FROM registry.access.redhat.com/ubi9/ubi:9.4-947
 
 ARG COSIGN_VERSION=2.1.1
 ARG KUBECTL_VERSION=1.27.2
@@ -22,10 +22,10 @@ COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
 RUN dnf -y --setopt=tsflags=nodocs install \
     git \
     jq \
-    python39-devel \
+    python3-devel \
     diffutils \
-    python39-pip \
-    python39-requests \
+    python3-pip \
+    python3-requests \
     skopeo \
     krb5-workstation \
     rsync \
