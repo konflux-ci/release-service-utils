@@ -26,7 +26,10 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     diffutils \
     python3-pip \
     python3-requests \
+    python3-rpm \
     skopeo \
+    krb5-libs \
+    krb5-devel \
     krb5-workstation \
     rsync \
     && dnf clean all
