@@ -10,6 +10,11 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
+      - name: Install OS packages
+        # libkrb5-dev is required for gssapi dependency installation (krb5-config command)
+        run: |
+          sudo apt-get -y update
+          sudo apt-get install -y libkrb5-dev
       - name: Check out repo
         uses: actions/checkout@v3
       - name: Black Lint
