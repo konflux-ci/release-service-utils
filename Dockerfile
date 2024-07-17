@@ -36,8 +36,7 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     && dnf clean all
 
 RUN curl -LO https://github.com/release-engineering/exodus-rsync/releases/latest/download/exodus-rsync && \
-    chmod +x exodus-rsync && mv exodus-rsync /usr/local/bin/rsync && \
-    git clone https://github.com/release-engineering/pubtools-content-gateway.git
+    chmod +x exodus-rsync && mv exodus-rsync /usr/local/bin/rsync
 
 RUN pip3 install jinja2 \
     jinja2-ansible-filters \
