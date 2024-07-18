@@ -16,21 +16,25 @@
 #
 # Usage:
 #   ./internal-request.sh -r request [-p <key=value> ...] [-s sync] [-t timeout]
+#   [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]
 #
 # Parameters:
-#   -r  Request: the name of the request.
-#   -p  Parameters: can be specified multiple times. Each '-p' flag represents a
-#       parameter that will be added to the 'parameters' field in the
-#       InternalRequest resource. The value of the parameter is treated as a string,
-#       and it can be a valid JSON object or array. When passing complex parameter
-#       values, make sure to enclose them in quotes.
-#   -l  labels: can be specified multiple times. Each '-l' flag represents a
-#       label that will be added to the 'metadata.labels' field in the
-#       InternalRequest resource. The value of the parameter must be a string. Optional.
-#   -s  Sync: a flag that indicates whether the script has to finish to complete
-#       the tasks or exit immediately after creating the resource. Default is true.
-#   -t  Timeout: Defaults to 600 seconds.
-#   -h  Display this help message.
+#   -r                 Request: the name of the request.
+#   -p                 Parameters: can be specified multiple times. Each '-p' flag represents a
+#                      parameter that will be added to the 'parameters' field in the
+#                      InternalRequest resource. The value of the parameter is treated as a string,
+#                      and it can be a valid JSON object or array. When passing complex parameter
+#                      values, make sure to enclose them in quotes.
+#   -l                 labels: can be specified multiple times. Each '-l' flag represents a
+#                      label that will be added to the 'metadata.labels' field in the
+#                      InternalRequest resource. The value of the parameter must be a string. Optional.
+#   -s                 Sync: a flag that indicates whether the script has to finish to complete
+#                      the tasks or exit immediately after creating the resource. Default is true.
+#   -t                 Timeout: Defaults to 600 seconds.
+#   --pipeline-timeout The total timeout for the invoked pipelineRun. Defaults to 60mins
+#   --task-timeout     The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins
+#   --finally-timeout  The timeout for the finally tasks invoked in the pipelineRun. Defaults to 5mins
+#   -h                 Display this help message.
 #
 # Prerequisites:
 #   - kubectl: The Kubernetes command line tool must be installed and properly
@@ -43,47 +47,123 @@
 
 set -e
 
+# Set defaults
 TIMEOUT=600
 SYNC=true
 PARAMS=""
+PIPELINE_TIMEOUT=1h0m0s
+TASK_TIMEOUT=0h55m0s
+FINALLY_TIMEOUT=0h5m0s
 
 function usage {
-    echo "Usage: $0 -r request [-p parameters] [-l labels] [-s sync] [-t timeout]"
+    echo "Usage: $0 -r request [-p parameters] [-l labels] [-s sync] [-t timeout] [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]"
     echo
-    echo "  -r  Request: the name of the request."
-    echo "  -p  Params: can be specified multiple times. Each '-p' flag represents a"
-    echo "      parameter that will be added to the 'parameters' field in the"
-    echo "      InternalRequest resource."
-    echo "  -l  Labels: can be specified multiple times. Each '-l' flag represents a"
-    echo "      label that will be added to the 'metadata.labels' field in the"
-    echo "      InternalRequest resource. Optional."
-    echo "  -s  Sync: a flag that indicates whether the script has to finish to complete the tasks or exit immediately after creating the resource. Default is true."
-    echo "  -t  Timeout: Defaults to 600 seconds."
+    echo "  -r                 Request: the name of the request."
+    echo "  -p                 Params: can be specified multiple times. Each '-p' flag represents a"
+    echo "                     parameter that will be added to the 'parameters' field in the"
+    echo "                     InternalRequest resource."
+    echo "  -l                 Labels: can be specified multiple times. Each '-l' flag represents a"
+    echo "                     label that will be added to the 'metadata.labels' field in the"
+    echo "                     InternalRequest resource. Optional."
+    echo "  -s                 Sync: a flag that indicates whether the script has to finish to complete the tasks or"
+    echo "                     exit immediately after creating the resource. Default is true."
+    echo "  -t                 Timeout: Defaults to 600 seconds."
+    echo "  --pipeline-timeout The total timeout for the invoked pipelineRun. Defaults to 60mins."
+    echo "  --task-timeout     The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins."
+    echo "  --finally-timeout  The timeout for the finally tasks invoked in the pipelineRun. Defaults to 5mins."
     echo "  -h  Display this help message."
     exit 1
+}
+
+function convert_to_seconds {
+    echo "$1" | awk -F[h,m,s]  '{print ($1 * 3600) + ($2 * 60) + $3}'
 }
 
 
 # Parsing arguments
 PARAMS=() # initialize PARAMS as an empty array
 LABELS=() # initialize LABELS as an empty array
-while getopts r:p:l:s:t:h flag
-do
-    case "${flag}" in
-        r) REQUEST=${OPTARG};;
-        p) PARAMS+=("${OPTARG}");; # append each parameter to the PARAMS array
-        l) LABELS+=("${OPTARG}");; # append each label to the LABELS array
-        s) SYNC=${OPTARG};;
-        t) TIMEOUT=${OPTARG};;
-        h) usage;;
-        *) usage;;
+OPTIONS=$(getopt -l "pipeline-timeout:,task-timeout:,finally-timeout:" -o "r:p:l:s:t:h" -a -- "$@")
+eval set -- "$OPTIONS"
+while true; do
+    case "$1" in
+        -r)
+            shift
+            REQUEST=$1
+            ;;
+        -p)
+            shift
+            PARAMS+=("$1") # append each parameter to the PARAMS array
+            ;;
+        -l)
+            shift
+            LABELS+=("$1") # append each parameter to the PARAMS array
+            ;;
+        -s)
+            shift
+            SYNC=$1
+            ;;
+        -t)
+            shift
+            TIMEOUT=$1
+            ;;
+        --pipeline-timeout)
+            shift
+            PIPELINE_TIMEOUT=$1
+            ;;
+        --task-timeout)
+            shift
+            TASK_TIMEOUT=$1
+            ;;
+        --finally-timeout)
+            shift
+            FINALLY_TIMEOUT=$1
+            ;;
+        -h)
+            shift
+            usage
+            ;;
+        --)
+            shift
+            break
+            ;;
     esac
+    shift
 done
 
 # Check if mandatory parameters are set
 if [ -z "$REQUEST" ]
 then
     usage
+fi
+
+# Make sure all timeouts are passing in XhYmZs format
+PIPELINE_VALUES=$(echo $PIPELINE_TIMEOUT | awk -F[h,m,s] '{print $3}')
+TASK_VALUES=$(echo $TASK_TIMEOUT | awk -F[h,m,s] '{print $3}')
+FINALLY_VALUES=$(echo $FINALLY_TIMEOUT | awk -F[h,m,s] '{print $3}')
+if [[ $PIPELINE_VALUES = "" ]] || [[ $TASK_VALUES = "" ]] || [[ $FINALLY_VALUES = "" ]] ; then
+    echo The pipeline, task, or finally timeout value was passed incorrectly.
+    echo The correct format is XhYmZs, where X, Y, and Z are integers.
+    echo "You cannot leave out any of the 3 (use value 0 if necessary)."
+    exit 1
+fi
+
+# Ensure pipeline timeout is greater than or equal to the task + finally timeouts
+PIPELINE_TIMEOUT_SECS=$(convert_to_seconds $PIPELINE_TIMEOUT)
+TASK_TIMEOUT_SECS=$(convert_to_seconds $TASK_TIMEOUT)
+FINALLY_TIMEOUT_SECS=$(convert_to_seconds $FINALLY_TIMEOUT)
+ALL_TASKS_TIMEOUT=$((TASK_TIMEOUT_SECS + FINALLY_TIMEOUT_SECS))
+if [[ $ALL_TASKS_TIMEOUT -gt $PIPELINE_TIMEOUT_SECS ]] ; then
+    echo The sum of the task and finally timeout cannot exceed the pipeline timeout.
+    echo Pipeline timeout is $PIPELINE_TIMEOUT_SECS and the sum of the others is $ALL_TASKS_TIMEOUT
+    echo This leads to tekton validation webhook errors. Exiting...
+    exit 1
+fi
+
+# Ensure pipeline timeout does not exceed InternalRequest timeout
+if [ $PIPELINE_TIMEOUT_SECS -gt $TIMEOUT ] ; then
+    echo WARNING: The passed pipeline timeout is greater than the InternalRequest timeout
+    echo This means the InternalRequest can fail before the pipelineRun times out, should it take that long
 fi
 
 # Convert parameters and labels to JSON format
@@ -106,6 +186,8 @@ do
     LABEL_JSON_ARRAY+=("$(jq -n --arg key "$KEY" --arg value "$VALUE" '{($key): $value}')")
 done
 
+TIMEOUTS_JSON='{"pipeline": "'$PIPELINE_TIMEOUT'", "tasks": "'$TASK_TIMEOUT'", "finally": "'$FINALLY_TIMEOUT'"}'
+
 # Combine all JSON objects in the bash array into one JSON object
 PARAM_JSON=$(echo "${PARAM_JSON_ARRAY[@]}" | jq -s 'add')
 LABEL_JSON=$(echo "${LABEL_JSON_ARRAY[@]}" | jq -s 'add')
@@ -114,6 +196,7 @@ LABEL_JSON=$(echo "${LABEL_JSON_ARRAY[@]}" | jq -s 'add')
 PAYLOAD=$(jq -n \
     --arg request "$REQUEST" \
     --argjson parameters "$PARAM_JSON" \
+    --argjson timeouts "$TIMEOUTS_JSON" \
     '{
       "apiVersion": "appstudio.redhat.com/v1alpha1",
       "kind": "InternalRequest",
@@ -122,7 +205,8 @@ PAYLOAD=$(jq -n \
       },
       "spec": {
         "request": $request,
-        "params": $parameters
+        "params": $parameters,
+        "timeouts": $timeouts
       }
     }'
 )
