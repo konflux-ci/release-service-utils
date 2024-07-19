@@ -134,12 +134,18 @@ def construct_rpm_items(components: list[dict]) -> list[dict]:
         if "purl" in component:
             purl_dict = PackageURL.from_string(component["purl"]).to_dict()
             if purl_dict["type"] == "rpm":
-                rpm_item = {"name": purl_dict["name"]}
+                rpm_item = {
+                    "name": purl_dict["name"],
+                    "summary": purl_dict["name"],
+                    "architecture": purl_dict["qualifiers"].get("arch", "noarch"),
+                }
                 if purl_dict["version"] is not None:
                     rpm_item["version"] = purl_dict["version"].split("-")[0]
                     rpm_item["release"] = purl_dict["version"].split("-")[1]
-                if "arch" in purl_dict["qualifiers"]:
-                    rpm_item["architecture"] = purl_dict["qualifiers"]["arch"]
+                    rpm_item["nvra"] = (
+                        f"{rpm_item['name']}-{purl_dict['version']}.{rpm_item['architecture']}"
+                    )
+                    rpm_item["summary"] = rpm_item["nvra"]
                 if "upstream" in purl_dict["qualifiers"]:
                     rpm_item["srpm_name"] = purl_dict["qualifiers"]["upstream"]
                 rpms_items.append(rpm_item)

@@ -197,19 +197,36 @@ def test_construct_rpm_items__success():
     assert rpms == [
         {
             "name": "pkg1",
+            "summary": "pkg1-1-2.el8.x86_64",
+            "nvra": "pkg1-1-2.el8.x86_64",
             "version": "1",
             "release": "2.el8",
             "architecture": "x86_64",
             "srpm_name": "pkg1-1-2.el8.src.rpm",
         },
-        {"name": "pkg2", "architecture": "noarch", "srpm_name": "pkg2-1-2.el8.src.rpm"},
+        {
+            "name": "pkg2",
+            "summary": "pkg2",
+            "architecture": "noarch",
+            "srpm_name": "pkg2-1-2.el8.src.rpm",
+        },
         {
             "name": "pkg3",
+            "summary": "pkg3-9-8.el8.noarch",
+            "nvra": "pkg3-9-8.el8.noarch",
             "version": "9",
             "release": "8.el8",
+            "architecture": "noarch",
             "srpm_name": "pkg3-9-8.el8.src.rpm",
         },
-        {"name": "pkg4", "version": "1", "release": "2.el8", "architecture": "x86_64"},
+        {
+            "name": "pkg4",
+            "summary": "pkg4-1-2.el8.x86_64",
+            "nvra": "pkg4-1-2.el8.x86_64",
+            "version": "1",
+            "release": "2.el8",
+            "architecture": "x86_64",
+        },
     ]
 
 
