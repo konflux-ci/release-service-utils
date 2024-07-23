@@ -15,7 +15,7 @@
 # for status updates.
 #
 # Usage:
-#   ./internal-request.sh -r request [-p <key=value> ...] [-s sync] [-t timeout]
+#   ./internal-request.sh -r request [-p <key=value> ...] [-s sync] [-t timeout] [--serviceAccount name]
 #   [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]
 #
 # Parameters:
@@ -31,6 +31,7 @@
 #   -s                 Sync: a flag that indicates whether the script has to finish to complete
 #                      the tasks or exit immediately after creating the resource. Default is true.
 #   -t                 Timeout: Defaults to 600 seconds.
+#   --service-account  The name of the service account to be used in the pipelineRun execution. Optional.
 #   --pipeline-timeout The total timeout for the invoked pipelineRun. Defaults to 60mins
 #   --task-timeout     The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins
 #   --finally-timeout  The timeout for the finally tasks invoked in the pipelineRun. Defaults to 5mins
@@ -56,7 +57,7 @@ TASK_TIMEOUT=0h55m0s
 FINALLY_TIMEOUT=0h5m0s
 
 function usage {
-    echo "Usage: $0 -r request [-p parameters] [-l labels] [-s sync] [-t timeout] [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]"
+    echo "Usage: $0 -r request [-p parameters] [-l labels] [-s sync] [-t timeout] [--service-account name] [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]"
     echo
     echo "  -r                 Request: the name of the request."
     echo "  -p                 Params: can be specified multiple times. Each '-p' flag represents a"
@@ -68,6 +69,7 @@ function usage {
     echo "  -s                 Sync: a flag that indicates whether the script has to finish to complete the tasks or"
     echo "                     exit immediately after creating the resource. Default is true."
     echo "  -t                 Timeout: Defaults to 600 seconds."
+    echo "  --service-account  The name of the service account to be used in the pipelineRun execution. Optional."
     echo "  --pipeline-timeout The total timeout for the invoked pipelineRun. Defaults to 60mins."
     echo "  --task-timeout     The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins."
     echo "  --finally-timeout  The timeout for the finally tasks invoked in the pipelineRun. Defaults to 5mins."
@@ -83,7 +85,7 @@ function convert_to_seconds {
 # Parsing arguments
 PARAMS=() # initialize PARAMS as an empty array
 LABELS=() # initialize LABELS as an empty array
-OPTIONS=$(getopt -l "pipeline-timeout:,task-timeout:,finally-timeout:" -o "r:p:l:s:t:h" -a -- "$@")
+OPTIONS=$(getopt -l "service-account:,pipeline-timeout:,task-timeout:,finally-timeout:" -o "r:p:l:s:t:h" -a -- "$@")
 eval set -- "$OPTIONS"
 while true; do
     case "$1" in
@@ -106,6 +108,10 @@ while true; do
         -t)
             shift
             TIMEOUT=$1
+            ;;
+        --service-account)
+            shift
+            SERVICEACCOUNT=$1
             ;;
         --pipeline-timeout)
             shift
@@ -214,6 +220,11 @@ if [[ -n ${LABELS[@]} ]]; then
     PAYLOAD=$(jq \
         --argjson labels "$LABEL_JSON" \
         '.metadata.labels += $labels' <<< $PAYLOAD)
+fi
+if [[ -n "${SERVICEACCOUNT}" ]]; then
+    PAYLOAD=$(jq \
+        --arg serviceAccount "$SERVICEACCOUNT" \
+        '.spec.serviceAccount = $serviceAccount' <<< $PAYLOAD)
 fi
 
 # Create InternalRequest using kubectl
