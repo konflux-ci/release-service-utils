@@ -19,6 +19,7 @@ import string
 import os
 from pathlib import Path
 import time
+from urllib.error import HTTPError
 from packageurl import PackageURL
 from upload_sbom import load_sbom_components, parse_arguments
 
@@ -44,6 +45,12 @@ def upload_container_rpm_manifest_with_retry(
         except RuntimeError as e:
             LOGGER.warning(f"Attempt {attempt+1} failed.")
             last_err = e
+        except HTTPError as e:
+            if e.code == 504:
+                LOGGER.warning(f"Attempt {attempt+1} failed with HTTPError code 504.")
+                last_err = e
+            else:
+                raise e
     LOGGER.error("Out of attempts. Raising the error.")
     raise last_err
 
