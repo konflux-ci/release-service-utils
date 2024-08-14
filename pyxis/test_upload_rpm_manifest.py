@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import patch, Mock
+from urllib.error import HTTPError
+import pytest
 
 from upload_rpm_manifest import (
     upload_container_rpm_manifest_with_retry,
@@ -61,8 +62,13 @@ def test_upload_container_rpm_manifest_with_retry__success_after_one_attempt(
 
 
 @patch("upload_rpm_manifest.upload_container_rpm_manifest")
-def test_upload_container_rpm_manifest_with_retry__fails(mock_upload_container_rpm_manifest):
-    """upload_container_rpm_manifest fails constantly, so the retry eventually fails"""
+def test_upload_container_rpm_manifest_with_retry__fails_runtime(
+    mock_upload_container_rpm_manifest,
+):
+    """
+    upload_container_rpm_manifest fails constantly with RuntimeError,
+    so the retry eventually fails
+    """
     mock_upload_container_rpm_manifest.side_effect = RuntimeError("error")
 
     with pytest.raises(RuntimeError):
@@ -71,6 +77,46 @@ def test_upload_container_rpm_manifest_with_retry__fails(mock_upload_container_r
         )
 
     assert mock_upload_container_rpm_manifest.call_count == 2
+
+
+@patch("upload_rpm_manifest.upload_container_rpm_manifest")
+def test_upload_container_rpm_manifest_with_retry__fails_http_504(
+    mock_upload_container_rpm_manifest,
+):
+    """
+    upload_container_rpm_manifest fails constantly with HTTPError with code 504,
+    so the retry eventually fails
+    """
+    mock_upload_container_rpm_manifest.side_effect = HTTPError(
+        "http://example.com", 504, "Internal Error", {}, None
+    )
+
+    with pytest.raises(HTTPError):
+        upload_container_rpm_manifest_with_retry(
+            GRAPHQL_API, IMAGE_ID, SBOM_PATH, retries=2, backoff_factor=0
+        )
+
+    assert mock_upload_container_rpm_manifest.call_count == 2
+
+
+@patch("upload_rpm_manifest.upload_container_rpm_manifest")
+def test_upload_container_rpm_manifest_with_retry__fails_http_other(
+    mock_upload_container_rpm_manifest,
+):
+    """
+    upload_container_rpm_manifest fails with HTTPError code other than 504,
+    so it fails without retry
+    """
+    mock_upload_container_rpm_manifest.side_effect = HTTPError(
+        "http://example.com", 404, "Internal Error", {}, None
+    )
+
+    with pytest.raises(HTTPError):
+        upload_container_rpm_manifest_with_retry(
+            GRAPHQL_API, IMAGE_ID, SBOM_PATH, retries=2, backoff_factor=0
+        )
+
+    assert mock_upload_container_rpm_manifest.call_count == 1
 
 
 @patch("upload_rpm_manifest.create_image_rpm_manifest")
