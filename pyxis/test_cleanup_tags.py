@@ -144,6 +144,21 @@ def test_get_rh_registry_image_properties__success():
     assert tags == ["latest"]
 
 
+def test_get_rh_registry_image_properties__no_tags():
+    """Scenario where the access.rh.c repository in the image has no tags,
+    so the returned tags should be empty
+    """
+    image = generate_image("1111", "amd64", [])
+    image["repositories"][0]["tags"] = None
+    image["repositories"][1]["tags"] = None
+
+    registry, repository, tags = get_rh_registry_image_properties(image)
+
+    assert registry == REGISTRY
+    assert repository == REPOSITORY
+    assert tags == []
+
+
 def test_get_rh_registry_image_properties__failure():
     """The Red Hat registry repository is not found in the image,
     so an exception is raised

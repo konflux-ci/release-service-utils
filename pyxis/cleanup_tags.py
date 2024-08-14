@@ -145,7 +145,10 @@ def get_rh_registry_image_properties(image: Dict):
     """
     for repo in image["repositories"]:
         if repo["registry"] == "registry.access.redhat.com":
-            tags = [tag["name"] for tag in repo["tags"]]
+            if repo["tags"] is None:
+                tags = []
+            else:
+                tags = [tag["name"] for tag in repo["tags"]]
             return repo["registry"], repo["repository"], tags
     raise RuntimeError(
         "Cannot find the registry.access.redhat.com repository entry for the image"
