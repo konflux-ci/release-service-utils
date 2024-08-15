@@ -123,6 +123,11 @@ def setup_argparser() -> Any:  # pragma: no cover
         "the image will be marked as published.",
         default="false",
     )
+    parser.add_argument(
+        "--dockerfile",
+        help="Path to the Dockerfile to be included in the ContainerImage.parsed_data field",
+        default="",
+    )
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
     return parser
 
@@ -169,12 +174,21 @@ def prepare_parsed_data(args) -> Dict[str, Any]:
     with open(args.oras_manifest_fetch) as json_file:
         oras_manifest_fetch = json.load(json_file)
 
-    return {
+    parsed_data = {
         "name": args.name,
         "digest": args.architecture_digest,
         "architecture": args.architecture,
         "layers": [layer["digest"] for layer in oras_manifest_fetch.get("layers", [])],
     }
+
+    if args.dockerfile != "":
+        with open(args.dockerfile) as f:
+            dockerfile_content = f.read()
+        parsed_data["files"] = [
+            {"key": "buildfile", "content": dockerfile_content, "filename": "Dockerfile"}
+        ]
+
+    return parsed_data
 
 
 def create_container_image(args, parsed_data: Dict[str, Any]):

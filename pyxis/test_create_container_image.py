@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime
 import json
-from unittest.mock import patch, mock_open, MagicMock
+from unittest.mock import patch, MagicMock
 
 from create_container_image import (
     image_already_exists,
@@ -271,23 +271,57 @@ def test_create_container_image_no_name():
         )
 
 
-def test_prepare_parsed_data():
-    # Arrange
+@patch("builtins.open")
+def test_prepare_parsed_data__success(mock_open):
     args = MagicMock()
     args.architecture = "test"
     args.architecture_digest = "sha:abc"
     args.name = "quay.io/hacbs-release/release-service-utils"
-    file_content = json.dumps(
+    args.dockerfile = "mydockerfile"
+    manifest_content = json.dumps(
         {
             "layers": [{"digest": "1"}, {"digest": "2"}],
         }
     )
+    dockerfile_content = """FROM myimage\n\nRUN command\n"""
+    mock_open1 = MagicMock()
+    mock_open2 = MagicMock()
+    mock_open.side_effect = [mock_open1, mock_open2]
+    file1 = mock_open1.__enter__.return_value
+    file2 = mock_open2.__enter__.return_value
+    file1.read.return_value = manifest_content
+    file2.read.return_value = dockerfile_content
 
-    # Act
-    with patch("builtins.open", mock_open(read_data=file_content)):
-        parsed_data = prepare_parsed_data(args)
+    parsed_data = prepare_parsed_data(args)
 
-    # Assert
+    assert parsed_data == {
+        "architecture": "test",
+        "digest": "sha:abc",
+        "layers": ["1", "2"],
+        "name": "quay.io/hacbs-release/release-service-utils",
+        "files": [
+            {"key": "buildfile", "filename": "Dockerfile", "content": dockerfile_content}
+        ],
+    }
+
+
+@patch("builtins.open")
+def test_prepare_parsed_data__success_no_dockerfile(mock_open):
+    args = MagicMock()
+    args.architecture = "test"
+    args.architecture_digest = "sha:abc"
+    args.name = "quay.io/hacbs-release/release-service-utils"
+    args.dockerfile = ""
+    manifest_content = json.dumps(
+        {
+            "layers": [{"digest": "1"}, {"digest": "2"}],
+        }
+    )
+    file = mock_open.return_value.__enter__.return_value
+    file.read.return_value = manifest_content
+
+    parsed_data = prepare_parsed_data(args)
+
     assert parsed_data == {
         "architecture": "test",
         "digest": "sha:abc",
