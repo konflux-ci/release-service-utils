@@ -1,7 +1,7 @@
 FROM quay.io/konflux-ci/oras:latest@sha256:99737f436051e6d3866eb8a8706463c35abf72c87f05090ff42ff642f6729661 as oras
 FROM registry.access.redhat.com/ubi9/ubi:9.4-1181
 
-ARG COSIGN_VERSION=2.1.1
+ARG COSIGN_VERSION=2.4.0
 ARG KUBECTL_VERSION=1.27.2
 ARG OPM_VERSION=v1.38.0
 ARG YQ_VERSION=4.34.1
@@ -14,7 +14,7 @@ RUN curl -L https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_
     curl -L https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_Linux_x86_64.tar.gz | tar -C /usr -xzf - bin/glab &&\
     curl -L https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz  | tar -C /usr -xzf - --strip=1 gh_${GH_VERSION}_linux_amd64/bin/gh &&\
     chmod +x /usr/bin/{yq,kubectl,opm,glab,gh} &&\
-    rpm -ivh https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-${COSIGN_VERSION}.x86_64.rpm
+    rpm -ivh https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-${COSIGN_VERSION}-1.x86_64.rpm
 
 COPY --from=oras /usr/bin/oras /usr/bin/oras
 COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
