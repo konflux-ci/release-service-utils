@@ -31,6 +31,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 
 LOG = logging.getLogger("pubtools-pulp-wrapper")
 DEFAULT_LOG_FMT = "%(asctime)s [%(levelname)-8s] %(message)s"
@@ -152,10 +153,16 @@ def validate_args(args):
 def main():
     args = validate_args(parse_args())
 
+    loglevel = logging.DEBUG if args.debug else logging.INFO
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setLevel(loglevel)
+
     logging.basicConfig(
-        level=logging.DEBUG if args.debug else logging.INFO,
+        level=loglevel,
         format=DEFAULT_LOG_FMT,
         datefmt=DEFAULT_DATE_FMT,
+        handlers=[stream_handler],
     )
 
     if args.dry_run:
