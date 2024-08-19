@@ -8,6 +8,7 @@ Run push-cgw-metadata command to push metadata to CGW:
 6. Run push-cgw-metadata to push the metadata
 """
 import os
+import sys
 import yaml
 import hashlib
 import subprocess
@@ -142,13 +143,19 @@ def parse_args():
 
 def main():
     args = parse_args()
-    validate_env_vars()
+
+    loglevel = logging.DEBUG if args.debug else logging.INFO
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setLevel(loglevel)
 
     logging.basicConfig(
-        level=logging.DEBUG if args.debug else logging.INFO,
+        level=loglevel,
         format=DEFAULT_LOG_FMT,
         datefmt=DEFAULT_DATE_FMT,
+        handlers=[stream_handler],
     )
+    validate_env_vars()
 
     if args.dry_run:
         LOG.info("This is a dry-run!")
