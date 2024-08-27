@@ -53,13 +53,7 @@ def generate_metadata(
     """
     metadata = []
 
-    default_values_per_component = {
-        "type": "FILE",
-        "shortURL": f"/cgw/{product_code}",
-        "hidden": False,
-        "invisible": False,
-    }
-
+    short_url_prefix = f"/cgw/{product_code}/{product_version_name}"
     for file in content_list:
         matching_component = file.startswith(file_prefix)
 
@@ -70,14 +64,17 @@ def generate_metadata(
                 "productCode": product_code,
                 "productVersionName": product_version_name,
                 "downloadURL": generate_download_url(content_dir, file),
+                "shortURL": f"{short_url_prefix}/{file}",
                 "label": file,
+                "type": "FILE",
+                "hidden": False,
+                "invisible": False,
             }
-            default_values_per_component["shortURL"] += f"/{file}"
             metadata.append(
                 {
                     "type": "file",
                     "action": "create",
-                    "metadata": {**default_values_per_component, **component_item},
+                    "metadata": component_item,
                 }
             )
         else:
