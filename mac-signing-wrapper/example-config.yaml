@@ -1,0 +1,14 @@
+# Below secrets are needed for the mac-signing-wrapper to sign the macos binaries.
+---
+oci_registry_repo: <>
+quay_username:
+quay_password:
+mac_host:
+mac_user:
+mac_password:
+# key_filename: Either key_filename or mac_password must be set
+keychain_password:
+signing_identity:
+apple_id:
+app_specific_password:
+team_id:

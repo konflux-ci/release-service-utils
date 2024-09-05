@@ -43,7 +43,8 @@ RUN pip3 install jinja2 \
     packageurl-python \
     pubtools-content-gateway \
     pubtools-pulp \
-    pubtools-exodus
+    pubtools-exodus \
+    paramiko
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
 RUN dnf -y remove gcc
@@ -56,6 +57,7 @@ COPY utils /home/utils
 COPY templates /home/templates
 COPY pubtools-pulp-wrapper /home/pubtools-pulp-wrapper
 COPY developer-portal-wrapper /home/developer-portal-wrapper
+COPY mac-signing-wrapper /home/mac-signing-wrapper
 
 # It is mandatory to set these labels
 LABEL name="Konflux Release Service Utils"
@@ -68,4 +70,4 @@ LABEL com.redhat.component="release-service-utils"
 
 # Set HOME variable to something else than `/` to avoid 'permission denied' problems when writing files.
 ENV HOME=/tekton/home
-ENV PATH="$PATH:/home/pyxis:/home/utils:/home/pubtools-pulp-wrapper:/home/developer-portal-wrapper"
+ENV PATH="$PATH:/home/pyxis:/home/utils:/home/pubtools-pulp-wrapper:/home/developer-portal-wrapper:/home/mac-signing-wrapper"
