@@ -3,9 +3,14 @@
 
 This script will take Pyxis image ID and an sbom cyclonedx file
 on the input. It will inspect the sbom for the rpms and then push
-data into Pyxis. If an RPM Manifest already exists for the container
+data into Pyxis. There are two separate items that will be pushed:
+
+1. RPM Manifest object
+If an RPM Manifest already exists for the container
 image, nothing is done as we assume it was already pushed by this
 script.
+
+2. content_sets field of ContainerImage object
 
 Required env vars:
 PYXIS_KEY_PATH
@@ -25,22 +30,22 @@ from upload_sbom import load_sbom_components, parse_arguments
 
 import pyxis
 
-LOGGER = logging.getLogger("upload_rpm_manifest")
+LOGGER = logging.getLogger("upload_rpm_data")
 
 
-def upload_container_rpm_manifest_with_retry(
+def upload_container_rpm_data_with_retry(
     graphql_api: str,
     image_id: str,
     sbom_path: str,
     retries: int = 3,
     backoff_factor: float = 5.0,
 ):
-    """Call the upload_container_rpm_manifest function with retries"""
+    """Call the upload_container_rpm_data function with retries"""
     last_err = RuntimeError()
     for attempt in range(retries):
         try:
             time.sleep(backoff_factor * attempt)
-            upload_container_rpm_manifest(graphql_api, image_id, sbom_path)
+            upload_container_rpm_data(graphql_api, image_id, sbom_path)
             return
         except RuntimeError as e:
             LOGGER.warning(f"Attempt {attempt+1} failed.")
@@ -55,29 +60,44 @@ def upload_container_rpm_manifest_with_retry(
     raise last_err
 
 
-def upload_container_rpm_manifest(graphql_api: str, image_id: str, sbom_path: str):
-    """Upload a Container Image RPM Manifest to Pyxis"""
-    if get_rpm_manifest_id(graphql_api, image_id) != "":
-        # We assume that if the RPM Manifest already exists, it is accurate as the
-        # entire object is added in one request.
-        LOGGER.info("RPM manifest already exists for ContainerImage. Exiting...")
-        return
+def upload_container_rpm_data(graphql_api: str, image_id: str, sbom_path: str):
+    """Upload a Container Image RPM Manifest and content sets to Pyxis"""
 
     sbom_components = load_sbom_components(sbom_path)
     LOGGER.info(f"Loaded {len(sbom_components)} components from sbom file.")
 
-    rpms = construct_rpm_items(sbom_components)
+    rpms, content_sets = construct_rpm_items_and_content_sets(sbom_components)
 
-    rpm_manifest_id = create_image_rpm_manifest(graphql_api, image_id, rpms)
+    image = get_image_rpm_data(graphql_api, image_id)
+
+    if image["rpm_manifest"] is not None and "_id" in image["rpm_manifest"]:
+        # We assume that if the RPM Manifest already exists, it is accurate as the
+        # entire object is added in one request.
+        LOGGER.info("RPM manifest already exists for ContainerImage. Skipping...")
+        rpm_manifest_id = image["rpm_manifest"]["_id"]
+    else:
+        rpm_manifest_id = create_image_rpm_manifest(graphql_api, image_id, rpms)
     LOGGER.info(f"RPM manifest ID: {rpm_manifest_id}")
 
+    if image["content_sets"] is not None:
+        LOGGER.info(
+            f"Content sets for the image are already set, skipping: {image['content_sets']}"
+        )
+    elif not content_sets:
+        LOGGER.info(
+            "No content sets found in the sbom, skipping update of "
+            "ContainerImage.content_sets field in Pyxis"
+        )
+    else:
+        LOGGER.info(f"Updating ContainerImage.content_sets field in Pyxis to: {content_sets}")
+        update_container_content_sets(graphql_api, image_id, content_sets)
 
-def get_rpm_manifest_id(graphql_api: str, image_id: str) -> str:
-    """Get RPM Manifest id from Pyxis using GraphQL API
+
+def get_image_rpm_data(graphql_api: str, image_id: str) -> dict:
+    """Get the Image's RPM Manifest id and content sets from Pyxis using GraphQL API
 
     This function uses the get_image graphql query to get the rpm_manifest
-    id. This will be the empty string if no rpm_manifest exists for the
-    ContainerImage or the id if one does exist.
+    id and content sets.
     """
     query = """
 query ($id: ObjectIDFilterScalar!) {
@@ -87,6 +107,7 @@ query ($id: ObjectIDFilterScalar!) {
             rpm_manifest {
                 _id
             }
+            content_sets
         }
         error {
             status
@@ -100,10 +121,8 @@ query ($id: ObjectIDFilterScalar!) {
 
     data = pyxis.graphql_query(graphql_api, body)
     image = data["get_image"]["data"]
-    if image["rpm_manifest"] is not None and "_id" in image["rpm_manifest"]:
-        return image["rpm_manifest"]["_id"]
 
-    return ""
+    return image
 
 
 def create_image_rpm_manifest(graphql_api: str, image_id: str, rpms: list) -> str:
@@ -128,15 +147,44 @@ mutation ($id: String!, $input: ContainerImageRPMManifestInput!) {
     return data["create_image_rpm_manifest"]["data"]["_id"]
 
 
-def construct_rpm_items(components: list[dict]) -> list[dict]:
-    """Create RpmsItems object from component for Pyxis.
+def update_container_content_sets(graphql_api: str, image_id: str, content_sets: list):
+    """Update ContainerImage.content_sets field in Pyxis using GraphQL API"""
+    mutation = """
+mutation ($id: ObjectIDFilterScalar!, $input: ContainerImageInput!) {
+    update_image(id: $id, input: $input) {
+        data {
+            _id
+        }
+        error {
+            detail
+        }
+    }
+}
+"""
+    variables = {"id": image_id, "input": {"content_sets": content_sets}}
+    body = {"query": mutation, "variables": variables}
 
-    This function creates a list of RpmsItems dicts. There will be
+    data = pyxis.graphql_query(graphql_api, body)
+
+    return data["update_image"]["data"]["_id"]
+
+
+def construct_rpm_items_and_content_sets(
+    components: list[dict],
+) -> tuple[list[dict], list[str]]:
+    """Create RpmsItems object and content_sets from components for Pyxis.
+
+    This function creates two items:
+
+    1. A list of RpmsItems dicts. There will be
     one RpmsItems per rpm component. A list is then formed of them
     and returned to be used in a containerImageRPMManifest.
-    """
 
+    2. A list of unique content set strings to be saved in the ContainerImage.content_sets
+    field in Pyxis
+    """
     rpms_items = []
+    content_sets = set()
     for component in components:
         if "purl" in component:
             purl_dict = PackageURL.from_string(component["purl"]).to_dict()
@@ -162,7 +210,11 @@ def construct_rpm_items(components: list[dict]) -> list[dict]:
                     rpm_item["gpg"] = "199e2f91fd431d51"
 
                 rpms_items.append(rpm_item)
-    return rpms_items
+
+                if "repository_id" in purl_dict["qualifiers"]:
+                    content_sets.add(purl_dict["qualifiers"]["repository_id"])
+
+    return rpms_items, sorted(content_sets)
 
 
 def main():  # pragma: no cover
@@ -188,11 +240,9 @@ def main():  # pragma: no cover
     LOGGER.debug(f"Pyxis GraphQL API: {args.pyxis_graphql_api}")
 
     if args.retry:
-        upload_container_rpm_manifest_with_retry(
-            args.pyxis_graphql_api, image_id, args.sbom_path
-        )
+        upload_container_rpm_data_with_retry(args.pyxis_graphql_api, image_id, args.sbom_path)
     else:
-        upload_container_rpm_manifest(args.pyxis_graphql_api, image_id, args.sbom_path)
+        upload_container_rpm_data(args.pyxis_graphql_api, image_id, args.sbom_path)
 
 
 if __name__ == "__main__":  # pragma: no cover
