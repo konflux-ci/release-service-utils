@@ -28,6 +28,14 @@ COMPONENTS = [
     {  # no upstream
         "purl": "pkg:rpm/rhel/pkg4@1-2.el8?arch=x86_64&distro=rhel-8.0",
     },
+    {  # with RH publisher
+        "purl": "pkg:rpm/rhel/pkg5?arch=noarch&upstream=pkg5-1-2.el8.src.rpm&distro=rhel-8.0",
+        "publisher": "Red Hat, inc.",
+    },
+    {  # with other publisher
+        "purl": "pkg:rpm/rhel/pkg6?arch=noarch&upstream=pkg6-1-2.el8.src.rpm&distro=rhel-8.0",
+        "publisher": "Blue Shoe, inc.",
+    },
     {  # not an rpm
         "purl": "pkg:golang/./staging/src@(devel)#k8s.io/api",
     },
@@ -272,6 +280,19 @@ def test_construct_rpm_items__success():
             "version": "1",
             "release": "2.el8",
             "architecture": "x86_64",
+        },
+        {
+            "name": "pkg5",
+            "gpg": "199e2f91fd431d51",
+            "summary": "pkg5",
+            "architecture": "noarch",
+            "srpm_name": "pkg5-1-2.el8.src.rpm",
+        },
+        {
+            "name": "pkg6",
+            "summary": "pkg6",
+            "architecture": "noarch",
+            "srpm_name": "pkg6-1-2.el8.src.rpm",
         },
     ]
 

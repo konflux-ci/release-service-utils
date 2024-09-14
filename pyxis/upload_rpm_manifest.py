@@ -155,6 +155,12 @@ def construct_rpm_items(components: list[dict]) -> list[dict]:
                     rpm_item["summary"] = rpm_item["nvra"]
                 if "upstream" in purl_dict["qualifiers"]:
                     rpm_item["srpm_name"] = purl_dict["qualifiers"]["upstream"]
+
+                # XXX - temporary https://issues.redhat.com/browse/KONFLUX-4292
+                # Undo this in https://issues.redhat.com/browse/KONFLUX-4175
+                if component.get("publisher") == "Red Hat, inc.":
+                    rpm_item["gpg"] = "199e2f91fd431d51"
+
                 rpms_items.append(rpm_item)
     return rpms_items
 
