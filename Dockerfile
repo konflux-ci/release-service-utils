@@ -56,6 +56,7 @@ COPY utils /home/utils
 COPY templates /home/templates
 COPY pubtools-pulp-wrapper /home/pubtools-pulp-wrapper
 COPY developer-portal-wrapper /home/developer-portal-wrapper
+COPY sbom /home/sbom
 
 # It is mandatory to set these labels
 LABEL name="Konflux Release Service Utils"
@@ -68,4 +69,8 @@ LABEL com.redhat.component="release-service-utils"
 
 # Set HOME variable to something else than `/` to avoid 'permission denied' problems when writing files.
 ENV HOME=/tekton/home
-ENV PATH="$PATH:/home/pyxis:/home/utils:/home/pubtools-pulp-wrapper:/home/developer-portal-wrapper"
+ENV PATH="$PATH:/home/pyxis"
+ENV PATH="$PATH:/home/utils"
+ENV PATH="$PATH:/home/pubtools-pulp-wrapper"
+ENV PATH="$PATH:/home/developer-portal-wrapper"
+ENV PATH="$PATH:/home/sbom"
