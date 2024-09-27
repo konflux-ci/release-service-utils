@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+
+# This script creates an PipelineRun resource in a Kubernetes cluster
+# using the 'kubectl' command line tool. The resource is created with
+# parameters passed to the script.
+#
+# In sync mode (default) the script waits for the PipelineRun to reach a 'completed'
+# status and will provide an exit code based on the PipelineRun status:
+#
+# Succeeded: error code 0
+# Failed: error code 21
+# Rejected: error code 22
+#
+# Usage:
+#   ./pipelinerun -r request [-p <key=value> ...] [-s sync] [-t timeout] [--service-account name]
+#   [--task-git-url url] [--task-git-revision revision]
+#   [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]
+#
+# Parameters:
+#   -r                  Request: the name of the request.
+#   -p                  Parameters: can be specified multiple times. Each '-p' flag represents a
+#                       parameter that will be added to the 'parameters' field in the
+#                       PipelineRun resource. The value of the parameter is treated as a string,
+#                       and it can be a valid JSON object or array. When passing complex parameter
+#                       values, make sure to enclose them in quotes.
+#   -l                  labels: can be specified multiple times. Each '-l' flag represents a
+#                       label that will be added to the 'metadata.labels' field in the
+#                       PipelineRun resource. The value of the parameter must be a string. Optional.
+#   -s                  Sync: a flag that indicates whether the script has to finish to complete
+#                       the tasks or exit immediately after creating the resource. Default is true.
+#   -t                  Timeout: Defaults to 600 seconds.
+#   --task-git-url      The url to the git repo where the release-service-catalog tasks to be used are stored
+#   --task-git-revision The revision in the taskGitUrl repo to be used
+#   --service-account   The name of the service account to be used in the pipelineRun execution. Optional.
+#   --pipeline-timeout  The total timeout for the invoked pipelineRun. Defaults to 60mins
+#   --task-timeout      The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins
+#   --finally-timeout   The timeout for the finally tasks invoked in the pipelineRun. Defaults to 5mins
+#   -h                  Display this help message.
+#
+# Prerequisites:
+#   - kubectl: The Kubernetes command line tool must be installed and properly
+#     configured to communicate with your cluster.
+#   - jq: This script uses jq to parse JSON. It must be installed on the system
+#     running the script.
+#
+
+set -e
+
+# Set defaults
+TIMEOUT=600
+SYNC=true
+PARAMS=""
+PIPELINE_TIMEOUT=1h0m0s
+TASK_TIMEOUT=0h55m0s
+FINALLY_TIMEOUT=0h5m0s
+
+function usage {
+    echo "Usage: $0 -r request [-p parameters] [-l labels] [-s sync] [-t timeout] [--service-account name] \
+          [--task-git-url url] [--task-git-revision revision] \
+          [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]"
+    echo
+    echo "  -r                  Request: the name of the request."
+    echo "  -p                  Params: can be specified multiple times. Each '-p' flag represents a"
+    echo "                      parameter that will be added to the 'parameters' field in the"
+    echo "                      PipelineRun resource."
+    echo "  -l                  Labels: can be specified multiple times. Each '-l' flag represents a"
+    echo "                      label that will be added to the 'metadata.labels' field in the"
+    echo "                      PipelineRun resource. Optional."
+    echo "  -s                  Sync: a flag that indicates whether the script has to finish to complete the tasks or"
+    echo "                      exit immediately after creating the resource. Default is true."
+    echo "  -t                  Timeout: Defaults to 600 seconds."
+    echo "  --service-account   The name of the service account to be used in the pipelineRun execution. Optional."
+    echo "  --task-git-url      The url to the git repo where the release-service-catalog tasks to be used are stored"
+    echo "  --task-git-revision The revision in the taskGitUrl repo to be used"
+    echo "  --pipeline-timeout  The total timeout for the invoked pipelineRun. Defaults to 60mins."
+    echo "  --task-timeout      The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins."
+    echo "  --finally-timeout   The timeout for the finally tasks invoked in the pipelineRun. Defaults to 5mins."
+    echo "  -h                  Display this help message."
+    exit 1
+}
+
+function convert_to_seconds {
+    echo "$1" | awk -F[h,m,s]  '{print ($1 * 3600) + ($2 * 60) + $3}'
+}
+
+
+# Parsing arguments
+PARAMS=() # initialize PARAMS as an empty array
+LABELS=() # initialize LABELS as an empty array
+OPTIONS=$(getopt -l "task-git-url:,task-git-revision:,service-account:,pipeline-timeout:,task-timeout:,finally-timeout:" -o "r:p:l:s:t:h" -a -- "$@")
+eval set -- "$OPTIONS"
+while true; do
+    case "$1" in
+        -r)
+            shift
+            REQUEST=$1
+            ;;
+        -p)
+            shift
+            PARAMS+=("$1") # append each parameter to the PARAMS array
+            ;;
+        -l)
+            shift
+            LABELS+=("$1") # append each parameter to the PARAMS array
+            ;;
+        -s)
+            shift
+            SYNC=$1
+            ;;
+        -t)
+            shift
+            TIMEOUT=$1
+            ;;
+        --service-account)
+            shift
+            SERVICEACCOUNT=$1
+            ;;
+        --task-git-url)
+            shift
+            TASKGITURL=$1
+            ;;
+        --task-git-revision)
+            shift
+            TASKGITREVISION=$1
+            ;;
+        --pipeline-timeout)
+            shift
+            PIPELINE_TIMEOUT=$1
+            ;;
+        --task-timeout)
+            shift
+            TASK_TIMEOUT=$1
+            ;;
+        --finally-timeout)
+            shift
+            FINALLY_TIMEOUT=$1
+            ;;
+        -h)
+            shift
+            usage
+            ;;
+        --)
+            shift
+            break
+            ;;
+    esac
+    shift
+done
+
+# Check if mandatory parameters are set
+if [ -z "$REQUEST" ]
+then
+    usage
+fi
+
+# Make sure all timeouts are passing in XhYmZs format
+PIPELINE_VALUES=$(echo $PIPELINE_TIMEOUT | awk -F[h,m,s] '{print $3}')
+TASK_VALUES=$(echo $TASK_TIMEOUT | awk -F[h,m,s] '{print $3}')
+FINALLY_VALUES=$(echo $FINALLY_TIMEOUT | awk -F[h,m,s] '{print $3}')
+if [[ $PIPELINE_VALUES = "" ]] || [[ $TASK_VALUES = "" ]] || [[ $FINALLY_VALUES = "" ]] ; then
+    echo The pipeline, task, or finally timeout value was passed incorrectly.
+    echo The correct format is XhYmZs, where X, Y, and Z are integers.
+    echo "You cannot leave out any of the 3 (use value 0 if necessary)."
+    exit 1
+fi
+
+# Ensure pipeline timeout is greater than or equal to the task + finally timeouts
+PIPELINE_TIMEOUT_SECS=$(convert_to_seconds $PIPELINE_TIMEOUT)
+TASK_TIMEOUT_SECS=$(convert_to_seconds $TASK_TIMEOUT)
+FINALLY_TIMEOUT_SECS=$(convert_to_seconds $FINALLY_TIMEOUT)
+ALL_TASKS_TIMEOUT=$((TASK_TIMEOUT_SECS + FINALLY_TIMEOUT_SECS))
+if [[ $ALL_TASKS_TIMEOUT -gt $PIPELINE_TIMEOUT_SECS ]] ; then
+    echo The sum of the task and finally timeout cannot exceed the pipeline timeout.
+    echo Pipeline timeout is $PIPELINE_TIMEOUT_SECS and the sum of the others is $ALL_TASKS_TIMEOUT
+    echo This leads to tekton validation webhook errors. Exiting...
+    exit 1
+fi
+
+# Ensure pipeline timeout does not exceed PipelineRun timeout
+if [ $PIPELINE_TIMEOUT_SECS -gt $TIMEOUT ] ; then
+    echo WARNING: The passed pipeline timeout is greater than the PipelineRun timeout
+    echo This means the PipelineRun can fail before the pipelineRun times out, should it take that long
+fi
+
+# Convert parameters and labels to JSON format
+# Create a bash array
+declare -a PARAM_JSON_ARRAY
+declare -a LABEL_JSON_ARRAY
+
+# Create a JSON object for each item and append to their bash arrays
+for param in "${PARAMS[@]}"
+do
+    KEY=$(echo "$param" | cut -d'=' -f1)
+    VALUE=$(echo "$param" | cut -d'=' -f2-)
+    PARAM_JSON_ARRAY+=("$(jq -n --arg key "$KEY" --arg value "$VALUE" '.name=$key | .value=$value'),")
+done
+
+for label in "${LABELS[@]}"
+do
+    KEY=$(echo "$label" | cut -d'=' -f1)
+    VALUE=$(echo "$label" | cut -d'=' -f2-)
+    LABEL_JSON_ARRAY+=("$(jq -n --arg key "$KEY" --arg value "$VALUE" '{($key): $value}')")
+done
+
+TIMEOUTS_JSON='{"pipeline": "'$PIPELINE_TIMEOUT'", "tasks": "'$TASK_TIMEOUT'", "finally": "'$FINALLY_TIMEOUT'"}'
+
+# Combine all JSON objects in the bash array into one JSON object
+PARAM_JSON="${PARAM_JSON_ARRAY[@]}"
+PARAM_JSON="${PARAM_JSON%,}" # remove final ,
+LABEL_JSON=$(echo "${LABEL_JSON_ARRAY[@]}" | jq -s 'add')
+
+# Create JSON payload for the PipelineRun
+PAYLOAD=$(jq -n \
+    --arg request "$REQUEST" \
+    --arg taskgiturl "$TASKGITURL" \
+    --arg taskgitrevision "$TASKGITREVISION" \
+    --arg pipeline "internal/pipelines/${REQUEST}/${REQUEST}.yaml" \
+    --argjson parameters "[ $PARAM_JSON ]" \
+    --argjson timeouts "$TIMEOUTS_JSON" \
+    '{
+      "apiVersion": "tekton.dev/v1",
+      "kind": "PipelineRun",
+      "metadata": {
+        "generateName": ($request + "-")
+      },
+      "spec": {
+        "params": $parameters
+        ,
+        "pipelineRef": {
+          "params": [
+            {
+              "name": "url",
+              "value": $taskgiturl
+            },
+            {
+              "name": "revision",
+              "value": $taskgitrevision
+            },
+            {
+              "name": "pathInRepo",
+              "value": $pipeline
+            }
+          ],
+          "resolver": "git"
+        },
+        "workspaces": [
+          {
+            "name": "pipeline",
+            "volumeClaimTemplate": {
+              "spec": {
+                "accessModes": [
+                  "ReadWriteOnce"
+                ],
+                "resources": {
+                  "requests": {
+                    "storage": "100Mi"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "timeouts": $timeouts
+      }
+    }'
+)
+if [[ -n ${LABELS[@]} ]]; then
+    PAYLOAD=$(jq \
+        --argjson labels "$LABEL_JSON" \
+        '.metadata.labels += $labels' <<< $PAYLOAD)
+fi
+if [[ -n "${SERVICEACCOUNT}" ]]; then
+    PAYLOAD=$(jq \
+        --arg serviceAccount "$SERVICEACCOUNT" \
+        '.spec.taskRunTemplate.serviceAccountName = $serviceAccount' <<< $PAYLOAD)
+fi
+
+# Create PipelineRun using kubectl
+RESOURCE=$(echo "$PAYLOAD" | kubectl create -f - -o json)
+PIPELINERUN_NAME=$(echo "$RESOURCE" | jq -r '.metadata.name')
+
+echo "PipelineRun $PIPELINERUN_NAME created."
+
+if [ "$SYNC" = "true" ]; then
+    echo "Sync flag set to true. Waiting for the PipelineRun to be completed."
+
+    SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+    $SCRIPT_DIR/wait-for-pipelinerun -n $PIPELINERUN_NAME -t $TIMEOUT
+fi

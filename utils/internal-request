@@ -15,7 +15,7 @@
 # for status updates.
 #
 # Usage:
-#   ./internal-request.sh -r request [-p <key=value> ...] [-s sync] [-t timeout] [--serviceAccount name]
+#   ./internal-request.sh -r request [-p <key=value> ...] [-s sync] [-t timeout] [--service-account name]
 #   [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]
 #
 # Parameters:
