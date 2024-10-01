@@ -7,11 +7,11 @@
 # The script waits for the PipelineRuns to reach a 'completed'
 # status and will provide an exit code as follows:
 #   - All succeeded: exit code 0
-#   - At least one IR failed or rejected: exit code 21
+#   - At least one PLR failed: exit code 21
 #   - Timeout reached: exit code 124
 #
 # Usage:
-#   ./wait-for-pipelinerun [-n name] [-l labels] [-t timeout]
+#   ./wait-for-internal-pipelinerun [-n name] [-l labels] [-t timeout]
 #
 # Parameters:
 #   -n  name: The name of the PipelineRun to watch.
@@ -99,7 +99,8 @@ while true; do
   for(( i=0; i<$PLRS_LENGTH; i++)); do
       PLR=$(jq -c ".[$i]" <<< "$PLRS")
       CONDITION_REASON=$(jq -r '.status.conditions[0].reason // ""' <<< "$PLR")
-      echo -n "  "$(jq -r ".metadata.name" <<< "$PLR")": "
+      PLRNAME=$(jq -r ".metadata.name" <<< "$PLR")
+      echo -n "  ${PLRNAME}: "
       if [ -z $CONDITION_REASON ]; then
           echo "no condition yet"
       elif [[ $CONDITION_REASON == "ResolvingPipelineRef" ]] || [[ $CONDITION_REASON == "ResolvingTaskRef" ]]; then
@@ -110,7 +111,8 @@ while true; do
           echo "succeeded"
           ((++DONE_COUNT))
       elif [ $CONDITION_REASON == "Failed" ]; then
-          echo "failed"
+          echo $CONDITION_REASON
+          echo "Failed"
           ((++DONE_COUNT))
           SUCCESS=false
       else
@@ -132,12 +134,12 @@ while true; do
       fi
   fi
 
-    if [ "$(date +%s)" -gt "$END_TIME" ]; then
-        echo "ERROR: Timeout while waiting for the PipelineRuns to complete"
-        print_conditions "$PLRS"
-        echo result: timeout
-        exit 124
-    fi
+  if [ "$(date +%s)" -gt "$END_TIME" ]; then
+      echo "ERROR: Timeout while waiting for the PipelineRuns to complete"
+      print_conditions "$PLRS"
+      echo "Result: timeout"
+      exit 124
+  fi
 
-    sleep 5
+  sleep 5
 done

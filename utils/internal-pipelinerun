@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 
-# This script creates an PipelineRun resource in a Kubernetes cluster
+# This script creates an "Internal" PipelineRun resource in a Kubernetes cluster
 # using the 'kubectl' command line tool. The resource is created with
 # parameters passed to the script.
+#
+# Note: Internal in this sense means it is used by the Release Service in a specific fashion
+#       to interact with internal services such as RADAS
 #
 # In sync mode (default) the script waits for the PipelineRun to reach a 'completed'
 # status and will provide an exit code based on the PipelineRun status:
 #
 # Succeeded: error code 0
 # Failed: error code 21
-# Rejected: error code 22
+# Timeout: error code 124
 #
 # Usage:
-#   ./pipelinerun -r request [-p <key=value> ...] [-s sync] [-t timeout] [--service-account name]
+#   ./internal-pipelinerun -r request [-p <key=value> ...] [-s sync] [-t timeout] [--service-account name]
 #   [--task-git-url url] [--task-git-revision revision]
 #   [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]
 #
@@ -158,9 +161,8 @@ PIPELINE_VALUES=$(echo $PIPELINE_TIMEOUT | awk -F[h,m,s] '{print $3}')
 TASK_VALUES=$(echo $TASK_TIMEOUT | awk -F[h,m,s] '{print $3}')
 FINALLY_VALUES=$(echo $FINALLY_TIMEOUT | awk -F[h,m,s] '{print $3}')
 if [[ $PIPELINE_VALUES = "" ]] || [[ $TASK_VALUES = "" ]] || [[ $FINALLY_VALUES = "" ]] ; then
-    echo The pipeline, task, or finally timeout value was passed incorrectly.
-    echo The correct format is XhYmZs, where X, Y, and Z are integers.
-    echo "You cannot leave out any of the 3 (use value 0 if necessary)."
+    echo "Error: You have passed a value for one of the timeouts that does not conform to the XhYmZs format,"
+    echo "       where X, Y, and Z are integers."
     exit 1
 fi
 
@@ -176,10 +178,10 @@ if [[ $ALL_TASKS_TIMEOUT -gt $PIPELINE_TIMEOUT_SECS ]] ; then
     exit 1
 fi
 
-# Ensure pipeline timeout does not exceed PipelineRun timeout
+# Warn if PipelineRun timeout does not exceed Request timeout
 if [ $PIPELINE_TIMEOUT_SECS -gt $TIMEOUT ] ; then
-    echo WARNING: The passed pipeline timeout is greater than the PipelineRun timeout
-    echo This means the PipelineRun can fail before the pipelineRun times out, should it take that long
+    echo "WARNING: The passed PipelineRun timeout ($PIPELINE_TIMEOUT_SECS) is greater than script timeout ($TIMEOUT)"
+    echo "This means the script can fail before the PipelineRun times out, should it take that long"
 fi
 
 # Convert parameters and labels to JSON format
@@ -214,7 +216,7 @@ PAYLOAD=$(jq -n \
     --arg request "$REQUEST" \
     --arg taskgiturl "$TASKGITURL" \
     --arg taskgitrevision "$TASKGITREVISION" \
-    --arg pipeline "internal/pipelines/${REQUEST}/${REQUEST}.yaml" \
+    --arg pipeline "pipelines/${REQUEST}/${REQUEST}.yaml" \
     --argjson parameters "[ $PARAM_JSON ]" \
     --argjson timeouts "$TIMEOUTS_JSON" \
     '{
@@ -246,18 +248,20 @@ PAYLOAD=$(jq -n \
         "workspaces": [
           {
             "name": "pipeline",
-            "volumeClaimTemplate": {
-              "spec": {
-                "accessModes": [
-                  "ReadWriteOnce"
-                ],
-                "resources": {
-                  "requests": {
-                    "storage": "100Mi"
-                  }
-                }
-              }
-            }
+            "emptyDir": {}
+# the following would be needed in emptyDirs place if using multiple tasks
+#            "volumeClaimTemplate": {
+#              "spec": {
+#                "accessModes": [
+#                  "ReadWriteOnce"
+#                ],
+#                "resources": {
+#                  "requests": {
+#                    "storage": "100Mi"
+#                  }
+#                }
+#              }
+#            }
           }
         ],
         "timeouts": $timeouts
@@ -285,5 +289,5 @@ if [ "$SYNC" = "true" ]; then
     echo "Sync flag set to true. Waiting for the PipelineRun to be completed."
 
     SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-    $SCRIPT_DIR/wait-for-pipelinerun -n $PIPELINERUN_NAME -t $TIMEOUT
+    $SCRIPT_DIR/wait-for-internal-pipelinerun -n $PIPELINERUN_NAME -t $TIMEOUT
 fi
