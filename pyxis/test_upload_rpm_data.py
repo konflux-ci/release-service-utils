@@ -8,6 +8,8 @@ from upload_rpm_data import (
     get_image_rpm_data,
     create_image_rpm_manifest,
     update_container_content_sets,
+    load_sbom_components,
+    check_bom_ref_duplicates,
     construct_rpm_items_and_content_sets,
 )
 
@@ -285,6 +287,73 @@ def test_update_container_content_sets__error(mock_post):
         update_container_content_sets(GRAPHQL_API, IMAGE_ID, CONTENT_SETS)
 
     mock_post.assert_called_once()
+
+
+@patch("json.load")
+@patch("upload_rpm_data.check_bom_ref_duplicates")
+@patch("builtins.open")
+def test_load_sbom_components__success(mock_open, mock_check_bom_ref_duplicates, mock_load):
+    fake_components = [1, 2, 3, 4]
+    mock_load.return_value = {"components": fake_components}
+
+    loaded_components = load_sbom_components(SBOM_PATH)
+
+    mock_load.assert_called_once_with(mock_open.return_value.__enter__.return_value)
+    mock_check_bom_ref_duplicates.assert_called_once_with(loaded_components)
+    assert fake_components == loaded_components
+
+
+@patch("json.load")
+@patch("upload_rpm_data.check_bom_ref_duplicates")
+@patch("builtins.open")
+def test_load_sbom_components__no_components_key(
+    mock_open, mock_check_bom_ref_duplicates, mock_load
+):
+    mock_load.return_value = {}
+
+    loaded_components = load_sbom_components(SBOM_PATH)
+
+    mock_load.assert_called_once_with(mock_open.return_value.__enter__.return_value)
+    mock_check_bom_ref_duplicates.assert_called_once_with(loaded_components)
+    assert loaded_components == []
+
+
+@patch("json.load")
+@patch("upload_rpm_data.check_bom_ref_duplicates")
+@patch("builtins.open")
+def test_load_sbom_components__json_load_fails(
+    mock_open, mock_check_bom_ref_duplicates, mock_load
+):
+    mock_load.side_effect = ValueError
+
+    with pytest.raises(ValueError):
+        load_sbom_components(SBOM_PATH)
+
+    mock_load.assert_called_once_with(mock_open.return_value.__enter__.return_value)
+    mock_check_bom_ref_duplicates.assert_not_called()
+
+
+def test_check_bom_ref_duplicates__no_duplicates():
+    components = [
+        {"bom-ref": "a"},
+        {"bom-ref": "b"},
+        {},
+        {"bom-ref": "c"},
+    ]
+
+    check_bom_ref_duplicates(components)
+
+
+def test_check_bom_ref_duplicates__duplicates_found():
+    components = [
+        {"bom-ref": "a"},
+        {"bom-ref": "b"},
+        {},
+        {"bom-ref": "a"},
+    ]
+
+    with pytest.raises(ValueError):
+        check_bom_ref_duplicates(components)
 
 
 def test_construct_rpm_items_and_content_sets__success():
