@@ -19,6 +19,8 @@ PYXIS_CERT_PATH
 Optional env vars:
 PYXIS_GRAPHQL_API
 """
+import argparse
+import json
 import logging
 import string
 import os
@@ -26,7 +28,6 @@ from pathlib import Path
 import time
 from urllib.error import HTTPError
 from packageurl import PackageURL
-from upload_sbom import load_sbom_components, parse_arguments
 
 import pyxis
 
@@ -91,6 +92,34 @@ def upload_container_rpm_data(graphql_api: str, image_id: str, sbom_path: str):
     else:
         LOGGER.info(f"Updating ContainerImage.content_sets field in Pyxis to: {content_sets}")
         update_container_content_sets(graphql_api, image_id, content_sets)
+
+
+def parse_arguments() -> argparse.Namespace:  # pragma: no cover
+    """Parse CLI arguments
+
+    :return: Dictionary of parsed arguments
+    """
+
+    parser = argparse.ArgumentParser(description="Upload RPM data to Pyxis via graphql")
+
+    parser.add_argument(
+        "--pyxis-graphql-api",
+        default=os.environ.get("PYXIS_GRAPHQL_API", "https://graphql-pyxis.api.redhat.com/"),
+        help="Pyxis Graphql endpoint.",
+    )
+    parser.add_argument(
+        "--image-id",
+        help="Pyxis container image ID. If omitted, sbom filename is used",
+    )
+    parser.add_argument("--sbom-path", help="Path to the sbom file", required=True)
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument(
+        "--retry",
+        "-r",
+        action="store_true",
+        help="If set, retry the upload in case it fails",
+    )
+    return parser.parse_args()
 
 
 def get_image_rpm_data(graphql_api: str, image_id: str) -> dict:
@@ -167,6 +196,46 @@ mutation ($id: ObjectIDFilterScalar!, $input: ContainerImageInput!) {
     data = pyxis.graphql_query(graphql_api, body)
 
     return data["update_image"]["data"]["_id"]
+
+
+def load_sbom_components(sbom_path: str) -> list[dict]:
+    """Open sbom file, load components and return them
+
+    If unable to open and load the json, raise an exception.
+    If there are duplicate bom-ref strings in the components,
+    raise an exception.
+    """
+    try:
+        with open(sbom_path) as f:
+            sbom = json.load(f)
+        components = sbom["components"] if "components" in sbom else []
+    except Exception:
+        LOGGER.error("Unable to load components from sbom file")
+        raise
+
+    check_bom_ref_duplicates(components)
+
+    return components
+
+
+def check_bom_ref_duplicates(components: list[dict]):
+    """Check if any two components use the same bom-ref string
+
+    bom-ref is not required, but has to be unique for
+    a given sbom. In most cases it is defined.
+    Pyxis team suggested we at least check this,
+    since Pyxis has no checks for component uniqueness.
+    """
+    bom_refs = [c["bom-ref"] for c in components if c.get("bom-ref") is not None]
+    seen = set()
+    for x in bom_refs:
+        if x in seen:
+            LOGGER.error(f"Duplicate bom-ref detected: {x}")
+            msg = "Invalid sbom file. bom-ref must to be unique."
+            LOGGER.error(msg)
+            raise ValueError(msg)
+        else:
+            seen.add(x)
 
 
 def construct_rpm_items_and_content_sets(
