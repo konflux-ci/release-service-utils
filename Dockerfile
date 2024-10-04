@@ -1,4 +1,5 @@
 FROM quay.io/konflux-ci/oras:latest@sha256:63a0f09801768d8a7bf7e496201c761dbb6f9a2118240185a9253db5a8791ad4 as oras
+FROM registry.redhat.io/rhtas/cosign-rhel9:1.0.2-1719417920 as cosign
 FROM registry.access.redhat.com/ubi9/ubi:9.4-1214.1725849297
 
 ARG COSIGN_VERSION=2.4.0
@@ -15,11 +16,11 @@ RUN curl -L https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_
     curl -L https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_Linux_x86_64.tar.gz | tar -C /usr -xzf - bin/glab &&\
     curl -L https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz  | tar -C /usr -xzf - --strip=1 gh_${GH_VERSION}_linux_amd64/bin/gh &&\
     curl -L https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz | tar -C /usr/bin/ -xzf - syft &&\
-    chmod +x /usr/bin/{yq,kubectl,opm,glab,gh} &&\
-    rpm -ivh https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-${COSIGN_VERSION}-1.x86_64.rpm
+    chmod +x /usr/bin/{yq,kubectl,opm,glab,gh}
 
 COPY --from=oras /usr/bin/oras /usr/bin/oras
 COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
+COPY --from=cosign /usr/local/bin/cosign /usr/local/bin/cosign
 
 RUN dnf -y --setopt=tsflags=nodocs install \
     git \
