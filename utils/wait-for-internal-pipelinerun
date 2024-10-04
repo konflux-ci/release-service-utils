@@ -82,9 +82,10 @@ END_TIME=$(date -ud "$TIMEOUT seconds" +%s)
 SUCCESS=true
 
 while true; do
-  echo Checking PLR statuses...
+  # echo Checking PLR statuses...
 
   if [ -n "$NAME" ]; then
+    # the following lines is too verbose
     # Wrap the single PLR in a JSON array
     PLRS=$(kubectl get pipelinerun "$NAME" -o json | jq -c '[.]' )
   else
@@ -92,8 +93,9 @@ while true; do
   fi
 
   PLRS_LENGTH=$(jq '. |length' <<< "$PLRS")
-  echo Found $PLRS_LENGTH PipelineRuns matching the name or label
-  echo Conditions:
+  # the following lines are too verbose
+  # echo Found $PLRS_LENGTH PipelineRuns matching the name or label
+  # echo Conditions:
   DONE_COUNT=0
 
   for(( i=0; i<$PLRS_LENGTH; i++)); do
