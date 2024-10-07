@@ -42,6 +42,7 @@ RUN curl -LO https://github.com/release-engineering/exodus-rsync/releases/latest
     chmod +x exodus-rsync && mv exodus-rsync /usr/local/bin/rsync
 
 RUN pip3 install jinja2 \
+    check-jsonschema \
     jinja2-ansible-filters \
     packageurl-python \
     pubtools-content-gateway \
