@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Python script to check if signature exists
+Python script to find all signatures in Pyxis for a given repository and manifest_digest
+and save a list of references that are signed in a text file, one reference per line
 
 Required env vars:
 PYXIS_KEY_PATH
@@ -12,11 +13,10 @@ PYXIS_GRAPHQL_API
 import argparse
 import logging
 import os
-import sys
 
 import pyxis
 
-LOGGER = logging.getLogger("find_signature")
+LOGGER = logging.getLogger("find_signatures")
 
 
 def parse_arguments() -> argparse.Namespace:  # pragma: no cover
@@ -25,7 +25,11 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
     :return: Dictionary of parsed arguments
     """
 
-    parser = argparse.ArgumentParser(description="find signature for image in Pyxis")
+    parser = argparse.ArgumentParser(
+        description="find all signatures in Pyxis for a given repository and manifest_digest"
+        "and save a list of references that are signed in a text file, one reference"
+        "per line"
+    )
 
     parser.add_argument(
         "--pyxis-graphql-api",
@@ -33,23 +37,22 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
             "PYXIS_GRAPHQL_API", "https://graphql-pyxis.api.redhat.com/graphql/"
         ),
         help="Pyxis Graphql endpoint",
-    )
-    parser.add_argument(
-        "--pyxis-api",
-        default=os.environ.get("PYXIS_API", "https://pyxis.api.redhat.com/"),
-        help="Pyxis API endpoint",
-    )
-    parser.add_argument(
-        "--reference",
-        help="image reference",
+        required=True,
     )
     parser.add_argument(
         "--repository",
         help="image repository",
+        required=True,
     )
     parser.add_argument(
         "--manifest_digest",
         help="image manifest digest",
+        required=True,
+    )
+    parser.add_argument(
+        "--output_file",
+        help="output file of references found",
+        required=True,
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     parser.add_argument(
@@ -62,21 +65,12 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
     return parser.parse_args()
 
 
-def find_signature_using_reference(
-    pyxis_api, graphql_api, reference: str, manifest_digest: str
-) -> bool:
-    LOGGER.info(f"reference: {reference}")
+def find_signatures_for_repository(graphql_api, repository: str, manifest_digest: str) -> set:
+    LOGGER.info(f"repository: {repository}")
     LOGGER.info(f"manifest_digest: {manifest_digest}")
 
-    image_registry = reference.split("/")[0]
-    repository = reference.split("/", 1)[1].split(":")[0]
-    LOGGER.debug(f"image_registry: {image_registry}")
-    LOGGER.debug(f"repository: {repository}")
-
-    current_index = 1
-    while True:
-        LOGGER.debug(f"current_index {current_index}")
-        query = """
+    references = set()
+    query = """
 query (
     $repository: String!, $manifest_digest: String!, $index: Int!) {
     find_signature_data_by_index(non_zero_index: $index,
@@ -93,7 +87,28 @@ query (
             }
     }
 }
-        """
+    """
+
+    signature_query = """
+query (
+    $id: ObjectIDFilterScalar!) {
+    get_signature(id: $id) {
+        error {
+            detail
+            status
+        }
+
+        data {
+            _id
+            reference
+        }
+    }
+}
+    """
+
+    current_index = 1
+    while True:
+        LOGGER.debug(f"current_index {current_index}")
         variables = {
             "repository": repository,
             "manifest_digest": manifest_digest,
@@ -108,21 +123,21 @@ query (
             LOGGER.debug(f"{signatures}")
             id = signatures[0]["_id"]
             LOGGER.debug(f"id: {id}")
-            signatureurl = f"{pyxis_api}/v1/signatures/id/{id}"
-            response = pyxis.get(url=signatureurl)
-            LOGGER.debug(f"response: {response}")
-            json = response.json()
-            LOGGER.debug(f"json: {json}")
-            reference_from_signature = json["reference"]
+            signature_variables = {
+                "id": id,
+            }
+            signature_body = {"query": signature_query, "variables": signature_variables}
+            signature_data = pyxis.graphql_query(graphql_api, signature_body)
+            LOGGER.debug(f"signature_data: {signature_data}")
+            reference_from_signature = signature_data["get_signature"]["data"]["reference"]
             LOGGER.debug(f"reference_from_signature: {reference_from_signature}")
-            if reference_from_signature == reference:
-                LOGGER.info(f"{reference_from_signature} matches")
-                return True
-            else:
-                current_index += 1
+            references.add(reference_from_signature)
+            current_index += 1
         else:
-            LOGGER.info("signature not found")
-            return False
+            LOGGER.debug("no more signatures")
+            break
+    LOGGER.info(f"Found {len(references)} references.")
+    return references
 
 
 def main():  # pragma: no cover
@@ -132,14 +147,14 @@ def main():  # pragma: no cover
     pyxis.setup_logger(level=log_level)
 
     LOGGER.debug(f"Pyxis GraphQL API: {args.pyxis_graphql_api}")
-    LOGGER.debug(f"Pyxis API: {args.pyxis_api}")
 
-    found = find_signature_using_reference(
-        args.pyxis_api, args.pyxis_graphql_api, args.reference, args.manifest_digest
+    references = find_signatures_for_repository(
+        args.pyxis_graphql_api, args.repository, args.manifest_digest
     )
-    if found:
-        sys.exit(0)
-    sys.exit(1)
+    with open(args.output_file, "w") as f:
+        for line in references:
+            f.write(f"{line}\n")
+    LOGGER.info(f"Writing references to {args.output_file}")
 
 
 if __name__ == "__main__":  # pragma: no cover
