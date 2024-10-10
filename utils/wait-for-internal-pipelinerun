@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+
+# This script waits for one or more PipelineRuns to complete.
+#
+# The PLRs to watch can be specified either by name or by a label selector.
+#
+# The script waits for the PipelineRuns to reach a 'completed'
+# status and will provide an exit code as follows:
+#   - All succeeded: exit code 0
+#   - At least one PLR failed: exit code 21
+#   - Timeout reached: exit code 124
+#
+# Usage:
+#   ./wait-for-internal-pipelinerun [-n name] [-l labels] [-t timeout]
+#
+# Parameters:
+#   -n  name: The name of the PipelineRun to watch.
+#   -l  labels: Can be specified multiple times. If set, the
+#       PLRs to watch will be determined by a label of this key
+#       and value. Optional. E.g. a TaskRun UID
+#   -t  Timeout: Defaults to 600 seconds.
+#   -h  Display this help message.
+#
+#   One of -n or -l has to be specified, but not both.
+#
+# Prerequisites:
+#   - kubectl: The Kubernetes command line tool must be installed and properly
+#     configured to communicate with your cluster.
+#   - jq: This script uses jq to parse JSON. It must be installed on the system
+#     running the script.
+#
+
+TIMEOUT=600
+
+function usage {
+    echo "Usage: $0 [-l labels] [-t timeout]"
+    echo
+    echo "  -n  name: The name of the PipelineRun to watch."
+    echo "  -l  labels: Can be specified multiple times. If set, the"
+    echo "      PipelineRun to watch will be determined by a label of this key"
+    echo "      and value. Optional. E.g. a TaskRun UID"
+    echo "  -t  Timeout: Defaults to 600 seconds."
+    echo "  -h  Display this help message."
+    echo
+    echo "  One of -n or -l has to be specified, but not both."
+    exit 1
+}
+
+function print_conditions {
+    PLRS=$1
+    PLRS_LENGTH=$(jq '. |length' <<< "$PLRS")
+    echo Conditions:
+    for(( i=0; i<$PLRS_LENGTH; i++)); do
+        echo -n "  "$(jq -r ".[$i].metadata.name" <<< "$PLRS")": "
+        jq -c ".[$i].status.conditions" <<< "$PLRS"
+    done
+}
+
+# Parsing arguments
+LABELS=""
+while getopts n:l:t:h flag
+do
+    case "${flag}" in
+        n) NAME=${OPTARG};;
+        l) LABELS+="${OPTARG},";; # append each label to the LABELS array
+        t) TIMEOUT=${OPTARG};;
+        h) usage;;
+        *) usage;;
+    esac
+done
+
+# Check that name or label is set, but not both
+if [[ -z "$NAME" && -z "$LABELS" || -n $NAME && -n $LABELS ]]
+then
+    usage
+fi
+
+LABELS=${LABELS%,} # remove final ,
+
+# Wait until status is set for all IRs or timeout is reached
+END_TIME=$(date -ud "$TIMEOUT seconds" +%s)
+SUCCESS=true
+
+while true; do
+  # echo Checking PLR statuses...
+
+  if [ -n "$NAME" ]; then
+    # the following lines is too verbose
+    # Wrap the single PLR in a JSON array
+    PLRS=$(kubectl get pipelinerun "$NAME" -o json | jq -c '[.]' )
+  else
+    PLRS=$(kubectl get pipelinerun -l "${LABELS}" -o json | jq -c ".items" )
+  fi
+
+  PLRS_LENGTH=$(jq '. |length' <<< "$PLRS")
+  # the following lines are too verbose
+  # echo Found $PLRS_LENGTH PipelineRuns matching the name or label
+  # echo Conditions:
+  DONE_COUNT=0
+
+  for(( i=0; i<$PLRS_LENGTH; i++)); do
+      PLR=$(jq -c ".[$i]" <<< "$PLRS")
+      CONDITION_REASON=$(jq -r '.status.conditions[0].reason // ""' <<< "$PLR")
+      PLRNAME=$(jq -r ".metadata.name" <<< "$PLR")
+      echo -n "  ${PLRNAME}: "
+      if [ -z $CONDITION_REASON ]; then
+          echo "no condition yet"
+      elif [[ $CONDITION_REASON == "ResolvingPipelineRef" ]] || [[ $CONDITION_REASON == "ResolvingTaskRef" ]]; then
+          echo "init"
+      elif [ $CONDITION_REASON == "Running" ]; then
+          echo "running"
+      elif [ $CONDITION_REASON == "Succeeded" ]; then
+          echo "succeeded"
+          ((++DONE_COUNT))
+      elif [ $CONDITION_REASON == "Failed" ]; then
+          echo $CONDITION_REASON
+          echo "Failed"
+          ((++DONE_COUNT))
+          SUCCESS=false
+      else
+          echo $CONDITION_REASON
+      fi
+  done
+
+  if [ $DONE_COUNT -eq $PLRS_LENGTH ]; then
+      echo All PipelineRuns have been completed
+      if [ $SUCCESS = true ]; then
+          print_conditions "$PLRS"
+          echo Result: success
+          exit 0
+      else
+          echo ERROR: At least one PipelineRun failed
+          print_conditions "$PLRS"
+          echo Result: failure
+          exit 21
+      fi
+  fi
+
+  if [ "$(date +%s)" -gt "$END_TIME" ]; then
+      echo "ERROR: Timeout while waiting for the PipelineRuns to complete"
+      print_conditions "$PLRS"
+      echo "Result: timeout"
+      exit 124
+  fi
+
+  sleep 5
+done
