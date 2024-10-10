@@ -36,7 +36,7 @@ COMPONENTS = [
     },
     {  # with RH publisher
         "purl": "pkg:rpm/rhel/pkg5?arch=noarch&upstream=pkg5-1-2.el8.src.rpm&distro=rhel-8.0",
-        "publisher": "Red Hat, inc.",
+        "publisher": "Red Hat, Inc.",
     },
     {  # with other publisher
         "purl": "pkg:rpm/rhel/pkg6?arch=noarch&upstream=pkg6-1-2.el8.src.rpm&distro=rhel-8.0",
