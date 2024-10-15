@@ -65,39 +65,25 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
     return parser.parse_args()
 
 
-def find_signatures_for_repository(graphql_api, repository: str, manifest_digest: str) -> set:
+def find_signatures_for_repository(
+    graphql_api, repository: str, manifest_digest: str, page_size: int = 50
+) -> set:
     LOGGER.info(f"repository: {repository}")
     LOGGER.info(f"manifest_digest: {manifest_digest}")
-
     references = set()
     query = """
-query (
-    $repository: String!, $manifest_digest: String!, $index: Int!) {
-    find_signature_data_by_index(non_zero_index: $index,
-        repository: $repository,
-        manifest_digest: $manifest_digest,
-        sort_by: [{ field: "creation_date", order: DESC }]) {
-            error {
-                detail
-                status
-            }
-
-            data {
-                _id
-            }
-    }
-}
-    """
-
-    signature_query = """
-query (
-    $id: ObjectIDFilterScalar!) {
-    get_signature(id: $id) {
+query ($repository: String!, $manifest_digest: String!, $page: Int!, $page_size: Int!) {
+    find_signatures(
+        page: $page
+        page_size: $page_size
+        sort_by: [{field: "last_update_date", order: DESC}]
+        filter: {and: [{manifest_digest: {eq: $manifest_digest}},
+            {repository: {eq: $repository}}]}
+    ) {
         error {
             detail
             status
         }
-
         data {
             _id
             reference
@@ -105,37 +91,23 @@ query (
     }
 }
     """
-
-    current_index = 1
-    while True:
-        LOGGER.debug(f"current_index {current_index}")
+    has_more = True
+    page = 0
+    while has_more:
+        LOGGER.debug(f"current page: {page}")
         variables = {
             "repository": repository,
             "manifest_digest": manifest_digest,
-            "index": current_index,
+            "page": page,
+            "page_size": page_size,
         }
         body = {"query": query, "variables": variables}
-
         data = pyxis.graphql_query(graphql_api, body)
-        signatures = data["find_signature_data_by_index"]["data"]
+        signatures = data["find_signatures"]["data"]
         LOGGER.debug(f"Found {len(signatures)} signatures.")
-        if len(signatures) == 1:
-            LOGGER.debug(f"{signatures}")
-            id = signatures[0]["_id"]
-            LOGGER.debug(f"id: {id}")
-            signature_variables = {
-                "id": id,
-            }
-            signature_body = {"query": signature_query, "variables": signature_variables}
-            signature_data = pyxis.graphql_query(graphql_api, signature_body)
-            LOGGER.debug(f"signature_data: {signature_data}")
-            reference_from_signature = signature_data["get_signature"]["data"]["reference"]
-            LOGGER.debug(f"reference_from_signature: {reference_from_signature}")
-            references.add(reference_from_signature)
-            current_index += 1
-        else:
-            LOGGER.debug("no more signatures")
-            break
+        references.update([signature["reference"] for signature in signatures])
+        has_more = len(signatures) == page_size
+        page += 1
     LOGGER.info(f"Found {len(references)} references.")
     return references
 

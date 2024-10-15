@@ -7,7 +7,6 @@ from find_signatures import (
 mock_pyxis_graphql_api = "https://graphql.redhat.com/api"
 
 SIGNATURE_ID = "67033c8d76860bfe6a094ecf"
-SIGNATURE_ID2 = "67033c8d76860bfe6a094ecg"
 
 
 @patch("pyxis.graphql_query")
@@ -19,19 +18,11 @@ def test_signatures_exist(graphql_query):
     args.repository = "scoheb/a"
 
     reference1 = "quay.io/scoheb/a:abc"
-    reference2 = "quay.io/scoheb/a:def"
 
     # signature exists
-    signatures1 = generate_signatures(SIGNATURE_ID)
-    signatures2 = generate_signatures(SIGNATURE_ID2)
-    signature1 = generate_signature(SIGNATURE_ID, reference1)
-    signature2 = generate_signature(SIGNATURE_ID2, reference2)
+    signatures1 = generate_signatures(SIGNATURE_ID, reference1)
     graphql_query.side_effect = [
-        generate_pyxis_response("find_signature_data_by_index", signatures1),
-        generate_pyxis_response("get_signature", signature1),
-        generate_pyxis_response("find_signature_data_by_index", signatures2),
-        generate_pyxis_response("get_signature", signature2),
-        generate_pyxis_response("find_signature_data_by_index", []),
+        generate_pyxis_response("find_signatures", signatures1),
     ]
 
     # Act
@@ -39,7 +30,7 @@ def test_signatures_exist(graphql_query):
         args.pyxis_graphql_api, args.repository, args.manifest_digest
     )
     assert references
-    assert len(references) == 2
+    assert len(references) == 1
 
 
 @patch("pyxis.graphql_query")
@@ -52,7 +43,7 @@ def test_signatures_notfound(graphql_query):
 
     # signatures do not exist
     graphql_query.side_effect = [
-        generate_pyxis_response("find_signature_data_by_index", []),
+        generate_pyxis_response("find_signatures", []),
     ]
 
     # Act
@@ -73,18 +64,11 @@ def generate_pyxis_response(query_name, data):
     return response_json
 
 
-def generate_signatures(id):
+def generate_signatures(id, reference):
     signatures = [
         {
             "_id": id,
+            "reference": reference,
         }
     ]
     return signatures
-
-
-def generate_signature(id, reference):
-    signature = {
-        "_id": id,
-        "reference": reference,
-    }
-    return signature
