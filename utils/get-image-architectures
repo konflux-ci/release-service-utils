@@ -41,6 +41,16 @@ elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.oci.image.manif
 
     jq -cr -n --arg architecture "$architecture" --arg os "$os" --arg digest "$digest" \
         '{"platform": {"architecture": $ARGS.named["architecture"], "os": $ARGS.named["os"]}, "digest": $ARGS.named["digest"]}'
+elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.docker.distribution.manifest.v2+json" ] ; then
+    RAW_OUTPUT=$(skopeo inspect --no-tags docker://${IMAGE})
+    architecture=$(jq -r '.Architecture // ""' <<< $RAW_OUTPUT)
+    os=$(jq -r '.Os // ""' <<< $RAW_OUTPUT)
+    digest=$(jq -r '.Digest' <<< $RAW_OUTPUT)
+
+    # tekton bundles produced by tkn do not set the architecture or OS so
+    # default to linux/amd64
+    jq -cr -n --arg architecture "${architecture:-amd64}" --arg os "${os:-linux}" --arg digest "$digest" \
+        '{"platform": {"architecture": $ARGS.named["architecture"], "os": $ARGS.named["os"]}, "digest": $ARGS.named["digest"]}'
 else
     # Multi arch
     jq -cr '.manifests[]' <<< $RAW_OUTPUT
