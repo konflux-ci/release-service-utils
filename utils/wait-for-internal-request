@@ -99,10 +99,11 @@ while true; do
     echo Found $IRS_LENGTH InternalRequests matching the name or label
     echo Conditions:
     DONE_COUNT=0
-    for(( i=0; i<$IRS_LENGTH; i++)); do
+    for(( i = 0; i < $IRS_LENGTH; i++)); do
         IR=$(jq -c ".[$i]" <<< "$IRS")
         CONDITION_REASON=$(jq -r '.status.conditions[0].reason // ""' <<< "$IR")
-        echo -n "  "$(jq -r ".metadata.name" <<< "$IR")": "
+        NAME=$(jq -r ".metadata.name" <<< "$IR")
+        echo -n "  ${NAME}: "
         if [ -z $CONDITION_REASON ]; then
             echo "no condition yet"
         elif [ $CONDITION_REASON = "Running" ]; then

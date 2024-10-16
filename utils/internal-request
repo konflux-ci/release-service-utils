@@ -15,7 +15,7 @@
 # for status updates.
 #
 # Usage:
-#   ./internal-request.sh -r request [-p <key=value> ...] [-s sync] [-t timeout] [--serviceAccount name]
+#   ./internal-request.sh -r request [-p <key=value> ...] [-s sync] [-t timeout] [--service-account name]
 #   [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]
 #
 # Parameters:
@@ -148,9 +148,8 @@ PIPELINE_VALUES=$(echo $PIPELINE_TIMEOUT | awk -F[h,m,s] '{print $3}')
 TASK_VALUES=$(echo $TASK_TIMEOUT | awk -F[h,m,s] '{print $3}')
 FINALLY_VALUES=$(echo $FINALLY_TIMEOUT | awk -F[h,m,s] '{print $3}')
 if [[ $PIPELINE_VALUES = "" ]] || [[ $TASK_VALUES = "" ]] || [[ $FINALLY_VALUES = "" ]] ; then
-    echo The pipeline, task, or finally timeout value was passed incorrectly.
-    echo The correct format is XhYmZs, where X, Y, and Z are integers.
-    echo "You cannot leave out any of the 3 (use value 0 if necessary)."
+    echo "Error: You have passed a value for one of the timeouts that does not conform to the XhYmZs format,"
+    echo "       where X, Y, and Z are integers."
     exit 1
 fi
 
@@ -168,8 +167,8 @@ fi
 
 # Ensure pipeline timeout does not exceed InternalRequest timeout
 if [ $PIPELINE_TIMEOUT_SECS -gt $TIMEOUT ] ; then
-    echo WARNING: The passed pipeline timeout is greater than the InternalRequest timeout
-    echo This means the InternalRequest can fail before the pipelineRun times out, should it take that long
+    echo WARNING: The passed pipeline timeout is greater than the script timeout
+    echo This means the script can fail before the pipeline times out, should it take that long
 fi
 
 # Convert parameters and labels to JSON format
@@ -237,5 +236,5 @@ if [ "$SYNC" = "true" ]; then
     echo "Sync flag set to true. Waiting for the InternalRequest to be completed."
 
     SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-    $SCRIPT_DIR/wait-for-ir -n $INTERNAL_REQUEST_NAME -t $TIMEOUT
+    $SCRIPT_DIR/wait-for-internal-request -n $INTERNAL_REQUEST_NAME -t $TIMEOUT
 fi
