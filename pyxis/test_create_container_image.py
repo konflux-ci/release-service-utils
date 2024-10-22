@@ -306,7 +306,7 @@ def test_prepare_parsed_data__success(mock_open):
     assert parsed_data == {
         "architecture": "test",
         "digest": "sha:abc",
-        "layers": ["1", "2"],
+        "layers": ["2", "1"],
         "name": "quay.io/hacbs-release/release-service-utils",
         "files": [
             {"key": "buildfile", "filename": "Dockerfile", "content": dockerfile_content}
@@ -314,7 +314,7 @@ def test_prepare_parsed_data__success(mock_open):
         "sum_layer_size_bytes": 0,
         "uncompressed_layer_sizes": [],
         "uncompressed_size_bytes": 0,
-        "top_layer_id": "1",
+        "top_layer_id": "2",
         "uncompressed_top_layer_id": None,
     }
 
@@ -339,12 +339,12 @@ def test_prepare_parsed_data__success_no_dockerfile(mock_open):
     assert parsed_data == {
         "architecture": "test",
         "digest": "sha:abc",
-        "layers": ["1", "2"],
+        "layers": ["2", "1"],
         "name": "quay.io/hacbs-release/release-service-utils",
         "sum_layer_size_bytes": 0,
         "uncompressed_layer_sizes": [],
         "uncompressed_size_bytes": 0,
-        "top_layer_id": "1",
+        "top_layer_id": "2",
         "uncompressed_top_layer_id": None,
     }
 
@@ -379,17 +379,17 @@ def test_prepare_parsed_data__with_layer_sizes(mock_open):
     assert parsed_data == {
         "architecture": "test",
         "digest": "sha:abc",
-        "layers": ["1", "2"],
+        "layers": ["2", "1"],
         "name": "quay.io/hacbs-release/release-service-utils",
         "files": [
             {"key": "buildfile", "filename": "Dockerfile", "content": dockerfile_content}
         ],
         "sum_layer_size_bytes": 7,
         "uncompressed_layer_sizes": [
-            {"layer_id": "3", "size_bytes": 5},
             {"layer_id": "4", "size_bytes": 4},
+            {"layer_id": "3", "size_bytes": 5},
         ],
         "uncompressed_size_bytes": 9,
-        "top_layer_id": "1",
-        "uncompressed_top_layer_id": "3",
+        "top_layer_id": "2",
+        "uncompressed_top_layer_id": "4",
     }

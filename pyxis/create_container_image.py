@@ -178,10 +178,12 @@ def prepare_parsed_data(args) -> Dict[str, Any]:
         "name": args.name,
         "digest": args.architecture_digest,
         "architecture": args.architecture,
-        "layers": [layer["digest"] for layer in oras_manifest_fetch.get("layers", [])],
+        "layers": [
+            layer["digest"] for layer in reversed(oras_manifest_fetch.get("layers", []))
+        ],
         "uncompressed_layer_sizes": [
             {"layer_id": layer["digest"], "size_bytes": layer["size"]}
-            for layer in oras_manifest_fetch.get("uncompressed_layers", [])
+            for layer in reversed(oras_manifest_fetch.get("uncompressed_layers", []))
         ],
         "uncompressed_size_bytes": sum(
             [
