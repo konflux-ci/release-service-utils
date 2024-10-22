@@ -179,7 +179,28 @@ def prepare_parsed_data(args) -> Dict[str, Any]:
         "digest": args.architecture_digest,
         "architecture": args.architecture,
         "layers": [layer["digest"] for layer in oras_manifest_fetch.get("layers", [])],
+        "uncompressed_layer_sizes": [
+            {"layer_id": layer["digest"], "size_bytes": layer["size"]}
+            for layer in oras_manifest_fetch.get("uncompressed_layers", [])
+        ],
+        "uncompressed_size_bytes": sum(
+            [
+                layer.get("size", 0)
+                for layer in oras_manifest_fetch.get("uncompressed_layers", [])
+            ]
+        ),
+        "sum_layer_size_bytes": sum(
+            [layer.get("size", 0) for layer in oras_manifest_fetch.get("layers", [])]
+        ),
+        "top_layer_id": None,
+        "uncompressed_top_layer_id": None,
     }
+    if parsed_data["layers"]:
+        parsed_data["top_layer_id"] = parsed_data["layers"][0]
+    if parsed_data["uncompressed_layer_sizes"]:
+        parsed_data["uncompressed_top_layer_id"] = parsed_data["uncompressed_layer_sizes"][0][
+            "layer_id"
+        ]
 
     if args.dockerfile != "":
         with open(args.dockerfile) as f:
@@ -212,6 +233,15 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
     # name isn't accepted in the parsed_data payload to pyxis
     del parsed_data["name"]
 
+    # sum_layer_size_bytes isn't accepted in the parsed_data payload to pyxis
+    sum_layer_size_bytes = parsed_data.pop("sum_layer_size_bytes", 0)
+
+    # top_layer_id isn't accepted in the parsed_data payload to pyxis
+    top_layer_id = parsed_data.pop("top_layer_id", None)
+
+    # uncompressed_top_layer_id isn't accepted in the parsed_data payload to pyxis
+    uncompressed_top_layer_id = parsed_data.pop("uncompressed_top_layer_id", None)
+
     upload_url = urljoin(args.pyxis_url, "v1/images")
 
     tags = args.tags.split()
@@ -239,6 +269,9 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
         "image_id": args.architecture_digest,
         "architecture": parsed_data["architecture"],
         "parsed_data": parsed_data,
+        "sum_layer_size_bytes": sum_layer_size_bytes,
+        "top_layer_id": top_layer_id,
+        "uncompressed_top_layer_id": uncompressed_top_layer_id,
     }
 
     container_image_payload["repositories"][0][
