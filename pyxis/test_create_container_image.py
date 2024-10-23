@@ -104,6 +104,9 @@ def test_create_container_image(mock_datetime, mock_post):
             "image_id": "arch specific digest",
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
+            "sum_layer_size_bytes": 0,
+            "top_layer_id": None,
+            "uncompressed_top_layer_id": None,
         },
     )
 
@@ -164,6 +167,9 @@ def test_create_container_image_latest(mock_datetime, mock_post):
             "image_id": "arch specific digest",
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
+            "sum_layer_size_bytes": 0,
+            "top_layer_id": None,
+            "uncompressed_top_layer_id": None,
         },
     )
 
@@ -241,6 +247,9 @@ def test_create_container_image_rh_push_multiple_tags(mock_datetime, mock_post):
             "image_id": "arch specific digest",
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
+            "sum_layer_size_bytes": 0,
+            "top_layer_id": None,
+            "uncompressed_top_layer_id": None,
         },
     )
 
@@ -297,11 +306,16 @@ def test_prepare_parsed_data__success(mock_open):
     assert parsed_data == {
         "architecture": "test",
         "digest": "sha:abc",
-        "layers": ["1", "2"],
+        "layers": ["2", "1"],
         "name": "quay.io/hacbs-release/release-service-utils",
         "files": [
             {"key": "buildfile", "filename": "Dockerfile", "content": dockerfile_content}
         ],
+        "sum_layer_size_bytes": 0,
+        "uncompressed_layer_sizes": [],
+        "uncompressed_size_bytes": 0,
+        "top_layer_id": "2",
+        "uncompressed_top_layer_id": None,
     }
 
 
@@ -325,6 +339,57 @@ def test_prepare_parsed_data__success_no_dockerfile(mock_open):
     assert parsed_data == {
         "architecture": "test",
         "digest": "sha:abc",
-        "layers": ["1", "2"],
+        "layers": ["2", "1"],
         "name": "quay.io/hacbs-release/release-service-utils",
+        "sum_layer_size_bytes": 0,
+        "uncompressed_layer_sizes": [],
+        "uncompressed_size_bytes": 0,
+        "top_layer_id": "2",
+        "uncompressed_top_layer_id": None,
+    }
+
+
+@patch("builtins.open")
+def test_prepare_parsed_data__with_layer_sizes(mock_open):
+    args = MagicMock()
+    args.architecture = "test"
+    args.architecture_digest = "sha:abc"
+    args.name = "quay.io/hacbs-release/release-service-utils"
+    args.dockerfile = "mydockerfile"
+    manifest_content = json.dumps(
+        {
+            "layers": [{"digest": "1", "size": 4}, {"digest": "2", "size": 3}],
+            "uncompressed_layers": [
+                {"digest": "3", "size": 5},
+                {"digest": "4", "size": 4},
+            ],
+        }
+    )
+    dockerfile_content = """FROM myimage\n\nRUN command\n"""
+    mock_open1 = MagicMock()
+    mock_open2 = MagicMock()
+    mock_open.side_effect = [mock_open1, mock_open2]
+    file1 = mock_open1.__enter__.return_value
+    file2 = mock_open2.__enter__.return_value
+    file1.read.return_value = manifest_content
+    file2.read.return_value = dockerfile_content
+
+    parsed_data = prepare_parsed_data(args)
+
+    assert parsed_data == {
+        "architecture": "test",
+        "digest": "sha:abc",
+        "layers": ["2", "1"],
+        "name": "quay.io/hacbs-release/release-service-utils",
+        "files": [
+            {"key": "buildfile", "filename": "Dockerfile", "content": dockerfile_content}
+        ],
+        "sum_layer_size_bytes": 7,
+        "uncompressed_layer_sizes": [
+            {"layer_id": "4", "size_bytes": 4},
+            {"layer_id": "3", "size_bytes": 5},
+        ],
+        "uncompressed_size_bytes": 9,
+        "top_layer_id": "2",
+        "uncompressed_top_layer_id": "4",
     }
