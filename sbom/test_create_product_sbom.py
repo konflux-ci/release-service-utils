@@ -1,12 +1,10 @@
 import datetime
 import json
-
 import unittest
-from unittest.mock import MagicMock, patch, mock_open
+from datetime import timezone
+from unittest.mock import MagicMock, mock_open, patch
 
-from create_product_sbom import (
-    create_sbom,
-)
+from create_product_sbom import create_sbom
 
 
 class TestCreateSBOM(unittest.TestCase):
@@ -15,7 +13,7 @@ class TestCreateSBOM(unittest.TestCase):
     def test_create_sbom_no_components(self, mock_datetime: MagicMock, mock_uuid: MagicMock):
         mock_uuid.uuid4.return_value = "039f091d-8790-41bc-b63e-251ec860e3db"
 
-        time = datetime.datetime.now()
+        time = datetime.datetime.now(timezone.utc)
         mock_datetime.now.return_value = time
 
         data = json.dumps(
@@ -34,14 +32,14 @@ class TestCreateSBOM(unittest.TestCase):
             assert sbom == {
                 "spdxVersion": "SPDX-2.3",
                 "SPDXID": "SPDXRef-DOCUMENT",
-                "dataLicense": "CC0-1.0",
-                "documentNamespace": "https://redhat.com/spdxdocs/"
-                "product-1.2.3-039f091d-8790-41bc-b63e-251ec860e3db",
+                "dataLicense": "CC-BY-4.0",
+                "documentNamespace": "https://redhat.com/039f091d-8790-41bc-b63e-251ec860e3db"
+                ".spdx.json",
                 "creationInfo": {
-                    "created": time.isoformat(),
-                    "creator": "Organization: Red Hat",
+                    "created": time.isoformat(timespec="seconds"),
+                    "creators": ["Organization: Red Hat", "Tool: Konflux CI"],
                 },
-                "name": "product",
+                "name": "product_1.2.3",
                 "packages": [
                     {
                         "SPDXID": "SPDXRef-product",
@@ -93,14 +91,14 @@ class TestCreateSBOM(unittest.TestCase):
             assert sbom == {
                 "spdxVersion": "SPDX-2.3",
                 "SPDXID": "SPDXRef-DOCUMENT",
-                "dataLicense": "CC0-1.0",
-                "documentNamespace": "https://redhat.com/spdxdocs/"
-                "product-1.2.3-039f091d-8790-41bc-b63e-251ec860e3db",
+                "dataLicense": "CC-BY-4.0",
+                "documentNamespace": "https://redhat.com/039f091d-8790-41bc-b63e-251ec860e3db"
+                ".spdx.json",
                 "creationInfo": {
-                    "created": time.isoformat(),
-                    "creator": "Organization: Red Hat",
+                    "created": time.isoformat(timespec="seconds"),
+                    "creators": ["Organization: Red Hat", "Tool: Konflux CI"],
                 },
-                "name": "product",
+                "name": "product_1.2.3",
                 "packages": [
                     {
                         "SPDXID": "SPDXRef-product",
@@ -173,14 +171,14 @@ class TestCreateSBOM(unittest.TestCase):
             assert sbom == {
                 "spdxVersion": "SPDX-2.3",
                 "SPDXID": "SPDXRef-DOCUMENT",
-                "dataLicense": "CC0-1.0",
-                "documentNamespace": "https://redhat.com/spdxdocs/"
-                "product-1.2.3-039f091d-8790-41bc-b63e-251ec860e3db",
+                "dataLicense": "CC-BY-4.0",
+                "documentNamespace": "https://redhat.com/039f091d-8790-41bc-b63e-251ec860e3db"
+                ".spdx.json",
                 "creationInfo": {
-                    "created": time.isoformat(),
-                    "creator": "Organization: Red Hat",
+                    "created": time.isoformat(timespec="seconds"),
+                    "creators": ["Organization: Red Hat", "Tool: Konflux CI"],
                 },
-                "name": "product",
+                "name": "product_1.2.3",
                 "packages": [
                     {
                         "SPDXID": "SPDXRef-product",
