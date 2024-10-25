@@ -5,7 +5,7 @@ data.json file.
 """
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 import argparse
 from collections import defaultdict
 from typing import DefaultDict, Dict, List
@@ -105,9 +105,7 @@ def create_sbom(data_path: str) -> Dict:
     # per SPDX spec, this URI does not have to be accessible, it's only used to
     # uniquely identify this SPDX document.
     # https://spdx.github.io/spdx-spec/v2.3/document-creation-information/#65-spdx-document-namespace-field
-    document_namespace = (
-        f"https://redhat.com/spdxdocs/{product_name}-{product_version}-{uuid.uuid4()}"
-    )
+    document_namespace = f"https://redhat.com/{uuid.uuid4()}.spdx.json"
 
     packages = [create_product_package(product_name, product_version, cpe)]
     relationships = [create_product_relationship()]
@@ -121,13 +119,14 @@ def create_sbom(data_path: str) -> Dict:
     sbom = {
         "spdxVersion": "SPDX-2.3",
         "SPDXID": "SPDXRef-DOCUMENT",
-        "dataLicense": "CC0-1.0",
+        "dataLicense": "CC-BY-4.0",
         "documentNamespace": document_namespace,
         "creationInfo": {
-            "created": datetime.now().isoformat(),
-            "creator": "Organization: Red Hat",
+            # E.g. 2024-10-21T20:52:36+00:00
+            "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "creators": ["Organization: Red Hat", "Tool: Konflux CI"],
         },
-        "name": product_name,
+        "name": f"{product_name}_{product_version}",
         "packages": packages,
         "relationships": relationships,
     }
