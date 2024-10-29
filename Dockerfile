@@ -5,6 +5,7 @@ FROM registry.access.redhat.com/ubi9/ubi:9.4-1214.1725849297
 ARG COSIGN_VERSION=2.4.0
 ARG KUBECTL_VERSION=1.27.2
 ARG OPM_VERSION=v1.38.0
+ARG PUBTOOLS_CGW_VERSION=0.5.4
 ARG YQ_VERSION=4.34.1
 ARG GLAB_VERSION=1.31.0
 ARG GH_VERSION=2.32.1
@@ -45,7 +46,7 @@ RUN pip3 install jinja2 \
     check-jsonschema \
     jinja2-ansible-filters \
     packageurl-python \
-    pubtools-content-gateway \
+    pubtools-content-gateway==${PUBTOOLS_CGW_VERSION} \
     pubtools-pulp \
     pubtools-exodus
 
