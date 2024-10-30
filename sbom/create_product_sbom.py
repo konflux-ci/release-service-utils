@@ -126,7 +126,7 @@ def create_sbom(data_path: str) -> Dict:
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "creators": ["Organization: Red Hat", "Tool: Konflux CI"],
         },
-        "name": f"{product_name}_{product_version}",
+        "name": f"{product_name} {product_version}",
         "packages": packages,
         "relationships": relationships,
     }
