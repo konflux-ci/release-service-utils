@@ -275,7 +275,10 @@ def construct_rpm_items_and_content_sets(
 
                 # XXX - temporary https://issues.redhat.com/browse/KONFLUX-4292
                 # Undo this in https://issues.redhat.com/browse/KONFLUX-4175
-                if component.get("publisher") == "Red Hat, Inc.":
+                if (
+                    component.get("publisher") == "Red Hat, Inc."
+                    or purl_dict["namespace"] == "redhat"
+                ):
                     rpm_item["gpg"] = "199e2f91fd431d51"
 
                 rpms_items.append(rpm_item)

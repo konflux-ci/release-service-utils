@@ -48,6 +48,9 @@ COMPONENTS = [
     {  # no purl
         "bom_ref": "ref",
     },
+    {  # with redhat namespace, but no publisher
+        "purl": "pkg:rpm/redhat/pkg7@1.2.3-4.el9000?arch=noarch",
+    },
 ]
 
 
@@ -408,6 +411,15 @@ def test_construct_rpm_items_and_content_sets__success():
             "summary": "pkg6",
             "architecture": "noarch",
             "srpm_name": "pkg6-1-2.el8.src.rpm",
+        },
+        {
+            "name": "pkg7",
+            "gpg": "199e2f91fd431d51",
+            "summary": "pkg7-1.2.3-4.el9000.noarch",
+            "release": "4.el9000",
+            "version": "1.2.3",
+            "architecture": "noarch",
+            "nvra": "pkg7-1.2.3-4.el9000.noarch",
         },
     ]
 
