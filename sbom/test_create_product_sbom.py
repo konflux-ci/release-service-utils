@@ -39,7 +39,7 @@ class TestCreateSBOM(unittest.TestCase):
                     "created": time.isoformat(timespec="seconds"),
                     "creators": ["Organization: Red Hat", "Tool: Konflux CI"],
                 },
-                "name": "product_1.2.3",
+                "name": "product 1.2.3",
                 "packages": [
                     {
                         "SPDXID": "SPDXRef-product",
@@ -98,7 +98,7 @@ class TestCreateSBOM(unittest.TestCase):
                     "created": time.isoformat(timespec="seconds"),
                     "creators": ["Organization: Red Hat", "Tool: Konflux CI"],
                 },
-                "name": "product_1.2.3",
+                "name": "product 1.2.3",
                 "packages": [
                     {
                         "SPDXID": "SPDXRef-product",
@@ -178,7 +178,7 @@ class TestCreateSBOM(unittest.TestCase):
                     "created": time.isoformat(timespec="seconds"),
                     "creators": ["Organization: Red Hat", "Tool: Konflux CI"],
                 },
-                "name": "product_1.2.3",
+                "name": "product 1.2.3",
                 "packages": [
                     {
                         "SPDXID": "SPDXRef-product",
