@@ -19,10 +19,10 @@ spec:
     {{ advisory.spec.content | to_nice_yaml(indent=2) | indent(4) | trim }}
   synopsis: {{ advisory.spec.synopsis }}
   topic: >-
-    {{ advisory.spec.topic | wordwrap(76) | indent(4) }}
+    {{ advisory.spec.topic | indent(4) }}
   description: >-
-    {{ advisory.spec.description | wordwrap(76) | indent(4) }}
+    {{ advisory.spec.description | indent(4) }}
   solution: >-
-    {{ advisory.spec.solution | wordwrap(76) | indent(4) }}
+    {{ advisory.spec.solution | indent(4) }}
   references:
     {{ advisory.spec.references | to_nice_yaml | indent(4) }}
