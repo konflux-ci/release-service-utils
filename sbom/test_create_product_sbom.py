@@ -22,7 +22,9 @@ class TestCreateSBOM(unittest.TestCase):
                     "cpe": "cpe",
                     "product_name": "product",
                     "product_version": "1.2.3",
-                    "images": [],
+                    "content": {
+                        "images": [],
+                    },
                 }
             }
         )
@@ -81,7 +83,9 @@ class TestCreateSBOM(unittest.TestCase):
                     "cpe": "cpe",
                     "product_name": "product",
                     "product_version": "1.2.3",
-                    "images": [{"component": "comp1", "purl": "purl1"}],
+                    "content": {
+                        "images": [{"component": "comp1", "purl": "purl1"}],
+                    },
                 }
             }
         )
@@ -157,11 +161,13 @@ class TestCreateSBOM(unittest.TestCase):
                     "cpe": "cpe",
                     "product_name": "product",
                     "product_version": "1.2.3",
-                    "images": [
-                        {"component": "comp1", "purl": "purl1"},
-                        {"component": "comp1", "purl": "purl2"},
-                        {"component": "comp2", "purl": "purl3"},
-                    ],
+                    "content": {
+                        "images": [
+                            {"component": "comp1", "purl": "purl1"},
+                            {"component": "comp1", "purl": "purl2"},
+                            {"component": "comp2", "purl": "purl3"},
+                        ],
+                    },
                 }
             }
         )

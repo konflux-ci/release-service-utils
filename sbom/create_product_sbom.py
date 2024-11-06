@@ -110,7 +110,7 @@ def create_sbom(data_path: str) -> Dict:
     packages = [create_product_package(product_name, product_version, cpe)]
     relationships = [create_product_relationship()]
 
-    component_packages = get_component_packages(release_notes["images"])
+    component_packages = get_component_packages(release_notes["content"].get("images", []))
     component_relationships = get_component_relationships(component_packages)
 
     packages.extend(component_packages)
