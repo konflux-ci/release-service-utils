@@ -139,10 +139,21 @@ def image_already_exists(args, digest: str, repository: str) -> bool:
     :return: True if one exists, else false
     """
 
+    # we need the repository name without the registry and organization
+    # given:
+    #   quay.io/redhat-pending/ubi9----buildah
+    # we need
+    #   ubi9/buildah
+    #
+    # is we are given:
+    #  quay.io/konflux-ci/release-service-utils
+    # then we need:
+    #  release-service-utils
+    repo = repository.split("/")[2].replace("----", "/")
     # quote is needed to urlparse the quotation marks
     filter_str = quote(
         f'repositories.manifest_schema2_digest=="{digest}";'
-        f'not(deleted==true);repositories.repository=="{repository}"'
+        f'not(deleted==true);repositories.repository=="{repo}"'
     )
 
     check_url = urljoin(args.pyxis_url, f"v1/images?page_size=1&filter={filter_str}")
