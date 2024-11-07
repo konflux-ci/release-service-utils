@@ -132,15 +132,18 @@ def setup_argparser() -> Any:  # pragma: no cover
     return parser
 
 
-def image_already_exists(args, digest: str) -> bool:
-    """Function to check if a containerImage with the given digest
+def image_already_exists(args, digest: str, repository: str) -> bool:
+    """Function to check if a containerImage with the given digest and repository
     already exists in the pyxis instance
 
     :return: True if one exists, else false
     """
 
     # quote is needed to urlparse the quotation marks
-    filter_str = quote(f'repositories.manifest_schema2_digest=="{digest}";not(deleted==true)')
+    filter_str = quote(
+        f'repositories.manifest_schema2_digest=="{digest}";'
+        f'not(deleted==true);repositories.repository=="{repository}"'
+    )
 
     check_url = urljoin(args.pyxis_url, f"v1/images?page_size=1&filter={filter_str}")
 
@@ -315,7 +318,7 @@ def main():  # pragma: no cover
 
     parsed_data = prepare_parsed_data(args)
 
-    if not image_already_exists(args, args.architecture_digest):
+    if not image_already_exists(args, args.architecture_digest, args.name):
         create_container_image(args, parsed_data)
 
 
