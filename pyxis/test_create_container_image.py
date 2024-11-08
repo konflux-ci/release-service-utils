@@ -4,87 +4,101 @@ import json
 from unittest.mock import patch, MagicMock
 
 from create_container_image import (
-    image_already_exists,
+    proxymap,
+    find_image,
+    repo_in_image,
+    prepare_parsed_data,
+    pyxis_tags,
+    repository_digest_values,
     create_container_image,
     add_container_image_repository,
-    prepare_parsed_data,
+    construct_repositories,
 )
 
 
-mock_pyxis_url = "https://catalog.redhat.com/api/containers/"
+PYXIS_URL = "https://catalog.redhat.com/api/containers/"
+
+
+def test_proxymap():
+    repository = "quay.io/redhat-pending/foo----bar"
+
+    mapped = proxymap(repository)
+
+    assert mapped == "foo/bar"
 
 
 @patch("create_container_image.pyxis.get")
-def test_image_already_exists__image_does_exist(mock_get):
+def test_find_image__image_does_exist(mock_get):
     # Arrange
     mock_rsp = MagicMock()
     mock_get.return_value = mock_rsp
-    args = MagicMock()
-    args.pyxis_url = mock_pyxis_url
-    args.architecture_digest = "some_digest"
-    args.name = "server/org/some_name"
+    architecture_digest = "some_digest"
+    mock_image = {"_id": 1}
 
     # Image already exists
-    mock_rsp.json.return_value = {"data": [{"_id": 0}]}
+    mock_rsp.json.return_value = {"data": [mock_image]}
 
     # Act
-    exists = image_already_exists(args, args.architecture_digest, args.name)
+    image = find_image(PYXIS_URL, architecture_digest)
 
     # Assert
-    assert exists
+    assert image == mock_image
     mock_get.assert_called_once_with(
-        mock_pyxis_url
+        PYXIS_URL
         + "v1/images?page_size=1&filter="
         + "repositories.manifest_schema2_digest%3D%3D%22some_digest%22"
         + "%3Bnot%28deleted%3D%3Dtrue%29"
-        + "%3Brepositories.repository%3D%3D%22some_name%22"
     )
 
 
 @patch("create_container_image.pyxis.get")
-def test_image_already_exists__image_does_not_exist(mock_get):
+def test_find_image__image_does_not_exist(mock_get):
     # Arrange
     mock_rsp = MagicMock()
     mock_get.return_value = mock_rsp
-    args = MagicMock()
-    args.pyxis_url = mock_pyxis_url
     digest = "some_digest"
-    name = "server/org/some----name"
 
     # Image doesn't exist
     mock_rsp.json.return_value = {"data": []}
 
     # Act
-    exists = image_already_exists(args, digest, name)
+    image = find_image(PYXIS_URL, digest)
 
     # Assert
-    assert not exists
+    assert image is None
 
 
 @patch("create_container_image.pyxis.get")
-def test_image_already_exists__image_does_exist_but_no_repo(mock_get):
+def test_find_image__no_id_in_image(mock_get):
     # Arrange
     mock_rsp = MagicMock()
     mock_get.return_value = mock_rsp
-    args = MagicMock()
-    args.pyxis_url = mock_pyxis_url
-    args.architecture_digest = "some_digest"
-    args.name = "server/org/some_name"
+    digest = "some_digest"
 
-    # Image already exists
-    mock_rsp.json.return_value = {"data": [{"_id": 0}]}
+    # Image exists, but has no id
+    mock_rsp.json.return_value = {"data": [{"some_key": "some_value"}]}
 
     # Act
-    exists = image_already_exists(args, args.architecture_digest, None)
+    with pytest.raises(RuntimeError):
+        find_image(PYXIS_URL, digest)
 
-    # Assert
-    assert exists
-    mock_get.assert_called_once_with(
-        mock_pyxis_url
-        + "v1/images?page_size=1&filter="
-        + "repositories.manifest_schema2_digest%3D%3D%22some_digest%22"
-        + "%3Bnot%28deleted%3D%3Dtrue%29"
-    )
+
+# scenario where repo is present in the image
+def test_repo_in_image__true():
+    image = {"repositories": [{"repository": "my/repo"}, {"repository": "foo/bar"}]}
+
+    result = repo_in_image("foo/bar", image)
+
+    assert result
+
+
+# scenario where repo is not present in the image
+def test_repo_in_image__false():
+    image = {"repositories": [{"repository": "my/repo"}, {"repository": "foo/bar"}]}
+
+    result = repo_in_image("something/missing", image)
+
+    assert not result
 
 
 @patch("create_container_image.pyxis.post")
@@ -97,22 +111,24 @@ def test_create_container_image(mock_datetime, mock_post):
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
 
     args = MagicMock()
-    args.pyxis_url = mock_pyxis_url
+    args.pyxis_url = PYXIS_URL
     args.tags = "some_version"
     args.certified = "false"
     args.rh_push = "false"
     args.architecture_digest = "arch specific digest"
+    args.digest = "some_digest"
     args.media_type = "single architecture"
+    args.name = "quay.io/some_repo"
 
     # Act
     create_container_image(
         args,
-        {"architecture": "ok", "digest": "some_digest", "name": "quay.io/some_repo"},
+        {"architecture": "ok"},
     )
 
     # Assert
     mock_post.assert_called_with(
-        mock_pyxis_url + "v1/images",
+        PYXIS_URL + "v1/images",
         {
             "repositories": [
                 {
@@ -149,29 +165,28 @@ def test_add_container_image_repository(mock_datetime, mock_patch):
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
 
     args = MagicMock()
-    args.pyxis_url = mock_pyxis_url
+    args.pyxis_url = PYXIS_URL
     args.tags = "some_version"
     args.rh_push = "true"
     args.architecture_digest = "arch specific digest"
     args.media_type = "single architecture"
+    args.name = "quay.io/redhat-pending/some_product----some_repo"
 
     # Act
     add_container_image_repository(
         args,
-        {"architecture": "ok", "digest": "some_digest", "name": "quay.io/namespace/some_repo"},
         {"_id": "some_id", "repositories": []},
     )
 
     # Assert
     mock_patch.assert_called_with(
-        mock_pyxis_url + "v1/images/id/some_id",
+        PYXIS_URL + "v1/images/id/some_id",
         {
-            "_id": "some_id",
             "repositories": [
                 {
-                    "published": True,
-                    "registry": "registry.access.redhat.com",
-                    "repository": "some_repo",
+                    "published": False,
+                    "registry": "quay.io",
+                    "repository": "redhat-pending/some_product----some_repo",
                     "push_date": "1970-10-10T10:10:10.000000+00:00",
                     "tags": [
                         {
@@ -181,7 +196,21 @@ def test_add_container_image_repository(mock_datetime, mock_patch):
                     ],
                     # Note, no manifest_list_digest here. Single arch.
                     "manifest_schema2_digest": "arch specific digest",
-                }
+                },
+                {
+                    "published": True,
+                    "registry": "registry.access.redhat.com",
+                    "repository": "some_product/some_repo",
+                    "push_date": "1970-10-10T10:10:10.000000+00:00",
+                    "tags": [
+                        {
+                            "added_date": "1970-10-10T10:10:10.000000+00:00",
+                            "name": "some_version",
+                        }
+                    ],
+                    # Note, no manifest_list_digest here. Single arch.
+                    "manifest_schema2_digest": "arch specific digest",
+                },
             ],
         },
     )
@@ -197,7 +226,7 @@ def test_create_container_image_latest(mock_datetime, mock_post):
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
 
     args = MagicMock()
-    args.pyxis_url = mock_pyxis_url
+    args.pyxis_url = PYXIS_URL
     args.tags = "some_version"
     args.certified = "false"
     args.is_latest = "true"
@@ -205,20 +234,20 @@ def test_create_container_image_latest(mock_datetime, mock_post):
     args.digest = "some_digest"
     args.architecture_digest = "arch specific digest"
     args.media_type = "application/vnd.oci.image.index.v1+json"
+    args.digest = "some_digest"
+    args.name = "redhat.com/some_repo/foobar"
 
     # Act
     create_container_image(
         args,
         {
             "architecture": "ok",
-            "digest": "some_digest",
-            "name": "redhat.com/some_repo/foobar",
         },
     )
 
     # Assert
     mock_post.assert_called_with(
-        mock_pyxis_url + "v1/images",
+        PYXIS_URL + "v1/images",
         {
             "repositories": [
                 {
@@ -259,27 +288,27 @@ def test_create_container_image_rh_push_multiple_tags(mock_datetime, mock_post):
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
 
     args = MagicMock()
-    args.pyxis_url = mock_pyxis_url
+    args.pyxis_url = PYXIS_URL
     args.tags = "tagprefix tagprefix-timestamp"
     args.certified = "false"
     args.rh_push = "true"
     args.digest = "some_digest"
     args.architecture_digest = "arch specific digest"
     args.media_type = "application/vnd.oci.image.index.v1+json"
+    args.digest = "some_digest"
+    args.name = "quay.io/redhat-pending/some-product----some-image"
 
     # Act
     create_container_image(
         args,
         {
             "architecture": "ok",
-            "digest": "some_digest",
-            "name": "quay.io/redhat-pending/some-product----some-image",
         },
     )
 
     # Assert
     mock_post.assert_called_with(
-        mock_pyxis_url + "v1/images",
+        PYXIS_URL + "v1/images",
         {
             "repositories": [
                 {
@@ -358,8 +387,6 @@ def test_create_container_image_no_name():
 def test_prepare_parsed_data__success(mock_open):
     args = MagicMock()
     args.architecture = "test"
-    args.architecture_digest = "sha:abc"
-    args.name = "quay.io/hacbs-release/release-service-utils"
     args.dockerfile = "mydockerfile"
     manifest_content = json.dumps(
         {
@@ -379,9 +406,7 @@ def test_prepare_parsed_data__success(mock_open):
 
     assert parsed_data == {
         "architecture": "test",
-        "digest": "sha:abc",
         "layers": ["2", "1"],
-        "name": "quay.io/hacbs-release/release-service-utils",
         "files": [
             {"key": "buildfile", "filename": "Dockerfile", "content": dockerfile_content}
         ],
@@ -397,8 +422,6 @@ def test_prepare_parsed_data__success(mock_open):
 def test_prepare_parsed_data__success_no_dockerfile(mock_open):
     args = MagicMock()
     args.architecture = "test"
-    args.architecture_digest = "sha:abc"
-    args.name = "quay.io/hacbs-release/release-service-utils"
     args.dockerfile = ""
     manifest_content = json.dumps(
         {
@@ -412,9 +435,7 @@ def test_prepare_parsed_data__success_no_dockerfile(mock_open):
 
     assert parsed_data == {
         "architecture": "test",
-        "digest": "sha:abc",
         "layers": ["2", "1"],
-        "name": "quay.io/hacbs-release/release-service-utils",
         "sum_layer_size_bytes": 0,
         "uncompressed_layer_sizes": [],
         "uncompressed_size_bytes": 0,
@@ -427,8 +448,6 @@ def test_prepare_parsed_data__success_no_dockerfile(mock_open):
 def test_prepare_parsed_data__with_layer_sizes(mock_open):
     args = MagicMock()
     args.architecture = "test"
-    args.architecture_digest = "sha:abc"
-    args.name = "quay.io/hacbs-release/release-service-utils"
     args.dockerfile = "mydockerfile"
     manifest_content = json.dumps(
         {
@@ -452,9 +471,7 @@ def test_prepare_parsed_data__with_layer_sizes(mock_open):
 
     assert parsed_data == {
         "architecture": "test",
-        "digest": "sha:abc",
         "layers": ["2", "1"],
-        "name": "quay.io/hacbs-release/release-service-utils",
         "files": [
             {"key": "buildfile", "filename": "Dockerfile", "content": dockerfile_content}
         ],
@@ -467,3 +484,150 @@ def test_prepare_parsed_data__with_layer_sizes(mock_open):
         "top_layer_id": "2",
         "uncompressed_top_layer_id": "4",
     }
+
+
+def test_pyxis_tags__with_latest():
+    args = MagicMock()
+    args.tags = "tag1 tag2"
+    args.is_latest = "true"
+    now = "now"
+
+    tags = pyxis_tags(args, now)
+
+    assert tags == [
+        {"added_date": "now", "name": "tag1"},
+        {"added_date": "now", "name": "tag2"},
+        {"added_date": "now", "name": "latest"},
+    ]
+
+
+def test_pyxis_tags__without_latest():
+    args = MagicMock()
+    args.tags = "tag1 tag2"
+    args.is_latest = "false"
+    now = "now"
+
+    tags = pyxis_tags(args, now)
+
+    assert tags == [
+        {"added_date": "now", "name": "tag1"},
+        {"added_date": "now", "name": "tag2"},
+    ]
+
+
+def test_repository_digest_values__single_arch():
+    args = MagicMock()
+    args.media_type = "application/vnd.docker.distribution.manifest.v2+json"
+    args.architecture_digest = "mydigest"
+
+    result = repository_digest_values(args)
+
+    assert result == {"manifest_schema2_digest": "mydigest"}
+
+
+def test_repository_digest_values__multi_arch():
+    args = MagicMock()
+    args.media_type = "application/vnd.docker.distribution.manifest.list.v2+json"
+    args.architecture_digest = "mydigest"
+    args.digest = "mytopdigest"
+
+    result = repository_digest_values(args)
+
+    assert result == {
+        "manifest_schema2_digest": "mydigest",
+        "manifest_list_digest": "mytopdigest",
+    }
+
+
+@patch("create_container_image.datetime")
+def test_construct_repositories__rh_push_true(mock_datetime):
+    mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
+    args = MagicMock()
+    args.media_type = "application/vnd.docker.distribution.manifest.list.v2+json"
+    args.architecture_digest = "arch specific digest"
+    args.digest = "some_digest"
+    args.tags = "tagprefix tagprefix-timestamp"
+    args.is_latest = "false"
+    args.rh_push = "true"
+    args.name = "quay.io/redhat-pending/some-product----some-image"
+
+    repos = construct_repositories(args)
+
+    assert repos == [
+        {
+            "published": False,
+            "registry": "quay.io",
+            "repository": "redhat-pending/some-product----some-image",
+            "push_date": "1970-10-10T10:10:10.000000+00:00",
+            "tags": [
+                {
+                    "added_date": "1970-10-10T10:10:10.000000+00:00",
+                    "name": "tagprefix",
+                },
+                {
+                    "added_date": "1970-10-10T10:10:10.000000+00:00",
+                    "name": "tagprefix-timestamp",
+                },
+            ],
+            "manifest_list_digest": "some_digest",
+            "manifest_schema2_digest": "arch specific digest",
+        },
+        {
+            "published": True,
+            "registry": "registry.access.redhat.com",
+            "repository": "some-product/some-image",
+            "push_date": "1970-10-10T10:10:10.000000+00:00",
+            "tags": [
+                {
+                    "added_date": "1970-10-10T10:10:10.000000+00:00",
+                    "name": "tagprefix",
+                },
+                {
+                    "added_date": "1970-10-10T10:10:10.000000+00:00",
+                    "name": "tagprefix-timestamp",
+                },
+            ],
+            "manifest_list_digest": "some_digest",
+            "manifest_schema2_digest": "arch specific digest",
+        },
+    ]
+
+
+@patch("create_container_image.datetime")
+def test_construct_repositories__rh_push_false(mock_datetime):
+    mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
+    args = MagicMock()
+    args.media_type = "application/vnd.docker.distribution.manifest.list.v2+json"
+    args.architecture_digest = "arch specific digest"
+    args.digest = "some_digest"
+    args.tags = "tagprefix tagprefix-timestamp"
+    args.is_latest = "true"
+    args.rh_push = "false"
+    args.name = "quay.io/some-org/some-image"
+
+    repos = construct_repositories(args)
+
+    assert repos == [
+        {
+            "published": False,
+            "registry": "quay.io",
+            "repository": "some-org/some-image",
+            "push_date": "1970-10-10T10:10:10.000000+00:00",
+            "tags": [
+                {
+                    "added_date": "1970-10-10T10:10:10.000000+00:00",
+                    "name": "tagprefix",
+                },
+                {
+                    "added_date": "1970-10-10T10:10:10.000000+00:00",
+                    "name": "tagprefix-timestamp",
+                },
+                {
+                    "added_date": "1970-10-10T10:10:10.000000+00:00",
+                    "name": "latest",
+                },
+            ],
+            "manifest_list_digest": "some_digest",
+            "manifest_schema2_digest": "arch specific digest",
+        },
+    ]

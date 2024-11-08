@@ -72,6 +72,37 @@ def test_post_error(mock_get_session: MagicMock) -> None:
         pyxis.post(API_URL, {})
 
 
+@patch("pyxis.session", None)
+@patch("pyxis._get_session")
+def test_patch(mock_get_session: MagicMock) -> None:
+    resp = pyxis.patch(API_URL, {})
+
+    assert resp == mock_get_session.return_value.patch.return_value
+    mock_get_session.assert_called_once_with()
+
+
+@patch("pyxis.session")
+@patch("pyxis._get_session")
+def test_patch_existing_session(mock_get_session, mock_session: MagicMock) -> None:
+    resp = pyxis.patch(API_URL, {})
+
+    assert resp == mock_session.patch.return_value
+    mock_get_session.assert_not_called()
+
+
+@patch("pyxis.session", None)
+@patch("pyxis._get_session")
+def test_patch_error(mock_get_session: MagicMock) -> None:
+    response = Response()
+    response.status_code = 400
+    mock_get_session.return_value.patch.return_value.raise_for_status.side_effect = HTTPError(
+        response=response
+    )
+
+    with pytest.raises(HTTPError):
+        pyxis.patch(API_URL, {})
+
+
 @patch("pyxis.post")
 def test_graphql_query__success(mock_post: MagicMock):
     mock_data = {
