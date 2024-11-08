@@ -132,6 +132,15 @@ def setup_argparser() -> Any:  # pragma: no cover
     return parser
 
 
+def emit_id(identifier):
+    """Emit the image identifier in a standard way.
+
+    The formatting of this log line is important.
+    It is parsed by the tekton task that calls us.
+    """
+    LOGGER.info(f"The image id is: {identifier}")
+
+
 def proxymap(repository: str) -> str:
     """Map a backend repo name to its proxy equivalent.
 
@@ -167,7 +176,7 @@ def image_already_exists(args, digest: str, repository: str) -> Any:
         return None
 
     if "_id" in query_results[0]:
-        LOGGER.info(f"Found image id is: {query_results[0]['_id']}")
+        emit_id(query_results[0]["_id"])
     else:
         raise Exception("Image metadata was found in Pyxis, but the id key was missing.")
 
@@ -318,7 +327,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
 
     # Make sure container metadata was successfully added to Pyxis
     if "_id" in rsp:
-        LOGGER.info(f"The image id is: {rsp['_id']}")
+        emit_id(rsp["_id"])
     else:
         raise Exception("Image metadata was not successfully added to Pyxis.")
 
@@ -353,7 +362,7 @@ def add_container_image_repository(args, parsed_data: Dict[str, Any], image: Dic
 
     # Make sure container metadata was successfully added to Pyxis
     if "_id" in rsp:
-        LOGGER.info(f"The image id is: {rsp['_id']}")
+        emit_id(rsp["_id"])
     else:
         raise Exception("Image metadata was not successfully added to Pyxis.")
 
