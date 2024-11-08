@@ -132,29 +132,28 @@ def setup_argparser() -> Any:  # pragma: no cover
     return parser
 
 
+def proxymap(repository):
+    """Map a backend repo name to its proxy equivalent.
+
+    i.e., map quay.io/redhat-pending/foo----bar to foo/bar
+    """
+    return repository.split("/")[-1].replace("----", "/")
+
+
 def image_already_exists(args, digest: str, repository: str) -> bool:
     """Function to check if a containerImage with the given digest and repository
     already exists in the pyxis instance
 
+    If `repository` is None, then the return True if the image exists at all.
+
     :return: True if one exists, else false
     """
 
-    # we need the repository name without the registry and organization
-    # given:
-    #   quay.io/redhat-pending/ubi9----buildah
-    # we need
-    #   ubi9/buildah
-    #
-    # is we are given:
-    #  quay.io/konflux-ci/release-service-utils
-    # then we need:
-    #  release-service-utils
-    repo = repository.split("/")[2].replace("----", "/")
     # quote is needed to urlparse the quotation marks
-    filter_str = quote(
-        f'repositories.manifest_schema2_digest=="{digest}";'
-        f'not(deleted==true);repositories.repository=="{repo}"'
-    )
+    raw_filter = f'repositories.manifest_schema2_digest=="{digest}";not(deleted==true);'
+    if repository:
+        raw_filter += f'repositories.repository=="{proxymap(repository)}"'
+    filter_str = quote(raw_filter)
 
     check_url = urljoin(args.pyxis_url, f"v1/images?page_size=1&filter={filter_str}")
 
@@ -165,14 +164,10 @@ def image_already_exists(args, digest: str, repository: str) -> bool:
     query_results = rsp.json()["data"]
 
     if len(query_results) == 0:
-        LOGGER.info("Image with given docker_image_digest doesn't exist yet")
         return False
 
-    LOGGER.info(
-        "Image with given docker_image_digest already exists." "Skipping the image creation."
-    )
     if "_id" in query_results[0]:
-        LOGGER.info(f"The image id is: {query_results[0]['_id']}")
+        LOGGER.info(f"Found image id is: {query_results[0]['_id']}")
     else:
         raise Exception("Image metadata was found in Pyxis, but the id key was missing.")
 
@@ -307,7 +302,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
         repo = container_image_payload["repositories"][0].copy()
         repo["published"] = True
         repo["registry"] = "registry.access.redhat.com"
-        repo["repository"] = image_name.split("/")[-1].replace("----", "/")
+        repo["repository"] = proxymap(image_name)
         container_image_payload["repositories"].append(repo)
 
     rsp = pyxis.post(upload_url, container_image_payload).json()
@@ -329,7 +324,20 @@ def main():  # pragma: no cover
 
     parsed_data = prepare_parsed_data(args)
 
-    if not image_already_exists(args, args.architecture_digest, args.name):
+    if image_already_exists(args, args.architecture_digest, repository=None):
+        if image_already_exists(args, args.architecture_digest, repository=args.name):
+            LOGGER.info(
+                "Image with given docker_image_digest already exists "
+                f"and is associated with {args.name}. "
+                "Skipping the image creation."
+            )
+        else:
+            LOGGER.info(
+                "Image with given docker_image_digest exists, but is not yet associated with {args.name}."
+            )
+            raise NotImplementedError("Add repository with a PATCH")
+    else:
+        LOGGER.info("Image with given docker_image_digest doesn't exist yet.")
         create_container_image(args, parsed_data)
 
 
