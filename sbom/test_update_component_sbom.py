@@ -27,10 +27,16 @@ class TestUpdateComponentSBOM(unittest.TestCase):
 
     def test_update_cyclonedx_sbom(self) -> None:
         sbom = {
+            "metadata": {
+                "component": {
+                    "name": "comp1",
+                    "purl": "purl1",
+                }
+            },
             "components": [
                 {"name": "comp1", "purl": "purl1"},
                 {"name": "comp2", "purl": "purl2"},
-            ]
+            ],
         }
         mapping = {
             "comp1": ["updated_purl1"],
@@ -38,10 +44,16 @@ class TestUpdateComponentSBOM(unittest.TestCase):
         }
         update_cyclonedx_sbom(sbom, mapping)
         assert sbom == {
+            "metadata": {
+                "component": {
+                    "name": "comp1",
+                    "purl": "updated_purl1",
+                }
+            },
             "components": [
                 {"name": "comp1", "purl": "updated_purl1"},
                 {"name": "comp2", "purl": "updated_purl2"},
-            ]
+            ],
         }
 
     def test_update_spdx_sbom(self) -> None:
