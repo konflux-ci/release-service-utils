@@ -132,7 +132,7 @@ def setup_argparser() -> Any:  # pragma: no cover
     return parser
 
 
-def proxymap(repository):
+def proxymap(repository: str) -> str:
     """Map a backend repo name to its proxy equivalent.
 
     i.e., map quay.io/redhat-pending/foo----bar to foo/bar
@@ -140,19 +140,19 @@ def proxymap(repository):
     return repository.split("/")[-1].replace("----", "/")
 
 
-def image_already_exists(args, digest: str, repository: str) -> bool:
+def image_already_exists(args, digest: str, repository: str) -> Any:
     """Function to check if a containerImage with the given digest and repository
     already exists in the pyxis instance
 
     If `repository` is None, then the return True if the image exists at all.
 
-    :return: True if one exists, else false
+    :return: the image id, if one exists, else None if not found
     """
 
     # quote is needed to urlparse the quotation marks
-    raw_filter = f'repositories.manifest_schema2_digest=="{digest}";not(deleted==true);'
+    raw_filter = f'repositories.manifest_schema2_digest=="{digest}";not(deleted==true)'
     if repository:
-        raw_filter += f'repositories.repository=="{proxymap(repository)}"'
+        raw_filter += f';repositories.repository=="{proxymap(repository)}"'
     filter_str = quote(raw_filter)
 
     check_url = urljoin(args.pyxis_url, f"v1/images?page_size=1&filter={filter_str}")
@@ -164,14 +164,14 @@ def image_already_exists(args, digest: str, repository: str) -> bool:
     query_results = rsp.json()["data"]
 
     if len(query_results) == 0:
-        return False
+        return None
 
     if "_id" in query_results[0]:
         LOGGER.info(f"Found image id is: {query_results[0]['_id']}")
     else:
         raise Exception("Image metadata was found in Pyxis, but the id key was missing.")
 
-    return True
+    return query_results[0]
 
 
 def prepare_parsed_data(args) -> Dict[str, Any]:
@@ -223,6 +223,28 @@ def prepare_parsed_data(args) -> Dict[str, Any]:
     return parsed_data
 
 
+def pyxis_tags(args, date_now):
+    """Return list of tags formatted for pyxis"""
+    tags = args.tags.split()
+    if args.is_latest == "true":
+        tags.append("latest")
+    return [
+        {
+            "added_date": date_now,
+            "name": tag,
+        }
+        for tag in tags
+    ]
+
+
+def repository_digest_values(args, docker_image_digest):
+    """Return digest values for the repository entry in the image entity"""
+    result = {"manifest_schema2_digest": args.architecture_digest}
+    if args.media_type in MANIFEST_LIST_TYPES:
+        result["manifest_list_digest"] = docker_image_digest
+    return result
+
+
 def create_container_image(args, parsed_data: Dict[str, Any]):
     """Function to create a new containerImage entry in a pyxis instance"""
 
@@ -255,17 +277,6 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
 
     upload_url = urljoin(args.pyxis_url, "v1/images")
 
-    tags = args.tags.split()
-    if args.is_latest == "true":
-        tags.append("latest")
-    pyxis_tags = [
-        {
-            "added_date": date_now,
-            "name": tag,
-        }
-        for tag in tags
-    ]
-
     container_image_payload = {
         "repositories": [
             {
@@ -273,7 +284,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
                 "registry": image_registry,
                 "repository": image_repo,
                 "push_date": date_now,
-                "tags": pyxis_tags,
+                "tags": pyxis_tags(args, date_now),
             }
         ],
         "certified": json.loads(args.certified.lower()),
@@ -285,20 +296,18 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
         "uncompressed_top_layer_id": uncompressed_top_layer_id,
     }
 
-    container_image_payload["repositories"][0][
-        "manifest_schema2_digest"
-    ] = args.architecture_digest
-    if args.media_type in MANIFEST_LIST_TYPES:
-        container_image_payload["repositories"][0][
-            "manifest_list_digest"
-        ] = docker_image_digest
+    container_image_payload["repositories"][0].update(
+        repository_digest_values(args, docker_image_digest)
+    )
 
     # For images released to registry.redhat.io we need a second repository item
     # with published=true and registry and repository converted.
     # E.g. if the name in the oras manifest result is
     # "quay.io/redhat-prod/rhtas-tech-preview----cosign-rhel9",
     # repository will be "rhtas-tech-preview/cosign-rhel9"
-    if args.rh_push == "true":
+    if not args.rh_push == "true":
+        LOGGER.info("--rh-push is not set. Skipping public registry association.")
+    else:
         repo = container_image_payload["repositories"][0].copy()
         repo["published"] = True
         repo["registry"] = "registry.access.redhat.com"
@@ -306,6 +315,41 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
         container_image_payload["repositories"].append(repo)
 
     rsp = pyxis.post(upload_url, container_image_payload).json()
+
+    # Make sure container metadata was successfully added to Pyxis
+    if "_id" in rsp:
+        LOGGER.info(f"The image id is: {rsp['_id']}")
+    else:
+        raise Exception("Image metadata was not successfully added to Pyxis.")
+
+
+def add_container_image_repository(args, parsed_data: Dict[str, Any], image: Dict[str, Any]):
+    if not args.rh_push == "true":
+        LOGGER.info("--rh-push is not set. Skipping public registry association.")
+        return
+
+    identifier = image["_id"]
+    LOGGER.info(f"Adding repository to container image {identifier}")
+
+    date_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+
+    image_name = parsed_data["name"]
+    docker_image_digest = parsed_data["digest"]
+
+    patch_url = urljoin(args.pyxis_url, f"v1/images/id/{identifier}")
+
+    image["repositories"].append(
+        {
+            "published": True,
+            "registry": "registry.access.redhat.com",
+            "repository": proxymap(image_name),
+            "push_date": date_now,
+            "tags": pyxis_tags(args, date_now),
+        }
+    )
+    image["repositories"][-1].update(repository_digest_values(args, docker_image_digest))
+
+    rsp = pyxis.patch(patch_url, image).json()
 
     # Make sure container metadata was successfully added to Pyxis
     if "_id" in rsp:
@@ -324,18 +368,23 @@ def main():  # pragma: no cover
 
     parsed_data = prepare_parsed_data(args)
 
-    if image_already_exists(args, args.architecture_digest, repository=None):
+    # First check if it exists at all
+    image = image_already_exists(args, args.architecture_digest, repository=None)
+    identifier = image["_id"]
+    if image:
+        # Then, check if it exists in association with the given repository
         if image_already_exists(args, args.architecture_digest, repository=args.name):
             LOGGER.info(
-                "Image with given docker_image_digest already exists "
-                f"and is associated with {args.name}. "
+                f"Image with given docker_image_digest already exists as {identifier} "
+                f"and is associated with repository {args.name}. "
                 "Skipping the image creation."
             )
         else:
             LOGGER.info(
-                "Image with given docker_image_digest exists, but is not yet associated with {args.name}."
+                f"Image with given docker_image_digest exists as {identifier}, but "
+                f"is not yet associated with repository {args.name}."
             )
-            raise NotImplementedError("Add repository with a PATCH")
+            add_container_image_repository(args, parsed_data, image)
     else:
         LOGGER.info("Image with given docker_image_digest doesn't exist yet.")
         create_container_image(args, parsed_data)

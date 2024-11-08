@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock
 from create_container_image import (
     image_already_exists,
     create_container_image,
+    add_container_image_repository,
     prepare_parsed_data,
 )
 
@@ -60,6 +61,32 @@ def test_image_already_exists__image_does_not_exist(mock_get):
     assert not exists
 
 
+@patch("create_container_image.pyxis.get")
+def test_image_already_exists__image_does_exist_but_no_repo(mock_get):
+    # Arrange
+    mock_rsp = MagicMock()
+    mock_get.return_value = mock_rsp
+    args = MagicMock()
+    args.pyxis_url = mock_pyxis_url
+    args.architecture_digest = "some_digest"
+    args.name = "server/org/some_name"
+
+    # Image already exists
+    mock_rsp.json.return_value = {"data": [{"_id": 0}]}
+
+    # Act
+    exists = image_already_exists(args, args.architecture_digest, None)
+
+    # Assert
+    assert exists
+    mock_get.assert_called_once_with(
+        mock_pyxis_url
+        + "v1/images?page_size=1&filter="
+        + "repositories.manifest_schema2_digest%3D%3D%22some_digest%22"
+        + "%3Bnot%28deleted%3D%3Dtrue%29"
+    )
+
+
 @patch("create_container_image.pyxis.post")
 @patch("create_container_image.datetime")
 def test_create_container_image(mock_datetime, mock_post):
@@ -110,6 +137,54 @@ def test_create_container_image(mock_datetime, mock_post):
             "sum_layer_size_bytes": 0,
             "top_layer_id": None,
             "uncompressed_top_layer_id": None,
+        },
+    )
+
+
+@patch("create_container_image.pyxis.patch")
+@patch("create_container_image.datetime")
+def test_add_container_image_repository(mock_datetime, mock_patch):
+    # Mock an _id in the response for logger check
+    mock_patch.return_value.json.return_value = {"_id": 0}
+
+    # mock date
+    mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
+
+    args = MagicMock()
+    args.pyxis_url = mock_pyxis_url
+    args.tags = "some_version"
+    args.rh_push = "true"
+    args.architecture_digest = "arch specific digest"
+    args.media_type = "single architecture"
+
+    # Act
+    add_container_image_repository(
+        args,
+        {"architecture": "ok", "digest": "some_digest", "name": "quay.io/namespace/some_repo"},
+        {"_id": "some_id", "repositories": []},
+    )
+
+    # Assert
+    mock_patch.assert_called_with(
+        mock_pyxis_url + "v1/images/id/some_id",
+        {
+            "_id": "some_id",
+            "repositories": [
+                {
+                    "published": True,
+                    "registry": "registry.access.redhat.com",
+                    "repository": "some_repo",
+                    "push_date": "1970-10-10T10:10:10.000000+00:00",
+                    "tags": [
+                        {
+                            "added_date": "1970-10-10T10:10:10.000000+00:00",
+                            "name": "some_version",
+                        }
+                    ],
+                    # Note, no manifest_list_digest here. Single arch.
+                    "manifest_schema2_digest": "arch specific digest",
+                }
+            ],
         },
     )
 
