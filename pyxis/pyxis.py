@@ -82,6 +82,34 @@ def post(url: str, body: Dict[str, Any]) -> requests.Response:
     return resp
 
 
+def patch(url: str, body: Dict[str, Any]) -> requests.Response:
+    """PATCH pyxis API request to given URL with given payload
+
+    Args:
+        url (str): Pyxis API URL
+        body (Dict[str, Any]): Request payload
+
+    :return: Pyxis response
+    """
+    global session
+    if session is None:
+        session = _get_session()
+
+    LOGGER.debug(f"PATCH request URL: {url}")
+    LOGGER.debug(f"PATCH request body: {body}")
+    resp = session.patch(url, json=body)
+
+    try:
+        LOGGER.debug(f"PATCH request response: {resp.text}")
+        resp.raise_for_status()
+    except requests.HTTPError:
+        LOGGER.exception(
+            f"Pyxis PATCH query failed with {url} - {resp.status_code} - {resp.text}"
+        )
+        raise
+    return resp
+
+
 def graphql_query(graphql_api: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """Make a request to Pyxis GraphQL API
 
