@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Upload rpm manifest to Pyxis
 
-This script will take Pyxis image ID and an sbom spdx file
+This script will take Pyxis image ID and an sbom cyclonedx file
 on the input. It will inspect the sbom for the rpms and then push
 data into Pyxis. There are two separate items that will be pushed:
 
@@ -64,10 +64,10 @@ def upload_container_rpm_data_with_retry(
 def upload_container_rpm_data(graphql_api: str, image_id: str, sbom_path: str):
     """Upload a Container Image RPM Manifest and content sets to Pyxis"""
 
-    sbom_packages = load_sbom_packages(sbom_path)
-    LOGGER.info(f"Loaded {len(sbom_packages)} packages from sbom file.")
+    sbom_components = load_sbom_components(sbom_path)
+    LOGGER.info(f"Loaded {len(sbom_components)} components from sbom file.")
 
-    rpms, content_sets = construct_rpm_items_and_content_sets(sbom_packages)
+    rpms, content_sets = construct_rpm_items_and_content_sets(sbom_components)
 
     image = get_image_rpm_data(graphql_api, image_id)
 
@@ -198,31 +198,55 @@ mutation ($id: ObjectIDFilterScalar!, $input: ContainerImageInput!) {
     return data["update_image"]["data"]["_id"]
 
 
-def load_sbom_packages(sbom_path: str) -> list[dict]:
-    """Open sbom file, load packages and return them
+def load_sbom_components(sbom_path: str) -> list[dict]:
+    """Open sbom file, load components and return them
 
     If unable to open and load the json, raise an exception.
+    If there are duplicate bom-ref strings in the components,
+    raise an exception.
     """
     try:
         with open(sbom_path) as f:
             sbom = json.load(f)
-        packages = sbom["packages"] if "packages" in sbom else []
+        components = sbom["components"] if "components" in sbom else []
     except Exception:
-        LOGGER.error("Unable to load packages from sbom file")
+        LOGGER.error("Unable to load components from sbom file")
         raise
 
-    return packages
+    check_bom_ref_duplicates(components)
+
+    return components
+
+
+def check_bom_ref_duplicates(components: list[dict]):
+    """Check if any two components use the same bom-ref string
+
+    bom-ref is not required, but has to be unique for
+    a given sbom. In most cases it is defined.
+    Pyxis team suggested we at least check this,
+    since Pyxis has no checks for component uniqueness.
+    """
+    bom_refs = [c["bom-ref"] for c in components if c.get("bom-ref") is not None]
+    seen = set()
+    for x in bom_refs:
+        if x in seen:
+            LOGGER.error(f"Duplicate bom-ref detected: {x}")
+            msg = "Invalid sbom file. bom-ref must to be unique."
+            LOGGER.error(msg)
+            raise ValueError(msg)
+        else:
+            seen.add(x)
 
 
 def construct_rpm_items_and_content_sets(
-    packages: list[dict],
+    components: list[dict],
 ) -> tuple[list[dict], list[str]]:
-    """Create RpmsItems object and content_sets from packages for Pyxis.
+    """Create RpmsItems object and content_sets from components for Pyxis.
 
     This function creates two items:
 
     1. A list of RpmsItems dicts. There will be
-    one RpmsItems per rpm package. A list is then formed of them
+    one RpmsItems per rpm component. A list is then formed of them
     and returned to be used in a containerImageRPMManifest.
 
     2. A list of unique content set strings to be saved in the ContainerImage.content_sets
@@ -230,40 +254,37 @@ def construct_rpm_items_and_content_sets(
     """
     rpms_items = []
     content_sets = set()
-    for package in packages:
-        for externalRef in package.get("externalRefs", []):
-            if externalRef.get("referenceType") != "purl":
-                continue
-            purl_dict = PackageURL.from_string(externalRef["referenceLocator"]).to_dict()
-            if purl_dict["type"] != "rpm":
-                continue
-            rpm_item = {
-                "name": purl_dict["name"],
-                "summary": purl_dict["name"],
-                "architecture": purl_dict["qualifiers"].get("arch", "noarch"),
-            }
-            if purl_dict["version"] is not None:
-                rpm_item["version"] = purl_dict["version"].split("-")[0]
-                rpm_item["release"] = purl_dict["version"].split("-")[1]
-                rpm_item["nvra"] = (
-                    f"{rpm_item['name']}-{purl_dict['version']}.{rpm_item['architecture']}"
-                )
-                rpm_item["summary"] = rpm_item["nvra"]
-            if "upstream" in purl_dict["qualifiers"]:
-                rpm_item["srpm_name"] = purl_dict["qualifiers"]["upstream"]
+    for component in components:
+        if "purl" in component:
+            purl_dict = PackageURL.from_string(component["purl"]).to_dict()
+            if purl_dict["type"] == "rpm":
+                rpm_item = {
+                    "name": purl_dict["name"],
+                    "summary": purl_dict["name"],
+                    "architecture": purl_dict["qualifiers"].get("arch", "noarch"),
+                }
+                if purl_dict["version"] is not None:
+                    rpm_item["version"] = purl_dict["version"].split("-")[0]
+                    rpm_item["release"] = purl_dict["version"].split("-")[1]
+                    rpm_item["nvra"] = (
+                        f"{rpm_item['name']}-{purl_dict['version']}.{rpm_item['architecture']}"
+                    )
+                    rpm_item["summary"] = rpm_item["nvra"]
+                if "upstream" in purl_dict["qualifiers"]:
+                    rpm_item["srpm_name"] = purl_dict["qualifiers"]["upstream"]
 
-            # XXX - temporary https://issues.redhat.com/browse/KONFLUX-4292
-            # Undo this in https://issues.redhat.com/browse/KONFLUX-4175
-            if (
-                package.get("supplier") == "Organization: Red Hat, Inc."
-                or purl_dict["namespace"] == "redhat"
-            ):
-                rpm_item["gpg"] = "199e2f91fd431d51"
+                # XXX - temporary https://issues.redhat.com/browse/KONFLUX-4292
+                # Undo this in https://issues.redhat.com/browse/KONFLUX-4175
+                if (
+                    component.get("publisher") == "Red Hat, Inc."
+                    or purl_dict["namespace"] == "redhat"
+                ):
+                    rpm_item["gpg"] = "199e2f91fd431d51"
 
-            rpms_items.append(rpm_item)
+                rpms_items.append(rpm_item)
 
-            if "repository_id" in purl_dict["qualifiers"]:
-                content_sets.add(purl_dict["qualifiers"]["repository_id"])
+                if "repository_id" in purl_dict["qualifiers"]:
+                    content_sets.add(purl_dict["qualifiers"]["repository_id"])
 
     return rpms_items, sorted(content_sets)
 
