@@ -301,9 +301,13 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
         "architecture": parsed_data["architecture"],
         "parsed_data": parsed_data,
         "sum_layer_size_bytes": sum_layer_size_bytes,
-        "top_layer_id": top_layer_id,
-        "uncompressed_top_layer_id": uncompressed_top_layer_id,
     }
+
+    # Only supply these ids if they are not "None"
+    if top_layer_id:
+        container_image_payload["top_layer_id"] = top_layer_id
+    if uncompressed_top_layer_id:
+        container_image_payload["uncompressed_top_layer_id"] = uncompressed_top_layer_id
 
     container_image_payload["repositories"][0].update(
         repository_digest_values(args, docker_image_digest)
