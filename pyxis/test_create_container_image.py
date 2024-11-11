@@ -135,8 +135,6 @@ def test_create_container_image(mock_datetime, mock_post):
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
             "sum_layer_size_bytes": 0,
-            "top_layer_id": None,
-            "uncompressed_top_layer_id": None,
         },
     )
 
@@ -246,8 +244,6 @@ def test_create_container_image_latest(mock_datetime, mock_post):
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
             "sum_layer_size_bytes": 0,
-            "top_layer_id": None,
-            "uncompressed_top_layer_id": None,
         },
     )
 
@@ -326,8 +322,6 @@ def test_create_container_image_rh_push_multiple_tags(mock_datetime, mock_post):
             "architecture": "ok",
             "parsed_data": {"architecture": "ok"},
             "sum_layer_size_bytes": 0,
-            "top_layer_id": None,
-            "uncompressed_top_layer_id": None,
         },
     )
 
