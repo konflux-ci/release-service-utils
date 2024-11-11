@@ -202,6 +202,7 @@ def test_create_container_image_latest(mock_datetime, mock_post):
     args.certified = "false"
     args.is_latest = "true"
     args.rh_push = "false"
+    args.digest = "some_digest"
     args.architecture_digest = "arch specific digest"
     args.media_type = "application/vnd.oci.image.index.v1+json"
 
@@ -262,6 +263,7 @@ def test_create_container_image_rh_push_multiple_tags(mock_datetime, mock_post):
     args.tags = "tagprefix tagprefix-timestamp"
     args.certified = "false"
     args.rh_push = "true"
+    args.digest = "some_digest"
     args.architecture_digest = "arch specific digest"
     args.media_type = "application/vnd.oci.image.index.v1+json"
 
