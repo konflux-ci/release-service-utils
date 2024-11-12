@@ -2,13 +2,14 @@ from unittest.mock import patch, Mock
 from urllib.error import HTTPError
 import pytest
 
-from upload_rpm_data import (
+from upload_rpm_data_cyclonedx import (
     upload_container_rpm_data_with_retry,
     upload_container_rpm_data,
     get_image_rpm_data,
     create_image_rpm_manifest,
     update_container_content_sets,
-    load_sbom_packages,
+    load_sbom_components,
+    check_bom_ref_duplicates,
     construct_rpm_items_and_content_sets,
 )
 
@@ -17,95 +18,43 @@ IMAGE_ID = "123456abcd"
 SBOM_PATH = "mypath"
 RPM_MANIFEST_ID = "abcd1234"
 CONTENT_SETS = ["myrepo1", "myrepo2"]
-PACKAGES = [
+COMPONENTS = [
     {  # all fields
-        "externalRefs": [
-            {
-                "referenceType": "purl",
-                "referenceLocator": "pkg:rpm/rhel/pkg1@1-2.el8?arch=x86_64&"
-                + "upstream=pkg1-1-2.el8.src.rpm&distro=rhel-8.0&repository_id=myrepo1",
-            }
-        ]
+        "purl": "pkg:rpm/rhel/pkg1@1-2.el8?arch=x86_64&"
+        + "upstream=pkg1-1-2.el8.src.rpm&distro=rhel-8.0&repository_id=myrepo1",
     },
     {  # no version, same repository_id
-        "externalRefs": [
-            {
-                "referenceType": "purl",
-                "referenceLocator": "pkg:rpm/rhel/pkg2?arch=noarch"
-                + "&upstream=pkg2-1-2.el8.src.rpm&distro=rhel-8.0&repository_id=myrepo1",
-            }
-        ]
+        "purl": "pkg:rpm/rhel/pkg2?arch=noarch&upstream=pkg2-1-2.el8.src.rpm&distro=rhel-8.0"
+        + "&repository_id=myrepo1",
     },
     {  # no architecture, different repository_id
-        "externalRefs": [
-            {
-                "referenceType": "purl",
-                "referenceLocator": "pkg:rpm/rhel/pkg3@9-8.el8?upstream=pkg3-9-8.el8.src.rpm"
-                + "&distro=rhel-8.0&repository_id=myrepo2",
-            }
-        ]
+        "purl": "pkg:rpm/rhel/pkg3@9-8.el8?upstream=pkg3-9-8.el8.src.rpm&distro=rhel-8.0"
+        + "&repository_id=myrepo2",
     },
     {  # no upstream
-        "externalRefs": [
-            {
-                "referenceType": "purl",
-                "referenceLocator": "pkg:rpm/rhel/pkg4@1-2.el8?arch=x86_64&distro=rhel-8.0",
-            }
-        ]
+        "purl": "pkg:rpm/rhel/pkg4@1-2.el8?arch=x86_64&distro=rhel-8.0",
     },
     {  # with RH publisher
-        "externalRefs": [
-            {
-                "referenceType": "purl",
-                "referenceLocator": "pkg:rpm/rhel/pkg5?arch=noarch"
-                + "&upstream=pkg5-1-2.el8.src.rpm&distro=rhel-8.0",
-            }
-        ],
-        "supplier": "Organization: Red Hat, Inc.",
+        "purl": "pkg:rpm/rhel/pkg5?arch=noarch&upstream=pkg5-1-2.el8.src.rpm&distro=rhel-8.0",
+        "publisher": "Red Hat, Inc.",
     },
     {  # with other publisher
-        "externalRefs": [
-            {
-                "referenceType": "purl",
-                "referenceLocator": "pkg:rpm/rhel/pkg6?arch=noarch"
-                + "&upstream=pkg6-1-2.el8.src.rpm&distro=rhel-8.0",
-            }
-        ],
-        "supplier": "Organization: Blue Shoe, inc.",
+        "purl": "pkg:rpm/rhel/pkg6?arch=noarch&upstream=pkg6-1-2.el8.src.rpm&distro=rhel-8.0",
+        "publisher": "Blue Shoe, inc.",
     },
     {  # not an rpm
-        "externalRefs": [
-            {
-                "referenceType": "purl",
-                "referenceLocator": "pkg:golang/./staging/src@(devel)#k8s.io/api",
-            }
-        ]
+        "purl": "pkg:golang/./staging/src@(devel)#k8s.io/api",
     },
-    {},  # no externalRefs
-    {  # no purl ref
-        "externalRefs": [
-            {
-                "referenceType": "cpe23Type",
-                "referenceLocator": "cpe:2.3:a:alpine_baselayout:alpine-baselayout:"
-                + "3.2.0-r18:*:*:*:*:*:*:*",
-            },
-        ]
-    },
-    {  # non-rpm purl
-        "externalRefs": [{"referenceLocator": "pkg:pypi/appr@0.7.4", "referenceType": "purl"}]
+    {  # no purl
+        "bom_ref": "ref",
     },
     {  # with redhat namespace, but no publisher
-        "externalRefs": [
-            {
-                "referenceType": "purl",
-                "referenceLocator": "pkg:rpm/redhat/pkg7@1.2.3-4.el9000?arch=noarch",
-            }
-        ]
+        "purl": "pkg:rpm/redhat/pkg7@1.2.3-4.el9000?arch=noarch",
     },
 ]
 
 
-@patch("upload_rpm_data.upload_container_rpm_data")
+@patch("upload_rpm_data_cyclonedx.upload_container_rpm_data")
 def test_upload_container_rpm_data_with_retry__success(mock_upload_container_rpm_data):
     """upload_container_rpm_data succeeds on first attempt"""
     upload_container_rpm_data_with_retry(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
@@ -113,7 +62,7 @@ def test_upload_container_rpm_data_with_retry__success(mock_upload_container_rpm
     mock_upload_container_rpm_data.assert_called_once_with(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
 
 
-@patch("upload_rpm_data.upload_container_rpm_data")
+@patch("upload_rpm_data_cyclonedx.upload_container_rpm_data")
 def test_upload_container_rpm_data_with_retry__success_after_one_attempt(
     mock_upload_container_rpm_data,
 ):
@@ -125,7 +74,7 @@ def test_upload_container_rpm_data_with_retry__success_after_one_attempt(
     assert mock_upload_container_rpm_data.call_count == 2
 
 
-@patch("upload_rpm_data.upload_container_rpm_data")
+@patch("upload_rpm_data_cyclonedx.upload_container_rpm_data")
 def test_upload_container_rpm_data_with_retry__fails_runtime(
     mock_upload_container_rpm_data,
 ):
@@ -143,7 +92,7 @@ def test_upload_container_rpm_data_with_retry__fails_runtime(
     assert mock_upload_container_rpm_data.call_count == 2
 
 
-@patch("upload_rpm_data.upload_container_rpm_data")
+@patch("upload_rpm_data_cyclonedx.upload_container_rpm_data")
 def test_upload_container_rpm_data_with_retry__fails_http_504(
     mock_upload_container_rpm_data,
 ):
@@ -163,7 +112,7 @@ def test_upload_container_rpm_data_with_retry__fails_http_504(
     assert mock_upload_container_rpm_data.call_count == 2
 
 
-@patch("upload_rpm_data.upload_container_rpm_data")
+@patch("upload_rpm_data_cyclonedx.upload_container_rpm_data")
 def test_upload_container_rpm_data_with_retry__fails_http_other(
     mock_upload_container_rpm_data,
 ):
@@ -183,14 +132,14 @@ def test_upload_container_rpm_data_with_retry__fails_http_other(
     assert mock_upload_container_rpm_data.call_count == 1
 
 
-@patch("upload_rpm_data.update_container_content_sets")
-@patch("upload_rpm_data.create_image_rpm_manifest")
-@patch("upload_rpm_data.construct_rpm_items_and_content_sets")
-@patch("upload_rpm_data.load_sbom_packages")
-@patch("upload_rpm_data.get_image_rpm_data")
+@patch("upload_rpm_data_cyclonedx.update_container_content_sets")
+@patch("upload_rpm_data_cyclonedx.create_image_rpm_manifest")
+@patch("upload_rpm_data_cyclonedx.construct_rpm_items_and_content_sets")
+@patch("upload_rpm_data_cyclonedx.load_sbom_components")
+@patch("upload_rpm_data_cyclonedx.get_image_rpm_data")
 def test_upload_container_rpm_data__success(
     mock_get_image_rpm_data,
-    mock_load_sbom_packages,
+    mock_load_sbom_components,
     mock_construct_rpm_items_and_content_sets,
     mock_create_image_rpm_manifest,
     mock_update_container_content_sets,
@@ -205,12 +154,12 @@ def test_upload_container_rpm_data__success(
         "content_sets": None,
         "rpm_manifest": None,
     }
-    mock_load_sbom_packages.return_value = PACKAGES
+    mock_load_sbom_components.return_value = COMPONENTS
     mock_construct_rpm_items_and_content_sets.return_value = ([{"name": "pkg"}], ["myrepo1"])
 
     upload_container_rpm_data(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
 
-    mock_construct_rpm_items_and_content_sets.assert_called_once_with(PACKAGES)
+    mock_construct_rpm_items_and_content_sets.assert_called_once_with(COMPONENTS)
     mock_create_image_rpm_manifest.assert_called_once_with(
         GRAPHQL_API,
         IMAGE_ID,
@@ -223,14 +172,14 @@ def test_upload_container_rpm_data__success(
     )
 
 
-@patch("upload_rpm_data.update_container_content_sets")
-@patch("upload_rpm_data.create_image_rpm_manifest")
-@patch("upload_rpm_data.construct_rpm_items_and_content_sets")
-@patch("upload_rpm_data.load_sbom_packages")
-@patch("upload_rpm_data.get_image_rpm_data")
+@patch("upload_rpm_data_cyclonedx.update_container_content_sets")
+@patch("upload_rpm_data_cyclonedx.create_image_rpm_manifest")
+@patch("upload_rpm_data_cyclonedx.construct_rpm_items_and_content_sets")
+@patch("upload_rpm_data_cyclonedx.load_sbom_components")
+@patch("upload_rpm_data_cyclonedx.get_image_rpm_data")
 def test_upload_container_rpm_data__data_already_exists(
     mock_get_image_rpm_data,
-    mock_load_sbom_packages,
+    mock_load_sbom_components,
     mock_construct_rpm_items_and_content_sets,
     mock_create_image_rpm_manifest,
     mock_update_container_content_sets,
@@ -244,13 +193,13 @@ def test_upload_container_rpm_data__data_already_exists(
         "content_sets": CONTENT_SETS,
         "rpm_manifest": {"_id": RPM_MANIFEST_ID},
     }
-    mock_load_sbom_packages.return_value = PACKAGES
+    mock_load_sbom_components.return_value = COMPONENTS
     mock_construct_rpm_items_and_content_sets.return_value = ([{"name": "pkg"}], CONTENT_SETS)
 
     upload_container_rpm_data(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
 
-    mock_load_sbom_packages.assert_called_once()
-    mock_construct_rpm_items_and_content_sets.assert_called_once_with(PACKAGES)
+    mock_load_sbom_components.assert_called_once()
+    mock_construct_rpm_items_and_content_sets.assert_called_once_with(COMPONENTS)
     mock_create_image_rpm_manifest.assert_not_called()
     mock_update_container_content_sets.assert_not_called()
 
@@ -344,37 +293,70 @@ def test_update_container_content_sets__error(mock_post):
 
 
 @patch("json.load")
+@patch("upload_rpm_data_cyclonedx.check_bom_ref_duplicates")
 @patch("builtins.open")
-def test_load_sbom_packages__success(mock_open, mock_load):
-    fake_packages = [1, 2, 3, 4]
-    mock_load.return_value = {"packages": fake_packages}
+def test_load_sbom_components__success(mock_open, mock_check_bom_ref_duplicates, mock_load):
+    fake_components = [1, 2, 3, 4]
+    mock_load.return_value = {"components": fake_components}
 
-    loaded_packages = load_sbom_packages(SBOM_PATH)
+    loaded_components = load_sbom_components(SBOM_PATH)
 
     mock_load.assert_called_once_with(mock_open.return_value.__enter__.return_value)
-    assert fake_packages == loaded_packages
+    mock_check_bom_ref_duplicates.assert_called_once_with(loaded_components)
+    assert fake_components == loaded_components
 
 
 @patch("json.load")
+@patch("upload_rpm_data_cyclonedx.check_bom_ref_duplicates")
 @patch("builtins.open")
-def test_load_sbom_packages__no_components_key(mock_open, mock_load):
+def test_load_sbom_components__no_components_key(
+    mock_open, mock_check_bom_ref_duplicates, mock_load
+):
     mock_load.return_value = {}
 
-    loaded_components = load_sbom_packages(SBOM_PATH)
+    loaded_components = load_sbom_components(SBOM_PATH)
 
     mock_load.assert_called_once_with(mock_open.return_value.__enter__.return_value)
+    mock_check_bom_ref_duplicates.assert_called_once_with(loaded_components)
     assert loaded_components == []
 
 
 @patch("json.load")
+@patch("upload_rpm_data_cyclonedx.check_bom_ref_duplicates")
 @patch("builtins.open")
-def test_load_sbom_packages__json_load_fails(mock_open, mock_load):
+def test_load_sbom_components__json_load_fails(
+    mock_open, mock_check_bom_ref_duplicates, mock_load
+):
     mock_load.side_effect = ValueError
 
     with pytest.raises(ValueError):
-        load_sbom_packages(SBOM_PATH)
+        load_sbom_components(SBOM_PATH)
 
     mock_load.assert_called_once_with(mock_open.return_value.__enter__.return_value)
+    mock_check_bom_ref_duplicates.assert_not_called()
+
+
+def test_check_bom_ref_duplicates__no_duplicates():
+    components = [
+        {"bom-ref": "a"},
+        {"bom-ref": "b"},
+        {},
+        {"bom-ref": "c"},
+    ]
+
+    check_bom_ref_duplicates(components)
+
+
+def test_check_bom_ref_duplicates__duplicates_found():
+    components = [
+        {"bom-ref": "a"},
+        {"bom-ref": "b"},
+        {},
+        {"bom-ref": "a"},
+    ]
+
+    with pytest.raises(ValueError):
+        check_bom_ref_duplicates(components)
 
 
 def test_construct_rpm_items_and_content_sets__success():
@@ -382,7 +364,7 @@ def test_construct_rpm_items_and_content_sets__success():
     and architecture fields are added if present.
     All unique repository_id values are returned."""
 
-    rpms, content_sets = construct_rpm_items_and_content_sets(PACKAGES)
+    rpms, content_sets = construct_rpm_items_and_content_sets(COMPONENTS)
 
     assert rpms == [
         {
@@ -444,8 +426,8 @@ def test_construct_rpm_items_and_content_sets__success():
     assert content_sets == ["myrepo1", "myrepo2"]
 
 
-def test_construct_rpm_items_and_content_sets__no_packages_result_in_empty_list():
-    """An empty list of packages results in an empty list of rpms and content_sets"""
+def test_construct_rpm_items_and_content_sets__no_components_result_in_empty_list():
+    """An empty list of components results in an empty list of rpms and content_sets"""
     rpms, content_sets = construct_rpm_items_and_content_sets([])
 
     assert rpms == []
