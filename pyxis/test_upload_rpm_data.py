@@ -102,6 +102,14 @@ PACKAGES = [
             }
         ]
     },
+    {  # with redhat namespace, but special gpg-pubkey rpm
+        "externalRefs": [
+            {
+                "referenceType": "purl",
+                "referenceLocator": "pkg:rpm/redhat/gpg-pubkey@abcd-efgh?arch=noarch",
+            }
+        ]
+    },
 ]
 
 
