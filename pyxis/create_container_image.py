@@ -382,10 +382,12 @@ def main():  # pragma: no cover
     parsed_data = prepare_parsed_data(args)
 
     # First check if it exists at all
+    LOGGER.info(f"Checking to see if digest {args.architecture_digest} exists in pyxis")
     image = image_already_exists(args, args.architecture_digest, repository=None)
     if image:
         # Then, check if it exists in association with the given repository
         identifier = image["_id"]
+        LOGGER.info(f"It does! Checking to see if it's associated with {args.name}")
         if image_already_exists(args, args.architecture_digest, repository=args.name):
             LOGGER.info(
                 f"Image with given docker_image_digest already exists as {identifier} "
