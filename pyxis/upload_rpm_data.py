@@ -32,6 +32,7 @@ from packageurl import PackageURL
 import pyxis
 
 LOGGER = logging.getLogger("upload_rpm_data")
+IGNORED_PACKAGES = ["gpg-pubkey"]
 
 
 def upload_container_rpm_data_with_retry(
@@ -236,6 +237,8 @@ def construct_rpm_items_and_content_sets(
                 continue
             purl_dict = PackageURL.from_string(externalRef["referenceLocator"]).to_dict()
             if purl_dict["type"] != "rpm":
+                continue
+            if purl_dict["name"] in IGNORED_PACKAGES:
                 continue
             rpm_item = {
                 "name": purl_dict["name"],

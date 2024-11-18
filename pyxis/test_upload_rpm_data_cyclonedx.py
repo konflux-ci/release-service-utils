@@ -51,6 +51,9 @@ COMPONENTS = [
     {  # with redhat namespace, but no publisher
         "purl": "pkg:rpm/redhat/pkg7@1.2.3-4.el9000?arch=noarch",
     },
+    {  # with redhat namespace, but special gpg-pubkey rpm
+        "purl": "pkg:rpm/redhat/gpg-pubkey@abcd-efgh?arch=noarch",
+    },
 ]
 
 
