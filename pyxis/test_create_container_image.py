@@ -28,14 +28,14 @@ def test_image_already_exists__image_does_exist(mock_get):
     mock_rsp.json.return_value = {"data": [{"_id": 0}]}
 
     # Act
-    exists = image_already_exists(args, args.architecture_digest, args.name)
+    exists = image_already_exists(args, args.name)
 
     # Assert
     assert exists
     mock_get.assert_called_once_with(
         mock_pyxis_url
         + "v1/images?page_size=1&filter="
-        + "repositories.manifest_schema2_digest%3D%3D%22some_digest%22"
+        + "image_id%3D%3D%22some_digest%22"
         + "%3Bnot%28deleted%3D%3Dtrue%29"
         + "%3Brepositories.repository%3D%3D%22some_name%22"
     )
@@ -48,14 +48,13 @@ def test_image_already_exists__image_does_not_exist(mock_get):
     mock_get.return_value = mock_rsp
     args = MagicMock()
     args.pyxis_url = mock_pyxis_url
-    digest = "some_digest"
     name = "server/org/some----name"
 
     # Image doesn't exist
     mock_rsp.json.return_value = {"data": []}
 
     # Act
-    exists = image_already_exists(args, digest, name)
+    exists = image_already_exists(args, name)
 
     # Assert
     assert not exists
@@ -75,14 +74,14 @@ def test_image_already_exists__image_does_exist_but_no_repo(mock_get):
     mock_rsp.json.return_value = {"data": [{"_id": 0}]}
 
     # Act
-    exists = image_already_exists(args, args.architecture_digest, None)
+    exists = image_already_exists(args, None)
 
     # Assert
     assert exists
     mock_get.assert_called_once_with(
         mock_pyxis_url
         + "v1/images?page_size=1&filter="
-        + "repositories.manifest_schema2_digest%3D%3D%22some_digest%22"
+        + "image_id%3D%3D%22some_digest%22"
         + "%3Bnot%28deleted%3D%3Dtrue%29"
     )
 

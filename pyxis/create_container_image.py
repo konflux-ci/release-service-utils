@@ -149,7 +149,7 @@ def proxymap(repository: str) -> str:
     return repository.split("/")[-1].replace("----", "/")
 
 
-def image_already_exists(args, digest: str, repository: str) -> Any:
+def image_already_exists(args, repository: str) -> Any:
     """Function to check if a containerImage with the given digest and repository
     already exists in the pyxis instance
 
@@ -157,11 +157,10 @@ def image_already_exists(args, digest: str, repository: str) -> Any:
 
     :return: the image id, if one exists, else None if not found
     """
-
-    # quote is needed to urlparse the quotation marks
-    raw_filter = f'repositories.manifest_schema2_digest=="{digest}";not(deleted==true)'
+    raw_filter = f'image_id=="{args.architecture_digest}";not(deleted==true)'
     if repository:
         raw_filter += f';repositories.repository=="{proxymap(repository)}"'
+    # quote is needed to urlparse the quotation marks
     filter_str = quote(raw_filter)
 
     check_url = urljoin(args.pyxis_url, f"v1/images?page_size=1&filter={filter_str}")
@@ -378,12 +377,12 @@ def main():  # pragma: no cover
 
     # First check if it exists at all
     LOGGER.info(f"Checking to see if digest {args.architecture_digest} exists in pyxis")
-    image = image_already_exists(args, args.architecture_digest, repository=None)
+    image = image_already_exists(args, repository=None)
     if image:
         # Then, check if it exists in association with the given repository
         identifier = image["_id"]
         LOGGER.info(f"It does! Checking to see if it's associated with {args.name}")
-        if image_already_exists(args, args.architecture_digest, repository=args.name):
+        if image_already_exists(args, repository=args.name):
             LOGGER.info(
                 f"Image with given docker_image_digest already exists as {identifier} "
                 f"and is associated with repository {args.name}. "
