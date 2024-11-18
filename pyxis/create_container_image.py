@@ -246,11 +246,11 @@ def pyxis_tags(args, date_now):
     ]
 
 
-def repository_digest_values(args, docker_image_digest):
+def repository_digest_values(args):
     """Return digest values for the repository entry in the image entity"""
     result = {"manifest_schema2_digest": args.architecture_digest}
     if args.media_type in MANIFEST_LIST_TYPES:
-        result["manifest_list_digest"] = docker_image_digest
+        result["manifest_list_digest"] = args.digest
     return result
 
 
@@ -261,12 +261,10 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
 
     date_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
 
-    if "digest" not in parsed_data:
-        raise Exception("Digest was not found in the passed oras manifest json")
     if "name" not in parsed_data:
         raise Exception("Name was not found in the passed oras manifest json")
-    docker_image_digest = parsed_data["digest"]
-    # digest isn't accepted in the parsed_data payload to pyxis
+
+    # digest isn't accepted in the parsed_data payload to pyxis; we ignore it
     del parsed_data["digest"]
 
     image_name = parsed_data["name"]
@@ -309,9 +307,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
     if uncompressed_top_layer_id:
         container_image_payload["uncompressed_top_layer_id"] = uncompressed_top_layer_id
 
-    container_image_payload["repositories"][0].update(
-        repository_digest_values(args, docker_image_digest)
-    )
+    container_image_payload["repositories"][0].update(repository_digest_values(args))
 
     # For images released to registry.redhat.io we need a second repository item
     # with published=true and registry and repository converted.
@@ -347,7 +343,6 @@ def add_container_image_repository(args, parsed_data: Dict[str, Any], image: Dic
     date_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
 
     image_name = parsed_data["name"]
-    docker_image_digest = parsed_data["digest"]
 
     patch_url = urljoin(args.pyxis_url, f"v1/images/id/{identifier}")
 
@@ -360,7 +355,7 @@ def add_container_image_repository(args, parsed_data: Dict[str, Any], image: Dic
             "tags": pyxis_tags(args, date_now),
         }
     )
-    image["repositories"][-1].update(repository_digest_values(args, docker_image_digest))
+    image["repositories"][-1].update(repository_digest_values(args))
 
     rsp = pyxis.patch(patch_url, image).json()
 
