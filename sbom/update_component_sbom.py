@@ -42,6 +42,12 @@ def update_cyclonedx_sbom(sbom: Dict, component_to_purls_map: Dict[str, List[str
         component_to_purls_map: dictionary mapping of component names to list of purls.
     """
     LOG.info("Updating CycloneDX sbom")
+
+    component_name = sbom["metadata"]["component"]["name"]
+    if component_name in component_to_purls_map:
+        # only one purl is supported for CycloneDX
+        sbom["metadata"]["component"]["purl"] = component_to_purls_map[component_name][0]
+
     for component in sbom["components"]:
         if component["name"] in component_to_purls_map:
             # only one purl is supported for CycloneDX
