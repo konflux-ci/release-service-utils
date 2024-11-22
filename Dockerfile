@@ -48,7 +48,8 @@ RUN pip3 install jinja2 \
     packageurl-python \
     pubtools-content-gateway==${PUBTOOLS_CGW_VERSION} \
     pubtools-pulp \
-    pubtools-exodus
+    pubtools-exodus \
+    pubtools-marketplacesvm
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
 RUN dnf -y remove gcc
@@ -60,6 +61,7 @@ COPY pyxis /home/pyxis
 COPY utils /home/utils
 COPY templates /home/templates
 COPY pubtools-pulp-wrapper /home/pubtools-pulp-wrapper
+COPY pubtools-marketplacesvm-wrapper /home/pubtools-marketplacesvm-wrapper
 COPY developer-portal-wrapper /home/developer-portal-wrapper
 COPY sbom /home/sbom
 
@@ -77,5 +79,6 @@ ENV HOME=/tekton/home
 ENV PATH="$PATH:/home/pyxis"
 ENV PATH="$PATH:/home/utils"
 ENV PATH="$PATH:/home/pubtools-pulp-wrapper"
+ENV PATH="$PATH:/home/pubtools-marketplacesvm-wrapper"
 ENV PATH="$PATH:/home/developer-portal-wrapper"
 ENV PATH="$PATH:/home/sbom"
