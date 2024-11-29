@@ -5,10 +5,12 @@ This script updates the purls in component-level SBOMs with release time info.
 import argparse
 import glob
 import json
+import logging
 import os
 from collections import defaultdict
 from typing import DefaultDict, Dict, List
-import logging
+
+from packageurl import PackageURL
 
 LOG = logging.getLogger("update_component_sbom")
 
@@ -54,9 +56,27 @@ def update_cyclonedx_sbom(sbom: Dict, component_to_purls_map: Dict[str, List[str
             component["purl"] = component_to_purls_map[component["name"]][0]
 
 
+def get_image_pullspec_from_purl(purl: str) -> str:
+    """
+    Parse the image purl to get the image pullspec.
+
+    The pullspec is made of the repository URL and digest that is available as
+    the version in the purl.
+
+    Args:
+        purl (str): A package URL for an image.
+
+    Returns:
+        str: Image pullspec with repository URL and digest.
+    """
+    parsed_purl = PackageURL.from_string(purl)
+    repository = parsed_purl.qualifiers["repository_url"]
+    return f"{repository}@{parsed_purl.version}"
+
+
 def update_spdx_sbom(sbom: Dict, component_to_purls_map: Dict[str, List[str]]) -> None:
     """
-    Update the purl in an SBOM with SPDX format
+    Update the purl in an SBOM with SPDX format and set the SBOM document name
     Args:
         sbom: SPDX SBOM file to update.
         component_to_purls_map: dictionary mapping of component names to list of purls.
@@ -64,15 +84,19 @@ def update_spdx_sbom(sbom: Dict, component_to_purls_map: Dict[str, List[str]]) -
     LOG.info("Updating SPDX sbom")
     for package in sbom["packages"]:
         if package["name"] in component_to_purls_map:
+            purls = component_to_purls_map[package["name"]]
             purl_external_refs = [
                 {
                     "referenceCategory": "PACKAGE-MANAGER",
                     "referenceType": "purl",
                     "referenceLocator": purl,
                 }
-                for purl in component_to_purls_map[package["name"]]
+                for purl in purls
             ]
             package["externalRefs"].extend(purl_external_refs)
+
+            # Set the SBOM document name to the first image pullspec
+            sbom["name"] = get_image_pullspec_from_purl(purls[0])
 
 
 def update_sboms(data_path: str, input_path: str, output_path: str) -> None:

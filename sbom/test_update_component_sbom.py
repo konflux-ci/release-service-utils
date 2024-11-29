@@ -11,7 +11,6 @@ from update_component_sbom import (
 
 
 class TestUpdateComponentSBOM(unittest.TestCase):
-
     def test_get_component_to_purls_map(self) -> None:
         release_note_images = [
             {"component": "comp1", "purl": "purl1"},
@@ -65,7 +64,7 @@ class TestUpdateComponentSBOM(unittest.TestCase):
                         {
                             "referenceCategory": "PACKAGE-MANAGER",
                             "referenceType": "purl",
-                            "referenceLocator": "purl1",
+                            "referenceLocator": "pkg:oci/package@sha256:123",
                         }
                     ],
                 },
@@ -75,19 +74,26 @@ class TestUpdateComponentSBOM(unittest.TestCase):
                         {
                             "referenceCategory": "PACKAGE-MANAGER",
                             "referenceType": "purl",
-                            "referenceLocator": "purl2",
+                            "referenceLocator": "pkg:oci/package@sha256:456",
                         }
                     ],
                 },
             ]
         }
         mapping = {
-            "comp1": ["updated_purl1", "updated_purl2"],
-            "comp2": ["updated_purl3", "updated_purl4"],
+            "comp1": [
+                "pkg:oci/package@sha256:123?repository_url=quay.io/foo/bar",
+                "pkg:oci/package@sha256:234?repository_url=quay.io/foo/bar",
+            ],
+            "comp2": [
+                "pkg:oci/package@sha256:456?repository_url=quay.io/foo/bar",
+                "pkg:oci/package@sha256:567?repository_url=quay.io/foo/bar",
+            ],
         }
 
         update_spdx_sbom(sbom, mapping)
         assert sbom == {
+            "name": "quay.io/foo/bar@sha256:456",
             "packages": [
                 {
                     "name": "comp1",
@@ -95,17 +101,19 @@ class TestUpdateComponentSBOM(unittest.TestCase):
                         {
                             "referenceCategory": "PACKAGE-MANAGER",
                             "referenceType": "purl",
-                            "referenceLocator": "purl1",
+                            "referenceLocator": "pkg:oci/package@sha256:123",
                         },
                         {
                             "referenceCategory": "PACKAGE-MANAGER",
                             "referenceType": "purl",
-                            "referenceLocator": "updated_purl1",
+                            "referenceLocator": "pkg:oci/package@sha256:123"
+                            "?repository_url=quay.io/foo/bar",
                         },
                         {
                             "referenceCategory": "PACKAGE-MANAGER",
                             "referenceType": "purl",
-                            "referenceLocator": "updated_purl2",
+                            "referenceLocator": "pkg:oci/package@sha256:234"
+                            "?repository_url=quay.io/foo/bar",
                         },
                     ],
                 },
@@ -115,21 +123,23 @@ class TestUpdateComponentSBOM(unittest.TestCase):
                         {
                             "referenceCategory": "PACKAGE-MANAGER",
                             "referenceType": "purl",
-                            "referenceLocator": "purl2",
+                            "referenceLocator": "pkg:oci/package@sha256:456",
                         },
                         {
                             "referenceCategory": "PACKAGE-MANAGER",
                             "referenceType": "purl",
-                            "referenceLocator": "updated_purl3",
+                            "referenceLocator": "pkg:oci/package@sha256:456"
+                            "?repository_url=quay.io/foo/bar",
                         },
                         {
                             "referenceCategory": "PACKAGE-MANAGER",
                             "referenceType": "purl",
-                            "referenceLocator": "updated_purl4",
+                            "referenceLocator": "pkg:oci/package@sha256:567"
+                            "?repository_url=quay.io/foo/bar",
                         },
                     ],
                 },
-            ]
+            ],
         }
 
     @patch("update_component_sbom.glob.glob")
@@ -143,7 +153,6 @@ class TestUpdateComponentSBOM(unittest.TestCase):
         mock_mapping: MagicMock,
         mock_glob: MagicMock,
     ) -> None:
-
         # combining the content of data.json and sbom, since there can only be one read_data
         # defined in the mock_open
         test_cyclonedx_sbom = {"bomFormat": "CycloneDX", "releaseNotes": {"images": "foo"}}
