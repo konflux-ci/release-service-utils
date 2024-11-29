@@ -30,10 +30,10 @@ are released are only available from registry.redhat.io. This is controlled by
 the `requires_terms` flag in the Pyxis Container Repository object:
 https://pyxis.api.redhat.com/docs/objects/ContainerRepository.html?tab=Fields
 
-For RHTAP, we currently expect to only release to registry.redhat.io and not the public
-registry. But if we did want to release to registry.access.redhat.com, there would
-likely be no change required in our pipeline - only the Container Repository
-object in Pyxis would need to have `requires_terms` set to false.
+In Konflux, by default we release to registry.redhat.io and not the public
+registry. But we do also release images with `requires_terms` set to false (e.g. ubi)
+so these images are available from both registries
+(registry.redhat.io, registry.access.redhat.com).
 """
 import argparse
 from urllib.parse import quote
