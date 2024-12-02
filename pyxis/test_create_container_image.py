@@ -12,7 +12,7 @@ from create_container_image import (
     repository_digest_values,
     create_container_image,
     add_container_image_repository,
-    construct_repositories,
+    construct_repository,
 )
 
 
@@ -184,20 +184,6 @@ def test_add_container_image_repository(mock_datetime, mock_patch):
         {
             "repositories": [
                 {
-                    "published": False,
-                    "registry": "quay.io",
-                    "repository": "redhat-pending/some_product----some_repo",
-                    "push_date": "1970-10-10T10:10:10.000000+00:00",
-                    "tags": [
-                        {
-                            "added_date": "1970-10-10T10:10:10.000000+00:00",
-                            "name": "some_version",
-                        }
-                    ],
-                    # Note, no manifest_list_digest here. Single arch.
-                    "manifest_schema2_digest": "arch specific digest",
-                },
-                {
                     "published": True,
                     "registry": "registry.access.redhat.com",
                     "repository": "some_product/some_repo",
@@ -311,24 +297,6 @@ def test_create_container_image_rh_push_multiple_tags(mock_datetime, mock_post):
         PYXIS_URL + "v1/images",
         {
             "repositories": [
-                {
-                    "published": False,
-                    "registry": "quay.io",
-                    "repository": "redhat-pending/some-product----some-image",
-                    "push_date": "1970-10-10T10:10:10.000000+00:00",
-                    "tags": [
-                        {
-                            "added_date": "1970-10-10T10:10:10.000000+00:00",
-                            "name": "tagprefix",
-                        },
-                        {
-                            "added_date": "1970-10-10T10:10:10.000000+00:00",
-                            "name": "tagprefix-timestamp",
-                        },
-                    ],
-                    "manifest_list_digest": "some_digest",
-                    "manifest_schema2_digest": "arch specific digest",
-                },
                 {
                     "published": True,
                     "registry": "registry.access.redhat.com",
@@ -540,7 +508,7 @@ def test_repository_digest_values__multi_arch():
 
 
 @patch("create_container_image.datetime")
-def test_construct_repositories__rh_push_true(mock_datetime):
+def test_construct_repository__rh_push_true(mock_datetime):
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
     args = MagicMock()
     args.media_type = "application/vnd.docker.distribution.manifest.list.v2+json"
@@ -551,50 +519,30 @@ def test_construct_repositories__rh_push_true(mock_datetime):
     args.rh_push = "true"
     args.name = "quay.io/redhat-pending/some-product----some-image"
 
-    repos = construct_repositories(args)
+    repo = construct_repository(args)
 
-    assert repos == [
-        {
-            "published": False,
-            "registry": "quay.io",
-            "repository": "redhat-pending/some-product----some-image",
-            "push_date": "1970-10-10T10:10:10.000000+00:00",
-            "tags": [
-                {
-                    "added_date": "1970-10-10T10:10:10.000000+00:00",
-                    "name": "tagprefix",
-                },
-                {
-                    "added_date": "1970-10-10T10:10:10.000000+00:00",
-                    "name": "tagprefix-timestamp",
-                },
-            ],
-            "manifest_list_digest": "some_digest",
-            "manifest_schema2_digest": "arch specific digest",
-        },
-        {
-            "published": True,
-            "registry": "registry.access.redhat.com",
-            "repository": "some-product/some-image",
-            "push_date": "1970-10-10T10:10:10.000000+00:00",
-            "tags": [
-                {
-                    "added_date": "1970-10-10T10:10:10.000000+00:00",
-                    "name": "tagprefix",
-                },
-                {
-                    "added_date": "1970-10-10T10:10:10.000000+00:00",
-                    "name": "tagprefix-timestamp",
-                },
-            ],
-            "manifest_list_digest": "some_digest",
-            "manifest_schema2_digest": "arch specific digest",
-        },
-    ]
+    assert repo == {
+        "published": True,
+        "registry": "registry.access.redhat.com",
+        "repository": "some-product/some-image",
+        "push_date": "1970-10-10T10:10:10.000000+00:00",
+        "tags": [
+            {
+                "added_date": "1970-10-10T10:10:10.000000+00:00",
+                "name": "tagprefix",
+            },
+            {
+                "added_date": "1970-10-10T10:10:10.000000+00:00",
+                "name": "tagprefix-timestamp",
+            },
+        ],
+        "manifest_list_digest": "some_digest",
+        "manifest_schema2_digest": "arch specific digest",
+    }
 
 
 @patch("create_container_image.datetime")
-def test_construct_repositories__rh_push_false(mock_datetime):
+def test_construct_repository__rh_push_false(mock_datetime):
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
     args = MagicMock()
     args.media_type = "application/vnd.docker.distribution.manifest.list.v2+json"
@@ -605,29 +553,27 @@ def test_construct_repositories__rh_push_false(mock_datetime):
     args.rh_push = "false"
     args.name = "quay.io/some-org/some-image"
 
-    repos = construct_repositories(args)
+    repo = construct_repository(args)
 
-    assert repos == [
-        {
-            "published": False,
-            "registry": "quay.io",
-            "repository": "some-org/some-image",
-            "push_date": "1970-10-10T10:10:10.000000+00:00",
-            "tags": [
-                {
-                    "added_date": "1970-10-10T10:10:10.000000+00:00",
-                    "name": "tagprefix",
-                },
-                {
-                    "added_date": "1970-10-10T10:10:10.000000+00:00",
-                    "name": "tagprefix-timestamp",
-                },
-                {
-                    "added_date": "1970-10-10T10:10:10.000000+00:00",
-                    "name": "latest",
-                },
-            ],
-            "manifest_list_digest": "some_digest",
-            "manifest_schema2_digest": "arch specific digest",
-        },
-    ]
+    assert repo == {
+        "published": False,
+        "registry": "quay.io",
+        "repository": "some-org/some-image",
+        "push_date": "1970-10-10T10:10:10.000000+00:00",
+        "tags": [
+            {
+                "added_date": "1970-10-10T10:10:10.000000+00:00",
+                "name": "tagprefix",
+            },
+            {
+                "added_date": "1970-10-10T10:10:10.000000+00:00",
+                "name": "tagprefix-timestamp",
+            },
+            {
+                "added_date": "1970-10-10T10:10:10.000000+00:00",
+                "name": "latest",
+            },
+        ],
+        "manifest_list_digest": "some_digest",
+        "manifest_schema2_digest": "arch specific digest",
+    }

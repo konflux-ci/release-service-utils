@@ -263,7 +263,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
 
     LOGGER.info("Creating new container image")
 
-    repositories = construct_repositories(args)
+    repository = construct_repository(args)
 
     # sum_layer_size_bytes isn't accepted in the parsed_data payload to pyxis
     sum_layer_size_bytes = parsed_data.pop("sum_layer_size_bytes", 0)
@@ -277,7 +277,7 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
     upload_url = urljoin(args.pyxis_url, "v1/images")
 
     container_image_payload = {
-        "repositories": repositories,
+        "repositories": [repository],
         "certified": json.loads(args.certified.lower()),
         "image_id": args.architecture_digest,
         "architecture": parsed_data["architecture"],
@@ -311,7 +311,7 @@ def add_container_image_repository(args: Dict[str, Any], image: Dict[str, Any]):
     patch_url = urljoin(args.pyxis_url, f"v1/images/id/{identifier}")
 
     payload = {"repositories": image["repositories"]}
-    payload["repositories"].extend(construct_repositories(args))
+    payload["repositories"].append(construct_repository(args))
 
     rsp = pyxis.patch(patch_url, payload).json()
 
@@ -322,40 +322,39 @@ def add_container_image_repository(args: Dict[str, Any], image: Dict[str, Any]):
         raise Exception("Image metadata was not successfully added to Pyxis.")
 
 
-def construct_repositories(args):
+def construct_repository(args):
     image_name = args.name
     image_registry = image_name.split("/")[0]
     image_repo = image_name.split("/", 1)[1]
 
     date_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
 
-    repos = [
-        {
+    # For images released to registry.redhat.io we need a special repository item
+    # with published=true and registry and repository converted.
+    # E.g. if the name in the oras manifest result is
+    # "quay.io/redhat-prod/rhtas-tech-preview----cosign-rhel9",
+    # repository will be "rhtas-tech-preview/cosign-rhel9"
+    if args.rh_push == "true":
+        LOGGER.info("--rh-push is true. Associating registry.access.redhat.com repository.")
+        repo = {
+            "published": True,
+            "registry": "registry.access.redhat.com",
+            "repository": proxymap(image_name),
+            "push_date": date_now,
+            "tags": pyxis_tags(args, date_now),
+        }
+    else:
+        repo = {
             "published": False,
             "registry": image_registry,
             "repository": image_repo,
             "push_date": date_now,
             "tags": pyxis_tags(args, date_now),
         }
-    ]
 
-    repos[0].update(repository_digest_values(args))
+    repo.update(repository_digest_values(args))
 
-    # For images released to registry.redhat.io we need a second repository item
-    # with published=true and registry and repository converted.
-    # E.g. if the name in the oras manifest result is
-    # "quay.io/redhat-prod/rhtas-tech-preview----cosign-rhel9",
-    # repository will be "rhtas-tech-preview/cosign-rhel9"
-    if not args.rh_push == "true":
-        LOGGER.info("--rh-push is not set. Skipping public registry association.")
-    else:
-        rh_repo = repos[0].copy()
-        rh_repo["published"] = True
-        rh_repo["registry"] = "registry.access.redhat.com"
-        rh_repo["repository"] = proxymap(image_name)
-        repos.append(rh_repo)
-
-    return repos
+    return repo
 
 
 def main():  # pragma: no cover
