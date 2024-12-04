@@ -11,7 +11,7 @@ from update_component_sbom import (
 
 
 class TestUpdateComponentSBOM(unittest.TestCase):
-    def test_get_component_to_purls_map(self) -> None:
+    def test_get_component_to_purls_map_single_arch(self) -> None:
         release_note_images = [
             {"component": "comp1", "purl": "purl1"},
             {"component": "comp1", "purl": "purl2"},
@@ -22,6 +22,26 @@ class TestUpdateComponentSBOM(unittest.TestCase):
         assert result == {
             "comp1": ["purl1", "purl2"],
             "comp2": ["purl3"],
+        }
+
+    def test_get_component_to_purls_map_multi_arch(self) -> None:
+        release_note_images = [
+            {
+                "component": "comp1",
+                "purl": "pkg:oci/bar@sha256%3Aabcde?arch=amd64&repository_url=registry.io/foo",
+                "multiarch": True,
+                "arch": "amd64",
+                "imageSha": "foosha1",
+            },
+        ]
+
+        result = get_component_to_purls_map(release_note_images)
+        assert result == {
+            "comp1": ["pkg:oci/bar@sha256%3Afoosha1?repository_url=registry.io/foo"],
+            "comp1_amd64": [
+                "pkg:oci/bar@sha256%3Afoosha1?arch=amd64&repository_url=registry.io/foo",
+                "pkg:oci/bar@sha256%3Aabcde?repository_url=registry.io/foo",
+            ],
         }
 
     def test_update_cyclonedx_sbom(self) -> None:
@@ -101,11 +121,6 @@ class TestUpdateComponentSBOM(unittest.TestCase):
                         {
                             "referenceCategory": "PACKAGE-MANAGER",
                             "referenceType": "purl",
-                            "referenceLocator": "pkg:oci/package@sha256:123",
-                        },
-                        {
-                            "referenceCategory": "PACKAGE-MANAGER",
-                            "referenceType": "purl",
                             "referenceLocator": "pkg:oci/package@sha256:123"
                             "?repository_url=quay.io/foo/bar",
                         },
@@ -120,11 +135,6 @@ class TestUpdateComponentSBOM(unittest.TestCase):
                 {
                     "name": "comp2",
                     "externalRefs": [
-                        {
-                            "referenceCategory": "PACKAGE-MANAGER",
-                            "referenceType": "purl",
-                            "referenceLocator": "pkg:oci/package@sha256:456",
-                        },
                         {
                             "referenceCategory": "PACKAGE-MANAGER",
                             "referenceType": "purl",
@@ -155,7 +165,10 @@ class TestUpdateComponentSBOM(unittest.TestCase):
     ) -> None:
         # combining the content of data.json and sbom, since there can only be one read_data
         # defined in the mock_open
-        test_cyclonedx_sbom = {"bomFormat": "CycloneDX", "releaseNotes": {"images": "foo"}}
+        test_cyclonedx_sbom = {
+            "bomFormat": "CycloneDX",
+            "releaseNotes": {"content": {"images": "foo"}},
+        }
 
         with patch(
             "builtins.open", mock_open(read_data=json.dumps(test_cyclonedx_sbom))
@@ -182,7 +195,7 @@ class TestUpdateComponentSBOM(unittest.TestCase):
     ) -> None:
         # combining the content of data.json and sbom, since there can only be one read_data
         # defined in the mock_open
-        test_spdx_sbom = {"spdxVersion": "2.3", "releaseNotes": {"images": "foo"}}
+        test_spdx_sbom = {"spdxVersion": "2.3", "releaseNotes": {"content": {"images": "foo"}}}
 
         with patch(
             "builtins.open", mock_open(read_data=json.dumps(test_spdx_sbom))
@@ -207,7 +220,10 @@ class TestUpdateComponentSBOM(unittest.TestCase):
     ) -> None:
         # combining the content of data.json and sbom, since there can only be one read_data
         # defined in the mock_open
-        test_spdx_sbom = {"notSbom": "NoSbomVersion", "releaseNotes": {"images": "foo"}}
+        test_spdx_sbom = {
+            "notSbom": "NoSbomVersion",
+            "releaseNotes": {"content": {"images": "foo"}},
+        }
 
         with patch(
             "builtins.open", mock_open(read_data=json.dumps(test_spdx_sbom))

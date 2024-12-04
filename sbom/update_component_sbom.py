@@ -9,6 +9,7 @@ import logging
 import os
 from collections import defaultdict
 from typing import DefaultDict, Dict, List
+import re
 
 from packageurl import PackageURL
 
@@ -18,6 +19,12 @@ LOG = logging.getLogger("update_component_sbom")
 def get_component_to_purls_map(images: List[Dict]) -> Dict[str, List[str]]:
     """
         Get dictionary mapping component names to list of image purls.
+
+        If the image is single arch, just use the existing purls.
+        If the image is multi-arch, the purl formats are as follows (SPDX only):
+        - The index package has one purl with the index sha, and no arch info.
+        - The child packages have one purl with the index sha and arch info, and one purl with
+          the child image sha and no arch info.
 
     Args:
         images: List of image metadata from the given data.json.
@@ -30,7 +37,25 @@ def get_component_to_purls_map(images: List[Dict]) -> Dict[str, List[str]]:
     for image in images:
         component = image["component"]
         purl = image["purl"]
-        component_purls[component].append(purl)
+        arch = image.get("arch")
+        multiarch = image.get("multiarch", False)
+
+        if multiarch and arch:
+            # replace sha for index purl
+            index_sha = image.get("imageSha")
+            if index_sha:
+                index_purl = re.sub("sha256%3A.*\\?", f"sha256%3A{index_sha}?", purl)
+
+            # the index purl needs no arch info
+            component_purls[component] = [re.sub("arch=.*&|&arch=.*$", "", index_purl)]
+
+            component_purls[f"{component}_{arch}"].append(index_purl)
+            # remove arch from child image digest, since it's already in index purl
+            component_purls[f"{component}_{arch}"].append(
+                re.sub("arch=.*&|&arch=.*$", "", purl)
+            )
+        else:
+            component_purls[component].append(purl)
 
     LOG.debug("Component to purl mapping: %s", component_purls)
     return dict(component_purls)
@@ -84,6 +109,10 @@ def update_spdx_sbom(sbom: Dict, component_to_purls_map: Dict[str, List[str]]) -
     LOG.info("Updating SPDX sbom")
     for package in sbom["packages"]:
         if package["name"] in component_to_purls_map:
+            # Remove existing purls that contain internal repo info
+            package["externalRefs"] = list(
+                filter(lambda n: n.get("referenceType") != "purl", package["externalRefs"])
+            )
             purls = component_to_purls_map[package["name"]]
             purl_external_refs = [
                 {
@@ -111,7 +140,9 @@ def update_sboms(data_path: str, input_path: str, output_path: str) -> None:
     with open(data_path, "r") as data_file:
         data = json.load(data_file)
 
-    component_to_purls_map = get_component_to_purls_map(data["releaseNotes"]["images"])
+    component_to_purls_map = get_component_to_purls_map(
+        data["releaseNotes"]["content"].get("images", [])
+    )
     # get all json files in input dir
     input_jsons = glob.glob(os.path.join(input_path, "*.json"))
     # loop through files
