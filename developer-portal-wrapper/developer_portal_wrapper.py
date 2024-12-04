@@ -20,7 +20,7 @@ DEFAULT_LOG_FMT = "%(asctime)s [%(levelname)-8s] %(message)s"
 DEFAULT_DATE_FMT = "%Y-%m-%d %H:%M:%S %z"
 CGW_ENV_VARS_STRICT = (
     "CGW_USERNAME",
-    "CGW_TOKEN",
+    "CGW_PASSWORD",
 )
 
 WORKSPACE_DIR = "/tmp"
@@ -181,7 +181,6 @@ def main():
 
     LOG.info(f"YAML content dumped to {METADATA_FILE_PATH}")
     cgw_username = os.getenv("CGW_USERNAME")
-    cgw_token = os.getenv("CGW_TOKEN")
     main_command = "push-cgw-metadata"
     common_args = [
         "--CGW_filepath",
@@ -189,12 +188,7 @@ def main():
         "--CGW_hostname",
         cgw_hostname,
     ]
-    cred_args = [
-        "--CGW_username",
-        cgw_username,
-        "--CGW_password",
-        cgw_token,
-    ]
+    cred_args = ["--CGW_username", cgw_username]
     command = [main_command] + common_args
     cmd_str = " ".join(command)
     command += cred_args
