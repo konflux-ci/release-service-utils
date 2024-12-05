@@ -37,7 +37,7 @@ if [ "$ARTIFACT_TYPE" != "null" ] ; then
     # Just report that the image is for linux/amd64, which is not exactly true - but,
     # downstream release-service-catalog tasks expect to find something. Use this as a default.
     jq -cr -n --arg digest "$digest" \
-        '{"platform": {"architecture": "amd64", "os": "linux"}, "digest": $ARGS.named["digest"]}'
+        '{"platform": {"architecture": "amd64", "os": "linux"}, "digest": $ARGS.named["digest"], "multiarch": false}'
 elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.oci.image.manifest.v1+json" ] ; then
     # Single arch, so need to run skopeo inspect again without --raw
     RAW_OUTPUT=$(skopeo inspect --no-tags docker://${IMAGE})
@@ -46,7 +46,7 @@ elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.oci.image.manif
     digest=$(jq -r '.Digest' <<< $RAW_OUTPUT)
 
     jq -cr -n --arg architecture "$architecture" --arg os "$os" --arg digest "$digest" \
-        '{"platform": {"architecture": $ARGS.named["architecture"], "os": $ARGS.named["os"]}, "digest": $ARGS.named["digest"]}'
+        '{"platform": {"architecture": $ARGS.named["architecture"], "os": $ARGS.named["os"]}, "digest": $ARGS.named["digest"], "multiarch": false}'
 elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.docker.distribution.manifest.v2+json" ] ; then
     RAW_OUTPUT=$(skopeo inspect --no-tags docker://${IMAGE})
     architecture=$(jq -r '.Architecture // ""' <<< $RAW_OUTPUT)
@@ -56,8 +56,9 @@ elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.docker.distribu
     # tekton bundles produced by tkn do not set the architecture or OS so
     # default to linux/amd64
     jq -cr -n --arg architecture "${architecture:-amd64}" --arg os "${os:-linux}" --arg digest "$digest" \
-        '{"platform": {"architecture": $ARGS.named["architecture"], "os": $ARGS.named["os"]}, "digest": $ARGS.named["digest"]}'
+        '{"platform": {"architecture": $ARGS.named["architecture"], "os": $ARGS.named["os"]}, "digest": $ARGS.named["digest"], "multiarch": false}'
 else
     # Multi arch
-    jq -cr '.manifests[]' <<< $RAW_OUTPUT
+    manifests=$(jq '.manifests[] += {multiarch: true}' <<< "$RAW_OUTPUT")
+    jq -cr '.manifests[]' <<< "$manifests"
 fi
