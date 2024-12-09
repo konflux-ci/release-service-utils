@@ -126,6 +126,7 @@ def test_basic_command_nochannel(mock_run, caplog, mock_mkt_env_vars):
         ["/foo/bar/"],
         ["/a", "/tmp/foo/"],
         ["/a/b/c/d/e/f/g/h/i", "/a1/a2/a3/", "/f"],
+        ["/tmp/afASFu.fas", "/tmp/A.fs_.", "/tmp/fas12414fas"],
     ],
 )
 def test_get_source_url(stageddirs):
@@ -136,7 +137,7 @@ def test_get_source_url(stageddirs):
 
 @pytest.mark.parametrize(
     "stageddirs",
-    [["foo"], ["foo/bar"], [r"/\/\/\/\/\/\/"]],
+    [["foo"], ["foo/bar"], [r"/////////////"]],
 )
 def test_get_source_url_invalid(stageddirs):
     err = "Not a valid staging directory:"

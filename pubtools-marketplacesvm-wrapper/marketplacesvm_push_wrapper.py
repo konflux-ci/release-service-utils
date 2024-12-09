@@ -70,7 +70,7 @@ def parse_args():
 
 
 def get_source_url(stagedirs):
-    regex = re.compile(r"^/[\w++/*]+$")
+    regex = re.compile(r"^/([^/\0]+(/)?)+$")
     for item in stagedirs:
         if not regex.match(item):
             raise ValueError("Not a valid staging directory: %s" % item)
