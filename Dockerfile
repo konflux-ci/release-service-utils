@@ -45,6 +45,7 @@ RUN curl -LO https://github.com/release-engineering/exodus-rsync/releases/latest
 RUN pip3 install jinja2 \
     check-jsonschema \
     jinja2-ansible-filters \
+    packaging \
     packageurl-python \
     pubtools-content-gateway==${PUBTOOLS_CGW_VERSION} \
     pubtools-pulp \
