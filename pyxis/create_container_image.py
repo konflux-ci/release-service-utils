@@ -40,7 +40,7 @@ from urllib.parse import quote
 from datetime import datetime
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
 import pyxis
@@ -177,16 +177,16 @@ def find_image(pyxis_url, digest: str) -> Any:
     return query_results[0]
 
 
-def repo_in_image(repository_str: str, image: Dict[str, Any]) -> bool:
+def find_repo_in_image(repository_str: str, image: Dict[str, Any]) -> Optional[int]:
     """Check if a repository already exists in the ContainerImage
 
-    :return: True if repository_str string is found in the ContainerImage repositories,
-        False otherwise
+    :return: index of repository if repository_str string is found in the ContainerImage
+        repositories, None otherwise
     """
-    for repository in image["repositories"]:
+    for index, repository in enumerate(image["repositories"]):
         if repository["repository"] == repository_str:
-            return True
-    return False
+            return index
+    return None
 
 
 def prepare_parsed_data(args) -> Dict[str, Any]:
@@ -236,11 +236,8 @@ def prepare_parsed_data(args) -> Dict[str, Any]:
     return parsed_data
 
 
-def pyxis_tags(args, date_now):
+def pyxis_tags(tags, date_now):
     """Return list of tags formatted for pyxis"""
-    tags = args.tags.split()
-    if args.is_latest == "true":
-        tags.append("latest")
     return [
         {
             "added_date": date_now,
@@ -258,12 +255,12 @@ def repository_digest_values(args):
     return result
 
 
-def create_container_image(args, parsed_data: Dict[str, Any]):
+def create_container_image(args, parsed_data: Dict[str, Any], tags: List[str]):
     """Function to create a new containerImage entry in a pyxis instance"""
 
     LOGGER.info("Creating new container image")
 
-    repository = construct_repository(args)
+    repository = construct_repository(args, tags)
 
     # sum_layer_size_bytes isn't accepted in the parsed_data payload to pyxis
     sum_layer_size_bytes = parsed_data.pop("sum_layer_size_bytes", 0)
@@ -300,18 +297,14 @@ def create_container_image(args, parsed_data: Dict[str, Any]):
         raise Exception("Image metadata was not successfully added to Pyxis.")
 
 
-def add_container_image_repository(args: Dict[str, Any], image: Dict[str, Any]):
-    if not args.rh_push == "true":
-        LOGGER.info("--rh-push is not set. Skipping public registry association.")
-        return
+def update_container_image_repositories(
+    pyxis_url, image_id: str, repositories: List[Dict[str, Any]]
+):
+    LOGGER.info(f"Updating repositories for container image {image_id}")
 
-    identifier = image["_id"]
-    LOGGER.info(f"Adding repository to container image {identifier}")
+    patch_url = urljoin(pyxis_url, f"v1/images/id/{image_id}")
 
-    patch_url = urljoin(args.pyxis_url, f"v1/images/id/{identifier}")
-
-    payload = {"repositories": image["repositories"]}
-    payload["repositories"].append(construct_repository(args))
+    payload = {"repositories": repositories}
 
     rsp = pyxis.patch(patch_url, payload).json()
 
@@ -322,7 +315,7 @@ def add_container_image_repository(args: Dict[str, Any], image: Dict[str, Any]):
         raise Exception("Image metadata was not successfully added to Pyxis.")
 
 
-def construct_repository(args):
+def construct_repository(args, tags):
     image_name = args.name
     image_registry = image_name.split("/")[0]
     image_repo = image_name.split("/", 1)[1]
@@ -341,7 +334,7 @@ def construct_repository(args):
             "registry": "registry.access.redhat.com",
             "repository": proxymap(image_name),
             "push_date": date_now,
-            "tags": pyxis_tags(args, date_now),
+            "tags": pyxis_tags(tags, date_now),
         }
     else:
         repo = {
@@ -349,7 +342,7 @@ def construct_repository(args):
             "registry": image_registry,
             "repository": image_repo,
             "push_date": date_now,
-            "tags": pyxis_tags(args, date_now),
+            "tags": pyxis_tags(tags, date_now),
         }
 
     repo.update(repository_digest_values(args))
@@ -367,27 +360,52 @@ def main():  # pragma: no cover
 
     parsed_data = prepare_parsed_data(args)
 
-    # First check if it exists at all
+    if args.rh_push == "true":
+        image_repo = proxymap(args.name)
+    else:
+        image_repo = args.name.split("/", 1)[1]
+
+    tags = args.tags.split()
+    if args.is_latest == "true":
+        tags.append("latest")
+
+    # First check if it exists at all. If not, create it
     LOGGER.info(f"Checking to see if digest {args.architecture_digest} exists in pyxis")
     image = find_image(args.pyxis_url, args.architecture_digest)
-    if image is not None:
-        identifier = image["_id"]
-        # Then, check if it already references the given repository
-        if repo_in_image(proxymap(args.name), image):
-            LOGGER.info(
-                f"Image with given docker_image_digest already exists as {identifier} "
-                f"and is associated with repository {args.name}. "
-                "Skipping the image creation."
-            )
-        else:
-            LOGGER.info(
-                f"Image with given docker_image_digest exists as {identifier}, but "
-                f"is not yet associated with repository {args.name}."
-            )
-            add_container_image_repository(args, image)
-    else:
+    if image is None:
         LOGGER.info("Image with given docker_image_digest doesn't exist yet.")
-        create_container_image(args, parsed_data)
+        create_container_image(args, parsed_data, tags)
+        return
+
+    identifier = image["_id"]
+    # Then, check if it already references the given repository. If not, add the repo
+    repo_index = find_repo_in_image(image_repo, image)
+    repositories = image["repositories"]
+    if repo_index is None:
+        LOGGER.info(
+            f"Image with given docker_image_digest exists as {identifier}, but "
+            f"is not yet associated with repository {args.name}."
+        )
+        repositories.append(construct_repository(args, tags))
+        update_container_image_repositories(args.pyxis_url, identifier, repositories)
+        return
+
+    # Then, check if the tags are different. If they are, update them
+    existing_tags = [tag["name"] for tag in repositories[repo_index]["tags"]]
+    if existing_tags != tags:
+        LOGGER.info(
+            f"Image with given docker_image_digest exists as {identifier} and "
+            f"is associated with repository {args.name}, but the tags differ."
+        )
+        repositories[repo_index] = construct_repository(args, tags)
+        update_container_image_repositories(args.pyxis_url, identifier, repositories)
+        return
+
+    LOGGER.info(
+        f"Image with given docker_image_digest already exists as {identifier} "
+        f"and is associated with repository {args.name} and tags {args.tags}. "
+        "Skipping the image creation."
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover
