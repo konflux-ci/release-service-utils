@@ -21,6 +21,7 @@ RUN curl -L https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_
 
 COPY --from=oras /usr/bin/oras /usr/bin/oras
 COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
+COPY --from=oras /usr/local/bin/get-reference-base /usr/local/bin/get-reference-base
 COPY --from=cosign /usr/local/bin/cosign /usr/local/bin/cosign
 
 RUN dnf -y --setopt=tsflags=nodocs install \
