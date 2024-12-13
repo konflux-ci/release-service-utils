@@ -140,9 +140,7 @@ def update_sboms(data_path: str, input_path: str, output_path: str) -> None:
     with open(data_path, "r") as data_file:
         data = json.load(data_file)
 
-    component_to_purls_map = get_component_to_purls_map(
-        data["releaseNotes"]["content"].get("images", [])
-    )
+    component_to_purls_map = get_component_to_purls_map(data.get("images", []))
     # get all json files in input dir
     input_jsons = glob.glob(os.path.join(input_path, "*.json"))
     # loop through files

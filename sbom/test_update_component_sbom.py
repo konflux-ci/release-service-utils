@@ -12,20 +12,20 @@ from update_component_sbom import (
 
 class TestUpdateComponentSBOM(unittest.TestCase):
     def test_get_component_to_purls_map_single_arch(self) -> None:
-        release_note_images = [
+        images = [
             {"component": "comp1", "purl": "purl1"},
             {"component": "comp1", "purl": "purl2"},
             {"component": "comp2", "purl": "purl3"},
         ]
 
-        result = get_component_to_purls_map(release_note_images)
+        result = get_component_to_purls_map(images)
         assert result == {
             "comp1": ["purl1", "purl2"],
             "comp2": ["purl3"],
         }
 
     def test_get_component_to_purls_map_multi_arch(self) -> None:
-        release_note_images = [
+        images = [
             {
                 "component": "comp1",
                 "purl": "pkg:oci/bar@sha256%3Aabcde?arch=amd64&repository_url=registry.io/foo",
@@ -35,7 +35,7 @@ class TestUpdateComponentSBOM(unittest.TestCase):
             },
         ]
 
-        result = get_component_to_purls_map(release_note_images)
+        result = get_component_to_purls_map(images)
         assert result == {
             "comp1": ["pkg:oci/bar@sha256%3Afoosha1?repository_url=registry.io/foo"],
             "comp1_amd64": [
@@ -167,7 +167,7 @@ class TestUpdateComponentSBOM(unittest.TestCase):
         # defined in the mock_open
         test_cyclonedx_sbom = {
             "bomFormat": "CycloneDX",
-            "releaseNotes": {"content": {"images": "foo"}},
+            "images": "foo",
         }
 
         with patch(
@@ -195,7 +195,7 @@ class TestUpdateComponentSBOM(unittest.TestCase):
     ) -> None:
         # combining the content of data.json and sbom, since there can only be one read_data
         # defined in the mock_open
-        test_spdx_sbom = {"spdxVersion": "2.3", "releaseNotes": {"content": {"images": "foo"}}}
+        test_spdx_sbom = {"spdxVersion": "2.3", "images": "foo"}
 
         with patch(
             "builtins.open", mock_open(read_data=json.dumps(test_spdx_sbom))
@@ -222,7 +222,7 @@ class TestUpdateComponentSBOM(unittest.TestCase):
         # defined in the mock_open
         test_spdx_sbom = {
             "notSbom": "NoSbomVersion",
-            "releaseNotes": {"content": {"images": "foo"}},
+            "images": "foo",
         }
 
         with patch(
