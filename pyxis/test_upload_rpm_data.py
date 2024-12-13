@@ -10,6 +10,7 @@ from upload_rpm_data import (
     update_container_content_sets,
     load_sbom_packages,
     construct_rpm_items_and_content_sets,
+    get_purl_type,
 )
 
 GRAPHQL_API = "myapiurl"
@@ -458,3 +459,35 @@ def test_construct_rpm_items_and_content_sets__no_packages_result_in_empty_list(
 
     assert rpms == []
     assert content_sets == []
+
+
+def test_get_purl_type__rpm():
+    purl = (
+        "pkg:rpm/rhel/acl@2.3.1-4.el9?arch=x86_64&upstream=acl-2.3.1-4.el9.src.rpm"
+        "&distro=rhel-9.4&repository_id=myrepo3"
+    )
+
+    type = get_purl_type(purl)
+
+    assert type == "rpm"
+
+
+def test_get_purl_type__invalid_docker():
+    """This is an invalid purl that packageurl.PackageURL.from_string() would fail on,
+    but we can still get the type successfully.
+    """
+    purl = "pkg:github/docker:/#docker.mirror.hashicorp.services/rhysd/actionlint:latest"
+
+    type = get_purl_type(purl)
+
+    assert type == "github"
+
+
+def test_get_purl_type__missing_type():
+    """This is an invalid purl that does not have a type, so the function will throw
+    an exception.
+    """
+    purl = "pkg:docker:#docker.mirror.hashicorp.services"
+
+    with pytest.raises(ValueError):
+        get_purl_type(purl)
