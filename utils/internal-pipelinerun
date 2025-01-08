@@ -216,7 +216,7 @@ PAYLOAD=$(jq -n \
     --arg request "$REQUEST" \
     --arg taskgiturl "$TASKGITURL" \
     --arg taskgitrevision "$TASKGITREVISION" \
-    --arg pipeline "pipelines/${REQUEST}/${REQUEST}.yaml" \
+    --arg pipeline "pipelines/internal/${REQUEST}/${REQUEST}.yaml" \
     --argjson parameters "[ $PARAM_JSON ]" \
     --argjson timeouts "$TIMEOUTS_JSON" \
     '{
