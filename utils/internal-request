@@ -15,27 +15,32 @@
 # for status updates.
 #
 # Usage:
-#   ./internal-request.sh -r request [-p <key=value> ...] [-s sync] [-t timeout] [--service-account name]
-#   [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]
+#   ./internal-request.sh [-r request] [--pipeline pipeline-name] [-p <key=value> ...] [-s sync]
+#   [-t timeout] [--service-account name] [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s]
+#   [--finally-timeout 0h5m0s]
 #
 # Parameters:
-#   -r                 Request: the name of the request.
-#   -p                 Parameters: can be specified multiple times. Each '-p' flag represents a
-#                      parameter that will be added to the 'parameters' field in the
-#                      InternalRequest resource. The value of the parameter is treated as a string,
-#                      and it can be a valid JSON object or array. When passing complex parameter
-#                      values, make sure to enclose them in quotes.
-#   -l                 labels: can be specified multiple times. Each '-l' flag represents a
-#                      label that will be added to the 'metadata.labels' field in the
-#                      InternalRequest resource. The value of the parameter must be a string. Optional.
-#   -s                 Sync: a flag that indicates whether the script has to finish to complete
-#                      the tasks or exit immediately after creating the resource. Default is true.
-#   -t                 Timeout: Defaults to 600 seconds.
-#   --service-account  The name of the service account to be used in the pipelineRun execution. Optional.
-#   --pipeline-timeout The total timeout for the invoked pipelineRun. Defaults to 60mins
-#   --task-timeout     The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins
-#   --finally-timeout  The timeout for the finally tasks invoked in the pipelineRun. Defaults to 5mins
-#   -h                 Display this help message.
+#   -r                  Request: the name of the request.
+#   --pipeline          The name of the pipeline to execute in the internal/pipelines directory of
+#                       release-service-catalog.
+#   -p                  Parameters: can be specified multiple times. Each '-p' flag represents a
+#                       parameter that will be added to the 'parameters' field in the
+#                       InternalRequest resource. The value of the parameter is treated as a string,
+#                       and it can be a valid JSON object or array. When passing complex parameter
+#                       values, make sure to enclose them in quotes.
+#   -l                  labels: can be specified multiple times. Each '-l' flag represents a
+#                       label that will be added to the 'metadata.labels' field in the
+#                       InternalRequest resource. The value of the parameter must be a string. Optional.
+#   -s                  Sync: a flag that indicates whether the script has to finish to complete
+#                       the tasks or exit immediately after creating the resource. Default is true.
+#   -t                  Timeout: Defaults to 600 seconds.
+#   --task-git-url      The url to the git repo where the release-service-catalog tasks to be used are stored.
+#   --task-git-revision The revision in the taskGitUrl repo to be used.
+#   --service-account   The name of the service account to be used in the pipelineRun execution. Optional.
+#   --pipeline-timeout  The total timeout for the invoked pipelineRun. Defaults to 60mins
+#   --task-timeout      The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins
+#   --finally-timeout   The timeout for the finally tasks invoked in the pipelineRun. Defaults to 5mins
+#   -h                  Display this help message.
 #
 # Prerequisites:
 #   - kubectl: The Kubernetes command line tool must be installed and properly
@@ -57,22 +62,26 @@ TASK_TIMEOUT=0h55m0s
 FINALLY_TIMEOUT=0h5m0s
 
 function usage {
-    echo "Usage: $0 -r request [-p parameters] [-l labels] [-s sync] [-t timeout] [--service-account name] [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]"
+    echo "Usage: $0 [-r request] [--pipeline pipeline-name] [-p parameters] [-l labels] [-s sync] [-t timeout] [--service-account name] [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]"
     echo
-    echo "  -r                 Request: the name of the request."
-    echo "  -p                 Params: can be specified multiple times. Each '-p' flag represents a"
-    echo "                     parameter that will be added to the 'parameters' field in the"
-    echo "                     InternalRequest resource."
-    echo "  -l                 Labels: can be specified multiple times. Each '-l' flag represents a"
-    echo "                     label that will be added to the 'metadata.labels' field in the"
-    echo "                     InternalRequest resource. Optional."
-    echo "  -s                 Sync: a flag that indicates whether the script has to finish to complete the tasks or"
-    echo "                     exit immediately after creating the resource. Default is true."
-    echo "  -t                 Timeout: Defaults to 600 seconds."
-    echo "  --service-account  The name of the service account to be used in the pipelineRun execution. Optional."
-    echo "  --pipeline-timeout The total timeout for the invoked pipelineRun. Defaults to 60mins."
-    echo "  --task-timeout     The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins."
-    echo "  --finally-timeout  The timeout for the finally tasks invoked in the pipelineRun. Defaults to 5mins."
+    echo "  -r                  Request: the name of the request."
+    echo "  --pipeline          The name of the pipeline to execute in the internal/pipelines directory of"
+    echo "                      release-service-catalog."
+    echo "  -p                  Params: can be specified multiple times. Each '-p' flag represents a"
+    echo "                      parameter that will be added to the 'parameters' field in the"
+    echo "                      InternalRequest resource."
+    echo "  -l                  Labels: can be specified multiple times. Each '-l' flag represents a"
+    echo "                      label that will be added to the 'metadata.labels' field in the"
+    echo "                      InternalRequest resource. Optional."
+    echo "  -s                  Sync: a flag that indicates whether the script has to finish to complete the tasks or"
+    echo "                      exit immediately after creating the resource. Default is true."
+    echo "  -t                  Timeout: Defaults to 600 seconds."
+    echo "  --task-git-url      The url to the git repo where the release-service-catalog tasks to be used are stored."
+    echo "  --task-git-revision The revision in the taskGitUrl repo to be used."
+    echo "  --service-account   The name of the service account to be used in the pipelineRun execution. Optional."
+    echo "  --pipeline-timeout  The total timeout for the invoked pipelineRun. Defaults to 60mins."
+    echo "  --task-timeout      The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins."
+    echo "  --finally-timeout   The timeout for the finally tasks invoked in the pipelineRun. Defaults to 5mins."
     echo "  -h  Display this help message."
     exit 1
 }
@@ -85,13 +94,17 @@ function convert_to_seconds {
 # Parsing arguments
 PARAMS=() # initialize PARAMS as an empty array
 LABELS=() # initialize LABELS as an empty array
-OPTIONS=$(getopt -l "service-account:,pipeline-timeout:,task-timeout:,finally-timeout:" -o "r:p:l:s:t:h" -a -- "$@")
+OPTIONS=$(getopt -l "pipeline:,task-git-url:,task-git-revision:,service-account:,pipeline-timeout:,task-timeout:,finally-timeout:" -o "r:p:l:s:t:h" -a -- "$@")
 eval set -- "$OPTIONS"
 while true; do
     case "$1" in
         -r)
             shift
             REQUEST=$1
+            ;;
+        --pipeline)
+            shift
+            PIPELINE=$1
             ;;
         -p)
             shift
@@ -108,6 +121,14 @@ while true; do
         -t)
             shift
             TIMEOUT=$1
+            ;;
+        --task-git-url)
+            shift
+            TASKGITURL=$1
+            ;;
+        --task-git-revision)
+            shift
+            TASKGITREVISION=$1
             ;;
         --service-account)
             shift
@@ -138,9 +159,17 @@ while true; do
 done
 
 # Check if mandatory parameters are set
-if [ -z "$REQUEST" ]
+if [ -z "$REQUEST" ] && [ -z "$PIPELINE" ]
 then
     usage
+fi
+
+# The -n PIPELINE can be dropped once PIPELINE is mandatory
+if [[ -n "$PIPELINE" ]]; then
+    if [ -z "$TASKGITURL" ] || [ -z "$TASKGITREVISION" ] ; then
+        echo "You must pass --task-git-url and --task-git-revision."
+        exit 1
+    fi
 fi
 
 # Make sure all timeouts are passing in XhYmZs format
@@ -199,22 +228,56 @@ LABEL_JSON=$(echo "${LABEL_JSON_ARRAY[@]}" | jq -s 'add')
 
 # Create JSON payload for the InternalRequest
 PAYLOAD=$(jq -n \
-    --arg request "$REQUEST" \
     --argjson parameters "$PARAM_JSON" \
     --argjson timeouts "$TIMEOUTS_JSON" \
     '{
       "apiVersion": "appstudio.redhat.com/v1alpha1",
       "kind": "InternalRequest",
-      "metadata": {
-        "generateName": ($request + "-")
-      },
       "spec": {
-        "request": $request,
         "params": $parameters,
         "timeouts": $timeouts
       }
     }'
 )
+# We will inject the pipeline stuff as we did request (without the if)
+# when we drop support for request
+if [[ -n "${REQUEST}" ]]; then
+    PAYLOAD=$(jq \
+        --arg request "$REQUEST" \
+        '.spec.request = $request' <<< $PAYLOAD)
+    PAYLOAD=$(jq \
+        --arg request "$REQUEST" \
+        '.metadata.generateName = $request + "-"' <<< $PAYLOAD)
+fi
+# generateName will be injected when PAYLOAD is initialized once REQUEST support is dropped
+if [[ -n "${PIPELINE}" ]]; then
+    PAYLOAD=$(jq \
+        --arg pipeline "$PIPELINE" \
+        '.metadata.generateName = $pipeline + "-"' <<< $PAYLOAD)
+    PAYLOAD=$(jq \
+        --arg url "$TASKGITURL" \
+        --arg revision "$TASKGITREVISION" \
+        --arg pipeline "pipelines/internal/${PIPELINE}/${PIPELINE}.yaml" \
+        '.spec.pipeline = {
+          "pipelineRef": {
+            "resolver": "git",
+            "params": [
+              {
+                "name": "url",
+                "value": $url
+              },
+              {
+                "name": "revision",
+                "value": $revision
+              },
+              {
+                "name": "pathInRepo",
+                "value": $pipeline
+              }
+            ]
+          }
+        }' <<< $PAYLOAD)
+fi
 if [[ -n ${LABELS[@]} ]]; then
     PAYLOAD=$(jq \
         --argjson labels "$LABEL_JSON" \
