@@ -34,8 +34,6 @@
 #   -s                  Sync: a flag that indicates whether the script has to finish to complete
 #                       the tasks or exit immediately after creating the resource. Default is true.
 #   -t                  Timeout: Defaults to 600 seconds.
-#   --task-git-url      The url to the git repo where the release-service-catalog tasks to be used are stored.
-#   --task-git-revision The revision in the taskGitUrl repo to be used.
 #   --service-account   The name of the service account to be used in the pipelineRun execution. Optional.
 #   --pipeline-timeout  The total timeout for the invoked pipelineRun. Defaults to 60mins
 #   --task-timeout      The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins
@@ -76,8 +74,6 @@ function usage {
     echo "  -s                  Sync: a flag that indicates whether the script has to finish to complete the tasks or"
     echo "                      exit immediately after creating the resource. Default is true."
     echo "  -t                  Timeout: Defaults to 600 seconds."
-    echo "  --task-git-url      The url to the git repo where the release-service-catalog tasks to be used are stored."
-    echo "  --task-git-revision The revision in the taskGitUrl repo to be used."
     echo "  --service-account   The name of the service account to be used in the pipelineRun execution. Optional."
     echo "  --pipeline-timeout  The total timeout for the invoked pipelineRun. Defaults to 60mins."
     echo "  --task-timeout      The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins."
@@ -94,7 +90,7 @@ function convert_to_seconds {
 # Parsing arguments
 PARAMS=() # initialize PARAMS as an empty array
 LABELS=() # initialize LABELS as an empty array
-OPTIONS=$(getopt -l "pipeline:,task-git-url:,task-git-revision:,service-account:,pipeline-timeout:,task-timeout:,finally-timeout:" -o "r:p:l:s:t:h" -a -- "$@")
+OPTIONS=$(getopt -l "pipeline:,service-account:,pipeline-timeout:,task-timeout:,finally-timeout:" -o "r:p:l:s:t:h" -a -- "$@")
 eval set -- "$OPTIONS"
 while true; do
     case "$1" in
@@ -121,14 +117,6 @@ while true; do
         -t)
             shift
             TIMEOUT=$1
-            ;;
-        --task-git-url)
-            shift
-            TASKGITURL=$1
-            ;;
-        --task-git-revision)
-            shift
-            TASKGITREVISION=$1
             ;;
         --service-account)
             shift
@@ -164,14 +152,6 @@ then
     usage
 fi
 
-# The -n PIPELINE can be dropped once PIPELINE is mandatory
-if [[ -n "$PIPELINE" ]]; then
-    if [ -z "$TASKGITURL" ] || [ -z "$TASKGITREVISION" ] ; then
-        echo "You must pass --task-git-url and --task-git-revision."
-        exit 1
-    fi
-fi
-
 # Make sure all timeouts are passing in XhYmZs format
 PIPELINE_VALUES=$(echo $PIPELINE_TIMEOUT | awk -F[h,m,s] '{print $3}')
 TASK_VALUES=$(echo $TASK_TIMEOUT | awk -F[h,m,s] '{print $3}')
@@ -205,13 +185,30 @@ fi
 declare -a PARAM_JSON_ARRAY
 declare -a LABEL_JSON_ARRAY
 
+PIPELINEGITURL=
+PIPELINEGITREVISION=
+
 # Create a JSON object for each item and append to their bash arrays
 for param in "${PARAMS[@]}"
 do
     KEY=$(echo "$param" | cut -d'=' -f1)
     VALUE=$(echo "$param" | cut -d'=' -f2-)
     PARAM_JSON_ARRAY+=("$(jq -n --arg key "$KEY" --arg value "$VALUE" '{($key): $value}')")
+    if [[ "$KEY" = "taskGitUrl" ]]; then
+        PIPELINEGITURL="$VALUE"
+    elif [[ "$KEY" = "taskGitRevision" ]]; then
+        PIPELINEGITREVISION="$VALUE"
+    fi
 done
+
+# The -n PIPELINE can be dropped once PIPELINE is mandatory
+if [[ -n "$PIPELINE" ]]; then
+    if [ -z "$PIPELINEGITURL" ] || [ -z "$PIPELINEGITREVISION" ] ; then
+        echo "You must pass -p taskGitUrl=foo and -p taskGitRevision=bar as parameters. These are used"
+        echo "to determine the pipeline reference in the git resolver."
+        exit 1
+    fi
+fi
 
 for label in "${LABELS[@]}"
 do
@@ -255,8 +252,8 @@ if [[ -n "${PIPELINE}" ]]; then
         --arg pipeline "$PIPELINE" \
         '.metadata.generateName = $pipeline + "-"' <<< $PAYLOAD)
     PAYLOAD=$(jq \
-        --arg url "$TASKGITURL" \
-        --arg revision "$TASKGITREVISION" \
+        --arg url "$PIPELINEGITURL" \
+        --arg revision "$PIPELINEGITREVISION" \
         --arg pipeline "pipelines/internal/${PIPELINE}/${PIPELINE}.yaml" \
         '.spec.pipeline = {
           "pipelineRef": {

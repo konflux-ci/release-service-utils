@@ -16,7 +16,6 @@
 #
 # Usage:
 #   ./internal-pipelinerun -r request [-p <key=value> ...] [-s sync] [-t timeout] [--service-account name]
-#   [--task-git-url url] [--task-git-revision revision]
 #   [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]
 #
 # Parameters:
@@ -32,8 +31,6 @@
 #   -s                  Sync: a flag that indicates whether the script has to finish to complete
 #                       the tasks or exit immediately after creating the resource. Default is true.
 #   -t                  Timeout: Defaults to 600 seconds.
-#   --task-git-url      The url to the git repo where the release-service-catalog tasks to be used are stored
-#   --task-git-revision The revision in the taskGitUrl repo to be used
 #   --service-account   The name of the service account to be used in the pipelineRun execution. Optional.
 #   --pipeline-timeout  The total timeout for the invoked pipelineRun. Defaults to 60mins
 #   --task-timeout      The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins
@@ -59,7 +56,6 @@ FINALLY_TIMEOUT=0h5m0s
 
 function usage {
     echo "Usage: $0 -r request [-p parameters] [-l labels] [-s sync] [-t timeout] [--service-account name] \
-          [--task-git-url url] [--task-git-revision revision] \
           [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]"
     echo
     echo "  -r                  Request: the name of the request."
@@ -73,8 +69,6 @@ function usage {
     echo "                      exit immediately after creating the resource. Default is true."
     echo "  -t                  Timeout: Defaults to 600 seconds."
     echo "  --service-account   The name of the service account to be used in the pipelineRun execution. Optional."
-    echo "  --task-git-url      The url to the git repo where the release-service-catalog tasks to be used are stored"
-    echo "  --task-git-revision The revision in the taskGitUrl repo to be used"
     echo "  --pipeline-timeout  The total timeout for the invoked pipelineRun. Defaults to 60mins."
     echo "  --task-timeout      The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins."
     echo "  --finally-timeout   The timeout for the finally tasks invoked in the pipelineRun. Defaults to 5mins."
@@ -90,7 +84,7 @@ function convert_to_seconds {
 # Parsing arguments
 PARAMS=() # initialize PARAMS as an empty array
 LABELS=() # initialize LABELS as an empty array
-OPTIONS=$(getopt -l "task-git-url:,task-git-revision:,service-account:,pipeline-timeout:,task-timeout:,finally-timeout:" -o "r:p:l:s:t:h" -a -- "$@")
+OPTIONS=$(getopt -l "service-account:,pipeline-timeout:,task-timeout:,finally-timeout:" -o "r:p:l:s:t:h" -a -- "$@")
 eval set -- "$OPTIONS"
 while true; do
     case "$1" in
@@ -117,14 +111,6 @@ while true; do
         --service-account)
             shift
             SERVICEACCOUNT=$1
-            ;;
-        --task-git-url)
-            shift
-            TASKGITURL=$1
-            ;;
-        --task-git-revision)
-            shift
-            TASKGITREVISION=$1
             ;;
         --pipeline-timeout)
             shift
@@ -189,13 +175,27 @@ fi
 declare -a PARAM_JSON_ARRAY
 declare -a LABEL_JSON_ARRAY
 
+PIPELINEGITURL=
+PIPELINEGITREVISION=
+
 # Create a JSON object for each item and append to their bash arrays
 for param in "${PARAMS[@]}"
 do
     KEY=$(echo "$param" | cut -d'=' -f1)
     VALUE=$(echo "$param" | cut -d'=' -f2-)
     PARAM_JSON_ARRAY+=("$(jq -n --arg key "$KEY" --arg value "$VALUE" '.name=$key | .value=$value'),")
+    if [[ "$KEY" = "taskGitUrl" ]]; then
+        PIPELINEGITURL="$VALUE"
+    elif [[ "$KEY" = "taskGitRevision" ]]; then
+        PIPELINEGITREVISION="$VALUE"
+    fi
 done
+
+if [ -z "$PIPELINEGITURL" ] || [ -z "$PIPELINEGITREVISION" ] ; then
+    echo "You must pass -p taskGitUrl=foo and -p taskGitRevision=bar as parameters. These are used"
+    echo "to determine the pipeline reference in the git resolver."
+    exit 1
+fi
 
 for label in "${LABELS[@]}"
 do
@@ -214,8 +214,8 @@ LABEL_JSON=$(echo "${LABEL_JSON_ARRAY[@]}" | jq -s 'add')
 # Create JSON payload for the PipelineRun
 PAYLOAD=$(jq -n \
     --arg request "$REQUEST" \
-    --arg taskgiturl "$TASKGITURL" \
-    --arg taskgitrevision "$TASKGITREVISION" \
+    --arg giturl "$PIPELINEGITURL" \
+    --arg gitrevision "$PIPELINEGITREVISION" \
     --arg pipeline "pipelines/internal/${REQUEST}/${REQUEST}.yaml" \
     --argjson parameters "[ $PARAM_JSON ]" \
     --argjson timeouts "$TIMEOUTS_JSON" \
@@ -232,11 +232,11 @@ PAYLOAD=$(jq -n \
           "params": [
             {
               "name": "url",
-              "value": $taskgiturl
+              "value": $giturl
             },
             {
               "name": "revision",
-              "value": $taskgitrevision
+              "value": $gitrevision
             },
             {
               "name": "pathInRepo",
