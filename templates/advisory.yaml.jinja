@@ -11,6 +11,9 @@ spec:
   product_stream: {{ advisory.spec.product_stream }}
   cpe: {{ advisory.spec.cpe }}
   type: {{ advisory.spec.type }}
+{%- if 'severity' in advisory.spec %}
+  severity: {{ advisory.spec.severity }}
+{%- endif %}
 {%- if 'issues' in advisory.spec %}
   issues:
     {{ advisory.spec.issues | to_nice_yaml(indent=2) | indent(4) | trim }}
