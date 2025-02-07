@@ -1,6 +1,6 @@
 FROM quay.io/konflux-ci/oras:latest@sha256:01803f17aca408776cc670b43a43987aeebb6bbd4b329df79750149b692cfad7 as oras
 FROM registry.redhat.io/rhtas/cosign-rhel9:1.0.2-1719417920 as cosign
-FROM registry.access.redhat.com/ubi9/ubi:9.5-1738643550
+FROM registry.access.redhat.com/ubi9/ubi:9.5-1738814488
 
 ARG COSIGN_VERSION=2.4.0
 ARG KUBECTL_VERSION=1.27.2
