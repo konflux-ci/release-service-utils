@@ -2,6 +2,10 @@
 """
 Python script to create a Container Image object in Pyxis
 
+NOTE: Any change to this file that changes functionality should be posted for review in
+#forum-metadata-guild on slack. No PR changing functionality should be removed without
+approval from someone on that team.
+
 Note about releasing to registry.redhat.io (using `--rh-push true` CLI argument):
 
 Our goal is to be able to download images from registry.redhat.io. For that to happen,

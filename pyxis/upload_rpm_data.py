@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Upload rpm manifest to Pyxis
 
+NOTE: Any change to this file that changes functionality should be posted for review in
+#forum-metadata-guild on slack. No PR changing functionality should be removed without
+approval from someone on that team.
+
 This script will take Pyxis image ID and an sbom spdx file
 on the input. It will inspect the sbom for the rpms and then push
 data into Pyxis. There are two separate items that will be pushed:
