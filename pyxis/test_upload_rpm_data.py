@@ -111,6 +111,14 @@ PACKAGES = [
             }
         ]
     },
+    {  # rpm purl, but no qualifiers, so it is skipped
+        "externalRefs": [
+            {
+                "referenceType": "purl",
+                "referenceLocator": "pkg:rpm/libtirpc@1.3.5-1.el10",
+            }
+        ]
+    },
 ]
 
 
