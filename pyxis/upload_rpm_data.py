@@ -245,6 +245,8 @@ def construct_rpm_items_and_content_sets(
             purl_dict = PackageURL.from_string(externalRef["referenceLocator"]).to_dict()
             if purl_dict["name"] in IGNORED_PACKAGES:
                 continue
+            if "qualifiers" not in purl_dict or purl_dict["qualifiers"] is None:
+                continue
             rpm_item = {
                 "name": purl_dict["name"],
                 "summary": purl_dict["name"],
