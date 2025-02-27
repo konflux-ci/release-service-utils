@@ -138,9 +138,9 @@ class TestCreateSBOM(unittest.TestCase):
                         "relatedSpdxElement": "SPDXRef-product",
                     },
                     {
-                        "spdxElementId": "SPDXRef-product",
+                        "spdxElementId": "SPDXRef-component-0",
                         "relationshipType": "PACKAGE_OF",
-                        "relatedSpdxElement": "SPDXRef-component-0",
+                        "relatedSpdxElement": "SPDXRef-product",
                     },
                 ],
             }
@@ -237,14 +237,14 @@ class TestCreateSBOM(unittest.TestCase):
                         "relatedSpdxElement": "SPDXRef-product",
                     },
                     {
-                        "spdxElementId": "SPDXRef-product",
+                        "spdxElementId": "SPDXRef-component-0",
                         "relationshipType": "PACKAGE_OF",
-                        "relatedSpdxElement": "SPDXRef-component-0",
+                        "relatedSpdxElement": "SPDXRef-product",
                     },
                     {
-                        "spdxElementId": "SPDXRef-product",
+                        "spdxElementId": "SPDXRef-component-1",
                         "relationshipType": "PACKAGE_OF",
-                        "relatedSpdxElement": "SPDXRef-component-1",
+                        "relatedSpdxElement": "SPDXRef-product",
                     },
                 ],
             }

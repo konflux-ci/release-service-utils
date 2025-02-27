@@ -85,9 +85,9 @@ def get_component_relationships(packages: List[Dict]):
     """Get SPDX relationship for each SPDX component package."""
     return [
         {
-            "spdxElementId": "SPDXRef-product",
+            "spdxElementId": package["SPDXID"],
             "relationshipType": "PACKAGE_OF",
-            "relatedSpdxElement": package["SPDXID"],
+            "relatedSpdxElement": "SPDXRef-product",
         }
         for package in packages
     ]
