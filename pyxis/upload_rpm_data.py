@@ -236,6 +236,8 @@ def construct_rpm_items_and_content_sets(
     rpms_items = []
     content_sets = set()
     for package in packages:
+        # First check if there is an rpm summary to use with a potential rpm item
+        rpm_summary = get_rpm_summary(package)
         for externalRef in package.get("externalRefs", []):
             if externalRef.get("referenceType") != "purl":
                 continue
@@ -262,6 +264,9 @@ def construct_rpm_items_and_content_sets(
             if "upstream" in purl_dict["qualifiers"]:
                 rpm_item["srpm_name"] = purl_dict["qualifiers"]["upstream"]
 
+            if rpm_summary != "":
+                rpm_item["summary"] = rpm_summary
+
             # XXX - temporary https://issues.redhat.com/browse/KONFLUX-4292
             # Undo this in https://issues.redhat.com/browse/KONFLUX-4175
             if (
@@ -276,6 +281,23 @@ def construct_rpm_items_and_content_sets(
                 content_sets.add(purl_dict["qualifiers"]["repository_id"])
 
     return rpms_items, sorted(content_sets)
+
+
+def get_rpm_summary(package: dict) -> str:
+    """Get RPM summary from the package"""
+    for annotation in package.get("annotations", []):
+        if annotation.get("annotator") != "Tool: cachi2:jsonencoded":
+            continue
+        comment = annotation.get("comment", "")
+        try:
+            comment_dict = json.loads(comment)
+        except json.JSONDecodeError:
+            LOGGER.warning(f"Failed to decode JSON from annotation comment: {comment}")
+            continue
+        if comment_dict.get("name") == "cachi2:rpm_summary":
+            summary = comment_dict.get("value", "")
+            return summary
+    return ""
 
 
 def get_purl_type(purl: str):
