@@ -10,6 +10,7 @@ from upload_rpm_data import (
     update_container_content_sets,
     load_sbom_packages,
     construct_rpm_items_and_content_sets,
+    get_rpm_summary,
     get_purl_type,
 )
 
@@ -19,14 +20,20 @@ SBOM_PATH = "mypath"
 RPM_MANIFEST_ID = "abcd1234"
 CONTENT_SETS = ["myrepo1", "myrepo2"]
 PACKAGES = [
-    {  # all fields
+    {  # all fields, including a summary annotation
         "externalRefs": [
             {
                 "referenceType": "purl",
                 "referenceLocator": "pkg:rpm/rhel/pkg1@1-2.el8?arch=x86_64&"
                 + "upstream=pkg1-1-2.el8.src.rpm&distro=rhel-8.0&repository_id=myrepo1",
             }
-        ]
+        ],
+        "annotations": [
+            {
+                "annotator": "Tool: cachi2:jsonencoded",
+                "comment": '{"name": "cachi2:rpm_summary", "value": "My rpm summary"}',
+            }
+        ],
     },
     {  # no version, same repository_id
         "externalRefs": [
@@ -404,7 +411,7 @@ def test_construct_rpm_items_and_content_sets__success():
     assert rpms == [
         {
             "name": "pkg1",
-            "summary": "pkg1-1-2.el8.x86_64",
+            "summary": "My rpm summary",
             "nvra": "pkg1-1-2.el8.x86_64",
             "version": "1",
             "release": "2.el8",
@@ -467,6 +474,47 @@ def test_construct_rpm_items_and_content_sets__no_packages_result_in_empty_list(
 
     assert rpms == []
     assert content_sets == []
+
+
+def test_get_rpm_summary__summary_exists():
+    package = {
+        "annotations": [
+            {"annotator": "some other annotator", "comment": "some_value"},
+            {
+                "annotator": "Tool: cachi2:jsonencoded",
+                "comment": '{"name": "cachi2:found_by", "value": "cachi2"}',
+            },
+            {
+                "annotator": "Tool: cachi2:jsonencoded",
+                "comment": '{"name": "cachi2:rpm_summary", "value": "My special summary"}',
+            },
+            {
+                "annotator": "Tool: cachi2:jsonencoded",
+                # invalid json
+                "comment": '{"name": "cachi2:rpm_summary", value": "My invalid summary"}',
+            },
+        ],
+    }
+
+    summary = get_rpm_summary(package)
+
+    assert summary == "My special summary"
+
+
+def test_get_rpm_summary__no_rpm_summary():
+    package = {
+        "annotations": [
+            {"annotator": "some other annotator", "comment": "some_value"},
+            {
+                "annotator": "Tool: cachi2:jsonencoded",
+                "comment": '{"name": "cachi2:found_by", "value": "cachi2"}',
+            },
+        ],
+    }
+
+    summary = get_rpm_summary(package)
+
+    assert summary == ""
 
 
 def test_get_purl_type__rpm():
