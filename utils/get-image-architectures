@@ -8,21 +8,16 @@
 # example command:
 #              get-image-architectures IMAGE where IMAGE is quay.io/org/repo@sha256:abcde for example
 #
+set -e
 
 IMAGE=$1
 
 if [ -z "${IMAGE}" ] || [[ "${IMAGE}" == docker://* ]] ; then
-    echo "Please pass an image (without the docker:// prefix) to find the architectures for" >&2
+    echo "Error: Please pass an image (without the docker:// prefix) to find the architectures for" >&2
     exit 1
 fi
 
 RAW_OUTPUT=$(skopeo inspect --no-tags --raw docker://${IMAGE})
-
-if [ -z "$RAW_OUTPUT" ]; then
-    echo "Error: Unable to fetch image details with skopeo inspect" >&2
-    exit 1
-fi
-
 
 ARTIFACT_TYPE=$(jq -r '.artifactType' <<< $RAW_OUTPUT)
 if [ "$ARTIFACT_TYPE" != "null" ] ; then
