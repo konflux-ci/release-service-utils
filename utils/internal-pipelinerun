@@ -15,11 +15,11 @@
 # Timeout: error code 124
 #
 # Usage:
-#   ./internal-pipelinerun -r request [-p <key=value> ...] [-s sync] [-t timeout] [--service-account name]
+#   ./internal-pipelinerun --pipeline pipeline [-p <key=value> ...] [-s sync] [-t timeout] [--service-account name]
 #   [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]
 #
 # Parameters:
-#   -r                  Request: the name of the request.
+#   --pipeline          Pipeline: the name of the internal pipeline to execute.
 #   -p                  Parameters: can be specified multiple times. Each '-p' flag represents a
 #                       parameter that will be added to the 'parameters' field in the
 #                       PipelineRun resource. The value of the parameter is treated as a string,
@@ -55,10 +55,10 @@ TASK_TIMEOUT=0h55m0s
 FINALLY_TIMEOUT=0h5m0s
 
 function usage {
-    echo "Usage: $0 -r request [-p parameters] [-l labels] [-s sync] [-t timeout] [--service-account name] \
+    echo "Usage: $0 --pipeline pipeline [-p parameters] [-l labels] [-s sync] [-t timeout] [--service-account name] \
           [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]"
     echo
-    echo "  -r                  Request: the name of the request."
+    echo "  --pipeline          Pipeline: the name of the internal pipeline to execute."
     echo "  -p                  Params: can be specified multiple times. Each '-p' flag represents a"
     echo "                      parameter that will be added to the 'parameters' field in the"
     echo "                      PipelineRun resource."
@@ -84,13 +84,13 @@ function convert_to_seconds {
 # Parsing arguments
 PARAMS=() # initialize PARAMS as an empty array
 LABELS=() # initialize LABELS as an empty array
-OPTIONS=$(getopt -l "service-account:,pipeline-timeout:,task-timeout:,finally-timeout:" -o "r:p:l:s:t:h" -a -- "$@")
+OPTIONS=$(getopt -l "pipeline:,service-account:,pipeline-timeout:,task-timeout:,finally-timeout:" -o "p:l:s:t:h" -a -- "$@")
 eval set -- "$OPTIONS"
 while true; do
     case "$1" in
-        -r)
+        --pipeline)
             shift
-            REQUEST=$1
+            PIPELINE=$1
             ;;
         -p)
             shift
@@ -137,7 +137,7 @@ while true; do
 done
 
 # Check if mandatory parameters are set
-if [ -z "$REQUEST" ]
+if [ -z "$PIPELINE" ]
 then
     usage
 fi
@@ -213,10 +213,10 @@ LABEL_JSON=$(echo "${LABEL_JSON_ARRAY[@]}" | jq -s 'add')
 
 # Create JSON payload for the PipelineRun
 PAYLOAD=$(jq -n \
-    --arg request "$REQUEST" \
+    --arg request "$PIPELINE" \
     --arg giturl "$PIPELINEGITURL" \
     --arg gitrevision "$PIPELINEGITREVISION" \
-    --arg pipeline "pipelines/internal/${REQUEST}/${REQUEST}.yaml" \
+    --arg pipeline "pipelines/internal/${PIPELINE}/${PIPELINE}.yaml" \
     --argjson parameters "[ $PARAM_JSON ]" \
     --argjson timeouts "$TIMEOUTS_JSON" \
     '{
