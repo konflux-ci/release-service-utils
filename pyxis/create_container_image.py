@@ -395,7 +395,7 @@ def main():  # pragma: no cover
         return
 
     # Then, check if the tags are different. If they are, update them
-    existing_tags = [tag["name"] for tag in repositories[repo_index].get("tags", [])]
+    existing_tags = [tag["name"] for tag in repositories[repo_index]["tags"] or []]
     if existing_tags != tags:
         LOGGER.info(
             f"Image with given docker_image_digest exists as {identifier} and "
