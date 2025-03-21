@@ -1,4 +1,5 @@
 pytest
+pytest-asyncio
 requests
 jinja2
 jinja2-ansible-filters
@@ -7,3 +8,6 @@ pubtools-pulp
 pubtools-exodus
 pubtools-content-gateway
 pubtools-marketplacesvm
+pydantic
+aiofiles
+types-aiofiles
