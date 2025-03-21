@@ -1,0 +1,63 @@
+#!/bin/bash
+#
+# script:      bump-catalog-task-refs
+# 
+# description: This script inspects the passed commit from release-service-utils. If it is
+#              not a bot commit, it will create a pull request to the release-service-catalog
+#              repo to bump the release-service-utils image reference in each task and test using
+#              it.
+#
+# example command:  
+#              get-catalog-task-refs SHA where SHA is a release-service-utils commit sha
+#
+
+UTILS_SHA=$1
+
+if [ -z "${UTILS_SHA}" ] ; then
+    echo -e "Please pass a release-service-utils commit sha to bump the task references to"
+    exit 1
+fi
+
+UTILS_REPO=https://github.com/konflux-ci/release-service-utils.git
+CATALOG_REPO=
+CATALOG_BASE_BRANCH=development
+CATALOG_PR_BRANCH=automated_update_task_image_refs
+VERSION_LABEL=app.kubernetes.io/version
+COMMIT_TITLE=""
+
+git clone "$UTILS_REPO" utils
+pushd utils
+COMMIT_TITLE="$(git show -s --format=%s $UTILS_SHA)"
+if [[ "$(git show -s --format='%ae' $UTILS_SHA)" == *"[bot]"* ]] ; then
+    echo "This release-service-utils commit was made by a bot."
+    echo "We do not bump the catalog task image references for bot commits. Exiting..."
+    exit 0
+fi
+popd
+
+TODO - git clone the repo with perms
+cd catalog
+git checkout "$CATALOG_BASE_BRANCH"
+git checkout -b "$CATALOG_PR_BRANCH"
+# Get all task directories, exclude tests directories
+for TASK_DIR in "$(find tasks -type d -depth 1)" ; do
+    if grep -q "quay.io/konflux-ci/release-service-utils:" $TASK_DIR/*.yaml; then
+        # Replace image references
+        find $TASK_DIR -type f -name *.yaml | \
+          xargs sed -i "s|quay.io/konflux-ci/release-service-utils:[0-9a-f]*$|quay.io/konflux-ci/release-service-utils:$UTILS_SHA|g"
+        # Update x.y.z version string by bumping y and setting z to 0
+        oldVersion="$(yq ".metadata.labels.[\"$VERSION_LABEL\"]" $TASK_DIR/*.yaml)"
+        yVersion="$(echo $oldVersion | cut -d '.' -f 2)"
+        newVersion="$(echo $version | cut -d '.' -f 1).$((y_version+1)).0"
+        yq e -i ".metadata.labels.[\"$VERSION_LABEL\"] = \"$newVersion\"" $TASK_DIR/*.yaml
+    
+        # Update READMEs
+        sed -i "0,/## Changes in/s//## Changes in $newVersion\n* Release Service Utils Image Update\n  * $COMMIT_TITLE\n\n&/" $TASK_DIR/README.md
+    fi
+done
+
+git add .
+git commit -s -m "chore: bump release-service-utils image ref to ${UTILS_SHA:0:7}"
+git push -f origin "$CATALOG_PR_BRANCH"
+
+TODO - git cli stuff to open PR
