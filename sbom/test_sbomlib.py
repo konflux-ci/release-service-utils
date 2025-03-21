@@ -11,16 +11,19 @@ import sbomlib
     ["auths", "reference", "expected_auths"],
     [
         pytest.param(
-            {"registry.local/repo": {"auth": "some_token"}},
+            {
+                "registry.local/repo": {"auth": "some_token"},
+                "another.io/repo": {"auth": "some_token"},
+            },
             "registry.local/repo@sha256:deadbeef",
             {"registry.local": {"auth": "some_token"}},
-            id="simple"
+            id="simple",
         ),
         pytest.param(
             {"registry.local/org/repo": {"auth": "some_token"}},
             "registry.local/org/repo@sha256:deadbeef",
             {"registry.local": {"auth": "some_token"}},
-            id="nested"
+            id="nested",
         ),
     ],
 )
@@ -33,9 +36,7 @@ def test_get_oci_auth_file(auths, reference, expected_auths):
 
         fp = StringIO()
 
-        assert sbomlib.get_oci_auth_file(
-            reference, Path(config.name), fp
-        ) is True
+        assert sbomlib.get_oci_auth_file(reference, Path(config.name), fp) is True
 
         fp.seek(0)
 

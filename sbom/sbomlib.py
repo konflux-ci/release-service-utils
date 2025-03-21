@@ -6,6 +6,7 @@ from pathlib import Path
 def get_oci_auth_file(reference: str, auth: Path, fp: IO) -> bool:
     """
     Gets path to a temporary file containing the docker config JSON for <reference>.
+    Returns True if a token was found, False otherwise.
 
     Args:
         reference (str): Reference to an image in the form registry/repo@sha256-deadbeef
