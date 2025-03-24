@@ -1,5 +1,5 @@
 import json
-from typing import IO, Optional, Any
+from typing import IO, Optional, Any, TextIO, Union
 from pathlib import Path
 from dataclasses import dataclass
 import re
@@ -8,18 +8,20 @@ import tempfile
 import os
 
 
-# TODO: maybe we don't need pydantic
+# FIXME: remove pydantic
+from packageurl import PackageURL
 import pydantic as pdc
 
 
 @dataclass
 class Image:
     digest: str
-    children: list["Image"]
 
-    @property
-    def is_index(self) -> bool:
-        return self.children != 0
+
+@dataclass
+class IndexImage:
+    digest: str
+    children: list[Image]
 
 
 @dataclass
@@ -29,7 +31,7 @@ class Component:
     """
 
     repository: str
-    image: Image
+    image: Union[Image, IndexImage]
 
 
 @dataclass
@@ -43,6 +45,11 @@ class Snapshot:
 
     # TODO: this has to be somehow optional for pipelines without CPE
     cpe: str
+
+
+class SBOMError(Exception):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
 
 
 class ComponentModel(pdc.BaseModel):
@@ -72,14 +79,7 @@ class SnapshotModel(pdc.BaseModel):
     components: list[ComponentModel]
 
 
-async def construct_image_tree(repository: str, image_digest: str) -> Image:
-    """
-    Get all references to images in the format <repository>@<digest> for which
-    SBOMs should be fetched.
-
-    If the image pointed to by <repository> and <image_digest> is an index image
-    or a docker manifest V2, recurse and get also its child images.
-    """
+async def construct_image(repository: str, image_digest: str) -> Union[Image, IndexImage]:
     manifest = await get_image_manifest(repository, image_digest)
     media_type = manifest["mediaType"]
 
@@ -87,19 +87,18 @@ async def construct_image_tree(repository: str, image_digest: str) -> Image:
         media_type == "application/vnd.oci.image.manifest.v1+json"
         or media_type == "application/vnd.docker.distribution.manifest.v2+json"
     ):
-        return Image(digest=image_digest, children=[])
+        return Image(digest=image_digest)
 
     if (
         media_type == "application/vnd.oci.image.index.v1+json"
         or media_type == "application/vnd.docker.distribution.manifest.list.v2+json"
     ):
-        children_tasks = []
+        children = []
         for submanifest in manifest["manifests"]:
             child_digest = submanifest["digest"]
-            children_tasks.append(construct_image_tree(repository, child_digest))
+            children.append(Image(child_digest))
 
-        children = await asyncio.gather(*children_tasks)
-        return Image(digest=image_digest, children=children)
+        return IndexImage(digest=image_digest, children=children)
 
     # unsupported mediaType
     # FIXME: log a warning and handle somehow
@@ -107,8 +106,8 @@ async def construct_image_tree(repository: str, image_digest: str) -> Image:
 
 
 async def make_component(repository: str, image_digest: str) -> Component:
-    image_tree = await construct_image_tree(repository, image_digest)
-    return Component(repository=repository, image=image_tree)
+    image: Union[Image, IndexImage] = await construct_image(repository, image_digest)
+    return Component(repository=repository, image=image)
 
 
 async def make_snapshot(snapshot_spec: Path, rpa: Path) -> Snapshot:
@@ -128,24 +127,31 @@ async def make_snapshot(snapshot_spec: Path, rpa: Path) -> Snapshot:
     #     data_dict = json.load(data_file)
 
     # TODO: load tags
-    tags = []
+    tags: list[str] = []
     cpe = ""  # data_dict["releaseNotes"]["cpe"]
 
     return Snapshot(components=components, tags=tags, cpe=cpe)
 
 
-def construct_purl(component: Component, image: Image) -> str:
+def construct_purl(repository: str, digest: str, arch: Optional[str] = None) -> str:
     # TODO: add tags ( which ones? )
 
-    repo_name = component.repository.split("/")[-1]
+    repo_name = repository.split("/")[-1]
 
-    encoded_digest = image.digest.replace(":", "%3A")
+    # encoded_digest = digest.replace(":", "%3A")
 
-    repository_url = "/".join(component.repository.split("/")[:-1])
+    optional_qualifiers = {}
+    if arch is not None:
+        optional_qualifiers["arch"] = arch
 
-    purl = f"pkg:oci/{repo_name}@{encoded_digest}?repository_url={repository_url}"
+    purl = PackageURL(
+        type="oci",
+        name=repo_name,
+        version=digest,
+        qualifiers={"repository_url": repository, **optional_qualifiers},
+    )
 
-    return purl
+    return str(purl)
 
 
 async def run_async_subprocess(
@@ -202,7 +208,7 @@ async def get_image_manifest(repository: str, image_digest: str) -> dict[str, An
             ]
         )
     if code != 0:
-        raise RuntimeError(f"Could not get manifest of {reference}: {stderr}")
+        raise RuntimeError(f"Could not get manifest of {reference}: {stderr.decode()}")
 
     return json.loads(stdout)
 
@@ -223,7 +229,7 @@ def make_reference(repository: str, image_digest: str) -> str:
     return f"{repository}@{image_digest}"
 
 
-def get_oci_auth_file(reference: str, auth: Path, fp: IO) -> bool:
+def get_oci_auth_file(reference: str, auth: Path, fp: Any) -> bool:
     """
     Gets path to a temporary file containing the docker config JSON for <reference>.
     Returns True if a token was found, False otherwise.
@@ -231,7 +237,7 @@ def get_oci_auth_file(reference: str, auth: Path, fp: IO) -> bool:
     Args:
         reference (str): Reference to an image in the form registry/repo@sha256-deadbeef
         auth (Path): Existing docker config.json
-        fp (IO): File object to write the new auth file to
+        fp: File object to write the new auth file to
     """
     if not auth.is_file():
         raise ValueError(f"No docker config file at {auth}")

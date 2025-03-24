@@ -10,3 +10,4 @@ pubtools-content-gateway
 pubtools-marketplacesvm
 pydantic
 aiofiles
+types-aiofiles
