@@ -1,11 +1,14 @@
 import tempfile
 import json
 import os
+
+from jinja2 import TemplateSyntaxError
 import yaml
 
 import pytest
 
 from unittest.mock import patch, MagicMock
+
 from apply_template import setup_argparser, main
 
 
@@ -36,6 +39,7 @@ def test_apply_template_advisory_template(
     args.template = "templates/advisory.yaml.jinja"
     args.data = "{}"
     args.output = "somefile"
+    args.verbose = True
     mock_argparser.return_value = args
     mock_render.return_value = "applied template file"
     mock_open1 = MagicMock()
@@ -66,6 +70,8 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
         "on-and-on-and-on-and-on-and-on,-it's-so-long-that-you-would-"
         "expect-that-something-is-going-to-linewrap-it-at-some-point.-so-long."
     )
+    # Confirm contributed partial templates are rendered
+    synopsis = "{%- if advisory.spec.type == 'RHEA' %} Enhancement{%- endif %} synopsis"
     try:
         args = MagicMock()
         args.template = "templates/advisory.yaml.jinja"
@@ -84,7 +90,7 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
                         "topic": topic,
                         "description": "description",
                         "solution": solution,
-                        "synopsis": "synopsis",
+                        "synopsis": synopsis,
                         "references": ["testing"],
                         "content": {},
                     }
@@ -103,5 +109,50 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
 
         assert result["spec"]["solution"] == solution
         assert result["spec"]["topic"] == topic
+        assert result["spec"]["synopsis"] == "Enhancement synopsis"
+    finally:
+        os.remove(filename)
+
+
+@patch("apply_template.setup_argparser")
+def test_apply_template_advisory_template_fail_syntax_error(mock_argparser: MagicMock):
+    _, filename = tempfile.mkstemp()
+
+    # error in this partial template
+    synopsis = "{% if advisory.spec.type == ' %}FAILURE{%- endif %}"
+    #                    error is here     ^^^
+    try:
+        args = MagicMock()
+        args.template = "templates/advisory.yaml.jinja"
+        args.data = json.dumps(
+            {
+                "advisory_name": "advisory",
+                "advisory_ship_date": "today",
+                "advisory": {
+                    "spec": {
+                        "product_id": 1,
+                        "product_name": "name",
+                        "product_version": "version",
+                        "product_stream": "stream",
+                        "cpe": "cpe:/id",
+                        "type": "RHEA",
+                        "topic": "topic",
+                        "description": "description",
+                        "solution": "solution",
+                        "synopsis": synopsis,
+                        "references": ["testing"],
+                        "content": {},
+                    }
+                },
+            }
+        )
+
+        args.output = filename
+        mock_argparser.return_value = args
+
+        # Act
+        with pytest.raises(TemplateSyntaxError):
+            main()
+
     finally:
         os.remove(filename)
