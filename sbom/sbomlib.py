@@ -30,8 +30,21 @@ class Component:
     Internal representation of a Component for SBOM generation purposes.
     """
 
+    # Original regex from:
+    # https://github.com/konflux-ci/release-service-catalog/blob/0c97b5076ab70e5fdc2660eea2216de07f42c045/tasks/managed/populate-release-notes/populate-release-notes.yaml#L46
+    unique_tag_regex = re.compile(r"(rhel-)?v?[0-9]+\.[0-9]+(\.[0-9]+)?-[0-9]{8,}")
+
     repository: str
     image: Union[Image, IndexImage]
+    tags: list[str]
+
+    @property
+    def unique_tag(self) -> Optional[str]:
+        for tag in self.tags:
+            if self.unique_tag_regex.match(tag) is not None:
+                return tag
+
+        return None
 
 
 @dataclass
@@ -41,10 +54,6 @@ class Snapshot:
     """
 
     components: list[Component]
-    tags: list[str]
-
-    # TODO: this has to be somehow optional for pipelines without CPE
-    cpe: str
 
 
 class SBOMError(Exception):
@@ -59,6 +68,7 @@ class ComponentModel(pdc.BaseModel):
 
     image_digest: str = pdc.Field(alias="containerImage")
     rh_registry_repo: str = pdc.Field(alias="rh-registry-repo")
+    tags: list[str]
 
     @pdc.field_validator("image_digest", mode="after")
     @classmethod
@@ -105,12 +115,12 @@ async def construct_image(repository: str, image_digest: str) -> Union[Image, In
     assert False
 
 
-async def make_component(repository: str, image_digest: str) -> Component:
+async def make_component(repository: str, image_digest: str, tags: list[str]) -> Component:
     image: Union[Image, IndexImage] = await construct_image(repository, image_digest)
-    return Component(repository=repository, image=image)
+    return Component(repository=repository, image=image, tags=tags)
 
 
-async def make_snapshot(snapshot_spec: Path, rpa: Path) -> Snapshot:
+async def make_snapshot(snapshot_spec: Path) -> Snapshot:
     with open(snapshot_spec, "r") as snapshot_file:
         snapshot_model = SnapshotModel.model_validate_json(snapshot_file.read())
 
@@ -118,19 +128,13 @@ async def make_snapshot(snapshot_spec: Path, rpa: Path) -> Snapshot:
     for component_model in snapshot_model.components:
         repository = component_model.rh_registry_repo
         image_digest = component_model.image_digest
+        tags = component_model.tags
 
-        component_tasks.append(make_component(repository, image_digest))
+        component_tasks.append(make_component(repository, image_digest, tags))
 
     components = await asyncio.gather(*component_tasks)
 
-    # with open(data, "r") as data_file:
-    #     data_dict = json.load(data_file)
-
-    # TODO: load tags
-    tags: list[str] = []
-    cpe = ""  # data_dict["releaseNotes"]["cpe"]
-
-    return Snapshot(components=components, tags=tags, cpe=cpe)
+    return Snapshot(components=components)
 
 
 def construct_purl(repository: str, digest: str, arch: Optional[str] = None) -> str:

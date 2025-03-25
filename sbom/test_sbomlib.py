@@ -66,10 +66,12 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
                 {
                     "containerImage": "quay.io/repo1@sha256:deadbeef",
                     "rh-registry-repo": "registry.redhat.io/repo1",
+                    "tags": ["1.0"],
                 },
                 {
                     "containerImage": "quay.io/repo2@sha256:ffffffff",
                     "rh-registry-repo": "registry.redhat.io/repo2",
+                    "tags": ["2.0", "latest"],
                 },
             ]
         }
@@ -80,14 +82,14 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
             Component(
                 "registry.redhat.io/repo1",
                 image=IndexImage("sha256:deadbeef", children=[Image("sha256:aaaaffff")]),
+                tags=["1.0"],
             ),
             Component(
                 "registry.redhat.io/repo2",
                 image=IndexImage("sha256:ffffffff", children=[Image("sha256:bbbbffff")]),
+                tags=["2.0", "latest"],
             ),
         ],
-        tags=[],
-        cpe="",
     )
 
     def fake_get_image_manifest(repository: str, _: str) -> dict[str, Any]:
@@ -108,5 +110,5 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
 
     with patch("sbomlib.get_image_manifest", side_effect=fake_get_image_manifest):
         with patch("builtins.open", mock_open(read_data=snapshot_raw)):
-            snapshot = await sbomlib.make_snapshot(Path(""), Path(""))
+            snapshot = await sbomlib.make_snapshot(Path(""))
             assert snapshot == expected_snapshot
