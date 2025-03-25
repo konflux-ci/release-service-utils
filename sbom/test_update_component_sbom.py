@@ -1,17 +1,16 @@
 import json
-import unittest
-from unittest.mock import MagicMock, patch, mock_open, AsyncMock, call, ANY
+from unittest.mock import patch, AsyncMock, call, ANY
 import pytest
 from pathlib import Path
 
-from update_component_sbom import update_sboms
-from sbomlib import Component, Image, IndexImage, Snapshot
+from sbom.update_component_sbom import update_sboms
+from sbom.sbomlib import Component, Image, IndexImage, Snapshot
 
 TESTDATA_PATH = Path(__file__).parent.joinpath("testdata")
 
 
 @pytest.mark.asyncio
-@patch("update_component_sbom.write_sbom")
+@patch("sbom.update_component_sbom.write_sbom")
 async def test_spdx_single_component_single_arch(mock_write_sbom: AsyncMock) -> None:
 
     async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
@@ -31,13 +30,13 @@ async def test_spdx_single_component_single_arch(mock_write_sbom: AsyncMock) -> 
     with open(TESTDATA_PATH.joinpath("single-component-single-arch/release_sbom.json")) as fp:
         expected_sbom = json.load(fp)
 
-    with patch("update_component_sbom.load_sbom", side_effect=fake_load_sbom):
+    with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
         await update_sboms(snapshot, Path("dummy"))
         mock_write_sbom.assert_awaited_with(expected_sbom, ANY)
 
 
 @pytest.mark.asyncio
-@patch("update_component_sbom.write_sbom")
+@patch("sbom.update_component_sbom.write_sbom")
 async def test_spdx_single_component_multiarch(mock_write_sbom: AsyncMock) -> None:
 
     async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
@@ -79,7 +78,7 @@ async def test_spdx_single_component_multiarch(mock_write_sbom: AsyncMock) -> No
     ) as fp:
         expected_image_sbom = json.load(fp)
 
-    with patch("update_component_sbom.load_sbom", side_effect=fake_load_sbom):
+    with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
         await update_sboms(snapshot, Path("dummy"))
 
         mock_write_sbom.assert_has_awaits(

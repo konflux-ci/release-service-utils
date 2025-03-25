@@ -7,8 +7,8 @@ from pathlib import Path
 
 from unittest.mock import mock_open, patch, AsyncMock, call
 
-import sbomlib
-from sbomlib import IndexImage, Snapshot, Component, Image
+import sbom.sbomlib as sbomlib
+from sbom.sbomlib import IndexImage, Snapshot, Component, Image
 
 
 @pytest.mark.parametrize(
@@ -108,7 +108,7 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
                 "manifests": [{"digest": child_digest}],
             }
 
-    with patch("sbomlib.get_image_manifest", side_effect=fake_get_image_manifest):
+    with patch("sbom.sbomlib.get_image_manifest", side_effect=fake_get_image_manifest):
         with patch("builtins.open", mock_open(read_data=snapshot_raw)):
             snapshot = await sbomlib.make_snapshot(Path(""))
             assert snapshot == expected_snapshot

@@ -4,12 +4,12 @@ import unittest
 from datetime import timezone
 from unittest.mock import MagicMock, mock_open, patch
 
-from create_product_sbom import create_sbom
+from sbom.create_product_sbom import create_sbom
 
 
 class TestCreateSBOM(unittest.TestCase):
-    @patch("create_product_sbom.uuid")
-    @patch("create_product_sbom.datetime")
+    @patch("sbom.create_product_sbom.uuid")
+    @patch("sbom.create_product_sbom.datetime")
     def test_create_sbom_no_components(self, mock_datetime: MagicMock, mock_uuid: MagicMock):
         mock_uuid.uuid4.return_value = "039f091d-8790-41bc-b63e-251ec860e3db"
 
@@ -67,8 +67,8 @@ class TestCreateSBOM(unittest.TestCase):
                 ],
             }
 
-    @patch("create_product_sbom.uuid")
-    @patch("create_product_sbom.datetime")
+    @patch("sbom.create_product_sbom.uuid")
+    @patch("sbom.create_product_sbom.datetime")
     def test_create_sbom_single_component(
         self, mock_datetime: MagicMock, mock_uuid: MagicMock
     ):
@@ -145,8 +145,8 @@ class TestCreateSBOM(unittest.TestCase):
                 ],
             }
 
-    @patch("create_product_sbom.uuid")
-    @patch("create_product_sbom.datetime")
+    @patch("sbom.create_product_sbom.uuid")
+    @patch("sbom.create_product_sbom.datetime")
     def test_create_sbom_multiple_components_multiple_purls(
         self, mock_datetime: MagicMock, mock_uuid: MagicMock
     ):

@@ -276,3 +276,28 @@ def get_oci_auth_file(reference: str, auth: Path, fp: Any) -> bool:
     json.dump({"auths": {}}, fp)
     fp.flush()
     return False
+
+
+def without_sha_header(digest: str) -> str:
+    """
+    Returns a digest without the "sha256:" header.
+    """
+    return digest.removeprefix("sha256:")
+
+
+def get_purl_arch(purl_str: str) -> Optional[str]:
+    """
+    Get the arch qualifier from a PackageURL.
+    """
+    purl = PackageURL.from_string(purl_str).to_dict()
+    return purl["qualifiers"].get("arch")
+
+
+def get_purl_digest(purl_str: str) -> str:
+    """
+    Get the image digest from a PackageURL.
+    """
+    purl = PackageURL.from_string(purl_str)
+    if purl.version is None:
+        raise ValueError()
+    return purl.version
