@@ -137,7 +137,7 @@ def test_get_rh_registry_image_properties__success():
     """
     image = generate_image("1111", "amd64", ["latest"])
 
-    registry, repository, tags = get_rh_registry_image_properties(image)
+    registry, repository, tags = get_rh_registry_image_properties(image)[0]
 
     assert registry == REGISTRY
     assert repository == REPOSITORY
@@ -152,7 +152,7 @@ def test_get_rh_registry_image_properties__no_tags():
     image["repositories"][0]["tags"] = None
     image["repositories"][1]["tags"] = None
 
-    registry, repository, tags = get_rh_registry_image_properties(image)
+    registry, repository, tags = get_rh_registry_image_properties(image)[0]
 
     assert registry == REGISTRY
     assert repository == REPOSITORY
@@ -177,6 +177,22 @@ def test_get_rh_registry_image_properties__failure():
 
     with pytest.raises(RuntimeError):
         get_rh_registry_image_properties(image)
+
+
+def test_get_rh_registry_image_properties__multiple_images():
+    """Basic scenario where the function parses the image and returns
+    multiple images
+    """
+    image = generate_image("1111", "amd64", ["latest"], True)
+    image1, image2 = get_rh_registry_image_properties(image)
+
+    assert image1[0] == REGISTRY
+    assert image1[1] == REPOSITORY
+    assert image1[2] == ["latest"]
+
+    assert image2[0] == REGISTRY
+    assert image2[1] == "redhat-nonprod/myproduct----myimage"
+    assert image2[2] == ["latest"]
 
 
 @patch("pyxis.graphql_query")
@@ -252,7 +268,7 @@ def test_remove_none_values__success():
     assert remove_none_values(data) == expected_result
 
 
-def generate_image(id, architecture, tags):
+def generate_image(id, architecture, tags, multiple_repos=False):
     image = {
         "_id": id,
         "architecture": architecture,
@@ -269,6 +285,16 @@ def generate_image(id, architecture, tags):
             },
         ],
     }
+
+    if multiple_repos is not False:
+        image["repositories"].append(
+            {
+                "registry": REGISTRY,
+                "repository": "redhat-nonprod/myproduct----myimage",
+                "tags": [{"name": tag} for tag in tags],
+            }
+        )
+
     return image
 
 
