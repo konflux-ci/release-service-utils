@@ -19,12 +19,11 @@ async def test_spdx_single_component_single_arch(mock_write_sbom: AsyncMock) -> 
             return json.load(f), ""
 
     snapshot = Snapshot(
-        cpe="",
-        tags=[],
         components=[
             Component(
                 repository="registry.redhat.io/org/tenant/test",
                 image=Image("sha256:deadbeef"),
+                tags=["latest", "8.4-20230101"],
             )
         ],
     )
@@ -54,8 +53,6 @@ async def test_spdx_single_component_multiarch(mock_write_sbom: AsyncMock) -> No
             return json.load(f), ""
 
     snapshot = Snapshot(
-        cpe="",
-        tags=[],
         components=[
             Component(
                 repository="registry.redhat.io/org/tenant/test",
@@ -67,6 +64,7 @@ async def test_spdx_single_component_multiarch(mock_write_sbom: AsyncMock) -> No
                         )
                     ],
                 ),
+                tags=["latest", "8.4-20230101"],
             )
         ],
     )

@@ -117,7 +117,9 @@ class SPDX_2_3:
         }
 
     @classmethod
-    def _get_updated_index_purl(cls, package: dict, repository: str, index_digest: str) -> str:
+    def _get_updated_index_purl(
+        cls, package: dict, repository: str, index_digest: str, tag: Optional[str]
+    ) -> str:
         """
         Constructs a PackageURL for an index image with updated information.
         """
@@ -126,10 +128,12 @@ class SPDX_2_3:
         original_index_ref = package["externalRefs"][0]
         original_index_purl = original_index_ref["referenceLocator"]
         arch = get_purl_arch(original_index_purl)
-        return construct_purl(repository, index_digest, arch)
+        return construct_purl(repository, index_digest, arch, tag=tag)
 
     @classmethod
-    def _get_updated_multiarch_image_purl(cls, package: dict, repository: str) -> str:
+    def _get_updated_multiarch_image_purl(
+        cls, package: dict, repository: str, tag: Optional[str]
+    ) -> str:
         """
         Constructs a PackageURL for an arch-specific image with updated information.
         """
@@ -138,17 +142,19 @@ class SPDX_2_3:
         original_image_ref = package["externalRefs"][1]
         original_image_purl = original_image_ref["referenceLocator"]
         digest = get_purl_digest(original_image_purl)
-        return construct_purl(repository, digest)
+        return construct_purl(repository, digest, tag=tag)
 
     @classmethod
-    def _get_updated_image_purl(cls, package: dict, repository: str) -> str:
+    def _get_updated_image_purl(
+        cls, package: dict, repository: str, tag: Optional[str]
+    ) -> str:
         """
         Constructs a PackageURL for a single-arch image with updated information.
         """
         original_image_ref = package["externalRefs"][0]
         original_image_purl = original_image_ref["referenceLocator"]
         digest = get_purl_digest(original_image_purl)
-        return construct_purl(repository, digest)
+        return construct_purl(repository, digest, tag=tag)
 
     @classmethod
     def _find_image_package(cls, sbom: dict, digest: str) -> Optional[dict]:
@@ -203,7 +209,9 @@ class SPDX_2_3:
         return digest in child_digests
 
     @classmethod
-    def update_index_image_sbom(cls, repository: str, index: IndexImage, sbom: dict) -> None:
+    def update_index_image_sbom(
+        cls, component: Component, index: IndexImage, sbom: dict
+    ) -> None:
         """
         Update the SBOM of an index image in a repository.
         """
@@ -214,21 +222,27 @@ class SPDX_2_3:
                 f"supported version is {cls.supported_version}"
             )
 
-        sbom["name"] = make_reference(repository, index.digest)
+        sbom["name"] = make_reference(component.repository, index.digest)
 
         index_package = cls._find_image_package(sbom, index.digest)
         if not index_package:
             raise SBOMError(f"Could not find SPDX package for index {index}")
 
-        index_purl = construct_purl(repository, index.digest)
+        index_purl = construct_purl(
+            component.repository, index.digest, tag=component.unique_tag
+        )
         index_package["externalRefs"] = [cls._make_purl_ref(index_purl)]
 
         for package in sbom["packages"]:
             if not cls._is_relevant(package, index):
                 continue
 
-            index_purl = cls._get_updated_index_purl(package, repository, index.digest)
-            image_purl = cls._get_updated_multiarch_image_purl(package, repository)
+            index_purl = cls._get_updated_index_purl(
+                package, component.repository, index.digest, component.unique_tag
+            )
+            image_purl = cls._get_updated_multiarch_image_purl(
+                package, component.repository, component.unique_tag
+            )
 
             package["externalRefs"] = [
                 cls._make_purl_ref(index_purl),
@@ -236,7 +250,7 @@ class SPDX_2_3:
             ]
 
     @classmethod
-    def update_image_sbom(cls, repository: str, image: Image, sbom: dict) -> None:
+    def update_image_sbom(cls, component: Component, image: Image, sbom: dict) -> None:
         """
         Update the SBOM of an arch-specific image in a repository.
         """
@@ -247,13 +261,15 @@ class SPDX_2_3:
                 f"supported version is {cls.supported_version}"
             )
 
-        sbom["name"] = make_reference(repository, image.digest)
+        sbom["name"] = make_reference(component.repository, image.digest)
 
         image_package = cls._find_image_package(sbom, image.digest)
         if not image_package:
             raise SBOMError(f"Could not find SPDX package in SBOM for image {image}")
 
-        image_purl = cls._get_updated_image_purl(image_package, repository)
+        image_purl = cls._get_updated_image_purl(
+            image_package, component.repository, component.unique_tag
+        )
         image_package["externalRefs"] = [cls._make_purl_ref(image_purl)]
 
 
@@ -276,7 +292,7 @@ async def write_sbom(sbom: dict, path: Path) -> None:
 
 
 async def update_sbom(
-    repository: str, image: Union[IndexImage, Image], destination: Path
+    component: Component, image: Union[IndexImage, Image], destination: Path
 ) -> None:
     """
     Update an SBOM of an image in a repository and save it to a directory.
@@ -290,14 +306,14 @@ async def update_sbom(
         destination (Path): Path to the directory to save the SBOMs to.
     """
 
-    reference = f"{repository}@{image.digest}"
+    reference = f"{component.repository}@{image.digest}"
     sbom, sbom_path = await load_sbom(reference, destination)
 
     if sbom.get("spdxVersion") == "SPDX-2.3":
         if isinstance(image, IndexImage):
-            SPDX_2_3.update_index_image_sbom(repository, image, sbom)
+            SPDX_2_3.update_index_image_sbom(component, image, sbom)
         else:
-            SPDX_2_3.update_image_sbom(repository, image, sbom)
+            SPDX_2_3.update_image_sbom(component, image, sbom)
     elif sbom.get("bomFormat") == "CycloneDX":
         # TODO: implement
         pass
@@ -322,16 +338,16 @@ async def update_component_sboms(component: Component, destination: Path) -> Non
         # for both the index image and the child single arch images.
         index = component.image
         update_tasks = [
-            update_sbom(component.repository, index, destination),
+            update_sbom(component, index, destination),
         ]
         for child in index.children:
-            update_tasks.append(update_sbom(component.repository, child, destination))
+            update_tasks.append(update_sbom(component, child, destination))
 
         await asyncio.gather(*update_tasks)
         return
 
     # Single arch image
-    await update_sbom(component.repository, component.image, destination)
+    await update_sbom(component, component.image, destination)
 
 
 async def update_sboms(snapshot: Snapshot, destination: Path) -> None:

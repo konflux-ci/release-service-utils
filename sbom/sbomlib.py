@@ -137,9 +137,9 @@ async def make_snapshot(snapshot_spec: Path) -> Snapshot:
     return Snapshot(components=components)
 
 
-def construct_purl(repository: str, digest: str, arch: Optional[str] = None) -> str:
-    # TODO: add tags ( which ones? )
-
+def construct_purl(
+    repository: str, digest: str, arch: Optional[str] = None, tag: Optional[str] = None
+) -> str:
     repo_name = repository.split("/")[-1]
 
     # encoded_digest = digest.replace(":", "%3A")
@@ -147,6 +147,9 @@ def construct_purl(repository: str, digest: str, arch: Optional[str] = None) -> 
     optional_qualifiers = {}
     if arch is not None:
         optional_qualifiers["arch"] = arch
+
+    if tag is not None:
+        optional_qualifiers["tag"] = tag
 
     purl = PackageURL(
         type="oci",

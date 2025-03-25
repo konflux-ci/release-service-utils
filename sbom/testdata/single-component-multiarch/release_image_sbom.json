@@ -19,7 +19,7 @@
             "supplier": "NOASSERTION",
             "externalRefs": [
                 {
-                    "referenceLocator": "pkg:oci/test@sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921?repository_url=registry.redhat.io/org/tenant/test",
+                    "referenceLocator": "pkg:oci/test@sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921?repository_url=registry.redhat.io/org/tenant/test&tag=8.4-20230101",
                     "referenceType": "purl",
                     "referenceCategory": "PACKAGE-MANAGER"
                 }
