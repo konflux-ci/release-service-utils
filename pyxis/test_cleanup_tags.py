@@ -72,7 +72,7 @@ def test_cleanup_tags__success(
         [image1, image3],
     ]
 
-    cleanup_tags(GRAPHQL_API, "1111")
+    cleanup_tags(GRAPHQL_API, "1111", REPOSITORY)
 
     mock_get_image.assert_called_once_with(GRAPHQL_API, "1111")
     assert mock_get_candidates_for_cleanup.call_args_list == [
@@ -108,7 +108,7 @@ def test_cleanup_tags__nothing_to_cleanup(
         [image1, image2],
     ]
 
-    cleanup_tags(GRAPHQL_API, "1111")
+    cleanup_tags(GRAPHQL_API, "1111", REPOSITORY)
 
     mock_get_image.assert_called_once_with(GRAPHQL_API, "1111")
     assert mock_get_candidates_for_cleanup.call_args_list == [
@@ -137,7 +137,7 @@ def test_get_rh_registry_image_properties__success():
     """
     image = generate_image("1111", "amd64", ["latest"])
 
-    registry, repository, tags = get_rh_registry_image_properties(image)[0]
+    registry, repository, tags = get_rh_registry_image_properties(image, REPOSITORY)[0]
 
     assert registry == REGISTRY
     assert repository == REPOSITORY
@@ -152,7 +152,7 @@ def test_get_rh_registry_image_properties__no_tags():
     image["repositories"][0]["tags"] = None
     image["repositories"][1]["tags"] = None
 
-    registry, repository, tags = get_rh_registry_image_properties(image)[0]
+    registry, repository, tags = get_rh_registry_image_properties(image, REPOSITORY)[0]
 
     assert registry == REGISTRY
     assert repository == REPOSITORY
@@ -176,15 +176,15 @@ def test_get_rh_registry_image_properties__failure():
     ]
 
     with pytest.raises(RuntimeError):
-        get_rh_registry_image_properties(image)
+        get_rh_registry_image_properties(image, REPOSITORY)
 
 
-def test_get_rh_registry_image_properties__multiple_images():
+def test_get_rh_registry_image_properties__multiple_images__success():
     """Basic scenario where the function parses the image and returns
     multiple images
     """
     image = generate_image("1111", "amd64", ["latest"], True)
-    image1, image2 = get_rh_registry_image_properties(image)
+    image1, image2 = get_rh_registry_image_properties(image, None)
 
     assert image1[0] == REGISTRY
     assert image1[1] == REPOSITORY
@@ -193,6 +193,20 @@ def test_get_rh_registry_image_properties__multiple_images():
     assert image2[0] == REGISTRY
     assert image2[1] == "redhat-nonprod/myproduct----myimage"
     assert image2[2] == ["latest"]
+
+
+def test_get_rh_registry_image_properties__multiple_images__repository_set__success():
+    """Basic scenario where the function parses the image and returns
+    multiple images
+    """
+    image = generate_image("1111", "amd64", ["latest"], True)
+    images = get_rh_registry_image_properties(image, REPOSITORY)
+    image_properties = images[0]
+
+    assert len(images) == 1
+    assert image_properties[0] == REGISTRY
+    assert image_properties[1] == REPOSITORY
+    assert image_properties[2] == ["latest"]
 
 
 @patch("pyxis.graphql_query")

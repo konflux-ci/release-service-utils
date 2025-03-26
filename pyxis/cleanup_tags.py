@@ -40,6 +40,7 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
         ),
         help="Pyxis Graphql endpoint",
     )
+    parser.add_argument("--repository", help="Repository to cleanup tags from")
     parser.add_argument(
         "image_id",
         help="Pyxis Container Image ID",
@@ -58,6 +59,7 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
 def cleanup_tags_with_retry(
     graphql_api: str,
     image_id: str,
+    target_repository: str = None,
     retries: int = 3,
     backoff_factor: float = 5.0,
 ):
@@ -74,13 +76,16 @@ def cleanup_tags_with_retry(
     raise last_err
 
 
-def cleanup_tags(graphql_api, image_id: str):
+def cleanup_tags(graphql_api, image_id: str, target_repository: str = None):
     image = get_image(graphql_api, image_id)
-    for properties in get_rh_registry_image_properties(image):
+
+    LOGGER.info(f"Image id: {image['_id']}")
+    LOGGER.info(f"Image architecture: {image['architecture']}")
+
+    for properties in get_rh_registry_image_properties(image, target_repository):
         registry, repository, tags = properties
 
-        LOGGER.info(f"Image id: {image['_id']}")
-        LOGGER.info(f"Image architecture: {image['architecture']}")
+        LOGGER.info(f"Repository: {repository}")
         LOGGER.info(f"Image tags: {tags}")
 
         images_for_cleanup = {}
@@ -137,7 +142,7 @@ query ($id: ObjectIDFilterScalar!) {
     return image
 
 
-def get_rh_registry_image_properties(image: Dict):
+def get_rh_registry_image_properties(image: Dict, repository: str = None):
     """Get the registry.access.redhat.com repository properties of the image
     needed to search for related images.
 
@@ -145,6 +150,9 @@ def get_rh_registry_image_properties(image: Dict):
     """
     properties_list = []
     for repo in image["repositories"]:
+        if repository and repo["repository"] != repository:
+            continue
+
         if repo["registry"] == "registry.access.redhat.com":
             if repo["tags"] is None:
                 tags = []
@@ -360,9 +368,9 @@ def main():  # pragma: no cover
     LOGGER.debug(f"Pyxis GraphQL API: {args.pyxis_graphql_api}")
 
     if args.retry:
-        cleanup_tags_with_retry(args.pyxis_graphql_api, args.image_id)
+        cleanup_tags_with_retry(args.pyxis_graphql_api, args.image_id, args.repository)
     else:
-        cleanup_tags(args.pyxis_graphql_api, args.image_id)
+        cleanup_tags(args.pyxis_graphql_api, args.image_id, args.repository)
 
 
 if __name__ == "__main__":  # pragma: no cover
