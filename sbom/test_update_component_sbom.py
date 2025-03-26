@@ -12,9 +12,10 @@ TESTDATA_PATH = Path(__file__).parent.joinpath("testdata")
 @pytest.mark.asyncio
 @patch("sbom.update_component_sbom.write_sbom")
 async def test_spdx_single_component_single_arch(mock_write_sbom: AsyncMock) -> None:
+    data_path = TESTDATA_PATH.joinpath("single-component-single-arch/spdx")
 
     async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
-        with open(TESTDATA_PATH.joinpath("single-component-single-arch/build_sbom.json")) as f:
+        with open(data_path.joinpath("build_sbom.json")) as f:
             return json.load(f), ""
 
     snapshot = Snapshot(
@@ -27,7 +28,7 @@ async def test_spdx_single_component_single_arch(mock_write_sbom: AsyncMock) -> 
         ],
     )
 
-    with open(TESTDATA_PATH.joinpath("single-component-single-arch/release_sbom.json")) as fp:
+    with open(data_path.joinpath("release_sbom.json")) as fp:
         expected_sbom = json.load(fp)
 
     with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
@@ -38,17 +39,14 @@ async def test_spdx_single_component_single_arch(mock_write_sbom: AsyncMock) -> 
 @pytest.mark.asyncio
 @patch("sbom.update_component_sbom.write_sbom")
 async def test_spdx_single_component_multiarch(mock_write_sbom: AsyncMock) -> None:
+    data_path = TESTDATA_PATH.joinpath("single-component-multiarch/spdx")
 
     async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
         if "sha256:fae" in reference:
-            with open(
-                TESTDATA_PATH.joinpath("single-component-multiarch/build_index_sbom.json")
-            ) as f:
+            with open(data_path.joinpath("build_index_sbom.json")) as f:
                 return json.load(f), ""
 
-        with open(
-            TESTDATA_PATH.joinpath("single-component-multiarch/build_image_sbom.json")
-        ) as f:
+        with open(data_path.joinpath("build_image_sbom.json")) as f:
             return json.load(f), ""
 
     snapshot = Snapshot(
@@ -68,14 +66,10 @@ async def test_spdx_single_component_multiarch(mock_write_sbom: AsyncMock) -> No
         ],
     )
 
-    with open(
-        TESTDATA_PATH.joinpath("single-component-multiarch/release_index_sbom.json")
-    ) as fp:
+    with open(data_path.joinpath("release_index_sbom.json")) as fp:
         expected_index_sbom = json.load(fp)
 
-    with open(
-        TESTDATA_PATH.joinpath("single-component-multiarch/release_image_sbom.json")
-    ) as fp:
+    with open(data_path.joinpath("release_image_sbom.json")) as fp:
         expected_image_sbom = json.load(fp)
 
     with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):

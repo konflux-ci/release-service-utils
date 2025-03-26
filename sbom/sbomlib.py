@@ -32,6 +32,7 @@ class Component:
 
     # Original regex from:
     # https://github.com/konflux-ci/release-service-catalog/blob/0c97b5076ab70e5fdc2660eea2216de07f42c045/tasks/managed/populate-release-notes/populate-release-notes.yaml#L46
+    # FIXME: is this right?
     unique_tag_regex = re.compile(r"(rhel-)?v?[0-9]+\.[0-9]+(\.[0-9]+)?-[0-9]{8,}")
 
     repository: str
