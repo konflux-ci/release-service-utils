@@ -163,7 +163,7 @@ def construct_purl(
 
 
 async def run_async_subprocess(
-    cmd: list[str], env: Optional[dict[str, str]] = None
+    cmd: list[str], env: Optional[dict[str, str]] = None, retry_times: int = 0
 ) -> tuple[int, bytes, bytes]:
     """
     Run command in subprocess asynchronously.
@@ -171,19 +171,27 @@ async def run_async_subprocess(
     Args:
         cmd (list[str]): command to run in subprocess.
         env (dict[str, str] | None): environ dict
+        retry_times (int): number of retries if the process ends with non-zero return code
     """
-    # TODO: implement retry mechanism
+    if retry_times < 0:
+        raise ValueError("Retry count cannot be negative.")
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-    )
+    for _ in range(1 + retry_times):
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
 
-    stdout, stderr = await proc.communicate()
-    assert proc.returncode is not None
-    return proc.returncode, stdout, stderr
+        stdout, stderr = await proc.communicate()
+        assert proc.returncode is not None  # can't be None after proc.communicate is awaited
+        code = proc.returncode
+        if code == 0:
+            return code, stdout, stderr
+
+    # guaranteed to be bound, the loop runs at least once
+    return code, stdout, stderr
 
 
 async def get_image_manifest(repository: str, image_digest: str) -> dict[str, Any]:
