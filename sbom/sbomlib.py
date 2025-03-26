@@ -1,5 +1,6 @@
+from contextlib import contextmanager
 import json
-from typing import IO, Optional, Any, TextIO, Union
+from typing import Optional, Any, Union, Generator
 from pathlib import Path
 from dataclasses import dataclass
 import re
@@ -197,7 +198,7 @@ async def run_async_subprocess(
 async def get_image_manifest(repository: str, image_digest: str) -> dict[str, Any]:
     """
     Gets a dictionary containing the data from a manifest for an image in a
-    repository. Tries using the ~/.docker/config.json file for authentication.
+    repository.
 
     Args:
         repository (str): image repository URL
@@ -205,21 +206,14 @@ async def get_image_manifest(repository: str, image_digest: str) -> dict[str, An
     """
     reference = make_reference(repository, image_digest)
 
-    with tempfile.NamedTemporaryFile("+w") as authfile:
-        if not get_oci_auth_file(
-            reference,
-            Path(os.path.expanduser("~/.docker/config.json")),
-            authfile,
-        ):
-            raise ValueError(f"Could not get OCI auth for {reference}.")
-
+    with make_oci_auth_file(reference) as authfile:
         code, stdout, stderr = await run_async_subprocess(
             [
                 "oras",
                 "manifest",
                 "fetch",
                 "--registry-config",
-                authfile.name,
+                authfile,
                 reference,
             ]
         )
@@ -245,16 +239,26 @@ def make_reference(repository: str, image_digest: str) -> str:
     return f"{repository}@{image_digest}"
 
 
-def get_oci_auth_file(reference: str, auth: Path, fp: Any) -> bool:
+@contextmanager
+def make_oci_auth_file(
+    reference: str, auth: Optional[Path] = None
+) -> Generator[str, Any, None]:
     """
     Gets path to a temporary file containing the docker config JSON for <reference>.
-    Returns True if a token was found, False otherwise.
+    Deletes the file after the with statement. If no path to the docker config
+    is provided, tries using ~/.docker/config.json
 
     Args:
         reference (str): Reference to an image in the form registry/repo@sha256-deadbeef
-        auth (Path): Existing docker config.json
-        fp: File object to write the new auth file to
+        auth (Path | None): Existing docker config.json
+
+    Example:
+        >>> with make_oci_auth_file(ref) as auth_path:
+                perform_work_in_oci()
     """
+    if auth is None:
+        auth = Path(os.path.expanduser("~/.docker/config.json"))
+
     if not auth.is_file():
         raise ValueError(f"No docker config file at {auth}")
 
@@ -271,20 +275,26 @@ def get_oci_auth_file(reference: str, auth: Path, fp: Any) -> bool:
 
     current_ref = ref
 
-    while True:
-        token = auths.get(current_ref)
-        if token is not None:
-            json.dump({"auths": {registry: token}}, fp)
-            fp.flush()
-            return True
+    try:
+        tmpfile = tempfile.NamedTemporaryFile(mode="w", delete=False)
+        while True:
+            token = auths.get(current_ref)
+            if token is not None:
+                json.dump({"auths": {registry: token}}, tmpfile)
+                tmpfile.close()
+                yield tmpfile.name
+                return
 
-        if "/" not in current_ref:
-            break
-        current_ref = current_ref.rsplit("/", 1)[0]
+            if "/" not in current_ref:
+                break
+            current_ref = current_ref.rsplit("/", 1)[0]
 
-    json.dump({"auths": {}}, fp)
-    fp.flush()
-    return False
+        json.dump({"auths": {}}, tmpfile)
+        tmpfile.close()
+        yield tmpfile.name
+    finally:
+        # this also deletes the file
+        tmpfile.close()
 
 
 def without_sha_header(digest: str) -> str:

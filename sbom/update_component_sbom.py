@@ -29,14 +29,9 @@ async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
     """
     Download an SBOM for an image reference to a destination directory.
     """
-    with tempfile.NamedTemporaryFile(mode="+w") as authfile:
-        if not sbomlib.get_oci_auth_file(
-            reference, Path(os.path.expanduser("~/.docker/config.json")), authfile
-        ):
-            raise RuntimeError(f"Could not find auth for {reference}")
-
+    with sbomlib.make_oci_auth_file(reference) as authfile:
         code, stdout, stderr = await sbomlib.run_async_subprocess(
-            ["cosign", "download", "sbom", reference], env={"DOCKER_CONFIG": authfile.name}
+            ["cosign", "download", "sbom", reference], env={"DOCKER_CONFIG": authfile}
         )
 
     if code != 0:
