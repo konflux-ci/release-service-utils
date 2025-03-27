@@ -139,12 +139,23 @@ async def make_snapshot(snapshot_spec: Path) -> Snapshot:
     return Snapshot(components=components)
 
 
+def hack_purl_encoding(purl: str) -> str:
+    """
+    Encode ':' characters in PURL that are not the scheme and type separator.
+    """
+    if purl.count(":") == 1:
+        return purl
+
+    first_idx = purl.find(":")
+    after_first = purl[first_idx + 1 :]
+    after_first = after_first.replace(":", "%3A")
+    return f"{purl[:first_idx]}:{after_first}"
+
+
 def construct_purl(
     repository: str, digest: str, arch: Optional[str] = None, tag: Optional[str] = None
 ) -> str:
     repo_name = repository.split("/")[-1]
-
-    # encoded_digest = digest.replace(":", "%3A")
 
     optional_qualifiers = {}
     if arch is not None:
@@ -160,7 +171,11 @@ def construct_purl(
         qualifiers={"repository_url": repository, **optional_qualifiers},
     )
 
-    return str(purl)
+    # FIXME: There's a bug in PackageURL python that incorrectly handles
+    # encoding of ':' characters.  When this PR is merged, the hack should be
+    # removed: https://github.com/package-url/packageurl-python/pull/178
+    purl_str = hack_purl_encoding(str(purl))
+    return purl_str
 
 
 async def run_async_subprocess(
@@ -218,7 +233,7 @@ async def get_image_manifest(repository: str, image_digest: str) -> dict[str, An
             ]
         )
     if code != 0:
-        raise RuntimeError(f"Could not get manifest of {reference}: {stderr.decode()}")
+        raise SBOMError(f"Could not get manifest of {reference}: {stderr.decode()}")
 
     return json.loads(stdout)
 

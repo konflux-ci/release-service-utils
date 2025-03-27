@@ -19,7 +19,7 @@
             "supplier": "NOASSERTION",
             "externalRefs": [
                 {
-                    "referenceLocator": "pkg:oci/test@sha256:deadbeef?repository_url=registry.redhat.io/org/tenant/test&tag=8.4-20230101",
+                    "referenceLocator": "pkg:oci/test@sha256%3Adeadbeef?repository_url=registry.redhat.io/org/tenant/test&tag=8.4-20230101",
                     "referenceType": "purl",
                     "referenceCategory": "PACKAGE-MANAGER"
                 }

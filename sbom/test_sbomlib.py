@@ -1,14 +1,13 @@
-from io import StringIO
-from typing import Any
+from typing import Any, Optional
 import json
 import tempfile
 import pytest
 from pathlib import Path
 
-from unittest.mock import mock_open, patch, AsyncMock, call
+from unittest.mock import mock_open, patch
 
 import sbom.sbomlib as sbomlib
-from sbom.sbomlib import IndexImage, Snapshot, Component, Image
+from sbom.sbomlib import IndexImage, Snapshot, Component, Image, construct_purl
 
 
 @pytest.mark.parametrize(
@@ -108,3 +107,35 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
         with patch("builtins.open", mock_open(read_data=snapshot_raw)):
             snapshot = await sbomlib.make_snapshot(Path(""))
             assert snapshot == expected_snapshot
+
+
+@pytest.mark.parametrize(
+    ["repository", "digest", "arch", "tag", "expected"],
+    [
+        pytest.param(
+            "registry.redhat.io/test",
+            "sha256:deadbeef",
+            "amd64",
+            "1.0",
+            "pkg:oci/test@sha256%3Adeadbeef?arch=amd64&repository_url=registry.redhat.io/test&tag=1.0",
+        ),
+        pytest.param(
+            "registry.redhat.io/test",
+            "sha256:deadbeef",
+            None,
+            None,
+            "pkg:oci/test@sha256%3Adeadbeef?repository_url=registry.redhat.io/test",
+        ),
+        pytest.param(
+            "registry.redhat.io/org/test",
+            "sha256:deadbeef",
+            None,
+            None,
+            "pkg:oci/test@sha256%3Adeadbeef?repository_url=registry.redhat.io/org/test",
+        ),
+    ],
+)
+def test_construct_purl(
+    repository: str, digest: str, arch: Optional[str], tag: Optional[str], expected: str
+) -> None:
+    assert construct_purl(repository, digest, arch, tag) == expected
