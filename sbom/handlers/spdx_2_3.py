@@ -1,3 +1,7 @@
+"""
+This module contains the SBOM handler for SPDX-2.3.
+"""
+
 from typing import Optional, Union
 
 from sbom.handlers.abstract import SBOMHandler
@@ -14,7 +18,7 @@ from sbom.sbomlib import (
 )
 
 
-class SPDX_2_3(SBOMHandler):
+class SPDXVersion23(SBOMHandler):  # pylint: disable=too-few-public-methods
     """
     Class containing methods for SPDX v2.3 SBOM manipulation.
     """

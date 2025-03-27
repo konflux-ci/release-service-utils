@@ -11,7 +11,7 @@ from pathlib import Path
 import aiofiles
 
 from sbom.handlers import get_handler
-import sbom.sbomlib as sbomlib
+from sbom import sbomlib
 from sbom.sbomlib import (
     Component,
     SBOMError,
@@ -91,7 +91,7 @@ async def update_sbom(
 
         await write_sbom(sbom, sbom_path)
     except SBOMError:
-        LOG.exception(f"Failed to enrich SBOM for image {reference}.")
+        LOG.exception("Failed to enrich SBOM for image %s.", reference)
 
 
 async def update_component_sboms(component: Component, destination: Path) -> None:
@@ -136,6 +136,9 @@ async def update_sboms(snapshot: Snapshot, destination: Path) -> None:
 
 
 async def main() -> None:
+    """
+    Script entrypoint.
+    """
     parser = argparse.ArgumentParser(
         prog="update-component-sbom",
         description="Update component SBOM purls with release info.",

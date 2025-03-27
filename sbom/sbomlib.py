@@ -1,5 +1,10 @@
+"""
+This library contains utility functions for SBOM generation and enrichment.
+"""
+
 from contextlib import contextmanager
 import json
+import logging
 from typing import Optional, Any, Union, Generator
 from pathlib import Path
 from dataclasses import dataclass
@@ -9,18 +14,28 @@ import tempfile
 import os
 
 
-# FIXME: remove pydantic
 from packageurl import PackageURL
 import pydantic as pdc
+
+LOG = logging.getLogger(__name__)
 
 
 @dataclass
 class Image:
+    """
+    Object representing a single image in some repository.
+    """
+
     digest: str
 
 
 @dataclass
 class IndexImage:
+    """
+    Object representing an index image in some repository. It also contains
+    references to child images.
+    """
+
     digest: str
     children: list[Image]
 
@@ -33,7 +48,6 @@ class Component:
 
     # Original regex from:
     # https://github.com/konflux-ci/release-service-catalog/blob/0c97b5076ab70e5fdc2660eea2216de07f42c045/tasks/managed/populate-release-notes/populate-release-notes.yaml#L46
-    # FIXME: is this right?
     unique_tag_regex = re.compile(r"(rhel-)?v?[0-9]+\.[0-9]+(\.[0-9]+)?-[0-9]{8,}")
 
     repository: str
@@ -42,6 +56,10 @@ class Component:
 
     @property
     def unique_tag(self) -> Optional[str]:
+        """
+        Get a unique tag from component tags if such a tag is found, else
+        return None.
+        """
         for tag in self.tags:
             if self.unique_tag_regex.match(tag) is not None:
                 return tag
@@ -59,6 +77,10 @@ class Snapshot:
 
 
 class SBOMError(Exception):
+    """
+    Exception that can be raised during SBOM generation and enrichment.
+    """
+
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
 
@@ -75,6 +97,9 @@ class ComponentModel(pdc.BaseModel):
     @pdc.field_validator("image_digest", mode="after")
     @classmethod
     def is_valid_digest_reference(cls, value: str) -> str:
+        """
+        Validates that the digest reference is in the correct format.
+        """
         if not re.match(r"^[^:]+@sha256:[0-9a-f]+$", value):
             raise ValueError(f"{value} is not a valid digest reference.")
 
@@ -92,19 +117,23 @@ class SnapshotModel(pdc.BaseModel):
 
 
 async def construct_image(repository: str, image_digest: str) -> Union[Image, IndexImage]:
+    """
+    Creates an Image or IndexImage object based on an image reference. Performs
+    a registry call for index images, to parse all their child digests.
+    """
     manifest = await get_image_manifest(repository, image_digest)
     media_type = manifest["mediaType"]
 
-    if (
-        media_type == "application/vnd.oci.image.manifest.v1+json"
-        or media_type == "application/vnd.docker.distribution.manifest.v2+json"
-    ):
+    if media_type in {
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+    }:
         return Image(digest=image_digest)
 
-    if (
-        media_type == "application/vnd.oci.image.index.v1+json"
-        or media_type == "application/vnd.docker.distribution.manifest.list.v2+json"
-    ):
+    if media_type in {
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+    }:
         children = []
         for submanifest in manifest["manifests"]:
             child_digest = submanifest["digest"]
@@ -112,18 +141,27 @@ async def construct_image(repository: str, image_digest: str) -> Union[Image, In
 
         return IndexImage(digest=image_digest, children=children)
 
-    # unsupported mediaType
-    # FIXME: log a warning and handle somehow
-    assert False
+    raise SBOMError(f"Unsupported mediaType: {media_type}")
 
 
 async def make_component(repository: str, image_digest: str, tags: list[str]) -> Component:
+    """
+    Creates a component object from input data.
+    """
     image: Union[Image, IndexImage] = await construct_image(repository, image_digest)
     return Component(repository=repository, image=image, tags=tags)
 
 
 async def make_snapshot(snapshot_spec: Path) -> Snapshot:
-    with open(snapshot_spec, "r") as snapshot_file:
+    """
+    Parse a snapshot spec from a JSON file and create an object representation
+    of it. Multiarch images are handled by fetching their index image manifests
+    and parsing their children as well.
+
+    Args:
+        snapshot_spec (Path): Path to a snapshot spec JSON file
+    """
+    with open(snapshot_spec, mode="r", encoding="utf-8") as snapshot_file:
         snapshot_model = SnapshotModel.model_validate_json(snapshot_file.read())
 
     component_tasks = []
@@ -155,6 +193,9 @@ def hack_purl_encoding(purl: str) -> str:
 def construct_purl(
     repository: str, digest: str, arch: Optional[str] = None, tag: Optional[str] = None
 ) -> str:
+    """
+    Construct an OCI PackageURL from image data.
+    """
     repo_name = repository.split("/")[-1]
 
     optional_qualifiers = {}
@@ -171,7 +212,7 @@ def construct_purl(
         qualifiers={"repository_url": repository, **optional_qualifiers},
     )
 
-    # FIXME: There's a bug in PackageURL python that incorrectly handles
+    # HACK: There's a bug in PackageURL python that incorrectly handles
     # encoding of ':' characters.  When this PR is merged, the hack should be
     # removed: https://github.com/package-url/packageurl-python/pull/178
     purl_str = hack_purl_encoding(str(purl))
@@ -282,10 +323,9 @@ def make_oci_auth_file(
     ref = reference.split("@", 1)[0]
 
     # Registry is up to the first slash
-    # FIXME: handle also no repository option
     registry = ref.split("/", 1)[0]
 
-    with open(auth, "r") as f:
+    with open(auth, mode="r", encoding="utf-8") as f:
         config = json.load(f)
     auths = config.get("auths", {})
 

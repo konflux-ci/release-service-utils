@@ -96,12 +96,11 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
                 "manifests": [{"digest": child_digest}],
             }
 
-        else:
-            child_digest = "sha256:bbbbffff"
-            return {
-                **index_manifest,
-                "manifests": [{"digest": child_digest}],
-            }
+        child_digest = "sha256:bbbbffff"
+        return {
+            **index_manifest,
+            "manifests": [{"digest": child_digest}],
+        }
 
     with patch("sbom.sbomlib.get_image_manifest", side_effect=fake_get_image_manifest):
         with patch("builtins.open", mock_open(read_data=snapshot_raw)):
