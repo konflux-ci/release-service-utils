@@ -116,7 +116,8 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
             "sha256:deadbeef",
             "amd64",
             "1.0",
-            "pkg:oci/test@sha256%3Adeadbeef?arch=amd64&repository_url=registry.redhat.io/test&tag=1.0",
+            "pkg:oci/test@sha256%3Adeadbeef?arch=amd64&"
+            "repository_url=registry.redhat.io/test&tag=1.0",
         ),
         pytest.param(
             "registry.redhat.io/test",

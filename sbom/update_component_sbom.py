@@ -144,9 +144,6 @@ async def main() -> None:
         description="Update component SBOM purls with release info.",
     )
     parser.add_argument(
-        "--data-path", required=True, type=Path, help="Path to the data (RPA) in JSON format."
-    )
-    parser.add_argument(
         "--snapshot-path",
         required=True,
         type=Path,
