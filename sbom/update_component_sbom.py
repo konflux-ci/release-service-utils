@@ -6,10 +6,8 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 from typing import Union
 from pathlib import Path
-import tempfile
 import aiofiles
 
 from sbom.handlers import get_handler
@@ -22,7 +20,8 @@ from sbom.sbomlib import (
     IndexImage,
 )
 
-LOG = logging.getLogger("update_component_sbom")
+
+LOG = logging.getLogger(__name__)
 
 
 async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
@@ -35,7 +34,7 @@ async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
         )
 
     if code != 0:
-        raise RuntimeError(f"Failed to fetch SBOM {reference}: {stderr}")
+        raise SBOMError(f"Failed to fetch SBOM {reference}: {stderr}")
 
     digest = reference.split("@", 1)[1]
     path = destination_dir.joinpath(digest)
@@ -78,16 +77,19 @@ async def update_sbom(
         destination (Path): Path to the directory to save the SBOMs to.
     """
 
-    reference = f"{component.repository}@{image.digest}"
-    sbom, sbom_path = await load_sbom(reference, destination)
+    try:
+        reference = f"{component.repository}@{image.digest}"
+        sbom, sbom_path = await load_sbom(reference, destination)
 
-    handler = get_handler(sbom)
-    if not handler:
-        raise SBOMError(f"Unsupported SBOM format for image {reference}.")
+        handler = get_handler(sbom)
+        if not handler:
+            raise SBOMError(f"Unsupported SBOM format for image {reference}.")
 
-    handler.update_sbom(component, image, sbom)
+        handler.update_sbom(component, image, sbom)
 
-    await write_sbom(sbom, sbom_path)
+        await write_sbom(sbom, sbom_path)
+    except SBOMError:
+        LOG.exception(f"Failed to enrich SBOM for image {reference}.")
 
 
 async def update_component_sboms(component: Component, destination: Path) -> None:
