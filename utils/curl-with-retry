@@ -1,0 +1,50 @@
+#!/bin/bash
+#
+# script:      curl-with-retry
+#
+# description: This script handles Jira API rate limiting by retrying requests with exponential backoff.
+#              It will retry up to 5 times, and will wait for a random amount of time between retries.
+#              There are a few caveats:
+#              - The script will only retry if the response code is 429 (rate limited).
+#              - You can still use --retry as needed to retry 5xx errors.
+#              - -o/--output should not be specified - the response will always be printed to stdout.
+#              - --fail should not be specified. The script will always fail if the request fails.
+#
+# example command:
+#              curl-with-retry
+#
+
+set -eu
+
+#!/bin/bash
+
+MAX_RETRIES=5
+BASE_SLEEP_TIME=1  # Initial wait time in seconds
+TMPFILE=$(mktemp)  # Create a temporary file for output
+
+for ((i=1; i<=MAX_RETRIES; i++)); do
+    RESPONSE=$(curl -s -o "$TMPFILE" -w "%{http_code}" "$@")
+
+    if [ "$RESPONSE" -eq 200 ]; then
+        cat "$TMPFILE"  # Print the output
+        exit 0
+    elif [ "$RESPONSE" -eq 429 ]; then # Rate limited
+        SLEEP_TIME=$((BASE_SLEEP_TIME * 2 ** (i-1)))  # Exponential growth
+        JITTER=$((RANDOM % 3))  # Random delay (0-2s)
+        TOTAL_SLEEP=$((SLEEP_TIME + JITTER))
+
+        cat "$TMPFILE" >&2 # Print the output
+        echo >&2
+
+        echo "Rate limited. Retrying in $TOTAL_SLEEP seconds..." >&2
+        sleep "$TOTAL_SLEEP"
+    else
+        cat "$TMPFILE" >&2 # Print the output
+        echo >&2
+        echo "Request failed with status $RESPONSE" >&2
+        exit 1
+    fi
+done
+
+echo "Max retries reached, exiting." >&2
+exit 1
