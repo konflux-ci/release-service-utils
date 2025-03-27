@@ -230,7 +230,8 @@ async def get_image_manifest(repository: str, image_digest: str) -> dict[str, An
                 "--registry-config",
                 authfile,
                 reference,
-            ]
+            ],
+            retry_times=3,
         )
     if code != 0:
         raise SBOMError(f"Could not get manifest of {reference}: {stderr.decode()}")

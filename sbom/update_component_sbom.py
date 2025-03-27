@@ -30,7 +30,9 @@ async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
     """
     with sbomlib.make_oci_auth_file(reference) as authfile:
         code, stdout, stderr = await sbomlib.run_async_subprocess(
-            ["cosign", "download", "sbom", reference], env={"DOCKER_CONFIG": authfile}
+            ["cosign", "download", "sbom", reference],
+            env={"DOCKER_CONFIG": authfile},
+            retry_times=3,
         )
 
     if code != 0:
