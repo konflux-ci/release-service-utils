@@ -19,6 +19,8 @@ RUN curl -L https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_
     curl -L https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz | tar -C /usr/bin/ -xzf - syft &&\
     chmod +x /usr/bin/{yq,kubectl,opm,glab,gh}
 
+RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+
 COPY --from=oras /usr/bin/oras /usr/bin/oras
 COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
 COPY --from=oras /usr/local/bin/get-reference-base /usr/local/bin/get-reference-base
@@ -38,6 +40,7 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     krb5-workstation \
     rsync \
     gcc \
+    python3-qpid-proton \
     && dnf clean all
 
 RUN curl -LO https://github.com/release-engineering/exodus-rsync/releases/latest/download/exodus-rsync && \
