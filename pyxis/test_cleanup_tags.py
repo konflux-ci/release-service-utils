@@ -81,7 +81,7 @@ def test_cleanup_tags__success(
         call(GRAPHQL_API, REGISTRY, REPOSITORY, "9.4-1111"),
     ]
     mock_update_images.assert_called_once_with(
-        GRAPHQL_API, ["latest", "9.4", "9.4-1111"], {image2["_id"]: image2}
+        GRAPHQL_API, ["latest", "9.4", "9.4-1111"], {image2["_id"]: image2}, REPOSITORY
     )
 
 
@@ -116,7 +116,8 @@ def test_cleanup_tags__nothing_to_cleanup(
         call(GRAPHQL_API, REGISTRY, REPOSITORY, "9.4"),
         call(GRAPHQL_API, REGISTRY, REPOSITORY, "9.4-1111"),
     ]
-    mock_update_images.assert_called_once_with(GRAPHQL_API, ["latest", "9.4", "9.4-1111"], {})
+    mock_update_images.assert_called_once_with(GRAPHQL_API, ["latest", "9.4", "9.4-1111"],
+                                               {}, REPOSITORY)
 
 
 @patch("pyxis.graphql_query")
@@ -137,7 +138,7 @@ def test_get_rh_registry_image_properties__success():
     """
     image = generate_image("1111", "amd64", ["latest"])
 
-    registry, repository, tags = get_rh_registry_image_properties(image, REPOSITORY)[0]
+    registry, repository, tags = get_rh_registry_image_properties(image)[0]
 
     assert registry == REGISTRY
     assert repository == REPOSITORY
@@ -152,11 +153,24 @@ def test_get_rh_registry_image_properties__no_tags():
     image["repositories"][0]["tags"] = None
     image["repositories"][1]["tags"] = None
 
-    registry, repository, tags = get_rh_registry_image_properties(image, REPOSITORY)[0]
+    registry, repository, tags = get_rh_registry_image_properties(image)[0]
 
     assert registry == REGISTRY
     assert repository == REPOSITORY
     assert tags == []
+
+
+def test_get_rh_registry_image_properties__multiple_images__repository_set__success():
+    """Basic scenario where the function parses the image and returns
+    multiple images
+    """
+    image = generate_image("1111", "amd64", ["latest"], True)
+    images = get_rh_registry_image_properties(image)
+    image_properties = images[0]
+
+    assert image_properties[0] == REGISTRY
+    assert image_properties[1] == REPOSITORY
+    assert image_properties[2] == ["latest"]
 
 
 def test_get_rh_registry_image_properties__failure():
@@ -176,37 +190,7 @@ def test_get_rh_registry_image_properties__failure():
     ]
 
     with pytest.raises(RuntimeError):
-        get_rh_registry_image_properties(image, REPOSITORY)
-
-
-def test_get_rh_registry_image_properties__multiple_images__success():
-    """Basic scenario where the function parses the image and returns
-    multiple images
-    """
-    image = generate_image("1111", "amd64", ["latest"], True)
-    image1, image2 = get_rh_registry_image_properties(image, None)
-
-    assert image1[0] == REGISTRY
-    assert image1[1] == REPOSITORY
-    assert image1[2] == ["latest"]
-
-    assert image2[0] == REGISTRY
-    assert image2[1] == "redhat-nonprod/myproduct----myimage"
-    assert image2[2] == ["latest"]
-
-
-def test_get_rh_registry_image_properties__multiple_images__repository_set__success():
-    """Basic scenario where the function parses the image and returns
-    multiple images
-    """
-    image = generate_image("1111", "amd64", ["latest"], True)
-    images = get_rh_registry_image_properties(image, REPOSITORY)
-    image_properties = images[0]
-
-    assert len(images) == 1
-    assert image_properties[0] == REGISTRY
-    assert image_properties[1] == REPOSITORY
-    assert image_properties[2] == ["latest"]
+        get_rh_registry_image_properties(image)
 
 
 @patch("pyxis.graphql_query")
@@ -233,16 +217,26 @@ def test_update_images__success(mock_update_image):
     """Happy path scenario:
     There are 2 images on input and both have the correct tags removed
     """
+
+    lasting_tags = {
+        "image1": [{"name": "latest"}, {"name": "9.4"}, {"name": "9.4-1111"}],
+        "image2": [{"name": "9.4"}, {"name": "9.4-2222"}],
+    }
+
     image1 = generate_image("1111", "amd64", ["latest", "9.4", "9.4-1111"])
     image1_new = generate_image("1111", "amd64", ["9.4-1111"])
+    image1_new["repositories"][0]["tags"] = lasting_tags["image1"]
+
     image2 = generate_image("2222", "amd64", ["9.4", "9.4-2222"])
     image2_new = generate_image("2222", "amd64", ["9.4-2222"])
+    image2_new["repositories"][0]["tags"] = lasting_tags["image2"]
+
     images = {
         image1["_id"]: image1,
         image2["_id"]: image2,
     }
 
-    update_images(GRAPHQL_API, ["latest", "9.4", "9.4-0000"], images)
+    update_images(GRAPHQL_API, ["latest", "9.4", "9.4-0000"], images, REPOSITORY)
 
     assert mock_update_image.call_args_list == [
         call(GRAPHQL_API, image1_new),

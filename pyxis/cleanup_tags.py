@@ -82,7 +82,7 @@ def cleanup_tags(graphql_api, image_id: str, target_repository: str = None):
     LOGGER.info(f"Image id: {image['_id']}")
     LOGGER.info(f"Image architecture: {image['architecture']}")
 
-    for properties in get_rh_registry_image_properties(image, target_repository):
+    for properties in get_rh_registry_image_properties(image):
         registry, repository, tags = properties
 
         LOGGER.info(f"Repository: {repository}")
@@ -107,7 +107,7 @@ def cleanup_tags(graphql_api, image_id: str, target_repository: str = None):
                     images_for_cleanup[id] = candidate
 
         LOGGER.info(f"Found {len(images_for_cleanup)} images for cleanup.")
-        update_images(graphql_api, tags, images_for_cleanup)
+        update_images(graphql_api, tags, images_for_cleanup, repository)
 
 
 def get_image(graphql_api: str, image_id: str) -> dict:
@@ -142,7 +142,7 @@ query ($id: ObjectIDFilterScalar!) {
     return image
 
 
-def get_rh_registry_image_properties(image: Dict, repository: str = None):
+def get_rh_registry_image_properties(image: Dict):
     """Get the registry.access.redhat.com repository properties of the image
     needed to search for related images.
 
@@ -150,9 +150,6 @@ def get_rh_registry_image_properties(image: Dict, repository: str = None):
     """
     properties_list = []
     for repo in image["repositories"]:
-        if repository and repo["repository"] != repository:
-            continue
-
         if repo["registry"] == "registry.access.redhat.com":
             if repo["tags"] is None:
                 tags = []
@@ -260,7 +257,7 @@ query (
     return images
 
 
-def update_images(graphql_api: str, tags: List[str], images: Dict):
+def update_images(graphql_api: str, tags: List[str], images: Dict, target_repository: str):
     """Update images to remove unwanted tags from them
 
     For each image in `images` it will remove all `tags`
@@ -274,10 +271,13 @@ def update_images(graphql_api: str, tags: List[str], images: Dict):
             repo_tags = [tag["name"] for tag in repository["tags"]]
             LOGGER.info(f"  {repository['registry']}/{repository['repository']}: {repo_tags}")
         for i in range(len(image["repositories"])):
-            repo_tags = image["repositories"][i]["tags"]
-            image["repositories"][i]["tags"] = [
-                tag for tag in repo_tags if tag["name"] not in tags
-            ]
+            # clean up tags only only from the given repository
+            if image["repositories"][i]["repository"] == target_repository:
+                repo_tags = image["repositories"][i]["tags"]
+                image["repositories"][i]["tags"] = [
+                    tag for tag in repo_tags if tag["name"] not in tags
+                ]
+
         # When we load the images for patching, we request all fields of
         # the ContainerRepository objects because otherwise we might remove some data with
         # the update. But that means that fields that are not used will be null/None and
