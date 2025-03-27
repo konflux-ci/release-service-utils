@@ -116,8 +116,9 @@ def test_cleanup_tags__nothing_to_cleanup(
         call(GRAPHQL_API, REGISTRY, REPOSITORY, "9.4"),
         call(GRAPHQL_API, REGISTRY, REPOSITORY, "9.4-1111"),
     ]
-    mock_update_images.assert_called_once_with(GRAPHQL_API, ["latest", "9.4", "9.4-1111"],
-                                               {}, REPOSITORY)
+    mock_update_images.assert_called_once_with(
+        GRAPHQL_API, ["latest", "9.4", "9.4-1111"], {}, REPOSITORY
+    )
 
 
 @patch("pyxis.graphql_query")

@@ -40,7 +40,7 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
         ),
         help="Pyxis Graphql endpoint",
     )
-    parser.add_argument("--repository", help="Repository to cleanup tags from")
+    parser.add_argument("--repository", required=True, help="Repository to cleanup tags from")
     parser.add_argument(
         "image_id",
         help="Pyxis Container Image ID",
@@ -76,7 +76,7 @@ def cleanup_tags_with_retry(
     raise last_err
 
 
-def cleanup_tags(graphql_api, image_id: str, target_repository: str = None):
+def cleanup_tags(graphql_api, image_id: str, target_repository: str):
     image = get_image(graphql_api, image_id)
 
     LOGGER.info(f"Image id: {image['_id']}")
