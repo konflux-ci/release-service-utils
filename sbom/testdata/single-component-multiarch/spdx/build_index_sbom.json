@@ -45,11 +45,6 @@
                     "referenceCategory": "PACKAGE-MANAGER",
                     "referenceType": "purl",
                     "referenceLocator": "pkg:oci/demo@sha256:fae7e52c95ee8d24ad9e64b54e693047b94e1b1ef98be3e3b4b9859f986e5b1d?arch=amd64&repository_url=quay.io/redhat-user-workloads/mjediny-tenant/demo"
-                },
-                {
-                    "referenceCategory": "PACKAGE-MANAGER",
-                    "referenceType": "purl",
-                    "referenceLocator": "pkg:oci/demo@sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921?repository_url=quay.io/redhat-user-workloads/mjediny-tenant/demo"
                 }
             ],
             "checksums": [

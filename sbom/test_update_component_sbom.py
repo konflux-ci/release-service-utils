@@ -24,7 +24,7 @@ class TestSPDXVersion23:
                 Component(
                     repository="registry.redhat.io/org/tenant/test",
                     image=Image("sha256:deadbeef"),
-                    tags=["latest", "8.4-20230101"],
+                    tags=["1.0", "latest"],
                 )
             ],
         )
@@ -64,7 +64,7 @@ class TestSPDXVersion23:
                         index_digest,
                         children=[Image(child_digest)],
                     ),
-                    tags=["latest", "8.4-20230101"],
+                    tags=["1.0", "latest"],
                 )
             ],
         )
@@ -115,7 +115,7 @@ class TestSPDXVersion23:
                         index_digest,
                         children=[Image(child_digest)],
                     ),
-                    tags=["latest", "8.4-20230101"],
+                    tags=["1.0", "latest"],
                 )
             ]
             * num_components,

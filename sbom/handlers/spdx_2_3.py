@@ -37,44 +37,27 @@ class SPDXVersion23(SBOMHandler):  # pylint: disable=too-few-public-methods
         }
 
     @classmethod
-    def _get_updated_index_purl(
-        cls, package: dict, repository: str, index_digest: str, tag: Optional[str]
-    ) -> str:
+    def _find_purl_in_refs(cls, package: dict, digest: str) -> Optional[str]:
         """
-        Constructs a PackageURL for an index image with updated information.
+        Tries and to find a purl in the externalRefs of a package the version of
+        which is equal to the digest provided.
         """
-        # TODO:
-        # this assumes that index and image packages are in positions 0 and 1 respectively
-        original_index_ref = package["externalRefs"][0]
-        original_index_purl = original_index_ref["referenceLocator"]
-        arch = get_purl_arch(original_index_purl)
-        return construct_purl(repository, index_digest, arch, tag=tag)
+        for ref in filter(lambda rf: rf["referenceType"] == "purl", package["externalRefs"]):
+            purl = ref["referenceLocator"]
+            if digest == get_purl_digest(purl):
+                return purl
+
+        return None
 
     @classmethod
-    def _get_updated_multiarch_image_purl(
-        cls, package: dict, repository: str, tag: Optional[str]
-    ) -> str:
+    def _get_updated_external_refs(
+        cls, digest: str, repository: str, tags: list[str], arch: Optional[str] = None
+    ) -> list[dict]:
         """
-        Constructs a PackageURL for an arch-specific image with updated information.
+        Gets new externalRefs value based on input information.
         """
-        # TODO:
-        # this assumes that index and image packages are in positions 0 and 1 respectively
-        original_image_ref = package["externalRefs"][1]
-        original_image_purl = original_image_ref["referenceLocator"]
-        digest = get_purl_digest(original_image_purl)
-        return construct_purl(repository, digest, tag=tag)
-
-    @classmethod
-    def _get_updated_image_purl(
-        cls, package: dict, repository: str, tag: Optional[str]
-    ) -> str:
-        """
-        Constructs a PackageURL for a single-arch image with updated information.
-        """
-        original_image_ref = package["externalRefs"][0]
-        original_image_purl = original_image_ref["referenceLocator"]
-        digest = get_purl_digest(original_image_purl)
-        return construct_purl(repository, digest, tag=tag)
+        purls = (construct_purl(repository, digest, tag=tag, arch=arch) for tag in tags)
+        return [cls._make_purl_ref(purl) for purl in purls]
 
     @classmethod
     def _find_image_package(cls, sbom: dict, digest: str) -> Optional[dict]:
@@ -148,31 +131,29 @@ class SPDXVersion23(SBOMHandler):  # pylint: disable=too-few-public-methods
         if not index_package:
             raise SBOMError(f"Could not find SPDX package for index {index}")
 
-        index_purl = construct_purl(
-            component.repository, index.digest, tag=component.unique_tag
+        index_package["externalRefs"] = cls._get_updated_external_refs(
+            index.digest,
+            component.repository,
+            component.tags,
         )
-        index_package["externalRefs"] = [cls._make_purl_ref(index_purl)]
 
         for package in sbom["packages"]:
             if not cls._is_relevant(package, index):
                 continue
 
-            index_purl = cls._get_updated_index_purl(
-                package, component.repository, index.digest, component.unique_tag
-            )
-            image_purl = cls._get_updated_multiarch_image_purl(
-                package, component.repository, component.unique_tag
-            )
+            original_purl = cls._find_purl_in_refs(package, index.digest)
+            if original_purl is None:
+                continue
 
-            package["externalRefs"] = [
-                cls._make_purl_ref(index_purl),
-                cls._make_purl_ref(image_purl),
-            ]
+            arch = get_purl_arch(original_purl)
+            package["externalRefs"] = cls._get_updated_external_refs(
+                index.digest, component.repository, component.tags, arch
+            )
 
     @classmethod
     def _update_image_sbom(cls, component: Component, image: Image, sbom: dict) -> None:
         """
-        Update the SBOM of an arch-specific image in a repository.
+        Update the SBOM of single-arch image in a repository.
         """
         version = sbom["spdxVersion"]
         if version != cls.supported_version:
@@ -187,10 +168,9 @@ class SPDXVersion23(SBOMHandler):  # pylint: disable=too-few-public-methods
         if not image_package:
             raise SBOMError(f"Could not find SPDX package in SBOM for image {image}")
 
-        image_purl = cls._get_updated_image_purl(
-            image_package, component.repository, component.unique_tag
+        image_package["externalRefs"] = cls._get_updated_external_refs(
+            image.digest, component.repository, component.tags
         )
-        image_package["externalRefs"] = [cls._make_purl_ref(image_purl)]
 
     @classmethod
     def update_sbom(

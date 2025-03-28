@@ -23,7 +23,12 @@
                 {
                     "referenceCategory": "PACKAGE-MANAGER",
                     "referenceType": "purl",
-                    "referenceLocator": "pkg:oci/test@sha256%3Afae7e52c95ee8d24ad9e64b54e693047b94e1b1ef98be3e3b4b9859f986e5b1d?repository_url=registry.redhat.io/org/tenant/test&tag=8.4-20230101"
+                    "referenceLocator": "pkg:oci/test@sha256%3Afae7e52c95ee8d24ad9e64b54e693047b94e1b1ef98be3e3b4b9859f986e5b1d?repository_url=registry.redhat.io/org/tenant/test&tag=1.0"
+                },
+                {
+                    "referenceCategory": "PACKAGE-MANAGER",
+                    "referenceType": "purl",
+                    "referenceLocator": "pkg:oci/test@sha256%3Afae7e52c95ee8d24ad9e64b54e693047b94e1b1ef98be3e3b4b9859f986e5b1d?repository_url=registry.redhat.io/org/tenant/test&tag=latest"
                 }
             ],
             "checksums": [
@@ -44,12 +49,12 @@
                 {
                     "referenceCategory": "PACKAGE-MANAGER",
                     "referenceType": "purl",
-                    "referenceLocator": "pkg:oci/test@sha256%3Afae7e52c95ee8d24ad9e64b54e693047b94e1b1ef98be3e3b4b9859f986e5b1d?arch=amd64&repository_url=registry.redhat.io/org/tenant/test&tag=8.4-20230101"
+                    "referenceLocator": "pkg:oci/test@sha256%3Afae7e52c95ee8d24ad9e64b54e693047b94e1b1ef98be3e3b4b9859f986e5b1d?arch=amd64&repository_url=registry.redhat.io/org/tenant/test&tag=1.0"
                 },
                 {
                     "referenceCategory": "PACKAGE-MANAGER",
                     "referenceType": "purl",
-                    "referenceLocator": "pkg:oci/test@sha256%3A84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921?repository_url=registry.redhat.io/org/tenant/test&tag=8.4-20230101"
+                    "referenceLocator": "pkg:oci/test@sha256%3Afae7e52c95ee8d24ad9e64b54e693047b94e1b1ef98be3e3b4b9859f986e5b1d?arch=amd64&repository_url=registry.redhat.io/org/tenant/test&tag=latest"
                 }
             ],
             "checksums": [
