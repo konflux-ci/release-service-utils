@@ -1,236 +1,139 @@
 import json
-import unittest
-from unittest.mock import MagicMock, patch, mock_open
+from unittest.mock import patch, AsyncMock, call, ANY
+import pytest
+from pathlib import Path
 
-from update_component_sbom import (
-    get_component_to_purls_map,
-    update_cyclonedx_sbom,
-    update_spdx_sbom,
-    update_sboms,
-)
+from sbom.update_component_sbom import update_sboms
+from sbom.sbomlib import Component, Image, IndexImage, Snapshot
+
+TESTDATA_PATH = Path(__file__).parent.joinpath("testdata")
 
 
-class TestUpdateComponentSBOM(unittest.TestCase):
-    def test_get_component_to_purls_map_single_arch(self) -> None:
-        images = [
-            {"component": "comp1", "purl": "purl1"},
-            {"component": "comp1", "purl": "purl2"},
-            {"component": "comp2", "purl": "purl3"},
-        ]
+class TestSPDXVersion23:
+    @pytest.mark.asyncio
+    @patch("sbom.update_component_sbom.write_sbom")
+    async def test_single_component_single_arch(self, mock_write_sbom: AsyncMock) -> None:
+        data_path = TESTDATA_PATH.joinpath("single-component-single-arch/spdx")
 
-        result = get_component_to_purls_map(images)
-        assert result == {
-            "comp1": ["purl1", "purl2"],
-            "comp2": ["purl3"],
-        }
+        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
+            with open(data_path.joinpath("build_sbom.json")) as f:
+                return json.load(f), ""
 
-    def test_get_component_to_purls_map_multi_arch(self) -> None:
-        images = [
-            {
-                "component": "comp1",
-                "purl": "pkg:oci/bar@sha256%3Aabcde?arch=amd64&repository_url=registry.io/foo",
-                "multiarch": True,
-                "arch": "amd64",
-                "imageSha": "foosha1",
-            },
-        ]
-
-        result = get_component_to_purls_map(images)
-        assert result == {
-            "comp1": ["pkg:oci/bar@sha256%3Afoosha1?repository_url=registry.io/foo"],
-            "comp1_amd64": [
-                "pkg:oci/bar@sha256%3Afoosha1?arch=amd64&repository_url=registry.io/foo",
-                "pkg:oci/bar@sha256%3Aabcde?repository_url=registry.io/foo",
+        snapshot = Snapshot(
+            components=[
+                Component(
+                    repository="registry.redhat.io/org/tenant/test",
+                    image=Image("sha256:deadbeef"),
+                    tags=["1.0", "latest"],
+                )
             ],
-        }
+        )
 
-    def test_update_cyclonedx_sbom(self) -> None:
-        sbom = {
-            "metadata": {
-                "component": {
-                    "name": "comp1",
-                    "purl": "purl1",
-                }
-            },
-            "components": [
-                {"name": "comp1", "purl": "purl1"},
-                {"name": "comp2", "purl": "purl2"},
-            ],
-        }
-        mapping = {
-            "comp1": ["updated_purl1"],
-            "comp2": ["updated_purl2"],
-        }
-        update_cyclonedx_sbom(sbom, mapping)
-        assert sbom == {
-            "metadata": {
-                "component": {
-                    "name": "comp1",
-                    "purl": "updated_purl1",
-                }
-            },
-            "components": [
-                {"name": "comp1", "purl": "updated_purl1"},
-                {"name": "comp2", "purl": "updated_purl2"},
-            ],
-        }
+        with open(data_path.joinpath("release_sbom.json")) as fp:
+            expected_sbom = json.load(fp)
 
-    def test_update_spdx_sbom(self) -> None:
-        sbom = {
-            "packages": [
-                {
-                    "name": "comp1",
-                    "externalRefs": [
-                        {
-                            "referenceCategory": "PACKAGE-MANAGER",
-                            "referenceType": "purl",
-                            "referenceLocator": "pkg:oci/package@sha256:123",
-                        }
-                    ],
-                },
-                {
-                    "name": "comp2",
-                    "externalRefs": [
-                        {
-                            "referenceCategory": "PACKAGE-MANAGER",
-                            "referenceType": "purl",
-                            "referenceLocator": "pkg:oci/package@sha256:456",
-                        }
-                    ],
-                },
-            ]
-        }
-        mapping = {
-            "comp1": [
-                "pkg:oci/package@sha256:123?repository_url=quay.io/foo/bar",
-                "pkg:oci/package@sha256:234?repository_url=quay.io/foo/bar",
-            ],
-            "comp2": [
-                "pkg:oci/package@sha256:456?repository_url=quay.io/foo/bar",
-                "pkg:oci/package@sha256:567?repository_url=quay.io/foo/bar",
-            ],
-        }
+        with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
+            await update_sboms(snapshot, Path("dummy"))
+            mock_write_sbom.assert_awaited_with(expected_sbom, ANY)
 
-        update_spdx_sbom(sbom, mapping)
-        assert sbom == {
-            "name": "quay.io/foo/bar@sha256:456",
-            "packages": [
-                {
-                    "name": "comp1",
-                    "externalRefs": [
-                        {
-                            "referenceCategory": "PACKAGE-MANAGER",
-                            "referenceType": "purl",
-                            "referenceLocator": "pkg:oci/package@sha256:123"
-                            "?repository_url=quay.io/foo/bar",
-                        },
-                        {
-                            "referenceCategory": "PACKAGE-MANAGER",
-                            "referenceType": "purl",
-                            "referenceLocator": "pkg:oci/package@sha256:234"
-                            "?repository_url=quay.io/foo/bar",
-                        },
-                    ],
-                },
-                {
-                    "name": "comp2",
-                    "externalRefs": [
-                        {
-                            "referenceCategory": "PACKAGE-MANAGER",
-                            "referenceType": "purl",
-                            "referenceLocator": "pkg:oci/package@sha256:456"
-                            "?repository_url=quay.io/foo/bar",
-                        },
-                        {
-                            "referenceCategory": "PACKAGE-MANAGER",
-                            "referenceType": "purl",
-                            "referenceLocator": "pkg:oci/package@sha256:567"
-                            "?repository_url=quay.io/foo/bar",
-                        },
-                    ],
-                },
+    @pytest.mark.asyncio
+    @patch("sbom.update_component_sbom.write_sbom")
+    async def test_single_component_multiarch(self, mock_write_sbom: AsyncMock) -> None:
+        data_path = TESTDATA_PATH.joinpath("single-component-multiarch/spdx")
+
+        index_digest = (
+            "sha256:fae7e52c95ee8d24ad9e64b54e693047b94e1b1ef98be3e3b4b9859f986e5b1d"
+        )
+        child_digest = (
+            "sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921"
+        )
+
+        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
+            if index_digest in reference:
+                with open(data_path.joinpath("build_index_sbom.json")) as f:
+                    return json.load(f), ""
+
+            with open(data_path.joinpath("build_image_sbom.json")) as f:
+                return json.load(f), ""
+
+        snapshot = Snapshot(
+            components=[
+                Component(
+                    repository="registry.redhat.io/org/tenant/test",
+                    image=IndexImage(
+                        index_digest,
+                        children=[Image(child_digest)],
+                    ),
+                    tags=["1.0", "latest"],
+                )
             ],
-        }
+        )
 
-    @patch("update_component_sbom.glob.glob")
-    @patch("update_component_sbom.get_component_to_purls_map")
-    @patch("update_component_sbom.update_cyclonedx_sbom")
-    @patch("update_component_sbom.update_spdx_sbom")
-    def test_update_sboms_with_cyclonedex_format(
-        self,
-        mock_spdx_sbom: MagicMock,
-        mock_cyclonedx_sbom: MagicMock,
-        mock_mapping: MagicMock,
-        mock_glob: MagicMock,
-    ) -> None:
-        # combining the content of data.json and sbom, since there can only be one read_data
-        # defined in the mock_open
-        test_cyclonedx_sbom = {
-            "bomFormat": "CycloneDX",
-            "images": "foo",
-        }
+        with open(data_path.joinpath("release_index_sbom.json")) as fp:
+            expected_index_sbom = json.load(fp)
 
-        with patch(
-            "builtins.open", mock_open(read_data=json.dumps(test_cyclonedx_sbom))
-        ) as mock_fs:
-            mock_glob.return_value = ["sbom1"]
-            update_sboms("data_path", "input_path", "output_path")
-            mock_mapping.assert_called_once_with("foo")
-            mock_spdx_sbom.assert_not_called()
-            mock_cyclonedx_sbom.assert_called_once_with(
-                test_cyclonedx_sbom, mock_mapping.return_value
+        with open(data_path.joinpath("release_image_sbom.json")) as fp:
+            expected_image_sbom = json.load(fp)
+
+        with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
+            await update_sboms(snapshot, Path("dummy"))
+
+            mock_write_sbom.assert_has_awaits(
+                [
+                    call(expected_index_sbom, ANY),
+                    call(expected_image_sbom, ANY),
+                ]
             )
-            assert mock_fs.call_count == 3
 
-    @patch("update_component_sbom.glob.glob")
-    @patch("update_component_sbom.get_component_to_purls_map")
-    @patch("update_component_sbom.update_cyclonedx_sbom")
-    @patch("update_component_sbom.update_spdx_sbom")
-    def test_update_sboms_with_spdx_format(
-        self,
-        mock_spdx_sbom: MagicMock,
-        mock_cyclonedx_sbom: MagicMock,
-        mock_mapping: MagicMock,
-        mock_glob: MagicMock,
-    ) -> None:
-        # combining the content of data.json and sbom, since there can only be one read_data
-        # defined in the mock_open
-        test_spdx_sbom = {"spdxVersion": "2.3", "images": "foo"}
+    @pytest.mark.asyncio
+    @patch("sbom.update_component_sbom.write_sbom")
+    async def test_multi_component_multiarch(self, mock_write_sbom: AsyncMock) -> None:
+        data_path = TESTDATA_PATH.joinpath("single-component-multiarch/spdx")
 
-        with patch(
-            "builtins.open", mock_open(read_data=json.dumps(test_spdx_sbom))
-        ) as mock_fs:
-            mock_glob.return_value = ["sbom1"]
-            update_sboms("data_path", "input_path", "output_path")
-            mock_mapping.assert_called_once_with("foo")
-            mock_cyclonedx_sbom.assert_not_called()
-            mock_spdx_sbom.assert_called_once_with(test_spdx_sbom, mock_mapping.return_value)
-            assert mock_fs.call_count == 3
+        index_digest = (
+            "sha256:fae7e52c95ee8d24ad9e64b54e693047b94e1b1ef98be3e3b4b9859f986e5b1d"
+        )
+        child_digest = (
+            "sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921"
+        )
 
-    @patch("update_component_sbom.glob.glob")
-    @patch("update_component_sbom.get_component_to_purls_map")
-    @patch("update_component_sbom.update_cyclonedx_sbom")
-    @patch("update_component_sbom.update_spdx_sbom")
-    def test_update_sboms_with_wrong_format(
-        self,
-        mock_spdx_sbom: MagicMock,
-        mock_cyclonedx_sbom: MagicMock,
-        mock_mapping: MagicMock,
-        mock_glob: MagicMock,
-    ) -> None:
-        # combining the content of data.json and sbom, since there can only be one read_data
-        # defined in the mock_open
-        test_spdx_sbom = {
-            "notSbom": "NoSbomVersion",
-            "images": "foo",
-        }
+        num_components = 250
 
-        with patch(
-            "builtins.open", mock_open(read_data=json.dumps(test_spdx_sbom))
-        ) as mock_fs:
-            mock_glob.return_value = ["not-sbom"]
-            update_sboms("data_path", "input_path", "output_path")
-            mock_mapping.assert_called_once_with("foo")
-            mock_spdx_sbom.assert_not_called()
-            mock_cyclonedx_sbom.assert_not_called()
-            assert mock_fs.call_count == 2
+        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
+            if index_digest in reference:
+                with open(data_path.joinpath("build_index_sbom.json")) as f:
+                    return json.load(f), ""
+
+            with open(data_path.joinpath("build_image_sbom.json")) as f:
+                return json.load(f), ""
+
+        snapshot = Snapshot(
+            components=[
+                Component(
+                    repository="registry.redhat.io/org/tenant/test",
+                    image=IndexImage(
+                        index_digest,
+                        children=[Image(child_digest)],
+                    ),
+                    tags=["1.0", "latest"],
+                )
+            ]
+            * num_components,
+        )
+
+        with open(data_path.joinpath("release_index_sbom.json")) as fp:
+            expected_index_sbom = json.load(fp)
+
+        with open(data_path.joinpath("release_image_sbom.json")) as fp:
+            expected_image_sbom = json.load(fp)
+
+        with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
+            await update_sboms(snapshot, Path("dummy"))
+
+            mock_write_sbom.assert_has_awaits(
+                [
+                    call(expected_index_sbom, ANY),
+                    call(expected_image_sbom, ANY),
+                ]
+                * num_components
+            )
