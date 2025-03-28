@@ -59,7 +59,7 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
 def cleanup_tags_with_retry(
     graphql_api: str,
     image_id: str,
-    target_repository: str = None,
+    target_repository: str,
     retries: int = 3,
     backoff_factor: float = 5.0,
 ):
@@ -67,7 +67,7 @@ def cleanup_tags_with_retry(
     for attempt in range(retries):
         try:
             time.sleep(backoff_factor * attempt)
-            cleanup_tags(graphql_api, image_id)
+            cleanup_tags(graphql_api, image_id, target_repository)
             return
         except RuntimeError as e:
             LOGGER.warning(f"Attempt {attempt+1} failed.")
@@ -79,35 +79,33 @@ def cleanup_tags_with_retry(
 def cleanup_tags(graphql_api, image_id: str, target_repository: str):
     image = get_image(graphql_api, image_id)
 
+    registry, repository, tags = get_rh_registry_image_properties(image, target_repository)
+
     LOGGER.info(f"Image id: {image['_id']}")
     LOGGER.info(f"Image architecture: {image['architecture']}")
+    LOGGER.info(f"Repository: {repository}")
+    LOGGER.info(f"Image tags: {tags}")
 
-    for properties in get_rh_registry_image_properties(image):
-        registry, repository, tags = properties
+    images_for_cleanup = {}
 
-        LOGGER.info(f"Repository: {repository}")
-        LOGGER.info(f"Image tags: {tags}")
+    for tag in tags:
+        candidates = get_candidates_for_cleanup(
+            graphql_api,
+            registry,
+            repository,
+            tag,
+        )
+        for candidate in candidates:
+            id = candidate["_id"]
+            if (
+                id != image["_id"]
+                and id not in images_for_cleanup
+                and candidate["architecture"] == image["architecture"]
+            ):
+                images_for_cleanup[id] = candidate
 
-        images_for_cleanup = {}
-
-        for tag in tags:
-            candidates = get_candidates_for_cleanup(
-                graphql_api,
-                registry,
-                repository,
-                tag,
-            )
-            for candidate in candidates:
-                id = candidate["_id"]
-                if (
-                    id != image["_id"]
-                    and id not in images_for_cleanup
-                    and candidate["architecture"] == image["architecture"]
-                ):
-                    images_for_cleanup[id] = candidate
-
-        LOGGER.info(f"Found {len(images_for_cleanup)} images for cleanup.")
-        update_images(graphql_api, tags, images_for_cleanup, repository)
+    LOGGER.info(f"Found {len(images_for_cleanup)} images for cleanup.")
+    update_images(graphql_api, tags, images_for_cleanup, repository)
 
 
 def get_image(graphql_api: str, image_id: str) -> dict:
@@ -142,28 +140,26 @@ query ($id: ObjectIDFilterScalar!) {
     return image
 
 
-def get_rh_registry_image_properties(image: Dict):
+def get_rh_registry_image_properties(image: Dict, target_repository: str):
     """Get the registry.access.redhat.com repository properties of the image
     needed to search for related images.
 
-    :return: List ([registry, repository, tags])
+    :return: (registry, repository, tags)
     """
-    properties_list = []
     for repo in image["repositories"]:
-        if repo["registry"] == "registry.access.redhat.com":
+        if (
+            repo["registry"] == "registry.access.redhat.com"
+            and repo["repository"] == target_repository
+        ):
             if repo["tags"] is None:
                 tags = []
             else:
                 tags = [tag["name"] for tag in repo["tags"]]
-            image_properties = (repo["registry"], repo["repository"], tags)
-            properties_list.append(image_properties)
+            return repo["registry"], repo["repository"], tags
 
-    if len(properties_list) == 0:
-        raise RuntimeError(
-            "Cannot find the registry.access.redhat.com repository entry for the image"
-        )
-
-    return properties_list
+    raise RuntimeError(
+        "Cannot find the registry.access.redhat.com repository entry for the image"
+    )
 
 
 def get_candidates_for_cleanup(

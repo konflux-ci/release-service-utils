@@ -21,9 +21,9 @@ REPOSITORY = "myproduct/myimage"
 @patch("cleanup_tags.cleanup_tags")
 def test_cleanup_tags_with_retry__success(mock_cleanup_tags):
     """cleanup_tags succeeds on first attempt"""
-    cleanup_tags_with_retry(GRAPHQL_API, IMAGE_ID)
+    cleanup_tags_with_retry(GRAPHQL_API, IMAGE_ID, REPOSITORY)
 
-    mock_cleanup_tags.assert_called_once_with(GRAPHQL_API, IMAGE_ID)
+    mock_cleanup_tags.assert_called_once_with(GRAPHQL_API, IMAGE_ID, REPOSITORY)
 
 
 @patch("cleanup_tags.cleanup_tags")
@@ -31,7 +31,7 @@ def test_cleanup_tags_with_retry__success_after_one_attempt(mock_cleanup_tags):
     """cleanup_tags succeeds after one retry"""
     mock_cleanup_tags.side_effect = [RuntimeError("error"), None]
 
-    cleanup_tags_with_retry(GRAPHQL_API, IMAGE_ID, backoff_factor=0)
+    cleanup_tags_with_retry(GRAPHQL_API, IMAGE_ID, REPOSITORY, backoff_factor=0)
 
     assert mock_cleanup_tags.call_count == 2
 
@@ -42,7 +42,7 @@ def test_cleanup_tags_with_retry__fails(mock_cleanup_tags):
     mock_cleanup_tags.side_effect = RuntimeError("error")
 
     with pytest.raises(RuntimeError):
-        cleanup_tags_with_retry(GRAPHQL_API, IMAGE_ID, retries=2, backoff_factor=0)
+        cleanup_tags_with_retry(GRAPHQL_API, IMAGE_ID, REPOSITORY, retries=2, backoff_factor=0)
 
     assert mock_cleanup_tags.call_count == 2
 
@@ -139,7 +139,7 @@ def test_get_rh_registry_image_properties__success():
     """
     image = generate_image("1111", "amd64", ["latest"])
 
-    registry, repository, tags = get_rh_registry_image_properties(image)[0]
+    registry, repository, tags = get_rh_registry_image_properties(image, REPOSITORY)
 
     assert registry == REGISTRY
     assert repository == REPOSITORY
@@ -154,7 +154,7 @@ def test_get_rh_registry_image_properties__no_tags():
     image["repositories"][0]["tags"] = None
     image["repositories"][1]["tags"] = None
 
-    registry, repository, tags = get_rh_registry_image_properties(image)[0]
+    registry, repository, tags = get_rh_registry_image_properties(image, REPOSITORY)
 
     assert registry == REGISTRY
     assert repository == REPOSITORY
@@ -166,12 +166,11 @@ def test_get_rh_registry_image_properties__multiple_images__repository_set__succ
     multiple images
     """
     image = generate_image("1111", "amd64", ["latest"], True)
-    images = get_rh_registry_image_properties(image)
-    image_properties = images[0]
+    registry, repository, tags = get_rh_registry_image_properties(image, REPOSITORY)
 
-    assert image_properties[0] == REGISTRY
-    assert image_properties[1] == REPOSITORY
-    assert image_properties[2] == ["latest"]
+    assert registry == REGISTRY
+    assert repository == REPOSITORY
+    assert tags == ["latest"]
 
 
 def test_get_rh_registry_image_properties__failure():
@@ -191,7 +190,7 @@ def test_get_rh_registry_image_properties__failure():
     ]
 
     with pytest.raises(RuntimeError):
-        get_rh_registry_image_properties(image)
+        get_rh_registry_image_properties(image, REPOSITORY)
 
 
 @patch("pyxis.graphql_query")
