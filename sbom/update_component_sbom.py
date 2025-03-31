@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-This script updates the purls in component-level SBOMs with release time info.
+This script parses the mapped snapshot spec file (result from apply-mapping
+Tekton task), downloads SBOMs for all images that are being released to a
+directory and updates them with release time data.
+
+Example usage:
+$ update_component_sbom --snapshot-path snapshot_spec.json --output-path sboms/
 """
 import argparse
 import asyncio
@@ -8,6 +13,7 @@ import json
 import logging
 from typing import Union
 from pathlib import Path
+
 import aiofiles
 
 from sbom.handlers import get_handler
@@ -152,7 +158,7 @@ async def main() -> None:
     parser.add_argument(
         "--output-path",
         required=True,
-        type=str,
+        type=Path,
         help="Path to the directory to save the updated SBOM files.",
     )
     args = parser.parse_args()
