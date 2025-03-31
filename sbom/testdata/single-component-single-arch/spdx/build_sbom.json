@@ -22,6 +22,11 @@
                     "referenceLocator": "pkg:oci/test@sha256:deadbeef?repository_url=quay.io/org/tenant/test",
                     "referenceType": "purl",
                     "referenceCategory": "PACKAGE-MANAGER"
+                },
+                {
+                    "referenceLocator": "https://github.com/doc.md",
+                    "referenceType": "url",
+                    "referenceCategory": "SECURITY"
                 }
             ],
             "checksums": [

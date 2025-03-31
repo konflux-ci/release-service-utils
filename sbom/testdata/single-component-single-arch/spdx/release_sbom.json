@@ -27,6 +27,11 @@
                     "referenceLocator": "pkg:oci/test@sha256%3Adeadbeef?repository_url=registry.redhat.io/org/tenant/test&tag=latest",
                     "referenceType": "purl",
                     "referenceCategory": "PACKAGE-MANAGER"
+                },
+                {
+                    "referenceLocator": "https://github.com/doc.md",
+                    "referenceType": "url",
+                    "referenceCategory": "SECURITY"
                 }
             ],
             "checksums": [

@@ -22,6 +22,11 @@
                     "referenceLocator": "pkg:oci/test@sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921?repository_url=quay.io/org/tenant/test",
                     "referenceType": "purl",
                     "referenceCategory": "PACKAGE-MANAGER"
+                },
+                {
+                    "referenceLocator": "https://github.com/doc.md",
+                    "referenceType": "url",
+                    "referenceCategory": "SECURITY"
                 }
             ],
             "checksums": [

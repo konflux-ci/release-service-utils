@@ -6,18 +6,17 @@ the handlers.
 from typing import Any, Optional
 
 from sbom.handlers.abstract import SBOMHandler
-from sbom.handlers.spdx_2_3 import SPDXVersion23
+from sbom.handlers.spdx2 import SPDXVersion2
 
 
 def get_handler(sbom: dict[str, Any]) -> Optional[type[SBOMHandler]]:
     """
     Get SBOM handler class based on the SBOM dict provided.
     """
-    if sbom.get("spdxVersion") == "SPDX-2.3":
-        return SPDXVersion23
+    if sbom.get("spdxVersion") in SPDXVersion2.supported_versions:
+        return SPDXVersion2
 
     if sbom.get("bomFormat") == "CycloneDX":
-        if sbom.get("specVersion") == "1.6":
-            raise NotImplementedError()
+        raise NotImplementedError()
 
     return None
