@@ -1,11 +1,9 @@
 # Konflux release-time SBOM generation
-
 This module contains scripts and libraries used to enrich SBOMs created at
 build-time (component-level) and create SBOMs (product-level) when a snapshot is
 being released.
 
 ## Data sources
-
 ### Snapshot spec
 The necessary data source for both component-level and product-level SBOM
 manipulation is the mapped snapshot spec in JSON format. This file is created by
@@ -25,12 +23,14 @@ cpe id, product name and version). This data can be found in the
 Tekton task as path to a file.
 
 ## Component-level SBOM enrichment
-TODO
+When component-level SBOMs are updated, the OCI PURLs generated during
+build-time are stripped and new PURLs are generated based on the parsed snapshot
+data. Non-OCI PURLs are preserved.
 
 ### Handling SBOM formats
-To update multiple formats of SBOMs (SPDX-2.3, SPDX-3.0, CycloneDX 1.6, etc), an
+To update multiple formats of SBOMs (SPDX-2.X, SPDX-3.0, CycloneDX 1.X, etc), an
 SBOM handler must be implemented. An SBOM handler is a class which implements
-the `SBOMHandler` interface for updating SBOMs. 
+the `SBOMHandler` interface for updating SBOMs.
 
 ## Product-level SBOM creation
 TODO
