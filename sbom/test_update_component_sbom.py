@@ -85,55 +85,55 @@ class TestSPDXVersion23:
                 ]
             )
 
-    # @pytest.mark.asyncio
-    # @patch("sbom.update_component_sbom.write_sbom")
-    # async def test_multi_component_multiarch(self, mock_write_sbom: AsyncMock) -> None:
-    #     data_path = TESTDATA_PATH.joinpath("single-component-multiarch/spdx")
+    @pytest.mark.asyncio
+    @patch("sbom.update_component_sbom.write_sbom")
+    async def test_multi_component_multiarch(self, mock_write_sbom: AsyncMock) -> None:
+        data_path = TESTDATA_PATH.joinpath("single-component-multiarch/spdx")
 
-    #     index_digest = (
-    #         "sha256:fae7e52c95ee8d24ad9e64b54e693047b94e1b1ef98be3e3b4b9859f986e5b1d"
-    #     )
-    #     child_digest = (
-    #         "sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921"
-    #     )
+        index_digest = (
+            "sha256:fae7e52c95ee8d24ad9e64b54e693047b94e1b1ef98be3e3b4b9859f986e5b1d"
+        )
+        child_digest = (
+            "sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921"
+        )
 
-    #     num_components = 250
+        num_components = 250
 
-    #     async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
-    #         if index_digest in reference:
-    #             with open(data_path.joinpath("build_index_sbom.json")) as f:
-    #                 return json.load(f), ""
+        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
+            if index_digest in reference:
+                with open(data_path.joinpath("build_index_sbom.json")) as f:
+                    return json.load(f), ""
 
-    #         with open(data_path.joinpath("build_image_sbom.json")) as f:
-    #             return json.load(f), ""
+            with open(data_path.joinpath("build_image_sbom.json")) as f:
+                return json.load(f), ""
 
-    #     snapshot = Snapshot(
-    #         components=[
-    #             Component(
-    #                 repository="registry.redhat.io/org/tenant/test",
-    #                 image=IndexImage(
-    #                     index_digest,
-    #                     children=[Image(child_digest)],
-    #                 ),
-    #                 tags=["1.0", "latest"],
-    #             )
-    #         ]
-    #         * num_components,
-    #     )
+        snapshot = Snapshot(
+            components=[
+                Component(
+                    repository="registry.redhat.io/org/tenant/test",
+                    image=IndexImage(
+                        index_digest,
+                        children=[Image(child_digest)],
+                    ),
+                    tags=["1.0", "latest"],
+                )
+            ]
+            * num_components,
+        )
 
-    #     with open(data_path.joinpath("release_index_sbom.json")) as fp:
-    #         expected_index_sbom = json.load(fp)
+        with open(data_path.joinpath("release_index_sbom.json")) as fp:
+            expected_index_sbom = json.load(fp)
 
-    #     with open(data_path.joinpath("release_image_sbom.json")) as fp:
-    #         expected_image_sbom = json.load(fp)
+        with open(data_path.joinpath("release_image_sbom.json")) as fp:
+            expected_image_sbom = json.load(fp)
 
-    #     with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
-    #         await update_sboms(snapshot, Path("dummy"))
+        with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
+            await update_sboms(snapshot, Path("dummy"))
 
-    #         mock_write_sbom.assert_has_awaits(
-    #             [
-    #                 call(expected_index_sbom, ANY),
-    #                 call(expected_image_sbom, ANY),
-    #             ]
-    #             * num_components
-    #         )
+            mock_write_sbom.assert_has_awaits(
+                [
+                    call(expected_index_sbom, ANY),
+                    call(expected_image_sbom, ANY),
+                ]
+                * num_components
+            )
