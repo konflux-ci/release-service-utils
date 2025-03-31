@@ -142,7 +142,7 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
     @classmethod
     def _find_purl_in_refs(cls, package: SPDXPackage, digest: str) -> Optional[str]:
         """
-        Tries and to find a purl in the externalRefs of a package the version of
+        Tries to find a purl in the externalRefs of a package the version of
         which matches the passed digest.
         """
         for ref in filter(lambda rf: rf["referenceType"] == "purl", package.external_refs):
