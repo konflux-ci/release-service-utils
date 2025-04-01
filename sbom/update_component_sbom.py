@@ -59,7 +59,8 @@ async def load_sbom(reference: str, destination: Path) -> tuple[dict, Path]:
     """
     path = await fetch_sbom(destination, reference)
     async with aiofiles.open(path, "r") as sbom_raw:
-        return json.loads(await sbom_raw.read())
+        sbom = json.loads(await sbom_raw.read())
+        return sbom, path
 
 
 async def write_sbom(sbom: dict, path: Path) -> None:
@@ -164,7 +165,7 @@ async def main() -> None:
     args = parser.parse_args()
 
     snapshot = await sbomlib.make_snapshot(args.snapshot_path)
-    asyncio.run(update_sboms(snapshot, args.output_path))
+    await update_sboms(snapshot, args.output_path)
 
 
 if __name__ == "__main__":
