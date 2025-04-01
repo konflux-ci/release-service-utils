@@ -16,11 +16,10 @@ handles multiarch images by fetching manifests of index images (using `oras`)
 and parsing them. The resulting object contains all component repositories and
 digests of images that are being released in the snapshot.
      
-### ReleasePlanAdmission
+### Data file
 The product-level SBOM requires additional data to be constructed (such as the
-cpe id, product name and version). This data can be found in the
-`ReleasePlanAdmission` resource spec, which is exported by the `collect-data`
-Tekton task as path to a file.
+cpe id, product name and version). This data can be found in the data file,
+which is exported by the `collect-data` Tekton task as path to a file.
 
 ## Component-level SBOM enrichment
 When component-level SBOMs are updated, the OCI PURLs generated during
@@ -33,4 +32,4 @@ SBOM handler must be implemented. An SBOM handler is a class which implements
 the `SBOMHandler` interface for updating SBOMs.
 
 ## Product-level SBOM creation
-TODO
+This should be filled once product-level SBOMs use the new inputs.
