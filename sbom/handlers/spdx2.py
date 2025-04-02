@@ -6,12 +6,12 @@ from typing import Optional, Union, Any
 
 from packageurl import PackageURL
 
-from sbom.handlers.abstract import SBOMHandler
 from sbom.sbomlib import (
     Component,
     Image,
     IndexImage,
     SBOMError,
+    SBOMHandler,
     construct_purl,
     get_purl_arch,
     get_purl_digest,

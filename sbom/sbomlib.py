@@ -5,7 +5,7 @@ This library contains utility functions for SBOM generation and enrichment.
 from contextlib import contextmanager
 import json
 import logging
-from typing import Optional, Any, Union, Generator
+from typing import Optional, Any, Protocol, Union, Generator
 from pathlib import Path
 from dataclasses import dataclass
 import re
@@ -114,6 +114,21 @@ class SnapshotModel(pdc.BaseModel):
     """
 
     components: list[ComponentModel]
+
+
+class SBOMHandler(Protocol):
+    """
+    Protocol ensuring that SBOM handlers implement the correct method.
+    """
+
+    @classmethod
+    def update_sbom(
+        cls, component: Component, image: Union[IndexImage, Image], sbom: dict[str, Any]
+    ) -> None:
+        """
+        Update the specified SBOM in-place based on the provided component information.
+        """
+        raise NotImplementedError()
 
 
 async def construct_image(repository: str, image_digest: str) -> Union[Image, IndexImage]:

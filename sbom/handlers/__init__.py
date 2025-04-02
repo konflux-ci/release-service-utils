@@ -5,11 +5,11 @@ the handlers.
 
 from typing import Any, Optional
 
-from sbom.handlers.abstract import SBOMHandler
+from sbom.sbomlib import SBOMHandler
 from sbom.handlers.spdx2 import SPDXVersion2
 
 
-def get_handler(sbom: dict[str, Any]) -> Optional[type[SBOMHandler]]:
+def get_handler(sbom: dict[str, Any]) -> Optional[SBOMHandler]:
     """
     Get SBOM handler class based on the SBOM dict provided.
     """

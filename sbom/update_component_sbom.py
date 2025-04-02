@@ -42,7 +42,7 @@ async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
         )
 
     if code != 0:
-        raise SBOMError(f"Failed to fetch SBOM {reference}: {stderr}")
+        raise SBOMError(f"Failed to fetch SBOM {reference}: {stderr.decode()}")
 
     digest = reference.split("@", 1)[1]
     path = destination_dir.joinpath(digest)
