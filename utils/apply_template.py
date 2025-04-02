@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-from jinja2 import Template, DebugUndefined
+import traceback
+
+import yaml
+from jinja2 import Template, DebugUndefined, exceptions
 from jinja2_ansible_filters import AnsibleCoreFiltersExtension
 import argparse
 import json
+import logging
+import sys
+from typing import Any
+
+LOGGER = logging.getLogger("apply_template")
 
 
 def setup_argparser() -> argparse.Namespace:  # pragma: no cover
@@ -29,6 +37,7 @@ def setup_argparser() -> argparse.Namespace:  # pragma: no cover
         help="The desired filename of the result.",
         required=True,
     )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     return parser.parse_args()
 
 
@@ -36,17 +45,79 @@ def main():  # pragma: no cover
     """Main func"""
 
     args = setup_argparser()
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    setup_logger(level=log_level)
 
     with open(args.template) as t:
         template = Template(
             t.read(), extensions=[AnsibleCoreFiltersExtension], undefined=DebugUndefined
         )
-    content = template.render(json.loads(args.data))
+    LOGGER.info("Rendering 1st pass")
+    try:
+        content = template.render(json.loads(args.data))
+        LOGGER.debug(content)
+        first_pass = content
+    except exceptions.TemplateSyntaxError as jexc:
+        LOGGER.exception("Exception with Template Syntax:")
+        # we use this traceback to get the line number
+        LOGGER.error(traceback.format_exc())
+        raise jexc
+
+    # try 2nd pass
+    LOGGER.info("Rendering 2nd pass")
+    try:
+        content = Template(content).render(json.loads(args.data))
+        LOGGER.debug(content)
+    except exceptions.TemplateSyntaxError as jexc:
+        LOGGER.exception("Exception with Template Syntax:")
+        # we use this traceback to get the line number
+        LOGGER.error(traceback.format_exc())
+        raise jexc
+
+    try:
+        # load to check it is valid yaml
+        LOGGER.info("Load 2nd pass content")
+        yaml.safe_load(content)
+    except yaml.YAMLError:
+        LOGGER.exception("Invalid yaml...fall back to first pass rendered content")
+        # we use this traceback to get the line number
+        LOGGER.error(traceback.format_exc())
+        # fallback to valid first pass
+        content = first_pass
+        try:
+            # load to check it is valid yaml
+            LOGGER.info("Load 1st pass content")
+            yaml.safe_load(content)
+        except yaml.YAMLError as exc:
+            LOGGER.exception("Invalid yaml")
+            # we use this traceback to get the line number
+            LOGGER.error(traceback.format_exc())
+            raise exc
 
     filename = args.output
     with open(filename, mode="w", encoding="utf-8") as advisory:
         advisory.write(content)
-        print(f"Wrote {filename}")
+        LOGGER.info(f"Wrote {filename}")
+
+
+def setup_logger(level: int = logging.INFO, log_format: Any = None):
+    """Set up and configure logger.
+    Args:
+        level (str, optional): Logging level. Defaults to logging.INFO.
+        log_format (Any, optional): Logging message format. Defaults to None.
+    :return: Logger object
+    """
+    if log_format is None:
+        log_format = "%(asctime)s [%(name)s] %(levelname)s %(message)s"
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setLevel(level)
+
+    logging.basicConfig(
+        level=level,
+        format=log_format,
+        handlers=[stream_handler],
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover
