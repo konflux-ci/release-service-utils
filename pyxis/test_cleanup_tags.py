@@ -21,9 +21,9 @@ REPOSITORY = "myproduct/myimage"
 @patch("cleanup_tags.cleanup_tags")
 def test_cleanup_tags_with_retry__success(mock_cleanup_tags):
     """cleanup_tags succeeds on first attempt"""
-    cleanup_tags_with_retry(GRAPHQL_API, IMAGE_ID)
+    cleanup_tags_with_retry(GRAPHQL_API, IMAGE_ID, REPOSITORY)
 
-    mock_cleanup_tags.assert_called_once_with(GRAPHQL_API, IMAGE_ID)
+    mock_cleanup_tags.assert_called_once_with(GRAPHQL_API, IMAGE_ID, REPOSITORY)
 
 
 @patch("cleanup_tags.cleanup_tags")
@@ -31,7 +31,7 @@ def test_cleanup_tags_with_retry__success_after_one_attempt(mock_cleanup_tags):
     """cleanup_tags succeeds after one retry"""
     mock_cleanup_tags.side_effect = [RuntimeError("error"), None]
 
-    cleanup_tags_with_retry(GRAPHQL_API, IMAGE_ID, backoff_factor=0)
+    cleanup_tags_with_retry(GRAPHQL_API, IMAGE_ID, REPOSITORY, backoff_factor=0)
 
     assert mock_cleanup_tags.call_count == 2
 
@@ -42,7 +42,7 @@ def test_cleanup_tags_with_retry__fails(mock_cleanup_tags):
     mock_cleanup_tags.side_effect = RuntimeError("error")
 
     with pytest.raises(RuntimeError):
-        cleanup_tags_with_retry(GRAPHQL_API, IMAGE_ID, retries=2, backoff_factor=0)
+        cleanup_tags_with_retry(GRAPHQL_API, IMAGE_ID, REPOSITORY, retries=2, backoff_factor=0)
 
     assert mock_cleanup_tags.call_count == 2
 
@@ -72,7 +72,7 @@ def test_cleanup_tags__success(
         [image1, image3],
     ]
 
-    cleanup_tags(GRAPHQL_API, "1111")
+    cleanup_tags(GRAPHQL_API, "1111", REPOSITORY)
 
     mock_get_image.assert_called_once_with(GRAPHQL_API, "1111")
     assert mock_get_candidates_for_cleanup.call_args_list == [
@@ -81,7 +81,7 @@ def test_cleanup_tags__success(
         call(GRAPHQL_API, REGISTRY, REPOSITORY, "9.4-1111"),
     ]
     mock_update_images.assert_called_once_with(
-        GRAPHQL_API, ["latest", "9.4", "9.4-1111"], {image2["_id"]: image2}
+        GRAPHQL_API, ["latest", "9.4", "9.4-1111"], {image2["_id"]: image2}, REPOSITORY
     )
 
 
@@ -108,7 +108,7 @@ def test_cleanup_tags__nothing_to_cleanup(
         [image1, image2],
     ]
 
-    cleanup_tags(GRAPHQL_API, "1111")
+    cleanup_tags(GRAPHQL_API, "1111", REPOSITORY)
 
     mock_get_image.assert_called_once_with(GRAPHQL_API, "1111")
     assert mock_get_candidates_for_cleanup.call_args_list == [
@@ -116,7 +116,9 @@ def test_cleanup_tags__nothing_to_cleanup(
         call(GRAPHQL_API, REGISTRY, REPOSITORY, "9.4"),
         call(GRAPHQL_API, REGISTRY, REPOSITORY, "9.4-1111"),
     ]
-    mock_update_images.assert_called_once_with(GRAPHQL_API, ["latest", "9.4", "9.4-1111"], {})
+    mock_update_images.assert_called_once_with(
+        GRAPHQL_API, ["latest", "9.4", "9.4-1111"], {}, REPOSITORY
+    )
 
 
 @patch("pyxis.graphql_query")
@@ -137,7 +139,7 @@ def test_get_rh_registry_image_properties__success():
     """
     image = generate_image("1111", "amd64", ["latest"])
 
-    registry, repository, tags = get_rh_registry_image_properties(image)
+    registry, repository, tags = get_rh_registry_image_properties(image, REPOSITORY)
 
     assert registry == REGISTRY
     assert repository == REPOSITORY
@@ -152,11 +154,23 @@ def test_get_rh_registry_image_properties__no_tags():
     image["repositories"][0]["tags"] = None
     image["repositories"][1]["tags"] = None
 
-    registry, repository, tags = get_rh_registry_image_properties(image)
+    registry, repository, tags = get_rh_registry_image_properties(image, REPOSITORY)
 
     assert registry == REGISTRY
     assert repository == REPOSITORY
     assert tags == []
+
+
+def test_get_rh_registry_image_properties__multiple_images__repository_set__success():
+    """Basic scenario where the function parses the image with multiple repositories
+    and returns the expected values
+    """
+    image = generate_image("1111", "amd64", ["latest"], True)
+    registry, repository, tags = get_rh_registry_image_properties(image, REPOSITORY)
+
+    assert registry == REGISTRY
+    assert repository == REPOSITORY
+    assert tags == ["latest"]
 
 
 def test_get_rh_registry_image_properties__failure():
@@ -176,7 +190,7 @@ def test_get_rh_registry_image_properties__failure():
     ]
 
     with pytest.raises(RuntimeError):
-        get_rh_registry_image_properties(image)
+        get_rh_registry_image_properties(image, REPOSITORY)
 
 
 @patch("pyxis.graphql_query")
@@ -203,16 +217,26 @@ def test_update_images__success(mock_update_image):
     """Happy path scenario:
     There are 2 images on input and both have the correct tags removed
     """
+
+    lasting_tags = {
+        "image1": [{"name": "latest"}, {"name": "9.4"}, {"name": "9.4-1111"}],
+        "image2": [{"name": "9.4"}, {"name": "9.4-2222"}],
+    }
+
     image1 = generate_image("1111", "amd64", ["latest", "9.4", "9.4-1111"])
     image1_new = generate_image("1111", "amd64", ["9.4-1111"])
+    image1_new["repositories"][0]["tags"] = lasting_tags["image1"]
+
     image2 = generate_image("2222", "amd64", ["9.4", "9.4-2222"])
     image2_new = generate_image("2222", "amd64", ["9.4-2222"])
+    image2_new["repositories"][0]["tags"] = lasting_tags["image2"]
+
     images = {
         image1["_id"]: image1,
         image2["_id"]: image2,
     }
 
-    update_images(GRAPHQL_API, ["latest", "9.4", "9.4-0000"], images)
+    update_images(GRAPHQL_API, ["latest", "9.4", "9.4-0000"], images, REPOSITORY)
 
     assert mock_update_image.call_args_list == [
         call(GRAPHQL_API, image1_new),
@@ -252,7 +276,7 @@ def test_remove_none_values__success():
     assert remove_none_values(data) == expected_result
 
 
-def generate_image(id, architecture, tags):
+def generate_image(id, architecture, tags, multiple_repos=False):
     image = {
         "_id": id,
         "architecture": architecture,
@@ -269,6 +293,16 @@ def generate_image(id, architecture, tags):
             },
         ],
     }
+
+    if multiple_repos is not False:
+        image["repositories"].append(
+            {
+                "registry": REGISTRY,
+                "repository": "redhat-nonprod/myproduct----myimage",
+                "tags": [{"name": tag} for tag in tags],
+            }
+        )
+
     return image
 
 

@@ -40,6 +40,7 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
         ),
         help="Pyxis Graphql endpoint",
     )
+    parser.add_argument("--repository", required=True, help="Repository to cleanup tags from")
     parser.add_argument(
         "image_id",
         help="Pyxis Container Image ID",
@@ -58,6 +59,7 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
 def cleanup_tags_with_retry(
     graphql_api: str,
     image_id: str,
+    target_repository: str,
     retries: int = 3,
     backoff_factor: float = 5.0,
 ):
@@ -65,7 +67,7 @@ def cleanup_tags_with_retry(
     for attempt in range(retries):
         try:
             time.sleep(backoff_factor * attempt)
-            cleanup_tags(graphql_api, image_id)
+            cleanup_tags(graphql_api, image_id, target_repository)
             return
         except RuntimeError as e:
             LOGGER.warning(f"Attempt {attempt+1} failed.")
@@ -74,13 +76,14 @@ def cleanup_tags_with_retry(
     raise last_err
 
 
-def cleanup_tags(graphql_api, image_id: str):
+def cleanup_tags(graphql_api, image_id: str, target_repository: str):
     image = get_image(graphql_api, image_id)
 
-    registry, repository, tags = get_rh_registry_image_properties(image)
+    registry, repository, tags = get_rh_registry_image_properties(image, target_repository)
 
     LOGGER.info(f"Image id: {image['_id']}")
     LOGGER.info(f"Image architecture: {image['architecture']}")
+    LOGGER.info(f"Repository: {repository}")
     LOGGER.info(f"Image tags: {tags}")
 
     images_for_cleanup = {}
@@ -102,7 +105,7 @@ def cleanup_tags(graphql_api, image_id: str):
                 images_for_cleanup[id] = candidate
 
     LOGGER.info(f"Found {len(images_for_cleanup)} images for cleanup.")
-    update_images(graphql_api, tags, images_for_cleanup)
+    update_images(graphql_api, tags, images_for_cleanup, repository)
 
 
 def get_image(graphql_api: str, image_id: str) -> dict:
@@ -137,19 +140,23 @@ query ($id: ObjectIDFilterScalar!) {
     return image
 
 
-def get_rh_registry_image_properties(image: Dict):
+def get_rh_registry_image_properties(image: Dict, target_repository: str):
     """Get the registry.access.redhat.com repository properties of the image
     needed to search for related images.
 
-    Returns (registry, repository, tags)
+    :return: (registry, repository, tags)
     """
     for repo in image["repositories"]:
-        if repo["registry"] == "registry.access.redhat.com":
+        if (
+            repo["registry"] == "registry.access.redhat.com"
+            and repo["repository"] == target_repository
+        ):
             if repo["tags"] is None:
                 tags = []
             else:
                 tags = [tag["name"] for tag in repo["tags"]]
             return repo["registry"], repo["repository"], tags
+
     raise RuntimeError(
         "Cannot find the registry.access.redhat.com repository entry for the image"
     )
@@ -246,7 +253,7 @@ query (
     return images
 
 
-def update_images(graphql_api: str, tags: List[str], images: Dict):
+def update_images(graphql_api: str, tags: List[str], images: Dict, target_repository: str):
     """Update images to remove unwanted tags from them
 
     For each image in `images` it will remove all `tags`
@@ -257,13 +264,16 @@ def update_images(graphql_api: str, tags: List[str], images: Dict):
         LOGGER.info(f"Updating image {image['_id']} with architecture {image['architecture']}")
         LOGGER.info("Repositories and tags before update:")
         for repository in image["repositories"]:
-            repo_tags = [tag["name"] for tag in repository["tags"]]
+            repo_tags = [tag["name"] for tag in repository.get("tags") or []]
             LOGGER.info(f"  {repository['registry']}/{repository['repository']}: {repo_tags}")
         for i in range(len(image["repositories"])):
-            repo_tags = image["repositories"][i]["tags"]
-            image["repositories"][i]["tags"] = [
-                tag for tag in repo_tags if tag["name"] not in tags
-            ]
+            # clean up tags only only from the given repository
+            if image["repositories"][i]["repository"] == target_repository:
+                repo_tags = image["repositories"][i]["tags"]
+                image["repositories"][i]["tags"] = [
+                    tag for tag in repo_tags if tag["name"] not in tags
+                ]
+
         # When we load the images for patching, we request all fields of
         # the ContainerRepository objects because otherwise we might remove some data with
         # the update. But that means that fields that are not used will be null/None and
@@ -354,9 +364,9 @@ def main():  # pragma: no cover
     LOGGER.debug(f"Pyxis GraphQL API: {args.pyxis_graphql_api}")
 
     if args.retry:
-        cleanup_tags_with_retry(args.pyxis_graphql_api, args.image_id)
+        cleanup_tags_with_retry(args.pyxis_graphql_api, args.image_id, args.repository)
     else:
-        cleanup_tags(args.pyxis_graphql_api, args.image_id)
+        cleanup_tags(args.pyxis_graphql_api, args.image_id, args.repository)
 
 
 if __name__ == "__main__":  # pragma: no cover
