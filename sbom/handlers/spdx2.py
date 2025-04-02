@@ -11,7 +11,6 @@ from sbom.sbomlib import (
     Image,
     IndexImage,
     SBOMError,
-    SBOMHandler,
     construct_purl,
     get_purl_arch,
     get_purl_digest,
@@ -36,7 +35,7 @@ class SPDXPackage:
         return self.package.get("externalRefs", [])
 
     @external_refs.setter
-    def external_refs(self, value) -> None:
+    def external_refs(self, value: list[Any]) -> None:
         self.package["externalRefs"] = value
 
     @property
@@ -125,7 +124,7 @@ class SPDXPackage:
         }
 
 
-class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
+class SPDXVersion2:  # pylint: disable=too-few-public-methods
     """
     Class containing methods for SPDX v2.x SBOM manipulation.
     """

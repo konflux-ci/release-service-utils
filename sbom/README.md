@@ -26,10 +26,5 @@ When component-level SBOMs are updated, the OCI PURLs generated during
 build-time are stripped and new PURLs are generated based on the parsed snapshot
 data. Non-OCI PURLs are preserved.
 
-### Handling SBOM formats
-To update multiple formats of SBOMs (SPDX-2.X, SPDX-3.0, CycloneDX 1.X, etc), an
-SBOM handler must be implemented. An SBOM handler is a class which implements
-the `SBOMHandler` interface for updating SBOMs.
-
 ## Product-level SBOM creation
 This should be filled once product-level SBOMs use the new inputs.
