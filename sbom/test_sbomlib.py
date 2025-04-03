@@ -116,7 +116,7 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
             "sha256:deadbeef",
             "amd64",
             "1.0",
-            "pkg:oci/test@sha256%3Adeadbeef?arch=amd64&"
+            "pkg:oci/test@sha256:deadbeef?arch=amd64&"
             "repository_url=registry.redhat.io/test&tag=1.0",
         ),
         pytest.param(
@@ -124,14 +124,14 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
             "sha256:deadbeef",
             None,
             None,
-            "pkg:oci/test@sha256%3Adeadbeef?repository_url=registry.redhat.io/test",
+            "pkg:oci/test@sha256:deadbeef?repository_url=registry.redhat.io/test",
         ),
         pytest.param(
             "registry.redhat.io/org/test",
             "sha256:deadbeef",
             None,
             None,
-            "pkg:oci/test@sha256%3Adeadbeef?repository_url=registry.redhat.io/org/test",
+            "pkg:oci/test@sha256:deadbeef?repository_url=registry.redhat.io/org/test",
         ),
     ],
 )

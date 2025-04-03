@@ -10,7 +10,6 @@ $ update_component_sbom --snapshot-path snapshot_spec.json --output-path sboms/
 import argparse
 import asyncio
 import json
-import logging
 from typing import Union
 from pathlib import Path
 
@@ -18,6 +17,7 @@ import aiofiles
 
 from sbom.handlers import get_handler
 from sbom import sbomlib
+from sbom.logging import get_sbom_logger, setup_sbom_logger
 from sbom.sbomlib import (
     Component,
     SBOMError,
@@ -27,7 +27,7 @@ from sbom.sbomlib import (
 )
 
 
-LOG = logging.getLogger(__name__)
+logger = get_sbom_logger()
 
 
 async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
@@ -97,8 +97,9 @@ async def update_sbom(
         handler.update_sbom(component, image, sbom)
 
         await write_sbom(sbom, sbom_path)
+        logger.info("Successfully enriched SBOM for image %s", reference)
     except SBOMError:
-        LOG.exception("Failed to enrich SBOM for image %s.", reference)
+        logger.exception("Failed to enrich SBOM for image %s.", reference)
 
 
 async def update_component_sboms(component: Component, destination: Path) -> None:
@@ -163,6 +164,8 @@ async def main() -> None:
         help="Path to the directory to save the updated SBOM files.",
     )
     args = parser.parse_args()
+
+    setup_sbom_logger()
 
     snapshot = await sbomlib.make_snapshot(args.snapshot_path)
     await update_sboms(snapshot, args.output_path)

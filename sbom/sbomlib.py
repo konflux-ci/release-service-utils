@@ -4,7 +4,6 @@ This library contains utility functions for SBOM generation and enrichment.
 
 from contextlib import contextmanager
 import json
-import logging
 from typing import Optional, Any, Protocol, Union, Generator
 from pathlib import Path
 from dataclasses import dataclass
@@ -17,7 +16,10 @@ import os
 from packageurl import PackageURL
 import pydantic as pdc
 
-LOG = logging.getLogger(__name__)
+from sbom.logging import get_sbom_logger
+
+
+logger = get_sbom_logger()
 
 
 @dataclass
@@ -192,19 +194,6 @@ async def make_snapshot(snapshot_spec: Path) -> Snapshot:
     return Snapshot(components=components)
 
 
-def hack_purl_encoding(purl: str) -> str:
-    """
-    Encode ':' characters in PURL that are not the scheme and type separator.
-    """
-    if purl.count(":") == 1:
-        return purl
-
-    first_idx = purl.find(":")
-    after_first = purl[first_idx + 1 :]
-    after_first = after_first.replace(":", "%3A")
-    return f"{purl[:first_idx]}:{after_first}"
-
-
 def construct_purl(
     repository: str, digest: str, arch: Optional[str] = None, tag: Optional[str] = None
 ) -> str:
@@ -220,18 +209,12 @@ def construct_purl(
     if tag is not None:
         optional_qualifiers["tag"] = tag
 
-    purl = PackageURL(
+    return PackageURL(
         type="oci",
         name=repo_name,
         version=digest,
         qualifiers={"repository_url": repository, **optional_qualifiers},
-    )
-
-    # HACK: There's a bug in PackageURL python that incorrectly handles
-    # encoding of ':' characters.  When this PR is merged, the hack should be
-    # removed: https://github.com/package-url/packageurl-python/pull/178
-    purl_str = hack_purl_encoding(str(purl))
-    return purl_str
+    ).to_string()
 
 
 async def run_async_subprocess(
@@ -276,6 +259,7 @@ async def get_image_manifest(repository: str, image_digest: str) -> dict[str, An
         image_digest (str): an image digest in the form sha256:<sha>
     """
     reference = make_reference(repository, image_digest)
+    logger.info("Fetching manifest for %s", reference)
 
     with make_oci_auth_file(reference) as authfile:
         code, stdout, stderr = await run_async_subprocess(
