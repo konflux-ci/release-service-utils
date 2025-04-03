@@ -12,7 +12,8 @@ logconfig = {
             "stream": "ext://sys.stdout",
         }
     },
-    "loggers": {"root": {"level": "DEBUG", "handlers": ["stdout"]}},
+    "loggers": {"sbom": {"level": "DEBUG"}},
+    "root": {"level": "WARNING", "handlers": ["stdout"]},
 }
 
 

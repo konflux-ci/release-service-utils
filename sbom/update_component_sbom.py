@@ -80,7 +80,7 @@ async def update_sbom(
     SBOMError if the format of the SBOM is unsupported.
 
     Args:
-        repository (str): Repository of the image
+        component (Component): The component the image belongs to.
         image (IndexImage | Image): Object representing an image or an index
                                     image being released.
         destination (Path): Path to the directory to save the SBOMs to.
@@ -98,7 +98,7 @@ async def update_sbom(
 
         await write_sbom(sbom, sbom_path)
         logger.info("Successfully enriched SBOM for image %s", reference)
-    except SBOMError:
+    except (SBOMError, ValueError):
         logger.exception("Failed to enrich SBOM for image %s.", reference)
 
 

@@ -48,25 +48,9 @@ class Component:
     Internal representation of a Component for SBOM generation purposes.
     """
 
-    # Original regex from:
-    # https://github.com/konflux-ci/release-service-catalog/blob/0c97b5076ab70e5fdc2660eea2216de07f42c045/tasks/managed/populate-release-notes/populate-release-notes.yaml#L46
-    unique_tag_regex = re.compile(r"(rhel-)?v?[0-9]+\.[0-9]+(\.[0-9]+)?-[0-9]{8,}")
-
     repository: str
     image: Union[Image, IndexImage]
     tags: list[str]
-
-    @property
-    def unique_tag(self) -> Optional[str]:
-        """
-        Get a unique tag from component tags if such a tag is found, else
-        return None.
-        """
-        for tag in self.tags:
-            if self.unique_tag_regex.match(tag) is not None:
-                return tag
-
-        return None
 
 
 @dataclass
@@ -100,7 +84,8 @@ class ComponentModel(pdc.BaseModel):
     @classmethod
     def is_valid_digest_reference(cls, value: str) -> str:
         """
-        Validates that the digest reference is in the correct format.
+        Validates that the digest reference is in the correct format. Does NOT
+        support references with a registry port.
         """
         if not re.match(r"^[^:]+@sha256:[0-9a-f]+$", value):
             raise ValueError(f"{value} is not a valid digest reference.")
@@ -300,9 +285,10 @@ def make_oci_auth_file(
     reference: str, auth: Optional[Path] = None
 ) -> Generator[str, Any, None]:
     """
-    Gets path to a temporary file containing the docker config JSON for <reference>.
-    Deletes the file after the with statement. If no path to the docker config
-    is provided, tries using ~/.docker/config.json
+    Gets path to a temporary file containing the docker config JSON for
+    <reference>.  Deletes the file after the with statement. If no path to the
+    docker config is provided, tries using ~/.docker/config.json . Ports in the
+    registry are NOT supported.
 
     Args:
         reference (str): Reference to an image in the form registry/repo@sha256-deadbeef
@@ -317,6 +303,11 @@ def make_oci_auth_file(
 
     if not auth.is_file():
         raise ValueError(f"No docker config file at {auth}")
+
+    if reference.count(":") > 1:
+        logger.warning(
+            "Multiple ':' symbols in %s. Registry ports are not supported.", reference
+        )
 
     # Remove digest (e.g. @sha256:...)
     ref = reference.split("@", 1)[0]
@@ -373,5 +364,5 @@ def get_purl_digest(purl_str: str) -> str:
     """
     purl = PackageURL.from_string(purl_str)
     if purl.version is None:
-        raise ValueError()
+        raise ValueError("SBOM contains invalid OCI Purl: %s", purl_str)
     return purl.version
