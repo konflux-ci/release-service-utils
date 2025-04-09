@@ -254,6 +254,10 @@ def construct_rpm_items_and_content_sets(
                 "summary": purl_dict["name"],
                 "architecture": purl_dict["qualifiers"].get("arch", "noarch"),
             }
+            if purl_dict["epoch"] is not None:
+                rpm_item["epoch"] = purl_dict["epoch"]
+            if purl_dict["module"] is not None:
+                rpm_item["module"] = purl_dict["module"]
             if purl_dict["version"] is not None:
                 rpm_item["version"] = purl_dict["version"].split("-")[0]
                 rpm_item["release"] = purl_dict["version"].split("-")[1]
