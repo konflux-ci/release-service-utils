@@ -263,6 +263,10 @@ def construct_rpm_items_and_content_sets(
                 rpm_item["summary"] = rpm_item["nvra"]
             if "upstream" in purl_dict["qualifiers"]:
                 rpm_item["srpm_name"] = purl_dict["qualifiers"]["upstream"]
+            if "epoch" in purl_dict["qualifiers"]:
+                rpm_item["epoch"] = purl_dict["qualifiers"]["epoch"]
+            if "module" in purl_dict["qualifiers"]:
+                rpm_item["module"] = purl_dict["qualifiers"]["module"]
 
             if rpm_summary != "":
                 rpm_item["summary"] = rpm_summary
