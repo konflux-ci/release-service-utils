@@ -1,192 +1,175 @@
 #!/usr/bin/env python3
 """
-This script updates the purls in component-level SBOMs with release time info.
+This script parses the mapped snapshot spec file (result from apply-mapping
+Tekton task), downloads SBOMs for all images that are being released to a
+directory and updates them with release time data.
+
+Example usage:
+$ update_component_sbom --snapshot-path snapshot_spec.json --output-path sboms/
 """
 import argparse
-import glob
+import asyncio
 import json
-import logging
-import os
-from collections import defaultdict
-from typing import DefaultDict, Dict, List
-import re
+from typing import Union
+from pathlib import Path
 
-from packageurl import PackageURL
+import aiofiles
 
-LOG = logging.getLogger("update_component_sbom")
+from sbom.handlers import get_handler
+from sbom import sbomlib
+from sbom.logging import get_sbom_logger, setup_sbom_logger
+from sbom.sbomlib import (
+    Component,
+    SBOMError,
+    Snapshot,
+    Image,
+    IndexImage,
+)
 
 
-def get_component_to_purls_map(images: List[Dict]) -> Dict[str, List[str]]:
+logger = get_sbom_logger()
+
+
+async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
     """
-        Get dictionary mapping component names to list of image purls.
+    Download an SBOM for an image reference to a destination directory.
+    """
+    with sbomlib.make_oci_auth_file(reference) as authfile:
+        code, stdout, stderr = await sbomlib.run_async_subprocess(
+            ["cosign", "download", "sbom", reference],
+            env={"DOCKER_CONFIG": authfile},
+            retry_times=3,
+        )
 
-        If the image is single arch, just use the existing purls.
-        If the image is multi-arch, the purl formats are as follows (SPDX only):
-        - The index package has one purl with the index sha, and no arch info.
-        - The child packages have one purl with the index sha and arch info, and one purl with
-          the child image sha and no arch info.
+    if code != 0:
+        raise SBOMError(f"Failed to fetch SBOM {reference}: {stderr.decode()}")
+
+    digest = reference.split("@", 1)[1]
+    path = destination_dir.joinpath(digest)
+    async with aiofiles.open(path, "wb") as file:
+        await file.write(stdout)
+
+    return path
+
+
+async def load_sbom(reference: str, destination: Path) -> tuple[dict, Path]:
+    """
+    Download the sbom for the image reference, save it to a directory and parse
+    it into a dictionary.
+    """
+    path = await fetch_sbom(destination, reference)
+    async with aiofiles.open(path, "r") as sbom_raw:
+        sbom = json.loads(await sbom_raw.read())
+        return sbom, path
+
+
+async def write_sbom(sbom: dict, path: Path) -> None:
+    """
+    Write an SBOM dictionary to a file.
+    """
+    async with aiofiles.open(path, "w") as fp:
+        await fp.write(json.dumps(sbom))
+
+
+async def update_sbom(
+    component: Component, image: Union[IndexImage, Image], destination: Path
+) -> None:
+    """
+    Update an SBOM of an image in a repository and save it to a directory.
+    Determines format of the SBOM and calls the correct handler or throws
+    SBOMError if the format of the SBOM is unsupported.
 
     Args:
-        images: List of image metadata from the given data.json.
-
-    Returns:
-        Dictionary mapping of component names to list of purls.
+        component (Component): The component the image belongs to.
+        image (IndexImage | Image): Object representing an image or an index
+                                    image being released.
+        destination (Path): Path to the directory to save the SBOMs to.
     """
-    component_purls: DefaultDict[str, List[str]] = defaultdict(list)
 
-    for image in images:
-        component = image["component"]
-        purl = image["purl"]
-        arch = image.get("arch")
-        multiarch = image.get("multiarch", False)
+    try:
+        reference = f"{component.repository}@{image.digest}"
+        sbom, sbom_path = await load_sbom(reference, destination)
 
-        if multiarch and arch:
-            # replace sha for index purl
-            index_sha = image.get("imageSha")
-            if index_sha:
-                index_purl = re.sub("sha256%3A.*\\?", f"sha256%3A{index_sha}?", purl)
+        handler = get_handler(sbom)
+        if not handler:
+            raise SBOMError(f"Unsupported SBOM format for image {reference}.")
 
-            # the index purl needs no arch info
-            component_purls[component] = [re.sub("arch=.*&|&arch=.*$", "", index_purl)]
+        handler.update_sbom(component, image, sbom)
 
-            component_purls[f"{component}_{arch}"].append(index_purl)
-            # remove arch from child image digest, since it's already in index purl
-            component_purls[f"{component}_{arch}"].append(
-                re.sub("arch=.*&|&arch=.*$", "", purl)
-            )
-        else:
-            component_purls[component].append(purl)
-
-    LOG.debug("Component to purl mapping: %s", component_purls)
-    return dict(component_purls)
+        await write_sbom(sbom, sbom_path)
+        logger.info("Successfully enriched SBOM for image %s", reference)
+    except (SBOMError, ValueError):
+        logger.exception("Failed to enrich SBOM for image %s.", reference)
 
 
-def update_cyclonedx_sbom(sbom: Dict, component_to_purls_map: Dict[str, List[str]]) -> None:
+async def update_component_sboms(component: Component, destination: Path) -> None:
     """
-    Update the purl in an SBOM with CycloneDX format
-    Args:
-        sbom: CycloneDX SBOM file to update.
-        component_to_purls_map: dictionary mapping of component names to list of purls.
-    """
-    LOG.info("Updating CycloneDX sbom")
+    Update SBOMs for a component and save them to a directory.
 
-    component_name = sbom["metadata"]["component"]["name"]
-    if component_name in component_to_purls_map:
-        # only one purl is supported for CycloneDX
-        sbom["metadata"]["component"]["purl"] = component_to_purls_map[component_name][0]
-
-    for component in sbom["components"]:
-        if component["name"] in component_to_purls_map:
-            # only one purl is supported for CycloneDX
-            component["purl"] = component_to_purls_map[component["name"]][0]
-
-
-def get_image_pullspec_from_purl(purl: str) -> str:
-    """
-    Parse the image purl to get the image pullspec.
-
-    The pullspec is made of the repository URL and digest that is available as
-    the version in the purl.
+    Handles multiarch images as well.
 
     Args:
-        purl (str): A package URL for an image.
-
-    Returns:
-        str: Image pullspec with repository URL and digest.
+        component (Component): Object representing a component being released.
+        destination (Path): Path to the directory to save the SBOMs to.
     """
-    parsed_purl = PackageURL.from_string(purl)
-    repository = parsed_purl.qualifiers["repository_url"]
-    return f"{repository}@{parsed_purl.version}"
+    if isinstance(component.image, IndexImage):
+        # If the image of a component is a multiarch image, we update the SBOMs
+        # for both the index image and the child single arch images.
+        index = component.image
+        update_tasks = [
+            update_sbom(component, index, destination),
+        ]
+        for child in index.children:
+            update_tasks.append(update_sbom(component, child, destination))
+
+        await asyncio.gather(*update_tasks)
+        return
+
+    # Single arch image
+    await update_sbom(component, component.image, destination)
 
 
-def update_spdx_sbom(sbom: Dict, component_to_purls_map: Dict[str, List[str]]) -> None:
+async def update_sboms(snapshot: Snapshot, destination: Path) -> None:
     """
-    Update the purl in an SBOM with SPDX format and set the SBOM document name
+    Update component SBOMs with release-time information based on a Snapshot and
+    save them to a directory.
+
     Args:
-        sbom: SPDX SBOM file to update.
-        component_to_purls_map: dictionary mapping of component names to list of purls.
+        Snapshot: A object representing a snapshot being released.
+        destination (Path): Path to the directory to save the SBOMs to.
     """
-    LOG.info("Updating SPDX sbom")
-    for package in sbom["packages"]:
-        if package["name"] in component_to_purls_map:
-            # Remove existing purls that contain internal repo info
-            package["externalRefs"] = list(
-                filter(lambda n: n.get("referenceType") != "purl", package["externalRefs"])
-            )
-            purls = component_to_purls_map[package["name"]]
-            purl_external_refs = [
-                {
-                    "referenceCategory": "PACKAGE-MANAGER",
-                    "referenceType": "purl",
-                    "referenceLocator": purl,
-                }
-                for purl in purls
-            ]
-            package["externalRefs"].extend(purl_external_refs)
-
-            # Set the SBOM document name to the first image pullspec
-            sbom["name"] = get_image_pullspec_from_purl(purls[0])
+    await asyncio.gather(
+        *[update_component_sboms(component, destination) for component in snapshot.components]
+    )
 
 
-def update_sboms(data_path: str, input_path: str, output_path: str) -> None:
+async def main() -> None:
     """
-    Update all SBOM files in the given input_path directory, and save the updated SBOMs to the
-    output_path directory
-    Args:
-        data_path: path to data.json file containing image metadata.
-        input_path: path to directory holding SBOMs files to be updated.
-        output_path: path to directory to save updated SBOMs.
+    Script entrypoint.
     """
-    with open(data_path, "r") as data_file:
-        data = json.load(data_file)
-
-    component_to_purls_map = get_component_to_purls_map(data.get("images", []))
-    # get all json files in input dir
-    input_jsons = glob.glob(os.path.join(input_path, "*.json"))
-    # loop through files
-    LOG.info("Found %s json files in input directory: %s", len(input_jsons), input_jsons)
-    for i in input_jsons:
-        with open(i, "r") as input_file:
-            sbom = json.load(input_file)
-
-        if sbom.get("bomFormat") == "CycloneDX":
-            update_cyclonedx_sbom(sbom, component_to_purls_map)
-        elif "spdxVersion" in sbom:
-            update_spdx_sbom(sbom, component_to_purls_map)
-        else:
-            continue
-
-        output_filename = os.path.join(output_path, os.path.basename(i))
-        LOG.info("Saving updated SBOM to %s", output_filename)
-        with open(output_filename, "w") as output_file:
-            json.dump(sbom, output_file)
-
-
-def main():
     parser = argparse.ArgumentParser(
         prog="update-component-sbom",
         description="Update component SBOM purls with release info.",
     )
     parser.add_argument(
-        "--data-path", required=True, type=str, help="Path to the input data in JSON format."
-    )
-    parser.add_argument(
-        "--input-path",
+        "--snapshot-path",
         required=True,
-        type=str,
-        help="Path to the directory holding the SBOM files to be updated.",
+        type=Path,
+        help="Path to the snapshot spec file in JSON format.",
     )
     parser.add_argument(
         "--output-path",
         required=True,
-        type=str,
+        type=Path,
         help="Path to the directory to save the updated SBOM files.",
     )
-
     args = parser.parse_args()
 
-    update_sboms(args.data_path, args.input_path, args.output_path)
+    setup_sbom_logger()
+
+    snapshot = await sbomlib.make_snapshot(args.snapshot_path)
+    await update_sboms(snapshot, args.output_path)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

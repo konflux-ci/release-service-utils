@@ -56,7 +56,11 @@ RUN pip3 install jinja2 \
     pubtools-exodus \
     pubtools-marketplacesvm \
     pubtools-sign \
-    pubtools-pyxis
+    pubtools-pyxis \
+    pydantic \
+    aiofiles \
+    types-aiofiles \
+    pytest-asyncio
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
 RUN dnf -y remove gcc
