@@ -59,11 +59,13 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
         {
             "components": [
                 {
+                    "name": "comp-1",
                     "containerImage": "quay.io/repo1@sha256:deadbeef",
                     "rh-registry-repo": "registry.redhat.io/repo1",
                     "tags": ["1.0"],
                 },
                 {
+                    "name": "comp-2",
                     "containerImage": "quay.io/repo2@sha256:ffffffff",
                     "rh-registry-repo": "registry.redhat.io/repo2",
                     "tags": ["2.0", "latest"],
@@ -75,12 +77,14 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
     expected_snapshot = Snapshot(
         components=[
             Component(
-                "registry.redhat.io/repo1",
+                name="comp-1",
+                repository="registry.redhat.io/repo1",
                 image=IndexImage("sha256:deadbeef", children=[Image("sha256:aaaaffff")]),
                 tags=["1.0"],
             ),
             Component(
-                "registry.redhat.io/repo2",
+                name="comp-2",
+                repository="registry.redhat.io/repo2",
                 image=IndexImage("sha256:ffffffff", children=[Image("sha256:bbbbffff")]),
                 tags=["2.0", "latest"],
             ),
