@@ -34,6 +34,7 @@ from sbom.sbomlib import Component, Snapshot, construct_purl
 
 logger = get_sbom_logger()
 
+
 class ReleaseNotes(pdc.BaseModel):
     """
     Pydantic model representing the release notes.
@@ -209,6 +210,7 @@ def main() -> None:
         write_file(document=sbom, file_name=str(args.output_path), validate=True)
     except Exception:  # pylint: disable=broad-except
         logger.exception("Creation of the product-level SBOM failed.")
+
 
 if __name__ == "__main__":
     main()
