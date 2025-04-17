@@ -266,7 +266,7 @@ async def get_image_manifest(repository: str, image_digest: str) -> dict[str, An
     if code != 0:
         raise SBOMError(f"Could not get manifest of {reference}: {stderr.decode()}")
 
-    return json.loads(stdout)
+    return json.loads(stdout)  # type: ignore
 
 
 def make_reference(repository: str, image_digest: str) -> str:
@@ -360,7 +360,7 @@ def get_purl_arch(purl_str: str) -> Optional[str]:
     Get the arch qualifier from a PackageURL.
     """
     purl = PackageURL.from_string(purl_str).to_dict()
-    return purl["qualifiers"].get("arch")
+    return purl["qualifiers"].get("arch")  # type: ignore
 
 
 def get_purl_digest(purl_str: str) -> str:

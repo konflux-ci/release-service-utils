@@ -1,159 +1,215 @@
 #!/usr/bin/env python3
 """
-This script creates a product-level SBOM based on releaseNotes in the merged
-data.json file.
+This script creates a product-level SBOM based on the merged data file and a
+mapped snapshot spec.
+
+Example usage:
+$ create_product_sbom --data-path data.json --snapshot-path snapshot.json \
+    --output-path product_sbom.json
 """
-import json
 import uuid
 from datetime import datetime, timezone
 import argparse
-from collections import defaultdict
-from typing import DefaultDict, Dict, List
+from typing import List
+from pathlib import Path
+import asyncio
+
+import pydantic as pdc
+
+from spdx_tools.spdx.model.actor import Actor, ActorType
+from spdx_tools.spdx.model.checksum import Checksum, ChecksumAlgorithm
+from spdx_tools.spdx.model.document import CreationInfo, Document
+from spdx_tools.spdx.model.package import (
+    ExternalPackageRef,
+    ExternalPackageRefCategory,
+    Package,
+)
+from spdx_tools.spdx.model.relationship import Relationship, RelationshipType
+from spdx_tools.spdx.model.spdx_no_assertion import SpdxNoAssertion
+from spdx_tools.spdx.writer.write_anything import write_file
+
+from sbom import sbomlib
+from sbom.logging import get_sbom_logger, setup_sbom_logger
+from sbom.sbomlib import Component, Snapshot, construct_purl
+
+logger = get_sbom_logger()
 
 
-def create_product_package(name: str, version: str, cpe: str) -> Dict:
+class ReleaseNotes(pdc.BaseModel):
+    """
+    Pydantic model representing the release notes.
+    """
+
+    product_name: str
+    product_version: str
+    cpe: str
+
+
+class ReleaseData(pdc.BaseModel):
+    """
+    Pydantic model representing the merged data file.
+    """
+
+    release_notes: ReleaseNotes = pdc.Field(alias="releaseNotes")
+
+
+def create_product_package(product_elem_id: str, release_notes: ReleaseNotes) -> Package:
     """Create SPDX package corresponding to the product."""
-    return {
-        "SPDXID": "SPDXRef-product",
-        "name": name,
-        "versionInfo": version,
-        "supplier": "Organization: Red Hat",
-        "downloadLocation": "NOASSERTION",
-        "externalRefs": [
-            {
-                "referenceCategory": "SECURITY",
-                "referenceType": "cpe22Type",
-                "referenceLocator": cpe,
-            }
+
+    return Package(
+        spdx_id=product_elem_id,
+        name=release_notes.product_name,
+        version=release_notes.product_version,
+        download_location=SpdxNoAssertion(),
+        supplier=Actor(ActorType.ORGANIZATION, "Red Hat"),
+        license_declared=SpdxNoAssertion(),
+        files_analyzed=False,
+        external_references=[
+            ExternalPackageRef(
+                category=ExternalPackageRefCategory.SECURITY,
+                reference_type="cpe22Type",
+                locator=release_notes.cpe,
+            )
         ],
-    }
+    )
 
 
-def create_product_relationship() -> Dict:
+def create_product_relationship(doc_elem_id: str, product_elem_id: str) -> Relationship:
     """Create SPDX relationship corresponding to the product SPDX package."""
-    return {
-        "spdxElementId": "SPDXRef-DOCUMENT",
-        "relationshipType": "DESCRIBES",
-        "relatedSpdxElement": "SPDXRef-product",
-    }
+    return Relationship(
+        spdx_element_id=doc_elem_id,
+        relationship_type=RelationshipType.DESCRIBES,
+        related_spdx_element_id=product_elem_id,
+    )
 
 
-def get_component_packages(images: List[Dict]) -> List[Dict]:
+def get_component_packages(components: List[Component]) -> List[Package]:
     """
     Get a list of SPDX packages - one per each component.
 
     Each component can have multiple external references - purls.
     """
     packages = []
-    component_to_purls_map = get_component_to_purls_map(images)
+    for component in components:
+        checksum = component.image.digest.split(":", 1)[1]
 
-    for i, (component, purls) in enumerate(component_to_purls_map.items()):
-        SPDXID = f"SPDXRef-component-{i}"
-        external_refs = [
-            {
-                "referenceCategory": "PACKAGE-MANAGER",
-                "referenceType": "purl",
-                "referenceLocator": purl,
-            }
-            for purl in purls
+        purls = [
+            construct_purl(component.repository, component.image.digest, tag=tag)
+            for tag in component.tags
         ]
 
-        package = {
-            "SPDXID": SPDXID,
-            "name": component,
-            "downloadLocation": "NOASSERTION",
-            "externalRefs": external_refs,
-        }
-        packages.append(package)
+        packages.append(
+            Package(
+                spdx_id=f"SPDXRef-component-{component.name}",
+                name=component.name,
+                license_declared=SpdxNoAssertion(),
+                download_location=SpdxNoAssertion(),
+                files_analyzed=False,
+                supplier=Actor(ActorType.ORGANIZATION, "Red Hat"),
+                external_references=[
+                    ExternalPackageRef(
+                        category=ExternalPackageRefCategory.PACKAGE_MANAGER,
+                        reference_type="purl",
+                        locator=purl,
+                    )
+                    for purl in purls
+                ],
+                checksums=[Checksum(algorithm=ChecksumAlgorithm.SHA256, value=checksum)],
+            )
+        )
 
     return packages
 
 
-def get_component_to_purls_map(images: List[Dict]) -> Dict[str, List[str]]:
-    """Get dictionary mapping component names to list of image purls."""
-    component_purls: DefaultDict[str, List[str]] = defaultdict(list)
-
-    for image in images:
-        component = image["component"]
-        purl = image["purl"]
-        component_purls[component].append(purl)
-
-    return dict(component_purls)
-
-
-def get_component_relationships(packages: List[Dict]):
+def get_component_relationships(
+    product_elem_id: str, packages: List[Package]
+) -> List[Relationship]:
     """Get SPDX relationship for each SPDX component package."""
     return [
-        {
-            "spdxElementId": package["SPDXID"],
-            "relationshipType": "PACKAGE_OF",
-            "relatedSpdxElement": "SPDXRef-product",
-        }
+        Relationship(
+            spdx_element_id=package.spdx_id,
+            relationship_type=RelationshipType.PACKAGE_OF,
+            related_spdx_element_id=product_elem_id,
+        )
         for package in packages
     ]
 
 
-def create_sbom(data_path: str) -> Dict:
-    with open(data_path, "r") as fp:
-        data = json.load(fp)
-        release_notes = data["releaseNotes"]
+def create_sbom(release_notes: ReleaseNotes, snapshot: Snapshot) -> Document:
+    """
+    Create an SPDX document based on release notes and a snapshot.
+    """
+    doc_elem_id = "SPDXRef-DOCUMENT"
+    product_elem_id = "SPDXRef-product"
 
-    product_name = release_notes["product_name"]
-    product_version = release_notes["product_version"]
-    cpe = release_notes["cpe"]
-
-    # per SPDX spec, this URI does not have to be accessible, it's only used to
-    # uniquely identify this SPDX document.
-    # https://spdx.github.io/spdx-spec/v2.3/document-creation-information/#65-spdx-document-namespace-field
-    document_namespace = f"https://redhat.com/{uuid.uuid4()}.spdx.json"
-
-    packages = [create_product_package(product_name, product_version, cpe)]
-    relationships = [create_product_relationship()]
-
-    component_packages = get_component_packages(release_notes["content"].get("images", []))
-    component_relationships = get_component_relationships(component_packages)
-
-    packages.extend(component_packages)
-    relationships.extend(component_relationships)
-
-    sbom = {
-        "spdxVersion": "SPDX-2.3",
-        "SPDXID": "SPDXRef-DOCUMENT",
-        "dataLicense": "CC-BY-4.0",
-        "documentNamespace": document_namespace,
-        "creationInfo": {
-            # E.g. 2024-10-21T20:52:36+00:00
-            "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "creators": ["Organization: Red Hat", "Tool: Konflux CI"],
-        },
-        "name": f"{product_name} {product_version}",
-        "packages": packages,
-        "relationships": relationships,
-    }
-
-    return sbom
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        prog="create-product-sbom", description="Create product-level SBOM from releaseNotes."
+    creation_info = CreationInfo(
+        spdx_version="SPDX-2.3",
+        spdx_id=doc_elem_id,
+        name=f"{release_notes.product_name} {release_notes.product_version}",
+        data_license="CC0-1.0",
+        document_namespace=f"https://redhat.com/{uuid.uuid4()}.spdx.json",
+        creators=[
+            Actor(ActorType.ORGANIZATION, "Red Hat"),
+            Actor(ActorType.TOOL, "Konflux CI"),
+        ],
+        created=datetime.now(timezone.utc),
     )
 
+    product_package = create_product_package(product_elem_id, release_notes)
+    product_relationship = create_product_relationship(doc_elem_id, product_elem_id)
+
+    component_packages = get_component_packages(snapshot.components)
+    component_relationships = get_component_relationships(product_elem_id, component_packages)
+
+    return Document(
+        creation_info=creation_info,
+        packages=[product_package, *component_packages],
+        relationships=[product_relationship, *component_relationships],
+    )
+
+
+def main() -> None:
+    """
+    Script entrypoint.
+    """
+    parser = argparse.ArgumentParser(
+        prog="create-product-sbom",
+        description="Create product-level SBOM from merged data file"
+        "and mapped snapshot spec.",
+    )
     parser.add_argument(
-        "--data-path", required=True, type=str, help="Path to the input data in JSON format."
+        "--data-path",
+        required=True,
+        type=Path,
+        help="Path to the merged data file in JSON format.",
+    )
+    parser.add_argument(
+        "--snapshot-path",
+        required=True,
+        type=Path,
+        help="Path to the input data in JSON format.",
     )
     parser.add_argument(
         "--output-path",
         required=True,
-        type=str,
+        type=Path,
         help="Path to save the output SBOM in JSON format.",
     )
 
     args = parser.parse_args()
+    setup_sbom_logger()
 
-    sbom = create_sbom(args.data_path)
-    with open(args.output_path, "w") as fp:
-        json.dump(sbom, fp)
+    try:
+        snapshot = asyncio.run(sbomlib.make_snapshot(args.snapshot_path))
+        with open(args.data_path, "r", encoding="utf-8") as fp:
+            raw_json = fp.read()
+            release_notes = ReleaseData.model_validate_json(raw_json).release_notes
+
+            sbom = create_sbom(release_notes, snapshot)
+
+        write_file(document=sbom, file_name=str(args.output_path), validate=True)
+    except Exception:  # pylint: disable=broad-except
+        logger.exception("Creation of the product-level SBOM failed.")
 
 
 if __name__ == "__main__":

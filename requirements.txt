@@ -11,3 +11,4 @@ pubtools-marketplacesvm
 pydantic
 aiofiles
 types-aiofiles
+spdx-tools==0.8.3
