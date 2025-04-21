@@ -10,7 +10,7 @@ from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream
 from sbom.create_product_sbom import ReleaseNotes, create_sbom
 from sbom.sbomlib import Component, Image, IndexImage, Snapshot
 
-Digests = namedtuple("TestDigests", ["single_arch", "multi_arch"])
+Digests = namedtuple("Digests", ["single_arch", "multi_arch"])
 DIGESTS = Digests(
     single_arch="sha256:8f2e5e7f92d8e8d2e9b3e9c1a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
     multi_arch="sha256:e4d2f37a563fcfa4d3a1ab476ded714c56f75f916d30c3a33815d64d41f78534",

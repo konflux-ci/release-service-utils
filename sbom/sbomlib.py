@@ -359,8 +359,12 @@ def get_purl_arch(purl_str: str) -> Optional[str]:
     """
     Get the arch qualifier from a PackageURL.
     """
-    purl = PackageURL.from_string(purl_str).to_dict()
-    return purl["qualifiers"].get("arch")  # type: ignore
+    purl = PackageURL.from_string(purl_str)
+    if isinstance(purl.qualifiers, dict):
+        return purl.qualifiers.get("arch")
+
+    logger.warning("Parsed qualifiers from purl %s are not a dictionary.", purl_str)
+    return None
 
 
 def get_purl_digest(purl_str: str) -> str:
@@ -369,5 +373,5 @@ def get_purl_digest(purl_str: str) -> str:
     """
     purl = PackageURL.from_string(purl_str)
     if purl.version is None:
-        raise ValueError("SBOM contains invalid OCI Purl: %s", purl_str)
+        raise SBOMError("SBOM contains invalid OCI Purl: %s", purl_str)
     return purl.version
