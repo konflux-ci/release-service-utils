@@ -1,14 +1,20 @@
 from io import StringIO
 import json
-import unittest
 from typing import List
-import pytest
+from collections import namedtuple
 
+import pytest
 from packageurl import PackageURL
 from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream
 
 from sbom.create_product_sbom import ReleaseNotes, create_sbom
 from sbom.sbomlib import Component, Image, IndexImage, Snapshot
+
+Digests = namedtuple("TestDigests", ["single_arch", "multi_arch"])
+DIGESTS = Digests(
+    single_arch="sha256:8f2e5e7f92d8e8d2e9b3e9c1a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+    multi_arch="sha256:e4d2f37a563fcfa4d3a1ab476ded714c56f75f916d30c3a33815d64d41f78534",
+)
 
 
 def verify_cpe(sbom, cpe: str) -> None:
@@ -75,7 +81,7 @@ def verify_relationships(sbom, components: List[Component]) -> None:
 
     # verify the relationship for the product
     assert {
-        "spdxElementId": f"SPDXRef-DOCUMENT",
+        "spdxElementId": "SPDXRef-DOCUMENT",
         "relatedSpdxElement": "SPDXRef-product",
         "relationshipType": "DESCRIBES",
     } in sbom["relationships"]
@@ -101,18 +107,14 @@ def verify_package_licenses(sbom) -> None:
                     Component(
                         name="component",
                         repository="quay.io/repo",
-                        image=Image(
-                            digest="sha256:8f2e5e7f92d8e8d2e9b3e9c1a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
-                        ),
+                        image=Image(digest=DIGESTS.single_arch),
                         tags=["1.0", "latest"],
                     )
                 ]
             ),
             [
-                "pkg:oci/repo@sha256:8f2e5e7f92d8e8d2e9b3e9c1a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
-                "?repository_url=quay.io/repo&tag=1.0",
-                "pkg:oci/repo@sha256:8f2e5e7f92d8e8d2e9b3e9c1a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
-                "?repository_url=quay.io/repo&tag=latest",
+                f"pkg:oci/repo@{DIGESTS.single_arch}?repository_url=quay.io/repo&tag=1.0",
+                f"pkg:oci/repo@{DIGESTS.single_arch}?repository_url=quay.io/repo&tag=latest",
             ],
             id="single-component-single-arch",
         ),
@@ -123,7 +125,7 @@ def verify_package_licenses(sbom) -> None:
                         name="component",
                         repository="quay.io/repo",
                         image=IndexImage(
-                            digest="sha256:8f2e5e7f92d8e8d2e9b3e9c1a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+                            digest=DIGESTS.multi_arch,
                             children=[
                                 Image(digest="sha256:aaa"),
                                 Image(digest="sha256:bbb"),
@@ -134,10 +136,8 @@ def verify_package_licenses(sbom) -> None:
                 ]
             ),
             [
-                "pkg:oci/repo@sha256:8f2e5e7f92d8e8d2e9b3e9c1a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
-                "?repository_url=quay.io/repo&tag=1.0",
-                "pkg:oci/repo@sha256:8f2e5e7f92d8e8d2e9b3e9c1a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
-                "?repository_url=quay.io/repo&tag=latest",
+                f"pkg:oci/repo@{DIGESTS.multi_arch}?repository_url=quay.io/repo&tag=1.0",
+                f"pkg:oci/repo@{DIGESTS.multi_arch}?repository_url=quay.io/repo&tag=latest",
             ],
             id="single-component-multi-arch",
         ),
@@ -148,7 +148,7 @@ def verify_package_licenses(sbom) -> None:
                         name="multiarch-component",
                         repository="quay.io/repo",
                         image=IndexImage(
-                            digest="sha256:8f2e5e7f92d8e8d2e9b3e9c1a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+                            digest=DIGESTS.multi_arch,
                             children=[
                                 Image(digest="sha256:aaa"),
                                 Image(digest="sha256:bbb"),
@@ -159,21 +159,17 @@ def verify_package_licenses(sbom) -> None:
                     Component(
                         name="singlearch-component",
                         repository="quay.io/another-repo",
-                        image=Image(
-                            digest="sha256:e4d2f37a563fcfa4d3a1ab476ded714c56f75f916d30c3a33815d64d41f78534",
-                        ),
+                        image=Image(digest=DIGESTS.single_arch),
                         tags=["2.0", "production"],
                     ),
                 ]
             ),
             [
-                "pkg:oci/repo@sha256:8f2e5e7f92d8e8d2e9b3e9c1a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
-                "?repository_url=quay.io/repo&tag=1.0",
-                "pkg:oci/repo@sha256:8f2e5e7f92d8e8d2e9b3e9c1a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
-                "?repository_url=quay.io/repo&tag=latest",
-                "pkg:oci/another-repo@sha256:e4d2f37a563fcfa4d3a1ab476ded714c56f75f916d30c3a33815d64d41f78534"
+                f"pkg:oci/repo@{DIGESTS.multi_arch}?repository_url=quay.io/repo&tag=1.0",
+                f"pkg:oci/repo@{DIGESTS.multi_arch}?repository_url=quay.io/repo&tag=latest",
+                f"pkg:oci/another-repo@{DIGESTS.single_arch}"
                 "?repository_url=quay.io/another-repo&tag=2.0",
-                "pkg:oci/another-repo@sha256:e4d2f37a563fcfa4d3a1ab476ded714c56f75f916d30c3a33815d64d41f78534"
+                f"pkg:oci/another-repo@{DIGESTS.single_arch}"
                 "?repository_url=quay.io/another-repo&tag=production",
             ],
             id="multi-component-mixed-arch",
