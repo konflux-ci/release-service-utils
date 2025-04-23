@@ -89,8 +89,8 @@ def update_sbom_in_situ(
         SPDXVersion2().update_sbom(component, image, sbom)
         return True
 
-    if CycloneDXVersion1.supports(sbom) and "specVersion" in sbom:
-        CycloneDXVersion1(sbom["specVersion"]).update_sbom(component, image, sbom)
+    if CycloneDXVersion1.supports(sbom):
+        CycloneDXVersion1().update_sbom(component, image, sbom)
         return True
 
     return False

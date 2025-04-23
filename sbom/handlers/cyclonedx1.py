@@ -1,7 +1,5 @@
-from functools import total_ordering
 from typing import Union, Optional
 from enum import Enum
-from packaging.version import Version
 
 
 from sbom.logging import get_sbom_logger
@@ -19,7 +17,6 @@ from sbom.sbomlib import (
 logger = get_sbom_logger()
 
 
-@total_ordering
 class CDXSpec(Enum):
     """
     Enum containing all recognized CycloneDX versions.
@@ -29,18 +26,6 @@ class CDXSpec(Enum):
     v1_5 = "1.5"
     v1_6 = "1.6"
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, CDXSpec):
-            return Version(self.value) == Version(other.value)
-
-        return NotImplemented
-
-    def __lt__(self, other: object):
-        if isinstance(other, CDXSpec):
-            return Version(self.value) < Version(other.value)
-
-        return NotImplemented
-
 
 class CycloneDXVersion1(SBOMHandler):
     supported_versions = [
@@ -49,8 +34,8 @@ class CycloneDXVersion1(SBOMHandler):
         CDXSpec.v1_6,
     ]
 
-    def __init__(self, version: str) -> None:
-        self.version = CDXSpec(version)
+    def __init__(self) -> None:
+        pass
 
     @classmethod
     def supports(cls, sbom: dict) -> bool:
@@ -64,7 +49,7 @@ class CycloneDXVersion1(SBOMHandler):
         try:
             spec = CDXSpec(raw)
         except ValueError:
-            logger.warning("CDX spec %s not recognized.")
+            logger.warning("CDX spec %s not recognized.", raw)
             return False
 
         return spec in cls.supported_versions
@@ -72,7 +57,26 @@ class CycloneDXVersion1(SBOMHandler):
     def update_sbom(
         self, component: Component, image: Union[IndexImage, Image], sbom: dict
     ) -> None:
-        self._update_sbom(component, image, sbom)
+        self._bump_version(sbom)
+        self._update_metadata_component(component, sbom)
+
+        for cdx_component in sbom.get("components", []):
+            if cdx_component.get("type") != "container":
+                continue
+
+            purl = cdx_component.get("purl")
+            if purl is None or get_purl_digest(purl) != image.digest:
+                continue
+
+            self._update_container_component(component, cdx_component)
+
+    def _bump_version(self, sbom: dict) -> None:
+        """
+        Bump the CDX version to 1.6, so we can populate the fields relevant to tags.
+        This is legal, because CycloneDX v1.X is forward-compatible.
+        """
+        sbom["$schema"] = "http://cyclonedx.org/schema/bom-1.6.schema.json"
+        sbom["specVersion"] = "1.6"
 
     def _update_component_purl_identity(
         self,
@@ -80,12 +84,6 @@ class CycloneDXVersion1(SBOMHandler):
         arch: Optional[str],
         cdx_component: dict,
     ) -> None:
-        if self.version < CDXSpec.v1_6:
-            logger.warning(
-                "Updating the evidence.identity field is only supported for CDX version 1.6."
-            )
-            return
-
         if len(kflx_component.tags) <= 1:
             return
 
@@ -127,19 +125,17 @@ class CycloneDXVersion1(SBOMHandler):
         new_purl = construct_purl(kflx_component.repository, digest, arch=arch, tag=tag)
         cdx_component["purl"] = new_purl
 
-        # Only CDX 1.6 supports multiple identity objects
-        if self.version >= CDXSpec.v1_6:
-            self._update_component_purl_identity(kflx_component, arch, cdx_component)
+        self._update_component_purl_identity(kflx_component, arch, cdx_component)
 
         if isinstance(kflx_component.image, IndexImage):
             variants = cdx_component.get("pedigree", {}).get("variants", [])
             child_digests = [img.digest for img in kflx_component.image.children]
-            for component in variants:
-                purl = component.get("purl")
+            for variant in variants:
+                purl = variant.get("purl")
                 if purl is None or get_purl_digest(purl) not in child_digests:
                     continue
 
-                self._update_container_component(kflx_component, component)
+                self._update_container_component(kflx_component, variant)
 
     def _update_metadata_component(self, kflx_component: Component, sbom: dict) -> None:
         component = sbom.get("metadata", {}).get("component", {})
@@ -150,18 +146,3 @@ class CycloneDXVersion1(SBOMHandler):
         else:
             metadata = {"component": component}
             sbom["metadata"] = metadata
-
-    def _update_sbom(
-        self, kflx_component: Component, image: Union[IndexImage, Image], sbom: dict
-    ) -> None:
-        self._update_metadata_component(kflx_component, sbom)
-
-        for cdx_component in sbom.get("components", []):
-            if cdx_component.get("type") != "container":
-                continue
-
-            purl = cdx_component.get("purl")
-            if purl is None or get_purl_digest(purl) != image.digest:
-                continue
-
-            self._update_container_component(kflx_component, cdx_component)
