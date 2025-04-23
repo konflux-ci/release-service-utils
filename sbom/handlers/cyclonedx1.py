@@ -87,11 +87,12 @@ class CycloneDXVersion1(SBOMHandler):
         if len(kflx_component.tags) <= 1:
             return
 
+        new_identity = []
         for tag in kflx_component.tags:
             purl = construct_purl(
                 kflx_component.repository, kflx_component.image.digest, arch=arch, tag=tag
             )
-            purl_identity = {"field": "purl", "concludedValue": purl}
+            new_identity.append({"field": "purl", "concludedValue": purl})
 
         if cdx_component.get("evidence") is None:
             cdx_component["evidence"] = {}
@@ -102,9 +103,10 @@ class CycloneDXVersion1(SBOMHandler):
         # The identity can either be an array or a single object. In both cases
         # we preserve the original identity.
         if isinstance(identity, list):
-            identity.extend(purl_identity)
+            identity.extend(new_identity)
+            evidence["identity"] = identity
         else:
-            evidence["identity"] = [identity, *purl_identity]
+            evidence["identity"] = [identity, *new_identity]
 
     def _update_container_component(
         self, kflx_component: Component, cdx_component: dict
