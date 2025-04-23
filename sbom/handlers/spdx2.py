@@ -2,6 +2,7 @@
 This module contains the SBOM handler for SPDX version 2 SBOMs.
 """
 
+from enum import Enum
 from typing import Optional, Union, Any
 
 from packageurl import PackageURL
@@ -12,6 +13,7 @@ from sbom.sbomlib import (
     Image,
     IndexImage,
     SBOMError,
+    SBOMHandler,
     construct_purl,
     get_purl_arch,
     get_purl_digest,
@@ -131,19 +133,46 @@ class SPDXPackage:
         }
 
 
-class SPDXVersion2:  # pylint: disable=too-few-public-methods
+class SPDXSpec(Enum):
+    """
+    Enum containing all recognized SPDX versions.
+    """
+
+    SPDX_2_0 = "SPDX-2.0"
+    SPDX_2_1 = "SPDX-2.1"
+    SPDX_2_2 = "SPDX-2.2"
+    SPDX_2_2_1 = "SPDX-2.2.1"
+    SPDX_2_2_2 = "SPDX-2.2.2"
+    SPDX_2_3 = "SPDX-2.3"
+
+
+class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
     """
     Class containing methods for SPDX v2.x SBOM manipulation.
     """
 
     supported_versions = [
-        "SPDX-2.0",
-        "SPDX-2.1",
-        "SPDX-2.2",
-        "SPDX-2.2.1",
-        "SPDX-2.2.2",
-        "SPDX-2.3",
+        SPDXSpec.SPDX_2_0,
+        SPDXSpec.SPDX_2_1,
+        SPDXSpec.SPDX_2_2,
+        SPDXSpec.SPDX_2_2_1,
+        SPDXSpec.SPDX_2_2_2,
+        SPDXSpec.SPDX_2_3,
     ]
+
+    @classmethod
+    def supports(cls, sbom: dict) -> bool:
+        raw = sbom.get("spdxVersion")
+        if raw is None:
+            return False
+
+        try:
+            spec = SPDXSpec(raw)
+        except ValueError:
+            logger.warning("SPDX spec %s not recognized.")
+            return False
+
+        return spec in cls.supported_versions
 
     @classmethod
     def _find_purl_in_refs(cls, package: SPDXPackage, digest: str) -> Optional[str]:
@@ -176,13 +205,6 @@ class SPDXVersion2:  # pylint: disable=too-few-public-methods
         """
         Update the SBOM of an index image in a repository.
         """
-        version = sbom["spdxVersion"]
-        if version not in cls.supported_versions:
-            raise ValueError(
-                f"Called update on unsupported version {version}, "
-                f"supported versions are {cls.supported_versions}"
-            )
-
         sbom["name"] = make_reference(component.repository, index.digest)
 
         index_package = cls._find_image_package(sbom, index.digest)
@@ -224,13 +246,6 @@ class SPDXVersion2:  # pylint: disable=too-few-public-methods
         """
         Update the SBOM of single-arch image in a repository.
         """
-        version = sbom["spdxVersion"]
-        if version not in cls.supported_versions:
-            raise ValueError(
-                f"Called update on unsupported version {version}, "
-                f"supported versions are {cls.supported_versions}"
-            )
-
         sbom["name"] = make_reference(component.repository, image.digest)
 
         image_package = cls._find_image_package(sbom, image.digest)
@@ -243,11 +258,11 @@ class SPDXVersion2:  # pylint: disable=too-few-public-methods
             component.tags,
         )
 
-    @classmethod
     def update_sbom(
-        cls, component: Component, image: Union[IndexImage, Image], sbom: dict
+        self, component: Component, image: Union[IndexImage, Image], sbom: dict
     ) -> None:
         if isinstance(image, IndexImage):
-            cls._update_index_image_sbom(component, image, sbom)
+            # breakpoint()
+            SPDXVersion2._update_index_image_sbom(component, image, sbom)
         elif isinstance(image, Image):
-            cls._update_image_sbom(component, image, sbom)
+            SPDXVersion2._update_image_sbom(component, image, sbom)

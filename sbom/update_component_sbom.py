@@ -15,8 +15,8 @@ from pathlib import Path
 
 import aiofiles
 
-from sbom.handlers import get_handler
 from sbom import sbomlib
+from sbom.handlers import CycloneDXVersion1, SPDXVersion2
 from sbom.logging import get_sbom_logger, setup_sbom_logger
 from sbom.sbomlib import (
     Component,
@@ -71,6 +71,31 @@ async def write_sbom(sbom: dict, path: Path) -> None:
         await fp.write(json.dumps(sbom))
 
 
+def update_sbom_in_situ(
+    component: Component, image: Union[IndexImage, Image], sbom: dict
+) -> bool:
+    """
+    Determine the matching SBOM handler and update the SBOM with release-time
+    information in situ.
+
+    Args:
+        component (Component): The component the image belongs to.
+        image (IndexImage | Image): Object representing an image or an index
+                                    image being released.
+        sbom (dict): SBOM parsed as dictionary.
+
+    """
+    if SPDXVersion2.supports(sbom):
+        SPDXVersion2().update_sbom(component, image, sbom)
+        return True
+
+    if CycloneDXVersion1.supports(sbom) and "specVersion" in sbom:
+        CycloneDXVersion1(sbom["specVersion"]).update_sbom(component, image, sbom)
+        return True
+
+    return False
+
+
 async def update_sbom(
     component: Component, image: Union[IndexImage, Image], destination: Path
 ) -> None:
@@ -90,11 +115,8 @@ async def update_sbom(
         reference = f"{component.repository}@{image.digest}"
         sbom, sbom_path = await load_sbom(reference, destination)
 
-        handler = get_handler(sbom)
-        if not handler:
+        if not update_sbom_in_situ(component, image, sbom):
             raise SBOMError(f"Unsupported SBOM format for image {reference}.")
-
-        handler.update_sbom(component, image, sbom)
 
         await write_sbom(sbom, sbom_path)
         logger.info("Successfully enriched SBOM for image %s", reference)

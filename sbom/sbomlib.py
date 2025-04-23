@@ -110,12 +110,18 @@ class SBOMHandler(Protocol):
     Protocol ensuring that SBOM handlers implement the correct method.
     """
 
-    @classmethod
     def update_sbom(
-        cls, component: Component, image: Union[IndexImage, Image], sbom: dict[str, Any]
+        self, component: Component, image: Union[IndexImage, Image], sbom: dict[str, Any]
     ) -> None:
         """
         Update the specified SBOM in-place based on the provided component information.
+        """
+        raise NotImplementedError()
+
+    @classmethod
+    def supports(cls, sbom: dict) -> bool:
+        """
+        Returns true if the provided SBOM is supported by this handler.
         """
         raise NotImplementedError()
 
@@ -373,5 +379,4 @@ def get_purl_digest(purl_str: str) -> str:
     """
     purl = PackageURL.from_string(purl_str)
     if purl.version is None:
-        raise SBOMError("SBOM contains invalid OCI Purl: %s", purl_str)
-    return purl.version
+        raise SBOMError(f"SBOM contains invalid OCI Purl: {purl_str}")
