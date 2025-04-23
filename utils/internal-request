@@ -15,12 +15,11 @@
 # for status updates.
 #
 # Usage:
-#   ./internal-request.sh [-r request] [--pipeline pipeline-name] [-p <key=value> ...] [-s sync]
+#   ./internal-request.sh [--pipeline pipeline-name] [-p <key=value> ...] [-s sync]
 #   [-t timeout] [--service-account name] [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s]
 #   [--finally-timeout 0h5m0s]
 #
 # Parameters:
-#   -r                  Request: the name of the request.
 #   --pipeline          The name of the pipeline to execute in the internal/pipelines directory of
 #                       release-service-catalog.
 #   -p                  Parameters: can be specified multiple times. Each '-p' flag represents a
@@ -60,9 +59,8 @@ TASK_TIMEOUT=0h55m0s
 FINALLY_TIMEOUT=0h5m0s
 
 function usage {
-    echo "Usage: $0 [-r request] [--pipeline pipeline-name] [-p parameters] [-l labels] [-s sync] [-t timeout] [--service-account name] [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]"
+    echo "Usage: $0 [--pipeline pipeline-name] [-p parameters] [-l labels] [-s sync] [-t timeout] [--service-account name] [--pipeline-timeout 1h0m0s] [--task-timeout 0h55m0s] [--finally-timeout 0h5m0s]"
     echo
-    echo "  -r                  Request: the name of the request."
     echo "  --pipeline          The name of the pipeline to execute in the internal/pipelines directory of"
     echo "                      release-service-catalog."
     echo "  -p                  Params: can be specified multiple times. Each '-p' flag represents a"
@@ -90,14 +88,10 @@ function convert_to_seconds {
 # Parsing arguments
 PARAMS=() # initialize PARAMS as an empty array
 LABELS=() # initialize LABELS as an empty array
-OPTIONS=$(getopt -l "pipeline:,service-account:,pipeline-timeout:,task-timeout:,finally-timeout:" -o "r:p:l:s:t:h" -a -- "$@")
+OPTIONS=$(getopt -l "pipeline:,service-account:,pipeline-timeout:,task-timeout:,finally-timeout:" -o "p:l:s:t:h" -a -- "$@")
 eval set -- "$OPTIONS"
 while true; do
     case "$1" in
-        -r)
-            shift
-            REQUEST=$1
-            ;;
         --pipeline)
             shift
             PIPELINE=$1
@@ -147,7 +141,7 @@ while true; do
 done
 
 # Check if mandatory parameters are set
-if [ -z "$REQUEST" ] && [ -z "$PIPELINE" ]
+if [ -z "$PIPELINE" ]
 then
     usage
 fi
@@ -201,13 +195,10 @@ do
     fi
 done
 
-# The -n PIPELINE can be dropped once PIPELINE is mandatory
-if [[ -n "$PIPELINE" ]]; then
-    if [ -z "$PIPELINEGITURL" ] || [ -z "$PIPELINEGITREVISION" ] ; then
-        echo "You must pass -p taskGitUrl=foo and -p taskGitRevision=bar as parameters. These are used"
-        echo "to determine the pipeline reference in the git resolver."
-        exit 1
-    fi
+if [ -z "$PIPELINEGITURL" ] || [ -z "$PIPELINEGITREVISION" ] ; then
+    echo "You must pass -p taskGitUrl=foo and -p taskGitRevision=bar as parameters. These are used"
+    echo "to determine the pipeline reference in the git resolver."
+    exit 1
 fi
 
 for label in "${LABELS[@]}"
@@ -225,37 +216,20 @@ LABEL_JSON=$(echo "${LABEL_JSON_ARRAY[@]}" | jq -s 'add')
 
 # Create JSON payload for the InternalRequest
 PAYLOAD=$(jq -n \
+    --arg name "$PIPELINE" \
+    --arg url "$PIPELINEGITURL" \
+    --arg revision "$PIPELINEGITREVISION" \
+    --arg pipeline "pipelines/internal/${PIPELINE}/${PIPELINE}.yaml" \
     --argjson parameters "$PARAM_JSON" \
     --argjson timeouts "$TIMEOUTS_JSON" \
     '{
       "apiVersion": "appstudio.redhat.com/v1alpha1",
       "kind": "InternalRequest",
+      "metadata": {
+        "generateName": ($name + "-")
+      },
       "spec": {
-        "params": $parameters,
-        "timeouts": $timeouts
-      }
-    }'
-)
-# We will inject the pipeline stuff as we did request (without the if)
-# when we drop support for request
-if [[ -n "${REQUEST}" ]]; then
-    PAYLOAD=$(jq \
-        --arg request "$REQUEST" \
-        '.spec.request = $request' <<< $PAYLOAD)
-    PAYLOAD=$(jq \
-        --arg request "$REQUEST" \
-        '.metadata.generateName = $request + "-"' <<< $PAYLOAD)
-fi
-# generateName will be injected when PAYLOAD is initialized once REQUEST support is dropped
-if [[ -n "${PIPELINE}" ]]; then
-    PAYLOAD=$(jq \
-        --arg pipeline "$PIPELINE" \
-        '.metadata.generateName = $pipeline + "-"' <<< $PAYLOAD)
-    PAYLOAD=$(jq \
-        --arg url "$PIPELINEGITURL" \
-        --arg revision "$PIPELINEGITREVISION" \
-        --arg pipeline "pipelines/internal/${PIPELINE}/${PIPELINE}.yaml" \
-        '.spec.pipeline = {
+        "pipeline": {
           "pipelineRef": {
             "resolver": "git",
             "params": [
@@ -273,8 +247,12 @@ if [[ -n "${PIPELINE}" ]]; then
               }
             ]
           }
-        }' <<< $PAYLOAD)
-fi
+        },
+        "params": $parameters,
+        "timeouts": $timeouts
+      }
+    }'
+)
 if [[ -n ${LABELS[@]} ]]; then
     PAYLOAD=$(jq \
         --argjson labels "$LABEL_JSON" \
