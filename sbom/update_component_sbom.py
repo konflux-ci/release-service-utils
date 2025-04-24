@@ -83,7 +83,6 @@ def update_sbom_in_situ(
         image (IndexImage | Image): Object representing an image or an index
                                     image being released.
         sbom (dict): SBOM parsed as dictionary.
-
     """
     if SPDXVersion2.supports(sbom):
         SPDXVersion2().update_sbom(component, image, sbom)

@@ -194,6 +194,16 @@ def construct_purl(
     repository: str, digest: str, arch: Optional[str] = None, tag: Optional[str] = None
 ) -> str:
     """
+    Construct an OCI PackageURL string from image data.
+    """
+    purl = construct_purl_object(repository, digest, arch, tag)
+    return purl.to_string()
+
+
+def construct_purl_object(
+    repository: str, digest: str, arch: Optional[str] = None, tag: Optional[str] = None
+) -> PackageURL:
+    """
     Construct an OCI PackageURL from image data.
     """
     repo_name = repository.split("/")[-1]
@@ -210,7 +220,7 @@ def construct_purl(
         name=repo_name,
         version=digest,
         qualifiers={"repository_url": repository, **optional_qualifiers},
-    ).to_string()
+    )
 
 
 async def run_async_subprocess(

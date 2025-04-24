@@ -1,14 +1,14 @@
-from typing import Union, Optional
 from enum import Enum
 
+from packageurl import PackageURL
 
 from sbom.logging import get_sbom_logger
 from sbom.sbomlib import (
     Component,
-    IndexImage,
     Image,
+    SBOMError,
     SBOMHandler,
-    construct_purl,
+    construct_purl_object,
     get_purl_arch,
     get_purl_digest,
 )
@@ -54,9 +54,7 @@ class CycloneDXVersion1(SBOMHandler):
 
         return spec in cls.supported_versions
 
-    def update_sbom(
-        self, component: Component, image: Union[IndexImage, Image], sbom: dict
-    ) -> None:
+    def update_sbom(self, component: Component, image: Image, sbom: dict) -> None:
         self._bump_version(sbom)
         self._update_metadata_component(component, sbom)
 
@@ -68,33 +66,47 @@ class CycloneDXVersion1(SBOMHandler):
             if purl is None or get_purl_digest(purl) != image.digest:
                 continue
 
-            self._update_container_component(component, cdx_component)
+            self._update_container_component(component, cdx_component, update_tags=True)
 
     def _bump_version(self, sbom: dict) -> None:
         """
-        Bump the CDX version to 1.6, so we can populate the fields relevant to tags.
-        This is legal, because CycloneDX v1.X is forward-compatible.
+        Bump the CDX version to 1.6, so we can populate the fields relevant to
+        tags. This is legal, because CycloneDX v1.X is forward-compatible (all
+        1.4 and 1.5 boms are valid 1.6 boms).
         """
+        # This is here to make sure an error is raised if this class is
+        # updated for CDX 1.7.
+        if sbom["specVersion"] not in ["1.4", "1.5", "1.6"]:
+            raise SBOMError("Attempted to downgrade an SBOM.")
+
         sbom["$schema"] = "http://cyclonedx.org/schema/bom-1.6.schema.json"
         sbom["specVersion"] = "1.6"
 
     def _update_component_purl_identity(
         self,
         kflx_component: Component,
-        arch: Optional[str],
         cdx_component: dict,
+        base_purl: PackageURL,
     ) -> None:
+        """
+        Update the evidence.identity field of a CDX component to contain PURLs
+        with all tags.
+
+        Args:
+            kflx_component (Component): associated Konflux component
+            cdx_component (dict): parsed CDX component object
+        """
         if len(kflx_component.tags) <= 1:
             return
 
         new_identity = []
         for tag in kflx_component.tags:
-            purl = construct_purl(
-                kflx_component.repository, kflx_component.image.digest, arch=arch, tag=tag
-            )
-            new_identity.append({"field": "purl", "concludedValue": purl})
+            if isinstance(base_purl.qualifiers, dict):
+                base_purl.qualifiers["tag"] = tag
 
-        if cdx_component.get("evidence") is None:
+            new_identity.append({"field": "purl", "concludedValue": base_purl.to_string()})
+
+        if "evidence" not in cdx_component:
             cdx_component["evidence"] = {}
 
         evidence = cdx_component["evidence"]
@@ -109,8 +121,18 @@ class CycloneDXVersion1(SBOMHandler):
             evidence["identity"] = [identity, *new_identity]
 
     def _update_container_component(
-        self, kflx_component: Component, cdx_component: dict
+        self, kflx_component: Component, cdx_component: dict, update_tags: bool
     ) -> None:
+        """
+        Update a CDX component with the container type in-situ based on the
+        passed Konflux component.
+
+        Args:
+            kflx_component (Component): associated Konflux component
+            cdx_component (dict): parsed CDX component object
+            update_tags (bool): flag determining whether to add the
+                evidence.identity field to the component
+        """
         if cdx_component.get("type") != "container":
             logger.warning(
                 'Called update method on CDX package with type %s instead of "container".'
@@ -124,24 +146,23 @@ class CycloneDXVersion1(SBOMHandler):
         arch = get_purl_arch(purl)
         digest = get_purl_digest(purl)
         tag = kflx_component.tags[0] if kflx_component.tags else None
-        new_purl = construct_purl(kflx_component.repository, digest, arch=arch, tag=tag)
-        cdx_component["purl"] = new_purl
+        new_purl = construct_purl_object(kflx_component.repository, digest, arch=arch, tag=tag)
 
-        self._update_component_purl_identity(kflx_component, arch, cdx_component)
+        cdx_component["purl"] = new_purl.to_string()
 
-        if isinstance(kflx_component.image, IndexImage):
-            variants = cdx_component.get("pedigree", {}).get("variants", [])
-            child_digests = [img.digest for img in kflx_component.image.children]
-            for variant in variants:
-                purl = variant.get("purl")
-                if purl is None or get_purl_digest(purl) not in child_digests:
-                    continue
-
-                self._update_container_component(kflx_component, variant)
+        if update_tags:
+            self._update_component_purl_identity(kflx_component, cdx_component, new_purl)
 
     def _update_metadata_component(self, kflx_component: Component, sbom: dict) -> None:
+        """
+        Updates the metadata component of the SBOM in-situ based on the Konflux component.
+
+        Args:
+            kflx_component (Component): associated Konflux component
+            sbom (dict): the parsed CDX sbom to update
+        """
         component = sbom.get("metadata", {}).get("component", {})
-        self._update_container_component(kflx_component, component)
+        self._update_container_component(kflx_component, component, update_tags=False)
 
         if "metadata" in sbom:
             sbom["metadata"]["component"] = component
