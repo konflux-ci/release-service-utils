@@ -10,7 +10,7 @@ $ create_product_sbom --data-path data.json --snapshot-path snapshot.json \
 import uuid
 from datetime import datetime, timezone
 import argparse
-from typing import List
+from typing import List, Union
 from pathlib import Path
 import asyncio
 
@@ -42,7 +42,7 @@ class ReleaseNotes(pdc.BaseModel):
 
     product_name: str
     product_version: str
-    cpe: str
+    cpe: Union[str, List[str]] = pdc.Field(union_mode="left_to_right")
 
 
 class ReleaseData(pdc.BaseModel):
@@ -55,6 +55,19 @@ class ReleaseData(pdc.BaseModel):
 
 def create_product_package(product_elem_id: str, release_notes: ReleaseNotes) -> Package:
     """Create SPDX package corresponding to the product."""
+    if isinstance(release_notes.cpe, str):
+        cpes = [release_notes.cpe]
+    else:
+        cpes = release_notes.cpe
+
+    refs = [
+        ExternalPackageRef(
+            category=ExternalPackageRefCategory.SECURITY,
+            reference_type="cpe22Type",
+            locator=cpe,
+        )
+        for cpe in cpes
+    ]
 
     return Package(
         spdx_id=product_elem_id,
@@ -64,13 +77,7 @@ def create_product_package(product_elem_id: str, release_notes: ReleaseNotes) ->
         supplier=Actor(ActorType.ORGANIZATION, "Red Hat"),
         license_declared=SpdxNoAssertion(),
         files_analyzed=False,
-        external_references=[
-            ExternalPackageRef(
-                category=ExternalPackageRefCategory.SECURITY,
-                reference_type="cpe22Type",
-                locator=release_notes.cpe,
-            )
-        ],
+        external_references=refs,
     )
 
 
@@ -168,14 +175,18 @@ def create_sbom(release_notes: ReleaseNotes, snapshot: Snapshot) -> Document:
     )
 
 
-def main() -> None:
+def parse_release_notes(raw_json: str) -> ReleaseNotes:
+    return ReleaseData.model_validate_json(raw_json).release_notes
+
+
+def main() -> None:  # pragma: nocover
     """
     Script entrypoint.
     """
     parser = argparse.ArgumentParser(
         prog="create-product-sbom",
         description="Create product-level SBOM from merged data file"
-        "and mapped snapshot spec.",
+        " and mapped snapshot spec.",
     )
     parser.add_argument(
         "--data-path",
@@ -203,14 +214,15 @@ def main() -> None:
         snapshot = asyncio.run(sbomlib.make_snapshot(args.snapshot_path))
         with open(args.data_path, "r", encoding="utf-8") as fp:
             raw_json = fp.read()
-            release_notes = ReleaseData.model_validate_json(raw_json).release_notes
+            release_notes = parse_release_notes(raw_json)
 
             sbom = create_sbom(release_notes, snapshot)
 
         write_file(document=sbom, file_name=str(args.output_path), validate=True)
     except Exception:  # pylint: disable=broad-except
         logger.exception("Creation of the product-level SBOM failed.")
+        raise
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: nocover
     main()

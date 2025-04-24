@@ -1,13 +1,13 @@
 from io import StringIO
 import json
-from typing import List
+from typing import List, Union
 from collections import namedtuple
 
 import pytest
 from packageurl import PackageURL
 from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream
 
-from sbom.create_product_sbom import ReleaseNotes, create_sbom
+from sbom.create_product_sbom import ReleaseNotes, create_sbom, parse_release_notes
 from sbom.sbomlib import Component, Image, IndexImage, Snapshot
 
 Digests = namedtuple("Digests", ["single_arch", "multi_arch"])
@@ -17,15 +17,59 @@ DIGESTS = Digests(
 )
 
 
-def verify_cpe(sbom, cpe: str) -> None:
+@pytest.mark.parametrize(
+    ["data", "expected_rn"],
+    [
+        pytest.param(
+            {
+                "unrelated": "field",
+                "releaseNotes": {
+                    "product_name": "Product",
+                    "product_version": "1.0",
+                    "cpe": "cpe",
+                },
+            },
+            ReleaseNotes(
+                product_name="Product",
+                product_version="1.0",
+                cpe="cpe",
+            ),
+            id="cpe-single",
+        ),
+        pytest.param(
+            {
+                "unrelated": "field",
+                "releaseNotes": {
+                    "product_name": "Product",
+                    "product_version": "1.0",
+                    "cpe": ["cpe1", "cpe2"],
+                },
+            },
+            ReleaseNotes(
+                product_name="Product",
+                product_version="1.0",
+                cpe=["cpe1", "cpe2"],
+            ),
+            id="cpe-list",
+        ),
+    ],
+)
+def test_parse_release_notes(data: dict, expected_rn: ReleaseNotes) -> None:
+    actual = parse_release_notes(json.dumps(data))
+    assert expected_rn == actual
+
+
+def verify_cpe(sbom, expected_cpe: Union[str, List[str]]) -> None:
     """
-    Verify that the CPE externalRef is in the first package.
+    Verify that all CPE externalRefs are in the first package.
     """
-    assert {
-        "referenceCategory": "SECURITY",
-        "referenceLocator": cpe,
-        "referenceType": "cpe22Type",
-    } in sbom["packages"][0]["externalRefs"]
+    all_cpes = expected_cpe if isinstance(expected_cpe, list) else [expected_cpe]
+    for cpe in all_cpes:
+        assert {
+            "referenceCategory": "SECURITY",
+            "referenceLocator": cpe,
+            "referenceType": "cpe22Type",
+        } in sbom["packages"][0]["externalRefs"]
 
 
 def verify_purls(sbom, expected: List[str]) -> None:
@@ -98,6 +142,19 @@ def verify_package_licenses(sbom) -> None:
         assert package["licenseDeclared"] == "NOASSERTION"
 
 
+@pytest.mark.parametrize(
+    "cpe",
+    [
+        pytest.param("cpe:/a:redhat:discovery:1.0::el9", id="cpe-single"),
+        pytest.param(
+            [
+                "cpe:/a:redhat:discovery:1.0::el9",
+                "cpe:/a:redhat:discovery:1.0::el10",
+            ],
+            id="cpe-list",
+        ),
+    ],
+)
 @pytest.mark.parametrize(
     ["snapshot", "purls"],
     [
@@ -176,12 +233,11 @@ def verify_package_licenses(sbom) -> None:
         ),
     ],
 )
-def test_create_sbom(snapshot, purls):
+def test_create_sbom(snapshot: Snapshot, purls: List[str], cpe: Union[str, List[str]]):
     """
     Create an SBOM from release notes and a snapshot and verify that the
     expected properties hold.
     """
-    cpe = "cpe:/a:redhat:discovery:1.0::el9"
     release_notes = ReleaseNotes(
         product_name="Product",
         product_version="1.0",
