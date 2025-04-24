@@ -390,3 +390,4 @@ def get_purl_digest(purl_str: str) -> str:
     purl = PackageURL.from_string(purl_str)
     if purl.version is None:
         raise SBOMError(f"SBOM contains invalid OCI Purl: {purl_str}")
+    return purl.version

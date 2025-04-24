@@ -1,14 +1,15 @@
+from typing import Optional, Union
 from enum import Enum
 
-from packageurl import PackageURL
 
 from sbom.logging import get_sbom_logger
 from sbom.sbomlib import (
     Component,
     Image,
+    IndexImage,
     SBOMError,
     SBOMHandler,
-    construct_purl_object,
+    construct_purl,
     get_purl_arch,
     get_purl_digest,
 )
@@ -54,7 +55,12 @@ class CycloneDXVersion1(SBOMHandler):
 
         return spec in cls.supported_versions
 
-    def update_sbom(self, component: Component, image: Image, sbom: dict) -> None:
+    def update_sbom(
+        self, component: Component, image: Union[IndexImage, Image], sbom: dict
+    ) -> None:
+        if isinstance(image, IndexImage):
+            raise ValueError("CDX update SBOM does not support index images.")
+
         self._bump_version(sbom)
         self._update_metadata_component(component, sbom)
 
@@ -85,28 +91,20 @@ class CycloneDXVersion1(SBOMHandler):
     def _update_component_purl_identity(
         self,
         kflx_component: Component,
+        arch: Optional[str],
         cdx_component: dict,
-        base_purl: PackageURL,
     ) -> None:
-        """
-        Update the evidence.identity field of a CDX component to contain PURLs
-        with all tags.
-
-        Args:
-            kflx_component (Component): associated Konflux component
-            cdx_component (dict): parsed CDX component object
-        """
         if len(kflx_component.tags) <= 1:
             return
 
         new_identity = []
         for tag in kflx_component.tags:
-            if isinstance(base_purl.qualifiers, dict):
-                base_purl.qualifiers["tag"] = tag
+            purl = construct_purl(
+                kflx_component.repository, kflx_component.image.digest, arch=arch, tag=tag
+            )
+            new_identity.append({"field": "purl", "concludedValue": purl})
 
-            new_identity.append({"field": "purl", "concludedValue": base_purl.to_string()})
-
-        if "evidence" not in cdx_component:
+        if cdx_component.get("evidence") is None:
             cdx_component["evidence"] = {}
 
         evidence = cdx_component["evidence"]
@@ -123,16 +121,6 @@ class CycloneDXVersion1(SBOMHandler):
     def _update_container_component(
         self, kflx_component: Component, cdx_component: dict, update_tags: bool
     ) -> None:
-        """
-        Update a CDX component with the container type in-situ based on the
-        passed Konflux component.
-
-        Args:
-            kflx_component (Component): associated Konflux component
-            cdx_component (dict): parsed CDX component object
-            update_tags (bool): flag determining whether to add the
-                evidence.identity field to the component
-        """
         if cdx_component.get("type") != "container":
             logger.warning(
                 'Called update method on CDX package with type %s instead of "container".'
@@ -146,21 +134,13 @@ class CycloneDXVersion1(SBOMHandler):
         arch = get_purl_arch(purl)
         digest = get_purl_digest(purl)
         tag = kflx_component.tags[0] if kflx_component.tags else None
-        new_purl = construct_purl_object(kflx_component.repository, digest, arch=arch, tag=tag)
-
-        cdx_component["purl"] = new_purl.to_string()
+        new_purl = construct_purl(kflx_component.repository, digest, arch=arch, tag=tag)
+        cdx_component["purl"] = new_purl
 
         if update_tags:
-            self._update_component_purl_identity(kflx_component, cdx_component, new_purl)
+            self._update_component_purl_identity(kflx_component, arch, cdx_component)
 
     def _update_metadata_component(self, kflx_component: Component, sbom: dict) -> None:
-        """
-        Updates the metadata component of the SBOM in-situ based on the Konflux component.
-
-        Args:
-            kflx_component (Component): associated Konflux component
-            sbom (dict): the parsed CDX sbom to update
-        """
         component = sbom.get("metadata", {}).get("component", {})
         self._update_container_component(kflx_component, component, update_tags=False)
 

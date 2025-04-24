@@ -88,7 +88,9 @@ def update_sbom_in_situ(
         SPDXVersion2().update_sbom(component, image, sbom)
         return True
 
-    if CycloneDXVersion1.supports(sbom):
+    # The CDX handler does not support updating SBOMs for index images, as those
+    # are generated only as SPDX in Konflux.
+    if CycloneDXVersion1.supports(sbom) and isinstance(image, Image):
         CycloneDXVersion1().update_sbom(component, image, sbom)
         return True
 

@@ -149,10 +149,6 @@ class TestSPDXVersion23:
 class TestCycloneDX:
     @staticmethod
     def verify_purl(purl: PackageURL, kflx_component: Component) -> None:
-        """
-        Verify that the PURL in a CDX component matches the expected PURL based
-        on the Konflux component.
-        """
         assert purl.qualifiers is not None
         assert (
             purl.qualifiers.get("repository_url") == kflx_component.repository  # type: ignore
@@ -208,9 +204,6 @@ class TestCycloneDX:
         cdx_component: dict,
         verify_tags: bool,
     ) -> None:
-        """
-        Verify that CDX component with a matching Konflux component is updated.
-        """
         if (purl_str := cdx_component.get("purl")) is None:
             return
 
@@ -227,8 +220,8 @@ class TestCycloneDX:
     @staticmethod
     def verify_components_updated(snapshot: Snapshot, sbom: dict) -> None:
         """
-        Verify that all CycloneDX container components that have a matching
-        Konflux component in the release are updated.
+        This method verifies that all CycloneDX container components that have a
+        matching Konflux component in the release are updated.
         """
         TestCycloneDX.verify_component_updated(
             snapshot, sbom["metadata"]["component"], verify_tags=False
@@ -262,14 +255,17 @@ class TestCycloneDX:
         async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
             with open(data_path.joinpath("build_sbom.json")) as f:
                 build_sbom = json.load(f)
-                # we can do this because our build sbom should not contain any
+                # we can do this, because our build sbom should not contain any
                 # version-specific structure
                 build_sbom["specVersion"] = spec.value
+                # TODO: change evidence.identity to make sure that the original
+                # value is kept in the case of CDX 1.6
                 return build_sbom, ""
 
         snapshot = Snapshot(
             components=[
                 Component(
+                    name="component",
                     repository="registry.redhat.io/org/tenant/test",
                     image=Image("sha256:deadbeef"),
                     tags=tags,
