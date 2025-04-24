@@ -1,250 +1,262 @@
-import datetime
+from io import StringIO
 import json
-import unittest
-from datetime import timezone
-from unittest.mock import MagicMock, mock_open, patch
+from typing import List, Union
+from collections import namedtuple
 
-from sbom.create_product_sbom import create_sbom
+import pytest
+from packageurl import PackageURL
+from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream
+
+from sbom.create_product_sbom import ReleaseNotes, create_sbom, parse_release_notes
+from sbom.sbomlib import Component, Image, IndexImage, Snapshot
+
+Digests = namedtuple("Digests", ["single_arch", "multi_arch"])
+DIGESTS = Digests(
+    single_arch="sha256:8f2e5e7f92d8e8d2e9b3e9c1a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+    multi_arch="sha256:e4d2f37a563fcfa4d3a1ab476ded714c56f75f916d30c3a33815d64d41f78534",
+)
 
 
-class TestCreateSBOM(unittest.TestCase):
-    @patch("sbom.create_product_sbom.uuid")
-    @patch("sbom.create_product_sbom.datetime")
-    def test_create_sbom_no_components(self, mock_datetime: MagicMock, mock_uuid: MagicMock):
-        mock_uuid.uuid4.return_value = "039f091d-8790-41bc-b63e-251ec860e3db"
-
-        time = datetime.datetime.now(timezone.utc)
-        mock_datetime.now.return_value = time
-
-        data = json.dumps(
+@pytest.mark.parametrize(
+    ["data", "expected_rn"],
+    [
+        pytest.param(
             {
+                "unrelated": "field",
                 "releaseNotes": {
+                    "product_name": "Product",
+                    "product_version": "1.0",
                     "cpe": "cpe",
-                    "product_name": "product",
-                    "product_version": "1.2.3",
-                    "content": {
-                        "images": [],
-                    },
-                }
-            }
+                },
+            },
+            ReleaseNotes(
+                product_name="Product",
+                product_version="1.0",
+                cpe="cpe",
+            ),
+            id="cpe-single",
+        ),
+        pytest.param(
+            {
+                "unrelated": "field",
+                "releaseNotes": {
+                    "product_name": "Product",
+                    "product_version": "1.0",
+                    "cpe": ["cpe1", "cpe2"],
+                },
+            },
+            ReleaseNotes(
+                product_name="Product",
+                product_version="1.0",
+                cpe=["cpe1", "cpe2"],
+            ),
+            id="cpe-list",
+        ),
+    ],
+)
+def test_parse_release_notes(data: dict, expected_rn: ReleaseNotes) -> None:
+    actual = parse_release_notes(json.dumps(data))
+    assert expected_rn == actual
+
+
+def verify_cpe(sbom, expected_cpe: Union[str, List[str]]) -> None:
+    """
+    Verify that all CPE externalRefs are in the first package.
+    """
+    all_cpes = expected_cpe if isinstance(expected_cpe, list) else [expected_cpe]
+    for cpe in all_cpes:
+        assert {
+            "referenceCategory": "SECURITY",
+            "referenceLocator": cpe,
+            "referenceType": "cpe22Type",
+        } in sbom["packages"][0]["externalRefs"]
+
+
+def verify_purls(sbom, expected: List[str]) -> None:
+    """
+    Verify that the actual purls in the SBOM match the expected purls.
+    """
+    actual_purls = []
+    for package in sbom["packages"]:
+        refs = package["externalRefs"]
+        actual_purls.extend(
+            [ref["referenceLocator"] for ref in refs if ref["referenceType"] == "purl"]
         )
 
-        with patch("builtins.open", mock_open(read_data=data)):
-            sbom = create_sbom("./data.json")
-            assert sbom == {
-                "spdxVersion": "SPDX-2.3",
-                "SPDXID": "SPDXRef-DOCUMENT",
-                "dataLicense": "CC-BY-4.0",
-                "documentNamespace": "https://redhat.com/039f091d-8790-41bc-b63e-251ec860e3db"
-                ".spdx.json",
-                "creationInfo": {
-                    "created": time.isoformat(timespec="seconds"),
-                    "creators": ["Organization: Red Hat", "Tool: Konflux CI"],
-                },
-                "name": "product 1.2.3",
-                "packages": [
-                    {
-                        "SPDXID": "SPDXRef-product",
-                        "name": "product",
-                        "versionInfo": "1.2.3",
-                        "supplier": "Organization: Red Hat",
-                        "downloadLocation": "NOASSERTION",
-                        "externalRefs": [
-                            {
-                                "referenceCategory": "SECURITY",
-                                "referenceType": "cpe22Type",
-                                "referenceLocator": "cpe",
-                            }
-                        ],
-                    }
-                ],
-                "relationships": [
-                    {
-                        "spdxElementId": "SPDXRef-DOCUMENT",
-                        "relationshipType": "DESCRIBES",
-                        "relatedSpdxElement": "SPDXRef-product",
-                    }
-                ],
-            }
+    assert sorted(actual_purls) == sorted(expected), print(
+        f"Actual: {actual_purls}, Expected: {expected}"
+    )
 
-    @patch("sbom.create_product_sbom.uuid")
-    @patch("sbom.create_product_sbom.datetime")
-    def test_create_sbom_single_component(
-        self, mock_datetime: MagicMock, mock_uuid: MagicMock
-    ):
-        mock_uuid.uuid4.return_value = "039f091d-8790-41bc-b63e-251ec860e3db"
 
-        time = datetime.datetime.now()
-        mock_datetime.now.return_value = time
+def verify_checksums(sbom) -> None:
+    """
+    Verify that if there is an OCI purl in a package, the version can also be
+    found in the checksums of the package.
+    """
+    for package in sbom["packages"]:
+        refs = package["externalRefs"]
+        purls = {
+            PackageURL.from_string(ref["referenceLocator"])
+            for ref in refs
+            if ref["referenceType"] == "purl"
+        }
 
-        data = json.dumps(
-            {
-                "releaseNotes": {
-                    "cpe": "cpe",
-                    "product_name": "product",
-                    "product_version": "1.2.3",
-                    "content": {
-                        "images": [{"component": "comp1", "purl": "purl1"}],
-                    },
-                }
-            }
-        )
+        expected_checksums = {
+            f"sha256:{checksum['checksumValue']}"
+            for checksum in package.get("checksums", [])
+            if checksum["algorithm"] == "SHA256"
+        }
 
-        with patch("builtins.open", mock_open(read_data=data)):
-            sbom = create_sbom("./data.json")
-            assert sbom == {
-                "spdxVersion": "SPDX-2.3",
-                "SPDXID": "SPDXRef-DOCUMENT",
-                "dataLicense": "CC-BY-4.0",
-                "documentNamespace": "https://redhat.com/039f091d-8790-41bc-b63e-251ec860e3db"
-                ".spdx.json",
-                "creationInfo": {
-                    "created": time.isoformat(timespec="seconds"),
-                    "creators": ["Organization: Red Hat", "Tool: Konflux CI"],
-                },
-                "name": "product 1.2.3",
-                "packages": [
-                    {
-                        "SPDXID": "SPDXRef-product",
-                        "name": "product",
-                        "versionInfo": "1.2.3",
-                        "supplier": "Organization: Red Hat",
-                        "downloadLocation": "NOASSERTION",
-                        "externalRefs": [
-                            {
-                                "referenceCategory": "SECURITY",
-                                "referenceType": "cpe22Type",
-                                "referenceLocator": "cpe",
-                            }
-                        ],
-                    },
-                    {
-                        "SPDXID": "SPDXRef-component-0",
-                        "name": "comp1",
-                        "downloadLocation": "NOASSERTION",
-                        "externalRefs": [
-                            {
-                                "referenceCategory": "PACKAGE-MANAGER",
-                                "referenceType": "purl",
-                                "referenceLocator": "purl1",
-                            }
-                        ],
-                    },
-                ],
-                "relationships": [
-                    {
-                        "spdxElementId": "SPDXRef-DOCUMENT",
-                        "relationshipType": "DESCRIBES",
-                        "relatedSpdxElement": "SPDXRef-product",
-                    },
-                    {
-                        "spdxElementId": "SPDXRef-component-0",
-                        "relationshipType": "PACKAGE_OF",
-                        "relatedSpdxElement": "SPDXRef-product",
-                    },
-                ],
-            }
+        actual_checksums = {purl.version or "" for purl in purls if purl.type == "oci"}
 
-    @patch("sbom.create_product_sbom.uuid")
-    @patch("sbom.create_product_sbom.datetime")
-    def test_create_sbom_multiple_components_multiple_purls(
-        self, mock_datetime: MagicMock, mock_uuid: MagicMock
-    ):
-        mock_uuid.uuid4.return_value = "039f091d-8790-41bc-b63e-251ec860e3db"
+        assert actual_checksums == expected_checksums
 
-        time = datetime.datetime.now()
-        mock_datetime.now.return_value = time
 
-        data = json.dumps(
-            {
-                "releaseNotes": {
-                    "cpe": "cpe",
-                    "product_name": "product",
-                    "product_version": "1.2.3",
-                    "content": {
-                        "images": [
-                            {"component": "comp1", "purl": "purl1"},
-                            {"component": "comp1", "purl": "purl2"},
-                            {"component": "comp2", "purl": "purl3"},
-                        ],
-                    },
-                }
-            }
-        )
+def verify_relationships(sbom, components: List[Component]) -> None:
+    """
+    Verify that the correct relationships exist for each component and the product.
+    """
+    for component in components:
+        assert {
+            "spdxElementId": f"SPDXRef-component-{component.name}",
+            "relatedSpdxElement": "SPDXRef-product",
+            "relationshipType": "PACKAGE_OF",
+        } in sbom["relationships"]
 
-        with patch("builtins.open", mock_open(read_data=data)):
-            sbom = create_sbom("./data.json")
-            assert sbom == {
-                "spdxVersion": "SPDX-2.3",
-                "SPDXID": "SPDXRef-DOCUMENT",
-                "dataLicense": "CC-BY-4.0",
-                "documentNamespace": "https://redhat.com/039f091d-8790-41bc-b63e-251ec860e3db"
-                ".spdx.json",
-                "creationInfo": {
-                    "created": time.isoformat(timespec="seconds"),
-                    "creators": ["Organization: Red Hat", "Tool: Konflux CI"],
-                },
-                "name": "product 1.2.3",
-                "packages": [
-                    {
-                        "SPDXID": "SPDXRef-product",
-                        "name": "product",
-                        "versionInfo": "1.2.3",
-                        "supplier": "Organization: Red Hat",
-                        "downloadLocation": "NOASSERTION",
-                        "externalRefs": [
-                            {
-                                "referenceCategory": "SECURITY",
-                                "referenceType": "cpe22Type",
-                                "referenceLocator": "cpe",
-                            }
-                        ],
-                    },
-                    {
-                        "SPDXID": "SPDXRef-component-0",
-                        "name": "comp1",
-                        "downloadLocation": "NOASSERTION",
-                        "externalRefs": [
-                            {
-                                "referenceCategory": "PACKAGE-MANAGER",
-                                "referenceType": "purl",
-                                "referenceLocator": "purl1",
-                            },
-                            {
-                                "referenceCategory": "PACKAGE-MANAGER",
-                                "referenceType": "purl",
-                                "referenceLocator": "purl2",
-                            },
-                        ],
-                    },
-                    {
-                        "SPDXID": "SPDXRef-component-1",
-                        "name": "comp2",
-                        "downloadLocation": "NOASSERTION",
-                        "externalRefs": [
-                            {
-                                "referenceCategory": "PACKAGE-MANAGER",
-                                "referenceType": "purl",
-                                "referenceLocator": "purl3",
-                            },
-                        ],
-                    },
-                ],
-                "relationships": [
-                    {
-                        "spdxElementId": "SPDXRef-DOCUMENT",
-                        "relationshipType": "DESCRIBES",
-                        "relatedSpdxElement": "SPDXRef-product",
-                    },
-                    {
-                        "spdxElementId": "SPDXRef-component-0",
-                        "relationshipType": "PACKAGE_OF",
-                        "relatedSpdxElement": "SPDXRef-product",
-                    },
-                    {
-                        "spdxElementId": "SPDXRef-component-1",
-                        "relationshipType": "PACKAGE_OF",
-                        "relatedSpdxElement": "SPDXRef-product",
-                    },
-                ],
-            }
+    # verify the relationship for the product
+    assert {
+        "spdxElementId": "SPDXRef-DOCUMENT",
+        "relatedSpdxElement": "SPDXRef-product",
+        "relationshipType": "DESCRIBES",
+    } in sbom["relationships"]
+
+
+def verify_supplier(sbom) -> None:
+    # verify suppliers are set
+    for package in sbom["packages"]:
+        assert package["supplier"] == "Organization: Red Hat"
+
+
+def verify_package_licenses(sbom) -> None:
+    for package in sbom["packages"]:
+        assert package["licenseDeclared"] == "NOASSERTION"
+
+
+@pytest.mark.parametrize(
+    "cpe",
+    [
+        pytest.param("cpe:/a:redhat:discovery:1.0::el9", id="cpe-single"),
+        pytest.param(
+            [
+                "cpe:/a:redhat:discovery:1.0::el9",
+                "cpe:/a:redhat:discovery:1.0::el10",
+            ],
+            id="cpe-list",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ["snapshot", "purls"],
+    [
+        pytest.param(
+            Snapshot(
+                components=[
+                    Component(
+                        name="component",
+                        repository="quay.io/repo",
+                        image=Image(digest=DIGESTS.single_arch),
+                        tags=["1.0", "latest"],
+                    )
+                ]
+            ),
+            [
+                f"pkg:oci/repo@{DIGESTS.single_arch}?repository_url=quay.io/repo&tag=1.0",
+                f"pkg:oci/repo@{DIGESTS.single_arch}?repository_url=quay.io/repo&tag=latest",
+            ],
+            id="single-component-single-arch",
+        ),
+        pytest.param(
+            Snapshot(
+                components=[
+                    Component(
+                        name="component",
+                        repository="quay.io/repo",
+                        image=IndexImage(
+                            digest=DIGESTS.multi_arch,
+                            children=[
+                                Image(digest="sha256:aaa"),
+                                Image(digest="sha256:bbb"),
+                            ],
+                        ),
+                        tags=["1.0", "latest"],
+                    )
+                ]
+            ),
+            [
+                f"pkg:oci/repo@{DIGESTS.multi_arch}?repository_url=quay.io/repo&tag=1.0",
+                f"pkg:oci/repo@{DIGESTS.multi_arch}?repository_url=quay.io/repo&tag=latest",
+            ],
+            id="single-component-multi-arch",
+        ),
+        pytest.param(
+            Snapshot(
+                components=[
+                    Component(
+                        name="multiarch-component",
+                        repository="quay.io/repo",
+                        image=IndexImage(
+                            digest=DIGESTS.multi_arch,
+                            children=[
+                                Image(digest="sha256:aaa"),
+                                Image(digest="sha256:bbb"),
+                            ],
+                        ),
+                        tags=["1.0", "latest"],
+                    ),
+                    Component(
+                        name="singlearch-component",
+                        repository="quay.io/another-repo",
+                        image=Image(digest=DIGESTS.single_arch),
+                        tags=["2.0", "production"],
+                    ),
+                ]
+            ),
+            [
+                f"pkg:oci/repo@{DIGESTS.multi_arch}?repository_url=quay.io/repo&tag=1.0",
+                f"pkg:oci/repo@{DIGESTS.multi_arch}?repository_url=quay.io/repo&tag=latest",
+                f"pkg:oci/another-repo@{DIGESTS.single_arch}"
+                "?repository_url=quay.io/another-repo&tag=2.0",
+                f"pkg:oci/another-repo@{DIGESTS.single_arch}"
+                "?repository_url=quay.io/another-repo&tag=production",
+            ],
+            id="multi-component-mixed-arch",
+        ),
+    ],
+)
+def test_create_sbom(snapshot: Snapshot, purls: List[str], cpe: Union[str, List[str]]):
+    """
+    Create an SBOM from release notes and a snapshot and verify that the
+    expected properties hold.
+    """
+    release_notes = ReleaseNotes(
+        product_name="Product",
+        product_version="1.0",
+        cpe=cpe,
+    )
+
+    sbom = create_sbom(release_notes, snapshot)
+    output = StringIO()
+
+    write_document_to_stream(sbom, output)  # type: ignore
+    output.seek(0)
+
+    sbom_dict = json.load(output)
+
+    verify_cpe(sbom_dict, cpe)
+    verify_purls(sbom_dict, purls)
+    verify_relationships(sbom_dict, snapshot.components)
+    verify_checksums(sbom_dict)
+    verify_supplier(sbom_dict)
+    verify_package_licenses(sbom_dict)
+
+    assert sbom_dict["dataLicense"] == "CC0-1.0"

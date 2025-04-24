@@ -48,6 +48,7 @@ class Component:
     Internal representation of a Component for SBOM generation purposes.
     """
 
+    name: str
     repository: str
     image: Union[Image, IndexImage]
     tags: list[str]
@@ -76,6 +77,7 @@ class ComponentModel(pdc.BaseModel):
     Model representing a component from the Snapshot.
     """
 
+    name: str
     image_digest: str = pdc.Field(alias="containerImage")
     rh_registry_repo: str = pdc.Field(alias="rh-registry-repo")
     tags: list[str]
@@ -146,12 +148,14 @@ async def construct_image(repository: str, image_digest: str) -> Union[Image, In
     raise SBOMError(f"Unsupported mediaType: {media_type}")
 
 
-async def make_component(repository: str, image_digest: str, tags: list[str]) -> Component:
+async def make_component(
+    name: str, repository: str, image_digest: str, tags: list[str]
+) -> Component:
     """
     Creates a component object from input data.
     """
     image: Union[Image, IndexImage] = await construct_image(repository, image_digest)
-    return Component(repository=repository, image=image, tags=tags)
+    return Component(name=name, repository=repository, image=image, tags=tags)
 
 
 async def make_snapshot(snapshot_spec: Path) -> Snapshot:
@@ -168,11 +172,12 @@ async def make_snapshot(snapshot_spec: Path) -> Snapshot:
 
     component_tasks = []
     for component_model in snapshot_model.components:
+        name = component_model.name
         repository = component_model.rh_registry_repo
         image_digest = component_model.image_digest
         tags = component_model.tags
 
-        component_tasks.append(make_component(repository, image_digest, tags))
+        component_tasks.append(make_component(name, repository, image_digest, tags))
 
     components = await asyncio.gather(*component_tasks)
 
@@ -261,7 +266,7 @@ async def get_image_manifest(repository: str, image_digest: str) -> dict[str, An
     if code != 0:
         raise SBOMError(f"Could not get manifest of {reference}: {stderr.decode()}")
 
-    return json.loads(stdout)
+    return json.loads(stdout)  # type: ignore
 
 
 def make_reference(repository: str, image_digest: str) -> str:
@@ -354,8 +359,12 @@ def get_purl_arch(purl_str: str) -> Optional[str]:
     """
     Get the arch qualifier from a PackageURL.
     """
-    purl = PackageURL.from_string(purl_str).to_dict()
-    return purl["qualifiers"].get("arch")
+    purl = PackageURL.from_string(purl_str)
+    if isinstance(purl.qualifiers, dict):
+        return purl.qualifiers.get("arch")
+
+    logger.warning("Parsed qualifiers from purl %s are not a dictionary.", purl_str)
+    return None
 
 
 def get_purl_digest(purl_str: str) -> str:
@@ -364,5 +373,5 @@ def get_purl_digest(purl_str: str) -> str:
     """
     purl = PackageURL.from_string(purl_str)
     if purl.version is None:
-        raise ValueError("SBOM contains invalid OCI Purl: %s", purl_str)
+        raise SBOMError("SBOM contains invalid OCI Purl: %s", purl_str)
     return purl.version

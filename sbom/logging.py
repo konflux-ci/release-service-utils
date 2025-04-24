@@ -17,9 +17,9 @@ logconfig = {
 }
 
 
-def setup_sbom_logger():
+def setup_sbom_logger() -> None:
     logging.config.dictConfig(config=logconfig)
 
 
-def get_sbom_logger():
+def get_sbom_logger() -> logging.Logger:
     return logging.getLogger("sbom")

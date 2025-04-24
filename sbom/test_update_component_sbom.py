@@ -22,6 +22,7 @@ class TestSPDXVersion23:
         snapshot = Snapshot(
             components=[
                 Component(
+                    name="component",
                     repository="registry.redhat.io/org/tenant/test",
                     image=Image("sha256:deadbeef"),
                     tags=["1.0", "latest"],
@@ -59,6 +60,7 @@ class TestSPDXVersion23:
         snapshot = Snapshot(
             components=[
                 Component(
+                    name="component",
                     repository="registry.redhat.io/org/tenant/test",
                     image=IndexImage(
                         index_digest,
@@ -110,6 +112,7 @@ class TestSPDXVersion23:
         snapshot = Snapshot(
             components=[
                 Component(
+                    name="component",
                     repository="registry.redhat.io/org/tenant/test",
                     image=IndexImage(
                         index_digest,

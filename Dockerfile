@@ -10,6 +10,7 @@ ARG YQ_VERSION=4.34.1
 ARG GLAB_VERSION=1.48.0
 ARG GH_VERSION=2.32.1
 ARG SYFT_VERSION=1.12.2
+ARG SPDX_TOOLS_VERSION=0.8.3
 
 RUN curl -L https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64 -o /usr/bin/yq &&\
     curl -L https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl -o /usr/bin/kubectl &&\
@@ -60,7 +61,8 @@ RUN pip3 install jinja2 \
     pydantic \
     aiofiles \
     types-aiofiles \
-    pytest-asyncio
+    pytest-asyncio \
+    spdx-tools==${SPDX_TOOLS_VERSION}
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
 RUN dnf -y remove gcc
