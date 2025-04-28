@@ -262,7 +262,6 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
         self, component: Component, image: Union[IndexImage, Image], sbom: dict
     ) -> None:
         if isinstance(image, IndexImage):
-            # breakpoint()
             SPDXVersion2._update_index_image_sbom(component, image, sbom)
         elif isinstance(image, Image):
             SPDXVersion2._update_image_sbom(component, image, sbom)

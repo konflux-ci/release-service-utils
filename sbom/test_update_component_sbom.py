@@ -258,8 +258,6 @@ class TestCycloneDX:
                 # we can do this, because our build sbom should not contain any
                 # version-specific structure
                 build_sbom["specVersion"] = spec.value
-                # TODO: change evidence.identity to make sure that the original
-                # value is kept in the case of CDX 1.6
                 return build_sbom, ""
 
         snapshot = Snapshot(
