@@ -7,7 +7,12 @@ import pytest
 from packageurl import PackageURL
 from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream
 
-from sbom.create_product_sbom import ReleaseNotes, create_sbom, parse_release_notes
+from sbom.create_product_sbom import (
+    ReleaseNotes,
+    create_sbom,
+    get_filename,
+    parse_release_notes,
+)
 from sbom.sbomlib import Component, Image, IndexImage, Snapshot
 
 Digests = namedtuple("Digests", ["single_arch", "multi_arch"])
@@ -260,3 +265,8 @@ def test_create_sbom(snapshot: Snapshot, purls: List[str], cpe: Union[str, List[
     verify_package_licenses(sbom_dict)
 
     assert sbom_dict["dataLicense"] == "CC0-1.0"
+
+
+def test_get_filename() -> None:
+    notes = ReleaseNotes(product_name="Amazing Red Hat Product", product_version="1.0", cpe="")
+    assert get_filename(notes) == "Amazing-Red-Hat-Product-1.0.json"
