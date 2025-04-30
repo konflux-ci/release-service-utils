@@ -6,6 +6,11 @@ ARG COSIGN_VERSION=2.4.0
 ARG KUBECTL_VERSION=1.27.2
 ARG OPM_VERSION=v1.38.0
 ARG PUBTOOLS_CGW_VERSION=0.5.4
+ARG PUBTOOLS_PULP_VERSION=1.33.2
+ARG PUBTOOLS_EXODUS_VERSION=1.5.2
+ARG PUBTOOLS_MARKETPLACESVM_VERSION=1.7.0
+ARG PUBTOOLS_SIGN_VERSION=0.0.13
+ARG PUBTOOLS_PYXIS_VERSION=1.3.5
 ARG YQ_VERSION=4.34.1
 ARG GLAB_VERSION=1.48.0
 ARG GH_VERSION=2.32.1
@@ -53,11 +58,11 @@ RUN pip3 install jinja2 \
     packaging \
     packageurl-python \
     pubtools-content-gateway==${PUBTOOLS_CGW_VERSION} \
-    pubtools-pulp \
-    pubtools-exodus \
-    pubtools-marketplacesvm \
-    pubtools-sign \
-    pubtools-pyxis \
+    pubtools-pulp==${PUBTOOLS_PULP_VERSION} \
+    pubtools-exodus==${PUBTOOLS_EXODUS_VERSION} \
+    pubtools-marketplacesvm==${PUBTOOLS_MARKETPLACESVM_VERSION} \
+    pubtools-sign==${PUBTOOLS_SIGN_VERSION} \
+    pubtools-pyxis==${PUBTOOLS_PYXIS_VERSION} \
     pydantic \
     aiofiles \
     types-aiofiles \
