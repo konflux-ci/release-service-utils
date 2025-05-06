@@ -30,6 +30,14 @@ case "${REPO}" in
     IO_URL=${REPO/quay.io\/redhat-pending/registry.stage.redhat.io}
     ACCESS_URL=$(echo "${IO_URL}" | sed 's/^registry.stage.redhat.io/registry.access.stage.redhat.com/')
     ;;
+  "quay.io/rh-flatpaks-prod/"*)
+    IO_URL=${REPO/quay.io\/rh-flatpaks-prod/flatpaks.registry.redhat.io}
+    ACCESS_URL=$(echo "${IO_URL}" | sed 's/^flatpaks.registry.redhat.io/registry.access.redhat.com/')
+    ;;
+  "quay.io/rh-flatpaks-stage/"*)
+    IO_URL=${REPO/quay.io\/rh-flatpaks-stage/flatpaks.registry.stage.redhat.io}
+    ACCESS_URL=$(echo "${IO_URL}" | sed 's/^flatpaks.registry.stage.redhat.io/registry.access.stage.redhat.com/')
+    ;;
   "quay.io/redhat/"*) # Index image repos don't have -prod or -pending
     IO_URL=${REPO/quay.io\/redhat/registry.redhat.io}
     ACCESS_URL=$(echo "${IO_URL}" | sed 's/^registry.redhat.io/registry.access.redhat.com/')
