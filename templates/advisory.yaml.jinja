@@ -16,7 +16,11 @@ spec:
 {%- endif %}
 {%- if 'issues' in advisory.spec %}
   issues:
-    {{ advisory.spec.issues | to_nice_yaml(indent=2) | indent(4) | trim }}
+    fixed:
+      {%- for issue in advisory.spec.issues.fixed %}
+      - id: {{ issue.id }}
+        source: {{ issue.source }}
+      {%- endfor %}
 {%- endif %}
   content:
     {{ advisory.spec.content | to_nice_yaml(indent=2) | indent(4) | trim }}
