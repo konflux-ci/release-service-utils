@@ -24,7 +24,8 @@ spec:
 {%- endif %}
   content:
     {{ advisory.spec.content | to_nice_yaml(indent=2) | indent(4) | trim }}
-  synopsis: {{ advisory.spec.synopsis }}
+  synopsis: >-
+    {{ advisory.spec.synopsis | indent(4) }}
   topic: >-
     {{ advisory.spec.topic | indent(4) }}
   description: >-

@@ -71,7 +71,7 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
         "expect-that-something-is-going-to-linewrap-it-at-some-point.-so-long."
     )
     # Confirm contributed partial templates are rendered
-    synopsis = "{%- if advisory.spec.type == 'RHEA' %} Enhancement{%- endif %} synopsis"
+    synopsis = "{% if advisory.spec.type == 'RHEA' %} Enhancement{%- endif %} synopsis"
     try:
         args = MagicMock()
         args.template = "templates/advisory.yaml.jinja"
