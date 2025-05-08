@@ -6,14 +6,14 @@ logconfig = {
     "disable_existing_loggers": False,
     "formatters": {"simple": {"format": "%(asctime)s - %(levelname)s - %(message)s"}},
     "handlers": {
-        "stdout": {
+        "stderr": {
             "class": "logging.StreamHandler",
             "formatter": "simple",
-            "stream": "ext://sys.stdout",
+            "stream": "ext://sys.stderr",
         }
     },
     "loggers": {"sbom": {"level": "DEBUG"}},
-    "root": {"level": "WARNING", "handlers": ["stdout"]},
+    "root": {"level": "WARNING", "handlers": ["stderr"]},
 }
 
 
