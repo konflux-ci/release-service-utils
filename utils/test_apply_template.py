@@ -99,11 +99,13 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
                                     "id": "KONFLUX-1",
                                     "source": "issues.redhat.com",
                                     "summary": "issue 1",
+                                    "public": "true",
                                 },
                                 {
                                     "id": "KONFLUX-2",
                                     "source": "issues.redhat.com",
                                     "summary": "issue 2",
+                                    "public": "false",
                                 },
                             ]
                         },
@@ -125,7 +127,7 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
         assert result["spec"]["topic"] == topic
         assert result["spec"]["synopsis"] == "Enhancement synopsis"
         for issue in result["spec"]["issues"]["fixed"]:
-            assert len(issue.keys()) == 2
+            assert len(issue.keys()) == 3
     finally:
         os.remove(filename)
 
