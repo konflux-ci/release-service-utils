@@ -20,6 +20,9 @@ spec:
       {%- for issue in advisory.spec.issues.fixed %}
       - id: {{ issue.id }}
         source: {{ issue.source }}
+        {%- if 'public' in issue %}
+        public: {{ issue.public }}
+        {%- endif %}
       {%- endfor %}
 {%- endif %}
   content:
