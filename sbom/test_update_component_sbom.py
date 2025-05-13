@@ -28,13 +28,13 @@ class NotImplementedCosign(Cosign):
     A not implemented cosign client, used where a client is expected, but won't be used.
     """
 
-    async def fetch_provenances(self, reference: str) -> list[Provenance02]:
+    async def fetch_provenances(self, image: Image) -> list[Provenance02]:
         return NotImplemented
 
-    async def fetch_latest_provenance(self, reference: str) -> Provenance02:
+    async def fetch_latest_provenance(self, image: Image) -> Provenance02:
         return NotImplemented
 
-    async def fetch_sbom(self, destination_dir: Path, reference: str) -> Path:
+    async def fetch_sbom(self, destination_dir: Path, image: Image) -> Path:
         return NotImplemented
 
 
@@ -44,7 +44,7 @@ class TestSPDXVersion23:
     async def test_single_component_single_arch(self, mock_write_sbom: AsyncMock) -> None:
         data_path = TESTDATA_PATH.joinpath("single-component-single-arch/spdx")
 
-        async def fake_load_sbom(reference: str, _, __) -> tuple[dict, str]:
+        async def fake_load_sbom(image: Image, _, __) -> tuple[dict, str]:
             with open(data_path.joinpath("build_sbom.json")) as f:
                 return json.load(f), ""
 
@@ -52,8 +52,7 @@ class TestSPDXVersion23:
             components=[
                 Component(
                     name="component",
-                    repository="registry.redhat.io/org/tenant/test",
-                    image=Image("sha256:deadbeef"),
+                    image=Image("registry.redhat.io/org/tenant/test", "sha256:deadbeef"),
                     tags=["1.0", "latest"],
                 )
             ],
@@ -78,8 +77,8 @@ class TestSPDXVersion23:
             "sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921"
         )
 
-        async def fake_load_sbom(reference: str, _, __) -> tuple[dict, str]:
-            if index_digest in reference:
+        async def fake_load_sbom(image: Image, _, __) -> tuple[dict, str]:
+            if index_digest == image.digest:
                 with open(data_path.joinpath("build_index_sbom.json")) as f:
                     return json.load(f), ""
 
@@ -90,10 +89,10 @@ class TestSPDXVersion23:
             components=[
                 Component(
                     name="component",
-                    repository="registry.redhat.io/org/tenant/test",
                     image=IndexImage(
+                        "registry.redhat.io/org/tenant/test",
                         index_digest,
-                        children=[Image(child_digest)],
+                        children=[Image("registry.redhat.io/org/tenant/test", child_digest)],
                     ),
                     tags=["1.0", "latest"],
                 )
@@ -130,8 +129,8 @@ class TestSPDXVersion23:
 
         num_components = 250
 
-        async def fake_load_sbom(reference: str, _, __) -> tuple[dict, str]:
-            if index_digest in reference:
+        async def fake_load_sbom(image: Image, _, __) -> tuple[dict, str]:
+            if index_digest == image.digest:
                 with open(data_path.joinpath("build_index_sbom.json")) as f:
                     return json.load(f), ""
 
@@ -142,10 +141,10 @@ class TestSPDXVersion23:
             components=[
                 Component(
                     name="component",
-                    repository="registry.redhat.io/org/tenant/test",
                     image=IndexImage(
+                        "registry.redhat.io/org/tenant/test",
                         index_digest,
-                        children=[Image(child_digest)],
+                        children=[Image("registry.redhat.io/org/tenant/test", child_digest)],
                     ),
                     tags=["1.0", "latest"],
                 )
@@ -173,12 +172,10 @@ class TestSPDXVersion23:
 
 class TestCycloneDX:
     @staticmethod
-    def verify_purl(purl: PackageURL, kflx_component: Component) -> None:
+    def verify_purl(purl: PackageURL, image: Image) -> None:
         assert purl.qualifiers is not None
-        assert (
-            purl.qualifiers.get("repository_url") == kflx_component.repository  # type: ignore
-        )
-        assert purl.name == kflx_component.repository.split("/")[-1]
+        assert purl.qualifiers.get("repository_url") == image.repository  # type: ignore
+        assert purl.name == image.repository.split("/")[-1]
 
     @staticmethod
     def verify_tags(kflx_component: Component, cdx_component: dict) -> None:
@@ -205,7 +202,7 @@ class TestCycloneDX:
             if id_item.get("field") != "purl":
                 continue
             purl = PackageURL.from_string(id_item["concludedValue"])
-            TestCycloneDX.verify_purl(purl, kflx_component)
+            TestCycloneDX.verify_purl(purl, kflx_component.image)
 
             purl_tag = purl.qualifiers.get("tag")  # type: ignore
             assert isinstance(purl_tag, str), f"Missing tag in identity purl {purl}."
@@ -237,7 +234,7 @@ class TestCycloneDX:
         if kflx_component is None:
             return
 
-        TestCycloneDX.verify_purl(PackageURL.from_string(purl_str), kflx_component)
+        TestCycloneDX.verify_purl(PackageURL.from_string(purl_str), kflx_component.image)
 
         if verify_tags:
             TestCycloneDX.verify_tags(kflx_component, cdx_component)
@@ -289,8 +286,7 @@ class TestCycloneDX:
             components=[
                 Component(
                     name="component",
-                    repository="registry.redhat.io/org/tenant/test",
-                    image=Image("sha256:deadbeef"),
+                    image=Image("registry.redhat.io/org/tenant/test", "sha256:deadbeef"),
                     tags=tags,
                 )
             ],
@@ -320,18 +316,16 @@ class FakeCosign(Cosign):
         self.provenances = provenances
         self.sboms = sboms
 
-    async def fetch_provenances(self, reference: str) -> list[Provenance02]:
-        digest = reference.split("@", 1)[1]
-        return [self.provenances[digest]]
+    async def fetch_provenances(self, image: Image) -> list[Provenance02]:
+        return [self.provenances[image.digest]]
 
-    async def fetch_latest_provenance(self, reference: str) -> Provenance02:
-        return (await self.fetch_provenances(reference))[0]
+    async def fetch_latest_provenance(self, image: Image) -> Provenance02:
+        return (await self.fetch_provenances(image))[0]
 
-    async def fetch_sbom(self, destination_dir: Path, reference: str) -> Path:
-        digest = reference.split("@", 1)[1]
-        path = destination_dir.joinpath(digest)
+    async def fetch_sbom(self, destination_dir: Path, image: Image) -> Path:
+        path = destination_dir.joinpath(image.digest)
         async with aiofiles.open(path, "wb") as fp:
-            await fp.write(json.dumps(self.sboms[digest]).encode("utf-8"))
+            await fp.write(json.dumps(self.sboms[image.digest]).encode("utf-8"))
         return path
 
 
@@ -419,11 +413,11 @@ class TestSBOMVerification:
             components=[
                 Component(
                     "multiarch-component",
-                    "registry.redhat.io/test",
                     image=IndexImage(
+                        "registry.redhat.io/test",
                         digest=index_digest,
                         children=[
-                            Image(digest=child_digest),
+                            Image("registry.redhat.io/test", child_digest),
                         ],
                     ),
                     tags=[],

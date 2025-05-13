@@ -168,8 +168,7 @@ def verify_package_licenses(sbom) -> None:
                 components=[
                     Component(
                         name="component",
-                        repository="quay.io/repo",
-                        image=Image(digest=DIGESTS.single_arch),
+                        image=Image("quay.io/repo", digest=DIGESTS.single_arch),
                         tags=["1.0", "latest"],
                     )
                 ]
@@ -185,12 +184,12 @@ def verify_package_licenses(sbom) -> None:
                 components=[
                     Component(
                         name="component",
-                        repository="quay.io/repo",
                         image=IndexImage(
+                            repository="quay.io/repo",
                             digest=DIGESTS.multi_arch,
                             children=[
-                                Image(digest="sha256:aaa"),
-                                Image(digest="sha256:bbb"),
+                                Image("quay.io/repo", "sha256:aaa"),
+                                Image("quay.io/repo", "sha256:bbb"),
                             ],
                         ),
                         tags=["1.0", "latest"],
@@ -208,20 +207,19 @@ def verify_package_licenses(sbom) -> None:
                 components=[
                     Component(
                         name="multiarch-component",
-                        repository="quay.io/repo",
                         image=IndexImage(
+                            repository="quay.io/repo",
                             digest=DIGESTS.multi_arch,
                             children=[
-                                Image(digest="sha256:aaa"),
-                                Image(digest="sha256:bbb"),
+                                Image("quay.io/repo", "sha256:aaa"),
+                                Image("quay.io/repo", "sha256:bbb"),
                             ],
                         ),
                         tags=["1.0", "latest"],
                     ),
                     Component(
                         name="singlearch-component",
-                        repository="quay.io/another-repo",
-                        image=Image(digest=DIGESTS.single_arch),
+                        image=Image("quay.io/another-repo", digest=DIGESTS.single_arch),
                         tags=["2.0", "production"],
                     ),
                 ]

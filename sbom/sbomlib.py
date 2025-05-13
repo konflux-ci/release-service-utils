@@ -4,7 +4,7 @@ This library contains utility functions for SBOM generation and enrichment.
 
 from contextlib import contextmanager
 import json
-from typing import Optional, Any, Protocol, Union, Generator
+from typing import Optional, Any, Protocol, Generator
 from pathlib import Path
 from dataclasses import dataclass
 import re
@@ -29,20 +29,27 @@ logger = get_sbom_logger()
 @dataclass
 class Image:
     """
-    Object representing a single image in some repository.
+    Object representing a single image in a repository.
     """
 
+    repository: str
     digest: str
+
+    @property
+    def reference(self) -> str:
+        return f"{self.repository}@{self.digest}"
+
+    def __str__(self) -> str:
+        return self.reference
 
 
 @dataclass
-class IndexImage:
+class IndexImage(Image):
     """
-    Object representing an index image in some repository. It also contains
-    references to child images.
+    Object representing an index image in a repository. It also contains child
+    images.
     """
 
-    digest: str
     children: list[Image]
 
 
@@ -53,8 +60,7 @@ class Component:
     """
 
     name: str
-    repository: str
-    image: Union[Image, IndexImage]
+    image: Image
     tags: list[str]
 
 
@@ -129,9 +135,7 @@ class SBOMHandler(Protocol):
     Protocol ensuring that SBOM handlers implement the correct method.
     """
 
-    def update_sbom(
-        self, component: Component, image: Union[IndexImage, Image], sbom: dict[str, Any]
-    ) -> None:
+    def update_sbom(self, component: Component, image: Image, sbom: dict[str, Any]) -> None:
         """
         Update the specified SBOM in-place based on the provided component information.
         """
@@ -145,19 +149,20 @@ class SBOMHandler(Protocol):
         raise NotImplementedError()
 
 
-async def construct_image(repository: str, image_digest: str) -> Union[Image, IndexImage]:
+async def construct_image(repository: str, image_digest: str) -> Image:
     """
     Creates an Image or IndexImage object based on an image reference. Performs
     a registry call for index images, to parse all their child digests.
     """
-    manifest = await get_image_manifest(repository, image_digest)
+    image = Image(repository, image_digest)
+    manifest = await get_image_manifest(image)
     media_type = manifest["mediaType"]
 
     if media_type in {
         "application/vnd.oci.image.manifest.v1+json",
         "application/vnd.docker.distribution.manifest.v2+json",
     }:
-        return Image(digest=image_digest)
+        return image
 
     if media_type in {
         "application/vnd.oci.image.index.v1+json",
@@ -166,9 +171,9 @@ async def construct_image(repository: str, image_digest: str) -> Union[Image, In
         children = []
         for submanifest in manifest["manifests"]:
             child_digest = submanifest["digest"]
-            children.append(Image(child_digest))
+            children.append(Image(repository, child_digest))
 
-        return IndexImage(digest=image_digest, children=children)
+        return IndexImage(repository, image_digest, children=children)
 
     raise SBOMError(f"Unsupported mediaType: {media_type}")
 
@@ -179,8 +184,8 @@ async def make_component(
     """
     Creates a component object from input data.
     """
-    image: Union[Image, IndexImage] = await construct_image(repository, image_digest)
-    return Component(name=name, repository=repository, image=image, tags=tags)
+    image: Image = await construct_image(repository, image_digest)
+    return Component(name=name, image=image, tags=tags)
 
 
 async def make_snapshot(snapshot_spec: Path) -> Snapshot:
@@ -209,23 +214,21 @@ async def make_snapshot(snapshot_spec: Path) -> Snapshot:
     return Snapshot(components=components)
 
 
-def construct_purl(
-    repository: str, digest: str, arch: Optional[str] = None, tag: Optional[str] = None
-) -> str:
+def construct_purl(image: Image, arch: Optional[str] = None, tag: Optional[str] = None) -> str:
     """
     Construct an OCI PackageURL string from image data.
     """
-    purl = construct_purl_object(repository, digest, arch, tag)
+    purl = construct_purl_object(image, arch, tag)
     return purl.to_string()
 
 
 def construct_purl_object(
-    repository: str, digest: str, arch: Optional[str] = None, tag: Optional[str] = None
+    image: Image, arch: Optional[str] = None, tag: Optional[str] = None
 ) -> PackageURL:
     """
     Construct an OCI PackageURL from image data.
     """
-    repo_name = repository.split("/")[-1]
+    repo_name = image.repository.split("/")[-1]
 
     optional_qualifiers = {}
     if arch is not None:
@@ -237,8 +240,8 @@ def construct_purl_object(
     return PackageURL(
         type="oci",
         name=repo_name,
-        version=digest,
-        qualifiers={"repository_url": repository, **optional_qualifiers},
+        version=image.digest,
+        qualifiers={"repository_url": image.repository, **optional_qualifiers},
     )
 
 
@@ -274,7 +277,7 @@ async def run_async_subprocess(
     return code, stdout, stderr
 
 
-async def get_image_manifest(repository: str, image_digest: str) -> dict[str, Any]:
+async def get_image_manifest(image: Image) -> dict[str, Any]:
     """
     Gets a dictionary containing the data from a manifest for an image in a
     repository.
@@ -283,10 +286,9 @@ async def get_image_manifest(repository: str, image_digest: str) -> dict[str, An
         repository (str): image repository URL
         image_digest (str): an image digest in the form sha256:<sha>
     """
-    reference = make_reference(repository, image_digest)
-    logger.info("Fetching manifest for %s", reference)
+    logger.info("Fetching manifest for %s", image)
 
-    with make_oci_auth_file(reference) as authfile:
+    with make_oci_auth_file(image) as authfile:
         code, stdout, stderr = await run_async_subprocess(
             [
                 "oras",
@@ -294,36 +296,18 @@ async def get_image_manifest(repository: str, image_digest: str) -> dict[str, An
                 "fetch",
                 "--registry-config",
                 authfile,
-                reference,
+                image.reference,
             ],
             retry_times=3,
         )
     if code != 0:
-        raise SBOMError(f"Could not get manifest of {reference}: {stderr.decode()}")
+        raise SBOMError(f"Could not get manifest of {image}: {stderr.decode()}")
 
     return json.loads(stdout)  # type: ignore
 
 
-def make_reference(repository: str, image_digest: str) -> str:
-    """
-    Create a full reference to an image using a repository and image digest.
-
-    Args:
-        repository (str): image repository URL
-        image_digest (str): an image digest in the form sha256:<sha>
-
-    Examples:
-        >>> make_reference("registry.redhat.io/repo", "sha256:deadbeef")
-        'registry.redhat.io/repo@sha256:deadbeef'
-
-    """
-    return f"{repository}@{image_digest}"
-
-
 @contextmanager
-def make_oci_auth_file(
-    reference: str, auth: Optional[Path] = None
-) -> Generator[str, Any, None]:
+def make_oci_auth_file(image: Image, auth: Optional[Path] = None) -> Generator[str, Any, None]:
     """
     Gets path to a temporary file containing the docker config JSON for
     <reference>.  Deletes the file after the with statement. If no path to the
@@ -344,22 +328,17 @@ def make_oci_auth_file(
     if not auth.is_file():
         raise ValueError(f"No docker config file at {auth}")
 
-    if reference.count(":") > 1:
-        logger.warning(
-            "Multiple ':' symbols in %s. Registry ports are not supported.", reference
-        )
-
-    # Remove digest (e.g. @sha256:...)
-    ref = reference.split("@", 1)[0]
+    if image.reference.count(":") > 1:
+        logger.warning("Multiple ':' symbols in %s. Registry ports are not supported.", image)
 
     # Registry is up to the first slash
-    registry = ref.split("/", 1)[0]
+    registry = image.repository.split("/", 1)[0]
 
     with open(auth, mode="r", encoding="utf-8") as f:
         config = json.load(f)
     auths = config.get("auths", {})
 
-    current_ref = ref
+    current_ref = image.repository
 
     try:
         tmpfile = tempfile.NamedTemporaryFile(mode="w", delete=False)
@@ -449,9 +428,10 @@ class Provenance02:
 
         return datetime.datetime.min
 
-    def get_sbom_digest(self, reference: str) -> str:
-        image_digest = reference.split("@", 1)[1]
-
+    def get_sbom_digest(self, image: Image) -> str:
+        """
+        Find the SBOM_BLOB_URL value in the provenance for the supplied image.
+        """
         sbom_blob_urls: dict[str, str] = {}
         tasks = self.predicate.get("buildConfig", {}).get("tasks", [])
         for task in tasks:
@@ -465,21 +445,21 @@ class Provenance02:
                 continue
             sbom_blob_urls[curr_digest] = sbom_url
 
-        blob_url = sbom_blob_urls.get(image_digest)
+        blob_url = sbom_blob_urls.get(image.digest)
         if blob_url is None:
-            raise SBOMError(f"No SBOM_BLOB_URL found in attestation for image {reference}.")
+            raise SBOMError(f"No SBOM_BLOB_URL found in attestation for image {image}.")
 
         return blob_url.split("@", 1)[1]
 
 
 class Cosign(typing.Protocol):
-    async def fetch_provenances(self, reference: str) -> list[Provenance02]:
+    async def fetch_provenances(self, image: Image) -> list[Provenance02]:
         return NotImplemented
 
-    async def fetch_latest_provenance(self, reference: str) -> Provenance02:
+    async def fetch_latest_provenance(self, image: Image) -> Provenance02:
         return NotImplemented
 
-    async def fetch_sbom(self, destination_dir: Path, reference: str) -> Path:
+    async def fetch_sbom(self, destination_dir: Path, image: Image) -> Path:
         return NotImplemented
 
 
@@ -495,20 +475,20 @@ class CosignClient(Cosign):
         """
         self.verification_key = verification_key
 
-    async def fetch_provenances(self, reference: str) -> list[Provenance02]:
+    async def fetch_provenances(self, image: Image) -> list[Provenance02]:
         """
         Fetch all provenances for the supplied image.
         """
-        with make_oci_auth_file(reference) as authfile:
+        with make_oci_auth_file(image) as authfile:
             cmd = [
                 "cosign",
                 "verify-attestation",
                 f"--key={self.verification_key}",
                 "--type=slsaprovenance02",
                 "--insecure-ignore-tlog=true",
-                reference,
+                image.reference,
             ]
-            logger.debug(f"Fetching provenance for {reference} using '{' '.join(cmd)}.'")
+            logger.debug(f"Fetching provenance for {image} using '{' '.join(cmd)}.'")
             code, stdout, stderr = await run_async_subprocess(
                 cmd,
                 env={"DOCKER_CONFIG": authfile},
@@ -516,7 +496,7 @@ class CosignClient(Cosign):
             )
 
         if code != 0:
-            raise SBOMError(f"Failed to fetch provenance for {reference}: {stderr.decode()}.")
+            raise SBOMError(f"Failed to fetch provenance for {image}: {stderr.decode()}.")
 
         attestations: list[Provenance02] = []
         for raw_attestation in stdout.splitlines():
@@ -525,33 +505,32 @@ class CosignClient(Cosign):
 
         return attestations
 
-    async def fetch_latest_provenance(self, reference: str) -> Provenance02:
+    async def fetch_latest_provenance(self, image: Image) -> Provenance02:
         """
         Fetch the latest provenance based on the supplied image based on the
         time the image build finished.
         """
-        provenances = await self.fetch_provenances(reference)
+        provenances = await self.fetch_provenances(image)
         if len(provenances) == 0:
-            raise SBOMError(f"No provenances parsed for image {reference}.")
+            raise SBOMError(f"No provenances parsed for image {image}.")
 
         return sorted(provenances, key=lambda x: x.build_finished_on, reverse=True)[0]
 
-    async def fetch_sbom(self, destination_dir: Path, reference: str) -> Path:
+    async def fetch_sbom(self, destination_dir: Path, image: Image) -> Path:
         """
         Fetch and save the SBOM for the supplied image to a directory.
         """
-        with make_oci_auth_file(reference) as authfile:
+        with make_oci_auth_file(image) as authfile:
             code, stdout, stderr = await run_async_subprocess(
-                ["cosign", "download", "sbom", reference],
+                ["cosign", "download", "sbom", image.reference],
                 env={"DOCKER_CONFIG": authfile},
                 retry_times=3,
             )
 
         if code != 0:
-            raise SBOMError(f"Failed to fetch SBOM {reference}: {stderr.decode()}")
+            raise SBOMError(f"Failed to fetch SBOM {image}: {stderr.decode()}")
 
-        digest = reference.split("@", 1)[1]
-        path = destination_dir.joinpath(digest)
+        path = destination_dir.joinpath(image.digest)
         async with aiofiles.open(path, "wb") as file:
             await file.write(stdout)
 

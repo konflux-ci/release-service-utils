@@ -17,7 +17,6 @@ from sbom.sbomlib import (
     construct_purl,
     get_purl_arch,
     get_purl_digest,
-    make_reference,
     without_sha_header,
 )
 
@@ -72,8 +71,7 @@ class SPDXPackage:
 
     def update_external_refs(
         self,
-        digest: str,
-        repository: str,
+        image: Image,
         tags: list[str],
         arch: Optional[str] = None,
     ) -> None:
@@ -83,8 +81,7 @@ class SPDXPackage:
         externalRefs are preserved.
         """
         new_oci_refs = SPDXPackage._get_updated_oci_purl_external_refs(
-            digest,
-            repository,
+            image,
             tags,
             arch=arch,
         )
@@ -113,12 +110,12 @@ class SPDXPackage:
 
     @staticmethod
     def _get_updated_oci_purl_external_refs(
-        digest: str, repository: str, tags: list[str], arch: Optional[str] = None
+        image: Image, tags: list[str], arch: Optional[str] = None
     ) -> list[dict]:
         """
         Gets new oci purl externalRefs value based on input information.
         """
-        purls = (construct_purl(repository, digest, tag=tag, arch=arch) for tag in tags)
+        purls = (construct_purl(image, tag=tag, arch=arch) for tag in tags)
         return [SPDXPackage._make_purl_ref(purl) for purl in purls]
 
     @staticmethod
@@ -188,12 +185,12 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
         return None
 
     @classmethod
-    def _find_image_package(cls, sbom: dict, digest: str) -> Optional[SPDXPackage]:
+    def _find_image_package(cls, sbom: dict, image: Image) -> Optional[SPDXPackage]:
         """
-        Find the SPDX package for a digest, based on the package checksum.
+        Find the SPDX package for an image, based on the package checksum.
         """
         for package in map(SPDXPackage, sbom.get("packages", [])):
-            if without_sha_header(digest) == package.sha256_checksum:
+            if without_sha_header(image.digest) == package.sha256_checksum:
                 return package
 
         return None
@@ -205,20 +202,19 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
         """
         Update the SBOM of an index image in a repository.
         """
-        sbom["name"] = make_reference(component.repository, index.digest)
+        sbom["name"] = index.reference
 
-        index_package = cls._find_image_package(sbom, index.digest)
+        index_package = cls._find_image_package(sbom, index)
         if not index_package:
             raise SBOMError(f"Could not find SPDX package for index {index}")
 
         index_package.update_external_refs(
-            index.digest,
-            component.repository,
+            index,
             component.tags,
         )
 
         for image in index.children:
-            package = cls._find_image_package(sbom, image.digest)
+            package = cls._find_image_package(sbom, image)
             if package is None:
                 logger.warning("Could not find SPDX package for %s.", image.digest)
                 continue
@@ -227,16 +223,15 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
             if original_purl is None:
                 logger.warning(
                     "Could not find OCI PURL for %s in package %s for index %s.",
-                    image.digest,
+                    image,
                     package.spdxid,
-                    index.digest,
+                    index,
                 )
                 continue
 
             arch = get_purl_arch(original_purl)
             package.update_external_refs(
-                image.digest,
-                component.repository,
+                image,
                 component.tags,
                 arch=arch,
             )
@@ -246,21 +241,18 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
         """
         Update the SBOM of single-arch image in a repository.
         """
-        sbom["name"] = make_reference(component.repository, image.digest)
+        sbom["name"] = image.reference
 
-        image_package = cls._find_image_package(sbom, image.digest)
+        image_package = cls._find_image_package(sbom, image)
         if not image_package:
             raise SBOMError(f"Could not find SPDX package in SBOM for image {image.digest}")
 
         image_package.update_external_refs(
-            image.digest,
-            component.repository,
+            image,
             component.tags,
         )
 
-    def update_sbom(
-        self, component: Component, image: Union[IndexImage, Image], sbom: dict
-    ) -> None:
+    def update_sbom(self, component: Component, image: Image, sbom: dict) -> None:
         if isinstance(image, IndexImage):
             SPDXVersion2._update_index_image_sbom(component, image, sbom)
         elif isinstance(image, Image):

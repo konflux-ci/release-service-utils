@@ -55,9 +55,7 @@ class CycloneDXVersion1(SBOMHandler):
 
         return spec in cls.supported_versions
 
-    def update_sbom(
-        self, component: Component, image: Union[IndexImage, Image], sbom: dict
-    ) -> None:
+    def update_sbom(self, component: Component, image: Image, sbom: dict) -> None:
         if isinstance(image, IndexImage):
             raise ValueError("CDX update SBOM does not support index images.")
 
@@ -99,9 +97,7 @@ class CycloneDXVersion1(SBOMHandler):
 
         new_identity = []
         for tag in kflx_component.tags:
-            purl = construct_purl(
-                kflx_component.repository, kflx_component.image.digest, arch=arch, tag=tag
-            )
+            purl = construct_purl(kflx_component.image, arch=arch, tag=tag)
             new_identity.append({"field": "purl", "concludedValue": purl})
 
         if cdx_component.get("evidence") is None:
@@ -132,9 +128,8 @@ class CycloneDXVersion1(SBOMHandler):
             return
 
         arch = get_purl_arch(purl)
-        digest = get_purl_digest(purl)
         tag = kflx_component.tags[0] if kflx_component.tags else None
-        new_purl = construct_purl(kflx_component.repository, digest, arch=arch, tag=tag)
+        new_purl = construct_purl(kflx_component.image, arch=arch, tag=tag)
         cdx_component["purl"] = new_purl
 
         if update_tags:

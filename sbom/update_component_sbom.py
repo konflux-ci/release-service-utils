@@ -47,16 +47,16 @@ async def get_sbom_digest(path: Path) -> str:
     return f"sha256:{sha256_hash.hexdigest()}"
 
 
-async def verify_sbom(path: Path, reference: str, cosign: Cosign) -> None:
+async def verify_sbom(path: Path, image: Image, cosign: Cosign) -> None:
     """
     Verify that the sha256 digest of the specified SBOM matches the value of
-    SBOM_BLOB_URL in the provenance for the provided image reference. Cosign is
+    SBOM_BLOB_URL in the provenance for the supplied image. Cosign is
     used to fetch the provenance. If it doesn't match, an SBOMVerificationError
     is raised.
     """
 
-    prov = await cosign.fetch_latest_provenance(reference)
-    prov_sbom_digest = prov.get_sbom_digest(reference)
+    prov = await cosign.fetch_latest_provenance(image)
+    prov_sbom_digest = prov.get_sbom_digest(image)
     sbom_digest = await get_sbom_digest(path)
 
     if prov_sbom_digest != sbom_digest:
@@ -66,14 +66,14 @@ async def verify_sbom(path: Path, reference: str, cosign: Cosign) -> None:
         )
 
 
-async def load_sbom(reference: str, destination: Path, cosign: Cosign) -> tuple[dict, Path]:
+async def load_sbom(image: Image, destination: Path, cosign: Cosign) -> tuple[dict, Path]:
     """
     Download the sbom for the image reference, save it to a directory, verify
     that its digest matches that in the image provenance and parse it into a
     dictionary.
     """
-    path = await cosign.fetch_sbom(destination, reference)
-    await verify_sbom(path, reference, cosign)
+    path = await cosign.fetch_sbom(destination, image)
+    await verify_sbom(path, image, cosign)
     async with aiofiles.open(path, "r") as sbom_raw:
         sbom = json.loads(await sbom_raw.read())
         return sbom, path
@@ -129,16 +129,15 @@ async def update_sbom(
     """
 
     try:
-        reference = f"{component.repository}@{image.digest}"
-        sbom, sbom_path = await load_sbom(reference, destination, cosign)
+        sbom, sbom_path = await load_sbom(image, destination, cosign)
 
         if not update_sbom_in_situ(component, image, sbom):
-            raise SBOMError(f"Unsupported SBOM format for image {reference}.")
+            raise SBOMError(f"Unsupported SBOM format for image {image}.")
 
         await write_sbom(sbom, sbom_path)
-        logger.info("Successfully enriched SBOM for image %s", reference)
+        logger.info("Successfully enriched SBOM for image %s", image)
     except (SBOMError, ValueError):
-        logger.exception("Failed to enrich SBOM for image %s.", reference)
+        logger.exception("Failed to enrich SBOM for image %s.", image)
         raise
 
 
