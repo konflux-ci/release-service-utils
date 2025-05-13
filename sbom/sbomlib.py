@@ -11,8 +11,12 @@ import re
 import asyncio
 import tempfile
 import os
+import typing
+import base64
+import datetime
 
-
+import aiofiles
+import dateutil.parser
 from packageurl import PackageURL
 import pydantic as pdc
 
@@ -70,6 +74,21 @@ class SBOMError(Exception):
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
+
+
+class SBOMVerificationError(SBOMError):
+    """
+    Exception raised when an SBOM's digest does not match that in the provenance.
+    """
+
+    def __init__(self, expected: str, actual: str, *args: object, **kwargs: object) -> None:
+        self.expected = expected
+        self.actual = actual
+        message = (
+            "SBOM digest verification from provenance failed. "
+            f"Expected digest: {expected}, actual digest: {actual}"
+        )
+        super().__init__(message, *args, **kwargs)
 
 
 class ComponentModel(pdc.BaseModel):
@@ -391,3 +410,149 @@ def get_purl_digest(purl_str: str) -> str:
     if purl.version is None:
         raise SBOMError(f"SBOM contains invalid OCI Purl: {purl_str}")
     return purl.version
+
+
+class Provenance02:
+    """
+    Object containing the data of an provenance attestation.
+    """
+
+    predicate_type = "https://slsa.dev/provenance/v0.2"
+
+    def __init__(self, predicate: Any) -> None:
+        self.predicate = predicate
+
+    @staticmethod
+    def from_cosign_output(raw: bytes) -> "Provenance02":
+        encoded = json.loads(raw)
+        att = json.loads(base64.b64decode(encoded["payload"]))
+        if (pt := att.get("predicateType")) != Provenance02.predicate_type:
+            raise ValueError(
+                f"Cannot parse predicateType {pt}. Expected {Provenance02.predicate_type}"
+            )
+
+        predicate = att.get("predicate", {})
+        return Provenance02(predicate)
+
+    @property
+    def build_finished_on(self) -> datetime.datetime:
+        """
+        Return datetime of the build being finished.
+        If it's not available, fallback to datetime.min.
+        """
+        if self.predicate is None:
+            raise ValueError("Cannot get build time from uninitialized provenance.")
+
+        finished_on: Optional[str] = self.predicate.get("metadata", {}).get("buildFinishedOn")
+        if finished_on:
+            return dateutil.parser.isoparse(finished_on)
+
+        return datetime.datetime.min
+
+    def get_sbom_digest(self, reference: str) -> str:
+        image_digest = reference.split("@", 1)[1]
+
+        sbom_blob_urls: dict[str, str] = {}
+        tasks = self.predicate.get("buildConfig", {}).get("tasks", [])
+        for task in tasks:
+            curr_digest, sbom_url = "", ""
+            for result in task.get("results", []):
+                if result.get("name") == "SBOM_BLOB_URL":
+                    sbom_url = result.get("value")
+                if result.get("name") == "IMAGE_DIGEST":
+                    curr_digest = result.get("value")
+            if not all([curr_digest, sbom_url]):
+                continue
+            sbom_blob_urls[curr_digest] = sbom_url
+
+        blob_url = sbom_blob_urls.get(image_digest)
+        if blob_url is None:
+            raise SBOMError(f"No SBOM_BLOB_URL found in attestation for image {reference}.")
+
+        return blob_url.split("@", 1)[1]
+
+
+class Cosign(typing.Protocol):
+    async def fetch_provenances(self, reference: str) -> list[Provenance02]:
+        return NotImplemented
+
+    async def fetch_latest_provenance(self, reference: str) -> Provenance02:
+        return NotImplemented
+
+    async def fetch_sbom(self, destination_dir: Path, reference: str) -> Path:
+        return NotImplemented
+
+
+class CosignClient(Cosign):
+    """
+    Client used to get OCI artifacts using Cosign.
+    """
+
+    def __init__(self, verification_key: Path) -> None:
+        """
+        Args:
+            verification_key: Path to public key used to verify attestations.
+        """
+        self.verification_key = verification_key
+
+    async def fetch_provenances(self, reference: str) -> list[Provenance02]:
+        """
+        Fetch all provenances for the supplied image.
+        """
+        with make_oci_auth_file(reference) as authfile:
+            cmd = [
+                "cosign",
+                "verify-attestation",
+                f"--key={self.verification_key}",
+                "--type=slsaprovenance02",
+                "--insecure-ignore-tlog=true",
+                reference,
+            ]
+            logger.debug(f"Fetching provenance for {reference} using '{' '.join(cmd)}.'")
+            code, stdout, stderr = await run_async_subprocess(
+                cmd,
+                env={"DOCKER_CONFIG": authfile},
+                retry_times=3,
+            )
+
+        if code != 0:
+            raise SBOMError(f"Failed to fetch provenance for {reference}: {stderr.decode()}.")
+
+        attestations: list[Provenance02] = []
+        for raw_attestation in stdout.splitlines():
+            att = Provenance02.from_cosign_output(raw_attestation)
+            attestations.append(att)
+
+        return attestations
+
+    async def fetch_latest_provenance(self, reference: str) -> Provenance02:
+        """
+        Fetch the latest provenance based on the supplied image based on the
+        time the image build finished.
+        """
+        provenances = await self.fetch_provenances(reference)
+        if len(provenances) == 0:
+            raise SBOMError(f"No provenances parsed for image {reference}.")
+
+        return sorted(provenances, key=lambda x: x.build_finished_on, reverse=True)[0]
+
+    async def fetch_sbom(self, destination_dir: Path, reference: str) -> Path:
+        """
+        Fetch and save the SBOM for the supplied image to a directory.
+        """
+        with make_oci_auth_file(reference) as authfile:
+            code, stdout, stderr = await run_async_subprocess(
+                ["cosign", "download", "sbom", reference],
+                env={"DOCKER_CONFIG": authfile},
+                retry_times=3,
+            )
+
+        if code != 0:
+            raise SBOMError(f"Failed to fetch SBOM {reference}: {stderr.decode()}")
+
+        digest = reference.split("@", 1)[1]
+        path = destination_dir.joinpath(digest)
+        async with aiofiles.open(path, "wb") as file:
+            await file.write(stdout)
+
+        return path

@@ -1,16 +1,41 @@
 import json
 import tempfile
 from unittest.mock import patch, AsyncMock, call, ANY
-from typing import Optional
+from typing import Optional, Dict, Any
+import aiofiles
 from packageurl import PackageURL
 import pytest
 from pathlib import Path
 
 from sbom.handlers.cyclonedx1 import CDXSpec
 from sbom.update_component_sbom import update_sboms
-from sbom.sbomlib import Component, Image, IndexImage, Snapshot, get_purl_digest
+from sbom.sbomlib import (
+    Component,
+    Cosign,
+    Image,
+    IndexImage,
+    Provenance02,
+    SBOMVerificationError,
+    Snapshot,
+    get_purl_digest,
+)
 
 TESTDATA_PATH = Path(__file__).parent.joinpath("testdata")
+
+
+class NotImplementedCosign(Cosign):
+    """
+    A not implemented cosign client, used where a client is expected, but won't be used.
+    """
+
+    async def fetch_provenances(self, reference: str) -> list[Provenance02]:
+        return NotImplemented
+
+    async def fetch_latest_provenance(self, reference: str) -> Provenance02:
+        return NotImplemented
+
+    async def fetch_sbom(self, destination_dir: Path, reference: str) -> Path:
+        return NotImplemented
 
 
 class TestSPDXVersion23:
@@ -19,7 +44,7 @@ class TestSPDXVersion23:
     async def test_single_component_single_arch(self, mock_write_sbom: AsyncMock) -> None:
         data_path = TESTDATA_PATH.joinpath("single-component-single-arch/spdx")
 
-        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
+        async def fake_load_sbom(reference: str, _, __) -> tuple[dict, str]:
             with open(data_path.joinpath("build_sbom.json")) as f:
                 return json.load(f), ""
 
@@ -38,7 +63,7 @@ class TestSPDXVersion23:
             expected_sbom = json.load(fp)
 
         with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
-            await update_sboms(snapshot, Path("dummy"))
+            await update_sboms(snapshot, Path("dummy"), NotImplementedCosign())
             mock_write_sbom.assert_awaited_with(expected_sbom, ANY)
 
     @pytest.mark.asyncio
@@ -53,7 +78,7 @@ class TestSPDXVersion23:
             "sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921"
         )
 
-        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
+        async def fake_load_sbom(reference: str, _, __) -> tuple[dict, str]:
             if index_digest in reference:
                 with open(data_path.joinpath("build_index_sbom.json")) as f:
                     return json.load(f), ""
@@ -82,7 +107,7 @@ class TestSPDXVersion23:
             expected_image_sbom = json.load(fp)
 
         with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
-            await update_sboms(snapshot, Path("dummy"))
+            await update_sboms(snapshot, Path("dummy"), NotImplementedCosign())
 
             mock_write_sbom.assert_has_awaits(
                 [
@@ -105,7 +130,7 @@ class TestSPDXVersion23:
 
         num_components = 250
 
-        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
+        async def fake_load_sbom(reference: str, _, __) -> tuple[dict, str]:
             if index_digest in reference:
                 with open(data_path.joinpath("build_index_sbom.json")) as f:
                     return json.load(f), ""
@@ -135,7 +160,7 @@ class TestSPDXVersion23:
             expected_image_sbom = json.load(fp)
 
         with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
-            await update_sboms(snapshot, Path("dummy"))
+            await update_sboms(snapshot, Path("dummy"), NotImplementedCosign())
 
             mock_write_sbom.assert_has_awaits(
                 [
@@ -252,7 +277,7 @@ class TestCycloneDX:
     ) -> None:
         data_path = TESTDATA_PATH.joinpath("single-component-single-arch/cdx")
 
-        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
+        async def fake_load_sbom(reference: str, _, __) -> tuple[dict, str]:
             with open(data_path.joinpath("build_sbom.json")) as f:
                 build_sbom = json.load(f)
                 # we can do this, because our build sbom should not contain any
@@ -272,7 +297,7 @@ class TestCycloneDX:
         )
 
         with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
-            await update_sboms(snapshot, Path("dummy"))
+            await update_sboms(snapshot, Path("dummy"), NotImplementedCosign())
 
             # get the SBOM that was written
             sbom, _ = mock_write_sbom.call_args[0]
@@ -286,3 +311,129 @@ class TestCycloneDX:
                         f"Failed verification of SBOM: {err}."
                         " Writing generated SBOM to {tmpf.name}"
                     ) from err
+
+
+class FakeCosign(Cosign):
+    def __init__(
+        self, provenances: dict[str, Provenance02], sboms: dict[str, Dict[Any, Any]]
+    ) -> None:
+        self.provenances = provenances
+        self.sboms = sboms
+
+    async def fetch_provenances(self, reference: str) -> list[Provenance02]:
+        digest = reference.split("@", 1)[1]
+        return [self.provenances[digest]]
+
+    async def fetch_latest_provenance(self, reference: str) -> Provenance02:
+        return (await self.fetch_provenances(reference))[0]
+
+    async def fetch_sbom(self, destination_dir: Path, reference: str) -> Path:
+        digest = reference.split("@", 1)[1]
+        path = destination_dir.joinpath(digest)
+        async with aiofiles.open(path, "wb") as fp:
+            await fp.write(json.dumps(self.sboms[digest]).encode("utf-8"))
+        return path
+
+
+class TestSBOMVerification:
+    def get_testing_provenance(self, digest: str, sbom_blob_url: str) -> Provenance02:
+        return Provenance02(
+            {
+                "buildConfig": {
+                    "tasks": [
+                        {
+                            "results": [
+                                {"name": "IMAGE_DIGEST", "value": digest},
+                                {"name": "SBOM_BLOB_URL", "value": sbom_blob_url},
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ["success"],
+        [
+            pytest.param(
+                True,
+                id="matching-digest",
+            ),
+            pytest.param(
+                False,
+                id="wrong-digest",
+            ),
+        ],
+    )
+    async def test_verification(self, success: bool) -> None:
+        """
+        This test sets up the SBOMs and provenances for a multiarch release, and
+        tests that the update process succeeds or fails with an
+        SBOMVerificationError based on the digest of the SBOM matching the
+        SBOM_BLOB_URL in the provenance.
+        """
+        data_path = TESTDATA_PATH.joinpath("single-component-multiarch/spdx")
+
+        index_digest = (
+            "sha256:fae7e52c95ee8d24ad9e64b54e693047b94e1b1ef98be3e3b4b9859f986e5b1d"
+        )
+        child_digest = (
+            "sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921"
+        )
+
+        index_sbom_blob_url = "quay.io/test@sha256:432997ca5d0f0b3373f861248261fe18b6ba904c862ac0d68e74e44ed9035742"
+        child_sbom_blob_url = "quay.io/test@sha256:3aa7e034114985807ed141f205a0752f91ec5802c8ed529d9252d481be3f3ca1"
+
+        with open(data_path.joinpath("build_index_sbom.json"), "r", encoding="utf-8") as fp:
+            index_sbom = json.load(fp)
+
+        with open(data_path.joinpath("build_image_sbom.json"), "r", encoding="utf-8") as fp:
+            child_sbom = json.load(fp)
+
+        sboms = {
+            index_digest: index_sbom,
+            child_digest: child_sbom,
+        }
+
+        if success:
+            provenances = {
+                index_digest: self.get_testing_provenance(index_digest, index_sbom_blob_url),
+                child_digest: self.get_testing_provenance(child_digest, child_sbom_blob_url),
+            }
+        else:
+            provenances = {
+                # Provide a non-matching SBOM_BLOB_URL so updating the SBOM fails.
+                index_digest: self.get_testing_provenance(
+                    index_digest, "quay.io/test@sha256:wrongdigest"
+                ),
+                child_digest: self.get_testing_provenance(child_digest, child_sbom_blob_url),
+            }
+
+        cosign = FakeCosign(
+            provenances,
+            sboms,
+        )
+
+        snapshot = Snapshot(
+            components=[
+                Component(
+                    "multiarch-component",
+                    "registry.redhat.io/test",
+                    image=IndexImage(
+                        digest=index_digest,
+                        children=[
+                            Image(digest=child_digest),
+                        ],
+                    ),
+                    tags=[],
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as destination:
+            if success:
+                await update_sboms(snapshot, Path(destination), cosign)
+            else:
+                with pytest.raises(SBOMVerificationError):
+                    await update_sboms(snapshot, Path(destination), cosign)
