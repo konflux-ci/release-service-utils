@@ -179,6 +179,11 @@ def parse_release_notes(raw_json: str) -> ReleaseNotes:
     return ReleaseData.model_validate_json(raw_json).release_notes
 
 
+def get_filename(release_notes: ReleaseNotes) -> str:
+    normalized_name = "-".join(release_notes.product_name.split())
+    return f"{normalized_name}-{release_notes.product_version}.json"
+
+
 def main() -> None:  # pragma: nocover
     """
     Script entrypoint.
@@ -186,7 +191,8 @@ def main() -> None:  # pragma: nocover
     parser = argparse.ArgumentParser(
         prog="create-product-sbom",
         description="Create product-level SBOM from merged data file"
-        " and mapped snapshot spec.",
+        " and mapped snapshot spec. The SBOM file is named according to the SBOM"
+        " contents and is printed to stdout.",
     )
     parser.add_argument(
         "--data-path",
@@ -204,7 +210,7 @@ def main() -> None:  # pragma: nocover
         "--output-path",
         required=True,
         type=Path,
-        help="Path to save the output SBOM in JSON format.",
+        help="Path to directory to save the output SBOM in JSON format.",
     )
 
     args = parser.parse_args()
@@ -215,10 +221,12 @@ def main() -> None:  # pragma: nocover
         with open(args.data_path, "r", encoding="utf-8") as fp:
             raw_json = fp.read()
             release_notes = parse_release_notes(raw_json)
-
             sbom = create_sbom(release_notes, snapshot)
 
-        write_file(document=sbom, file_name=str(args.output_path), validate=True)
+        fname = get_filename(release_notes)
+        output_path = str(args.output_path.joinpath(fname))
+        write_file(document=sbom, file_name=output_path, validate=True)
+        print(f"SBOM file: {output_path}")
     except Exception:  # pylint: disable=broad-except
         logger.exception("Creation of the product-level SBOM failed.")
         raise
