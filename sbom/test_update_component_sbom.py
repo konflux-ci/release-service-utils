@@ -370,8 +370,14 @@ class TestSBOMVerification:
             "sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921"
         )
 
-        index_sbom_blob_url = "quay.io/test@sha256:432997ca5d0f0b3373f861248261fe18b6ba904c862ac0d68e74e44ed9035742"
-        child_sbom_blob_url = "quay.io/test@sha256:3aa7e034114985807ed141f205a0752f91ec5802c8ed529d9252d481be3f3ca1"
+        index_sbom_blob_url = (
+            "quay.io/test@"
+            "sha256:432997ca5d0f0b3373f861248261fe18b6ba904c862ac0d68e74e44ed9035742"
+        )
+        child_sbom_blob_url = (
+            "quay.io/test@"
+            "sha256:3aa7e034114985807ed141f205a0752f91ec5802c8ed529d9252d481be3f3ca1"
+        )
 
         with open(data_path.joinpath("build_index_sbom.json"), "r", encoding="utf-8") as fp:
             index_sbom = json.load(fp)
