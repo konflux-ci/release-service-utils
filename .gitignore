@@ -1,1 +1,8 @@
 __pycache__
+
+# pyenv file
+.python-version
+
+# common venv names
+venv/
+.venv/
