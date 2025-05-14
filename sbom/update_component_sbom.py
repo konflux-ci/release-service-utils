@@ -16,20 +16,18 @@ from pathlib import Path
 import aiofiles
 
 from sbom import sbomlib
+from sbom.cosign import Cosign, CosignClient
 from sbom.handlers import CycloneDXVersion1, SPDXVersion2
 from sbom.logging import get_sbom_logger, setup_sbom_logger
 from sbom.sbomlib import (
     SBOM,
     Component,
-    Cosign,
-    CosignClient,
     SBOMError,
     SBOMVerificationError,
     Snapshot,
     Image,
     IndexImage,
 )
-
 
 logger = get_sbom_logger()
 

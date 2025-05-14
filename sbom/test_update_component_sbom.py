@@ -6,12 +6,12 @@ from packageurl import PackageURL
 import pytest
 from pathlib import Path
 
+from sbom.cosign import Cosign
 from sbom.handlers.cyclonedx1 import CDXSpec
 from sbom.update_component_sbom import update_sboms
 from sbom.sbomlib import (
     SBOM,
     Component,
-    Cosign,
     Image,
     IndexImage,
     Provenance02,
@@ -19,6 +19,7 @@ from sbom.sbomlib import (
     Snapshot,
     get_purl_digest,
 )
+
 
 TESTDATA_PATH = Path(__file__).parent.joinpath("testdata")
 
