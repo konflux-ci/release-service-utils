@@ -3,7 +3,7 @@ This module contains the SBOM handler for SPDX version 2 SBOMs.
 """
 
 from enum import Enum
-from typing import Optional, Union, Any
+from typing import Optional, Any
 
 from packageurl import PackageURL
 

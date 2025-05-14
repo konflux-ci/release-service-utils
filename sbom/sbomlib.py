@@ -3,6 +3,7 @@ This library contains utility functions for SBOM generation and enrichment.
 """
 
 from contextlib import contextmanager
+import hashlib
 import json
 from typing import Optional, Any, Protocol, Generator
 from pathlib import Path
@@ -15,7 +16,6 @@ import typing
 import base64
 import datetime
 
-import aiofiles
 import dateutil.parser
 from packageurl import PackageURL
 import pydantic as pdc
@@ -452,6 +452,28 @@ class Provenance02:
         return blob_url.split("@", 1)[1]
 
 
+class SBOM:
+    def __init__(self, doc: dict[Any, Any], digest: str) -> None:
+        """
+        An SBOM downloaded using cosign.
+
+        Attributes:
+            doc (dict): The parsed SBOM dictionary
+            digest (str): SHA256 digest of the raw SBOM data
+        """
+        self.doc = doc
+        self.digest = digest
+
+    @staticmethod
+    async def from_cosign_output(raw: bytes) -> "SBOM":
+        """
+        Create an SBOM object from a line of raw "cosign download sbom" output.
+        """
+        doc = json.loads(raw)
+        hexdigest = f"sha256:{hashlib.sha256(raw).hexdigest()}"
+        return SBOM(doc, hexdigest)
+
+
 class Cosign(typing.Protocol):
     async def fetch_provenances(self, image: Image) -> list[Provenance02]:
         return NotImplemented
@@ -459,7 +481,7 @@ class Cosign(typing.Protocol):
     async def fetch_latest_provenance(self, image: Image) -> Provenance02:
         return NotImplemented
 
-    async def fetch_sbom(self, destination_dir: Path, image: Image) -> Path:
+    async def fetch_sbom(self, image: Image) -> SBOM:
         return NotImplemented
 
 
@@ -488,7 +510,7 @@ class CosignClient(Cosign):
                 "--insecure-ignore-tlog=true",
                 image.reference,
             ]
-            logger.debug(f"Fetching provenance for {image} using '{' '.join(cmd)}.'")
+            logger.debug("Fetching provenance for %s using '%s'", image, " ".join(cmd))
             code, stdout, stderr = await run_async_subprocess(
                 cmd,
                 env={"DOCKER_CONFIG": authfile},
@@ -516,7 +538,7 @@ class CosignClient(Cosign):
 
         return sorted(provenances, key=lambda x: x.build_finished_on, reverse=True)[0]
 
-    async def fetch_sbom(self, destination_dir: Path, image: Image) -> Path:
+    async def fetch_sbom(self, image: Image) -> SBOM:
         """
         Fetch and save the SBOM for the supplied image to a directory.
         """
@@ -530,8 +552,4 @@ class CosignClient(Cosign):
         if code != 0:
             raise SBOMError(f"Failed to fetch SBOM {image}: {stderr.decode()}")
 
-        path = destination_dir.joinpath(image.digest)
-        async with aiofiles.open(path, "wb") as file:
-            await file.write(stdout)
-
-        return path
+        return await SBOM.from_cosign_output(stdout)

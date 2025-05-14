@@ -10,7 +10,6 @@ $ update_component_sbom --snapshot-path snapshot_spec.json --output-path sboms/
 import argparse
 import asyncio
 import json
-import hashlib
 from typing import Union
 from pathlib import Path
 
@@ -20,6 +19,7 @@ from sbom import sbomlib
 from sbom.handlers import CycloneDXVersion1, SPDXVersion2
 from sbom.logging import get_sbom_logger, setup_sbom_logger
 from sbom.sbomlib import (
+    SBOM,
     Component,
     Cosign,
     CosignClient,
@@ -34,20 +34,7 @@ from sbom.sbomlib import (
 logger = get_sbom_logger()
 
 
-async def get_sbom_digest(path: Path) -> str:
-    """
-    Read the specified SBOM by chunks and calculate its sha256 digest.
-    """
-    sha256_hash = hashlib.sha256()
-    async with aiofiles.open(path, "rb") as fp:
-        chunk_size = 2**20  # 1MiB
-        while chunk := await fp.read(chunk_size):
-            sha256_hash.update(chunk)
-
-    return f"sha256:{sha256_hash.hexdigest()}"
-
-
-async def verify_sbom(path: Path, image: Image, cosign: Cosign) -> None:
+async def verify_sbom(sbom: SBOM, image: Image, cosign: Cosign) -> None:
     """
     Verify that the sha256 digest of the specified SBOM matches the value of
     SBOM_BLOB_URL in the provenance for the supplied image. Cosign is
@@ -57,31 +44,27 @@ async def verify_sbom(path: Path, image: Image, cosign: Cosign) -> None:
 
     prov = await cosign.fetch_latest_provenance(image)
     prov_sbom_digest = prov.get_sbom_digest(image)
-    sbom_digest = await get_sbom_digest(path)
 
-    if prov_sbom_digest != sbom_digest:
+    if prov_sbom_digest != sbom.digest:
         raise SBOMVerificationError(
             prov_sbom_digest,
-            sbom_digest,
+            sbom.digest,
         )
 
 
-async def load_sbom(image: Image, destination: Path, cosign: Cosign) -> tuple[dict, Path]:
+async def load_sbom(image: Image, cosign: Cosign) -> SBOM:
     """
-    Download the sbom for the image reference, save it to a directory, verify
-    that its digest matches that in the image provenance and parse it into a
-    dictionary.
+    Download and parse the sbom for the image reference and verify that its digest
+    matches that in the image provenance.
     """
-    path = await cosign.fetch_sbom(destination, image)
-    await verify_sbom(path, image, cosign)
-    async with aiofiles.open(path, "r") as sbom_raw:
-        sbom = json.loads(await sbom_raw.read())
-        return sbom, path
+    sbom = await cosign.fetch_sbom(image)
+    await verify_sbom(sbom, image, cosign)
+    return sbom
 
 
 async def write_sbom(sbom: dict, path: Path) -> None:
     """
-    Write an SBOM dictionary to a file.
+    Write an SBOM doc to a file.
     """
     async with aiofiles.open(path, "w") as fp:
         await fp.write(json.dumps(sbom))
@@ -129,12 +112,12 @@ async def update_sbom(
     """
 
     try:
-        sbom, sbom_path = await load_sbom(image, destination, cosign)
+        sbom = await load_sbom(image, cosign)
 
-        if not update_sbom_in_situ(component, image, sbom):
+        if not update_sbom_in_situ(component, image, sbom.doc):
             raise SBOMError(f"Unsupported SBOM format for image {image}.")
 
-        await write_sbom(sbom, sbom_path)
+        await write_sbom(sbom.doc, destination.joinpath(image.digest))
         logger.info("Successfully enriched SBOM for image %s", image)
     except (SBOMError, ValueError):
         logger.exception("Failed to enrich SBOM for image %s.", image)
@@ -191,8 +174,9 @@ async def update_sboms(snapshot: Snapshot, destination: Path, cosign: Cosign) ->
         ],
         return_exceptions=True,
     )
-    # Python 3.11 ExceptionGroup would be nice here, so we can re-raise
-    # all the exceptions that were raised and not just one.
+    # Python 3.11 ExceptionGroup would be nice here, so we can re-raise all the
+    # exceptions that were raised and not just one. Consider when migrating to
+    # mobster.
     for res in results:
         if isinstance(res, BaseException):
             raise res

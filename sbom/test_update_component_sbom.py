@@ -2,7 +2,6 @@ import json
 import tempfile
 from unittest.mock import patch, AsyncMock, call, ANY
 from typing import Optional, Dict, Any
-import aiofiles
 from packageurl import PackageURL
 import pytest
 from pathlib import Path
@@ -10,6 +9,7 @@ from pathlib import Path
 from sbom.handlers.cyclonedx1 import CDXSpec
 from sbom.update_component_sbom import update_sboms
 from sbom.sbomlib import (
+    SBOM,
     Component,
     Cosign,
     Image,
@@ -34,7 +34,7 @@ class NotImplementedCosign(Cosign):
     async def fetch_latest_provenance(self, image: Image) -> Provenance02:
         return NotImplemented
 
-    async def fetch_sbom(self, destination_dir: Path, image: Image) -> Path:
+    async def fetch_sbom(self, image: Image) -> SBOM:
         return NotImplemented
 
 
@@ -44,9 +44,9 @@ class TestSPDXVersion23:
     async def test_single_component_single_arch(self, mock_write_sbom: AsyncMock) -> None:
         data_path = TESTDATA_PATH.joinpath("single-component-single-arch/spdx")
 
-        async def fake_load_sbom(image: Image, _, __) -> tuple[dict, str]:
-            with open(data_path.joinpath("build_sbom.json")) as f:
-                return json.load(f), ""
+        async def fake_load_sbom(image: Image, _) -> SBOM:
+            with open(data_path.joinpath("build_sbom.json"), "rb") as f:
+                return await SBOM.from_cosign_output(f.read())
 
         snapshot = Snapshot(
             components=[
@@ -77,13 +77,13 @@ class TestSPDXVersion23:
             "sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921"
         )
 
-        async def fake_load_sbom(image: Image, _, __) -> tuple[dict, str]:
+        async def fake_load_sbom(image: Image, _) -> SBOM:
             if index_digest == image.digest:
-                with open(data_path.joinpath("build_index_sbom.json")) as f:
-                    return json.load(f), ""
+                with open(data_path.joinpath("build_index_sbom.json"), "rb") as f:
+                    return await SBOM.from_cosign_output(f.read())
 
-            with open(data_path.joinpath("build_image_sbom.json")) as f:
-                return json.load(f), ""
+            with open(data_path.joinpath("build_image_sbom.json"), "rb") as f:
+                return await SBOM.from_cosign_output(f.read())
 
         snapshot = Snapshot(
             components=[
@@ -129,13 +129,13 @@ class TestSPDXVersion23:
 
         num_components = 250
 
-        async def fake_load_sbom(image: Image, _, __) -> tuple[dict, str]:
+        async def fake_load_sbom(image: Image, _) -> SBOM:
             if index_digest == image.digest:
-                with open(data_path.joinpath("build_index_sbom.json")) as f:
-                    return json.load(f), ""
+                with open(data_path.joinpath("build_index_sbom.json"), "rb") as f:
+                    return await SBOM.from_cosign_output(f.read())
 
-            with open(data_path.joinpath("build_image_sbom.json")) as f:
-                return json.load(f), ""
+            with open(data_path.joinpath("build_image_sbom.json"), "rb") as f:
+                return await SBOM.from_cosign_output(f.read())
 
         snapshot = Snapshot(
             components=[
@@ -274,13 +274,13 @@ class TestCycloneDX:
     ) -> None:
         data_path = TESTDATA_PATH.joinpath("single-component-single-arch/cdx")
 
-        async def fake_load_sbom(reference: str, _, __) -> tuple[dict, str]:
-            with open(data_path.joinpath("build_sbom.json")) as f:
+        async def fake_load_sbom(reference: str, _) -> SBOM:
+            with open(data_path.joinpath("build_sbom.json"), "rb") as f:
                 build_sbom = json.load(f)
                 # we can do this, because our build sbom should not contain any
                 # version-specific structure
                 build_sbom["specVersion"] = spec.value
-                return build_sbom, ""
+                return SBOM(build_sbom, "")
 
         snapshot = Snapshot(
             components=[
@@ -322,11 +322,10 @@ class FakeCosign(Cosign):
     async def fetch_latest_provenance(self, image: Image) -> Provenance02:
         return (await self.fetch_provenances(image))[0]
 
-    async def fetch_sbom(self, destination_dir: Path, image: Image) -> Path:
-        path = destination_dir.joinpath(image.digest)
-        async with aiofiles.open(path, "wb") as fp:
-            await fp.write(json.dumps(self.sboms[image.digest]).encode("utf-8"))
-        return path
+    async def fetch_sbom(self, image: Image) -> SBOM:
+        return await SBOM.from_cosign_output(
+            json.dumps(self.sboms[image.digest]).encode("utf-8")
+        )
 
 
 class TestSBOMVerification:
