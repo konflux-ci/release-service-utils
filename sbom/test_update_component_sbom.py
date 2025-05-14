@@ -28,9 +28,6 @@ class NotImplementedCosign(Cosign):
     A not implemented cosign client, used where a client is expected, but won't be used.
     """
 
-    async def fetch_provenances(self, image: Image) -> list[Provenance02]:
-        return NotImplemented
-
     async def fetch_latest_provenance(self, image: Image) -> Provenance02:
         return NotImplemented
 
@@ -316,11 +313,8 @@ class FakeCosign(Cosign):
         self.provenances = provenances
         self.sboms = sboms
 
-    async def fetch_provenances(self, image: Image) -> list[Provenance02]:
-        return [self.provenances[image.digest]]
-
     async def fetch_latest_provenance(self, image: Image) -> Provenance02:
-        return (await self.fetch_provenances(image))[0]
+        return [self.provenances[image.digest]][0]
 
     async def fetch_sbom(self, image: Image) -> SBOM:
         return await SBOM.from_cosign_output(

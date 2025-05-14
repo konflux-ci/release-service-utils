@@ -475,9 +475,6 @@ class SBOM:
 
 
 class Cosign(typing.Protocol):
-    async def fetch_provenances(self, image: Image) -> list[Provenance02]:
-        return NotImplemented
-
     async def fetch_latest_provenance(self, image: Image) -> Provenance02:
         return NotImplemented
 
@@ -497,9 +494,10 @@ class CosignClient(Cosign):
         """
         self.verification_key = verification_key
 
-    async def fetch_provenances(self, image: Image) -> list[Provenance02]:
+    async def fetch_latest_provenance(self, image: Image) -> Provenance02:
         """
-        Fetch all provenances for the supplied image.
+        Fetch the latest provenance based on the supplied image based on the
+        time the image build finished.
         """
         with make_oci_auth_file(image) as authfile:
             cmd = [
@@ -520,19 +518,11 @@ class CosignClient(Cosign):
         if code != 0:
             raise SBOMError(f"Failed to fetch provenance for {image}: {stderr.decode()}.")
 
-        attestations: list[Provenance02] = []
+        provenances: list[Provenance02] = []
         for raw_attestation in stdout.splitlines():
-            att = Provenance02.from_cosign_output(raw_attestation)
-            attestations.append(att)
+            prov = Provenance02.from_cosign_output(raw_attestation)
+            provenances.append(prov)
 
-        return attestations
-
-    async def fetch_latest_provenance(self, image: Image) -> Provenance02:
-        """
-        Fetch the latest provenance based on the supplied image based on the
-        time the image build finished.
-        """
-        provenances = await self.fetch_provenances(image)
         if len(provenances) == 0:
             raise SBOMError(f"No provenances parsed for image {image}.")
 
