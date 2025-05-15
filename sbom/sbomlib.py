@@ -3,16 +3,19 @@ This library contains utility functions for SBOM generation and enrichment.
 """
 
 from contextlib import contextmanager
+import hashlib
 import json
-from typing import Optional, Any, Protocol, Union, Generator
+from typing import Optional, Any, Protocol, Generator
 from pathlib import Path
 from dataclasses import dataclass
 import re
 import asyncio
 import tempfile
 import os
+import base64
+import datetime
 
-
+import dateutil.parser
 from packageurl import PackageURL
 import pydantic as pdc
 
@@ -25,20 +28,27 @@ logger = get_sbom_logger()
 @dataclass
 class Image:
     """
-    Object representing a single image in some repository.
+    Object representing a single image in a repository.
     """
 
+    repository: str
     digest: str
+
+    @property
+    def reference(self) -> str:
+        return f"{self.repository}@{self.digest}"
+
+    def __str__(self) -> str:
+        return self.reference
 
 
 @dataclass
-class IndexImage:
+class IndexImage(Image):
     """
-    Object representing an index image in some repository. It also contains
-    references to child images.
+    Object representing an index image in a repository. It also contains child
+    images.
     """
 
-    digest: str
     children: list[Image]
 
 
@@ -49,8 +59,7 @@ class Component:
     """
 
     name: str
-    repository: str
-    image: Union[Image, IndexImage]
+    image: Image
     tags: list[str]
 
 
@@ -70,6 +79,21 @@ class SBOMError(Exception):
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
+
+
+class SBOMVerificationError(SBOMError):
+    """
+    Exception raised when an SBOM's digest does not match that in the provenance.
+    """
+
+    def __init__(self, expected: str, actual: str, *args: object, **kwargs: object) -> None:
+        self.expected = expected
+        self.actual = actual
+        message = (
+            "SBOM digest verification from provenance failed. "
+            f"Expected digest: {expected}, actual digest: {actual}"
+        )
+        super().__init__(message, *args, **kwargs)
 
 
 class ComponentModel(pdc.BaseModel):
@@ -110,9 +134,7 @@ class SBOMHandler(Protocol):
     Protocol ensuring that SBOM handlers implement the correct method.
     """
 
-    def update_sbom(
-        self, component: Component, image: Union[IndexImage, Image], sbom: dict[str, Any]
-    ) -> None:
+    def update_sbom(self, component: Component, image: Image, sbom: dict[str, Any]) -> None:
         """
         Update the specified SBOM in-place based on the provided component information.
         """
@@ -126,19 +148,20 @@ class SBOMHandler(Protocol):
         raise NotImplementedError()
 
 
-async def construct_image(repository: str, image_digest: str) -> Union[Image, IndexImage]:
+async def construct_image(repository: str, image_digest: str) -> Image:
     """
     Creates an Image or IndexImage object based on an image reference. Performs
     a registry call for index images, to parse all their child digests.
     """
-    manifest = await get_image_manifest(repository, image_digest)
+    image = Image(repository, image_digest)
+    manifest = await get_image_manifest(image)
     media_type = manifest["mediaType"]
 
     if media_type in {
         "application/vnd.oci.image.manifest.v1+json",
         "application/vnd.docker.distribution.manifest.v2+json",
     }:
-        return Image(digest=image_digest)
+        return image
 
     if media_type in {
         "application/vnd.oci.image.index.v1+json",
@@ -147,9 +170,9 @@ async def construct_image(repository: str, image_digest: str) -> Union[Image, In
         children = []
         for submanifest in manifest["manifests"]:
             child_digest = submanifest["digest"]
-            children.append(Image(child_digest))
+            children.append(Image(repository, child_digest))
 
-        return IndexImage(digest=image_digest, children=children)
+        return IndexImage(repository, image_digest, children=children)
 
     raise SBOMError(f"Unsupported mediaType: {media_type}")
 
@@ -160,8 +183,8 @@ async def make_component(
     """
     Creates a component object from input data.
     """
-    image: Union[Image, IndexImage] = await construct_image(repository, image_digest)
-    return Component(name=name, repository=repository, image=image, tags=tags)
+    image: Image = await construct_image(repository, image_digest)
+    return Component(name=name, image=image, tags=tags)
 
 
 async def make_snapshot(snapshot_spec: Path) -> Snapshot:
@@ -190,23 +213,21 @@ async def make_snapshot(snapshot_spec: Path) -> Snapshot:
     return Snapshot(components=components)
 
 
-def construct_purl(
-    repository: str, digest: str, arch: Optional[str] = None, tag: Optional[str] = None
-) -> str:
+def construct_purl(image: Image, arch: Optional[str] = None, tag: Optional[str] = None) -> str:
     """
     Construct an OCI PackageURL string from image data.
     """
-    purl = construct_purl_object(repository, digest, arch, tag)
+    purl = construct_purl_object(image, arch, tag)
     return purl.to_string()
 
 
 def construct_purl_object(
-    repository: str, digest: str, arch: Optional[str] = None, tag: Optional[str] = None
+    image: Image, arch: Optional[str] = None, tag: Optional[str] = None
 ) -> PackageURL:
     """
     Construct an OCI PackageURL from image data.
     """
-    repo_name = repository.split("/")[-1]
+    repo_name = image.repository.split("/")[-1]
 
     optional_qualifiers = {}
     if arch is not None:
@@ -218,8 +239,8 @@ def construct_purl_object(
     return PackageURL(
         type="oci",
         name=repo_name,
-        version=digest,
-        qualifiers={"repository_url": repository, **optional_qualifiers},
+        version=image.digest,
+        qualifiers={"repository_url": image.repository, **optional_qualifiers},
     )
 
 
@@ -255,7 +276,7 @@ async def run_async_subprocess(
     return code, stdout, stderr
 
 
-async def get_image_manifest(repository: str, image_digest: str) -> dict[str, Any]:
+async def get_image_manifest(image: Image) -> dict[str, Any]:
     """
     Gets a dictionary containing the data from a manifest for an image in a
     repository.
@@ -264,10 +285,9 @@ async def get_image_manifest(repository: str, image_digest: str) -> dict[str, An
         repository (str): image repository URL
         image_digest (str): an image digest in the form sha256:<sha>
     """
-    reference = make_reference(repository, image_digest)
-    logger.info("Fetching manifest for %s", reference)
+    logger.info("Fetching manifest for %s", image)
 
-    with make_oci_auth_file(reference) as authfile:
+    with make_oci_auth_file(image) as authfile:
         code, stdout, stderr = await run_async_subprocess(
             [
                 "oras",
@@ -275,36 +295,18 @@ async def get_image_manifest(repository: str, image_digest: str) -> dict[str, An
                 "fetch",
                 "--registry-config",
                 authfile,
-                reference,
+                image.reference,
             ],
             retry_times=3,
         )
     if code != 0:
-        raise SBOMError(f"Could not get manifest of {reference}: {stderr.decode()}")
+        raise SBOMError(f"Could not get manifest of {image}: {stderr.decode()}")
 
     return json.loads(stdout)  # type: ignore
 
 
-def make_reference(repository: str, image_digest: str) -> str:
-    """
-    Create a full reference to an image using a repository and image digest.
-
-    Args:
-        repository (str): image repository URL
-        image_digest (str): an image digest in the form sha256:<sha>
-
-    Examples:
-        >>> make_reference("registry.redhat.io/repo", "sha256:deadbeef")
-        'registry.redhat.io/repo@sha256:deadbeef'
-
-    """
-    return f"{repository}@{image_digest}"
-
-
 @contextmanager
-def make_oci_auth_file(
-    reference: str, auth: Optional[Path] = None
-) -> Generator[str, Any, None]:
+def make_oci_auth_file(image: Image, auth: Optional[Path] = None) -> Generator[str, Any, None]:
     """
     Gets path to a temporary file containing the docker config JSON for
     <reference>.  Deletes the file after the with statement. If no path to the
@@ -325,22 +327,17 @@ def make_oci_auth_file(
     if not auth.is_file():
         raise ValueError(f"No docker config file at {auth}")
 
-    if reference.count(":") > 1:
-        logger.warning(
-            "Multiple ':' symbols in %s. Registry ports are not supported.", reference
-        )
-
-    # Remove digest (e.g. @sha256:...)
-    ref = reference.split("@", 1)[0]
+    if image.reference.count(":") > 1:
+        logger.warning("Multiple ':' symbols in %s. Registry ports are not supported.", image)
 
     # Registry is up to the first slash
-    registry = ref.split("/", 1)[0]
+    registry = image.repository.split("/", 1)[0]
 
     with open(auth, mode="r", encoding="utf-8") as f:
         config = json.load(f)
     auths = config.get("auths", {})
 
-    current_ref = ref
+    current_ref = image.repository
 
     try:
         tmpfile = tempfile.NamedTemporaryFile(mode="w", delete=False)
@@ -391,3 +388,86 @@ def get_purl_digest(purl_str: str) -> str:
     if purl.version is None:
         raise SBOMError(f"SBOM contains invalid OCI Purl: {purl_str}")
     return purl.version
+
+
+class Provenance02:
+    """
+    Object containing the data of an provenance attestation.
+    """
+
+    predicate_type = "https://slsa.dev/provenance/v0.2"
+
+    def __init__(self, predicate: Any) -> None:
+        self.predicate = predicate
+
+    @staticmethod
+    def from_cosign_output(raw: bytes) -> "Provenance02":
+        encoded = json.loads(raw)
+        att = json.loads(base64.b64decode(encoded["payload"]))
+        if (pt := att.get("predicateType")) != Provenance02.predicate_type:
+            raise ValueError(
+                f"Cannot parse predicateType {pt}. Expected {Provenance02.predicate_type}"
+            )
+
+        predicate = att.get("predicate", {})
+        return Provenance02(predicate)
+
+    @property
+    def build_finished_on(self) -> datetime.datetime:
+        """
+        Return datetime of the build being finished.
+        If it's not available, fallback to datetime.min.
+        """
+        if self.predicate is None:
+            raise ValueError("Cannot get build time from uninitialized provenance.")
+
+        finished_on: Optional[str] = self.predicate.get("metadata", {}).get("buildFinishedOn")
+        if finished_on:
+            return dateutil.parser.isoparse(finished_on)
+
+        return datetime.datetime.min
+
+    def get_sbom_digest(self, image: Image) -> str:
+        """
+        Find the SBOM_BLOB_URL value in the provenance for the supplied image.
+        """
+        sbom_blob_urls: dict[str, str] = {}
+        tasks = self.predicate.get("buildConfig", {}).get("tasks", [])
+        for task in tasks:
+            curr_digest, sbom_url = "", ""
+            for result in task.get("results", []):
+                if result.get("name") == "SBOM_BLOB_URL":
+                    sbom_url = result.get("value")
+                if result.get("name") == "IMAGE_DIGEST":
+                    curr_digest = result.get("value")
+            if not all([curr_digest, sbom_url]):
+                continue
+            sbom_blob_urls[curr_digest] = sbom_url
+
+        blob_url = sbom_blob_urls.get(image.digest)
+        if blob_url is None:
+            raise SBOMError(f"No SBOM_BLOB_URL found in attestation for image {image}.")
+
+        return blob_url.split("@", 1)[1]
+
+
+class SBOM:
+    def __init__(self, doc: dict[Any, Any], digest: str) -> None:
+        """
+        An SBOM downloaded using cosign.
+
+        Attributes:
+            doc (dict): The parsed SBOM dictionary
+            digest (str): SHA256 digest of the raw SBOM data
+        """
+        self.doc = doc
+        self.digest = digest
+
+    @staticmethod
+    async def from_cosign_output(raw: bytes) -> "SBOM":
+        """
+        Create an SBOM object from a line of raw "cosign download sbom" output.
+        """
+        doc = json.loads(raw)
+        hexdigest = f"sha256:{hashlib.sha256(raw).hexdigest()}"
+        return SBOM(doc, hexdigest)

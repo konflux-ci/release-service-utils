@@ -1,16 +1,39 @@
 import json
 import tempfile
 from unittest.mock import patch, AsyncMock, call, ANY
-from typing import Optional
+from typing import Optional, Dict, Any
 from packageurl import PackageURL
 import pytest
 from pathlib import Path
 
+from sbom.cosign import Cosign
 from sbom.handlers.cyclonedx1 import CDXSpec
 from sbom.update_component_sbom import update_sboms
-from sbom.sbomlib import Component, Image, IndexImage, Snapshot, get_purl_digest
+from sbom.sbomlib import (
+    SBOM,
+    Component,
+    Image,
+    IndexImage,
+    Provenance02,
+    SBOMVerificationError,
+    Snapshot,
+    get_purl_digest,
+)
+
 
 TESTDATA_PATH = Path(__file__).parent.joinpath("testdata")
+
+
+class NotImplementedCosign(Cosign):
+    """
+    A not implemented cosign client, used where a client is expected, but won't be used.
+    """
+
+    async def fetch_latest_provenance(self, image: Image) -> Provenance02:
+        return NotImplemented
+
+    async def fetch_sbom(self, image: Image) -> SBOM:
+        return NotImplemented
 
 
 class TestSPDXVersion23:
@@ -19,16 +42,15 @@ class TestSPDXVersion23:
     async def test_single_component_single_arch(self, mock_write_sbom: AsyncMock) -> None:
         data_path = TESTDATA_PATH.joinpath("single-component-single-arch/spdx")
 
-        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
-            with open(data_path.joinpath("build_sbom.json")) as f:
-                return json.load(f), ""
+        async def fake_load_sbom(image: Image, _) -> SBOM:
+            with open(data_path.joinpath("build_sbom.json"), "rb") as f:
+                return await SBOM.from_cosign_output(f.read())
 
         snapshot = Snapshot(
             components=[
                 Component(
                     name="component",
-                    repository="registry.redhat.io/org/tenant/test",
-                    image=Image("sha256:deadbeef"),
+                    image=Image("registry.redhat.io/org/tenant/test", "sha256:deadbeef"),
                     tags=["1.0", "latest"],
                 )
             ],
@@ -38,7 +60,7 @@ class TestSPDXVersion23:
             expected_sbom = json.load(fp)
 
         with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
-            await update_sboms(snapshot, Path("dummy"))
+            await update_sboms(snapshot, Path("dummy"), NotImplementedCosign())
             mock_write_sbom.assert_awaited_with(expected_sbom, ANY)
 
     @pytest.mark.asyncio
@@ -53,22 +75,22 @@ class TestSPDXVersion23:
             "sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921"
         )
 
-        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
-            if index_digest in reference:
-                with open(data_path.joinpath("build_index_sbom.json")) as f:
-                    return json.load(f), ""
+        async def fake_load_sbom(image: Image, _) -> SBOM:
+            if index_digest == image.digest:
+                with open(data_path.joinpath("build_index_sbom.json"), "rb") as f:
+                    return await SBOM.from_cosign_output(f.read())
 
-            with open(data_path.joinpath("build_image_sbom.json")) as f:
-                return json.load(f), ""
+            with open(data_path.joinpath("build_image_sbom.json"), "rb") as f:
+                return await SBOM.from_cosign_output(f.read())
 
         snapshot = Snapshot(
             components=[
                 Component(
                     name="component",
-                    repository="registry.redhat.io/org/tenant/test",
                     image=IndexImage(
+                        "registry.redhat.io/org/tenant/test",
                         index_digest,
-                        children=[Image(child_digest)],
+                        children=[Image("registry.redhat.io/org/tenant/test", child_digest)],
                     ),
                     tags=["1.0", "latest"],
                 )
@@ -82,7 +104,7 @@ class TestSPDXVersion23:
             expected_image_sbom = json.load(fp)
 
         with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
-            await update_sboms(snapshot, Path("dummy"))
+            await update_sboms(snapshot, Path("dummy"), NotImplementedCosign())
 
             mock_write_sbom.assert_has_awaits(
                 [
@@ -105,22 +127,22 @@ class TestSPDXVersion23:
 
         num_components = 250
 
-        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
-            if index_digest in reference:
-                with open(data_path.joinpath("build_index_sbom.json")) as f:
-                    return json.load(f), ""
+        async def fake_load_sbom(image: Image, _) -> SBOM:
+            if index_digest == image.digest:
+                with open(data_path.joinpath("build_index_sbom.json"), "rb") as f:
+                    return await SBOM.from_cosign_output(f.read())
 
-            with open(data_path.joinpath("build_image_sbom.json")) as f:
-                return json.load(f), ""
+            with open(data_path.joinpath("build_image_sbom.json"), "rb") as f:
+                return await SBOM.from_cosign_output(f.read())
 
         snapshot = Snapshot(
             components=[
                 Component(
                     name="component",
-                    repository="registry.redhat.io/org/tenant/test",
                     image=IndexImage(
+                        "registry.redhat.io/org/tenant/test",
                         index_digest,
-                        children=[Image(child_digest)],
+                        children=[Image("registry.redhat.io/org/tenant/test", child_digest)],
                     ),
                     tags=["1.0", "latest"],
                 )
@@ -135,7 +157,7 @@ class TestSPDXVersion23:
             expected_image_sbom = json.load(fp)
 
         with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
-            await update_sboms(snapshot, Path("dummy"))
+            await update_sboms(snapshot, Path("dummy"), NotImplementedCosign())
 
             mock_write_sbom.assert_has_awaits(
                 [
@@ -148,12 +170,10 @@ class TestSPDXVersion23:
 
 class TestCycloneDX:
     @staticmethod
-    def verify_purl(purl: PackageURL, kflx_component: Component) -> None:
+    def verify_purl(purl: PackageURL, image: Image) -> None:
         assert purl.qualifiers is not None
-        assert (
-            purl.qualifiers.get("repository_url") == kflx_component.repository  # type: ignore
-        )
-        assert purl.name == kflx_component.repository.split("/")[-1]
+        assert purl.qualifiers.get("repository_url") == image.repository  # type: ignore
+        assert purl.name == image.repository.split("/")[-1]
 
     @staticmethod
     def verify_tags(kflx_component: Component, cdx_component: dict) -> None:
@@ -180,7 +200,7 @@ class TestCycloneDX:
             if id_item.get("field") != "purl":
                 continue
             purl = PackageURL.from_string(id_item["concludedValue"])
-            TestCycloneDX.verify_purl(purl, kflx_component)
+            TestCycloneDX.verify_purl(purl, kflx_component.image)
 
             purl_tag = purl.qualifiers.get("tag")  # type: ignore
             assert isinstance(purl_tag, str), f"Missing tag in identity purl {purl}."
@@ -212,7 +232,7 @@ class TestCycloneDX:
         if kflx_component is None:
             return
 
-        TestCycloneDX.verify_purl(PackageURL.from_string(purl_str), kflx_component)
+        TestCycloneDX.verify_purl(PackageURL.from_string(purl_str), kflx_component.image)
 
         if verify_tags:
             TestCycloneDX.verify_tags(kflx_component, cdx_component)
@@ -252,27 +272,26 @@ class TestCycloneDX:
     ) -> None:
         data_path = TESTDATA_PATH.joinpath("single-component-single-arch/cdx")
 
-        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
-            with open(data_path.joinpath("build_sbom.json")) as f:
+        async def fake_load_sbom(reference: str, _) -> SBOM:
+            with open(data_path.joinpath("build_sbom.json"), "rb") as f:
                 build_sbom = json.load(f)
                 # we can do this, because our build sbom should not contain any
                 # version-specific structure
                 build_sbom["specVersion"] = spec.value
-                return build_sbom, ""
+                return SBOM(build_sbom, "")
 
         snapshot = Snapshot(
             components=[
                 Component(
                     name="component",
-                    repository="registry.redhat.io/org/tenant/test",
-                    image=Image("sha256:deadbeef"),
+                    image=Image("registry.redhat.io/org/tenant/test", "sha256:deadbeef"),
                     tags=tags,
                 )
             ],
         )
 
         with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
-            await update_sboms(snapshot, Path("dummy"))
+            await update_sboms(snapshot, Path("dummy"), NotImplementedCosign())
 
             # get the SBOM that was written
             sbom, _ = mock_write_sbom.call_args[0]
@@ -286,3 +305,129 @@ class TestCycloneDX:
                         f"Failed verification of SBOM: {err}."
                         " Writing generated SBOM to {tmpf.name}"
                     ) from err
+
+
+class FakeCosign(Cosign):
+    def __init__(
+        self, provenances: dict[str, Provenance02], sboms: dict[str, Dict[Any, Any]]
+    ) -> None:
+        self.provenances = provenances
+        self.sboms = sboms
+
+    async def fetch_latest_provenance(self, image: Image) -> Provenance02:
+        return [self.provenances[image.digest]][0]
+
+    async def fetch_sbom(self, image: Image) -> SBOM:
+        return await SBOM.from_cosign_output(
+            json.dumps(self.sboms[image.digest]).encode("utf-8")
+        )
+
+
+class TestSBOMVerification:
+    def get_testing_provenance(self, digest: str, sbom_blob_url: str) -> Provenance02:
+        return Provenance02(
+            {
+                "buildConfig": {
+                    "tasks": [
+                        {
+                            "results": [
+                                {"name": "IMAGE_DIGEST", "value": digest},
+                                {"name": "SBOM_BLOB_URL", "value": sbom_blob_url},
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ["success"],
+        [
+            pytest.param(
+                True,
+                id="matching-digest",
+            ),
+            pytest.param(
+                False,
+                id="wrong-digest",
+            ),
+        ],
+    )
+    async def test_verification(self, success: bool) -> None:
+        """
+        This test sets up the SBOMs and provenances for a multiarch release, and
+        tests that the update process succeeds or fails with an
+        SBOMVerificationError based on the digest of the SBOM matching the
+        SBOM_BLOB_URL in the provenance.
+        """
+        data_path = TESTDATA_PATH.joinpath("single-component-multiarch/spdx")
+
+        index_digest = (
+            "sha256:fae7e52c95ee8d24ad9e64b54e693047b94e1b1ef98be3e3b4b9859f986e5b1d"
+        )
+        child_digest = (
+            "sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921"
+        )
+
+        index_sbom_blob_url = (
+            "quay.io/test@"
+            "sha256:432997ca5d0f0b3373f861248261fe18b6ba904c862ac0d68e74e44ed9035742"
+        )
+        child_sbom_blob_url = (
+            "quay.io/test@"
+            "sha256:3aa7e034114985807ed141f205a0752f91ec5802c8ed529d9252d481be3f3ca1"
+        )
+
+        with open(data_path.joinpath("build_index_sbom.json"), "r", encoding="utf-8") as fp:
+            index_sbom = json.load(fp)
+
+        with open(data_path.joinpath("build_image_sbom.json"), "r", encoding="utf-8") as fp:
+            child_sbom = json.load(fp)
+
+        sboms = {
+            index_digest: index_sbom,
+            child_digest: child_sbom,
+        }
+
+        if success:
+            provenances = {
+                index_digest: self.get_testing_provenance(index_digest, index_sbom_blob_url),
+                child_digest: self.get_testing_provenance(child_digest, child_sbom_blob_url),
+            }
+        else:
+            provenances = {
+                # Provide a non-matching SBOM_BLOB_URL so updating the SBOM fails.
+                index_digest: self.get_testing_provenance(
+                    index_digest, "quay.io/test@sha256:wrongdigest"
+                ),
+                child_digest: self.get_testing_provenance(child_digest, child_sbom_blob_url),
+            }
+
+        cosign = FakeCosign(
+            provenances,
+            sboms,
+        )
+
+        snapshot = Snapshot(
+            components=[
+                Component(
+                    "multiarch-component",
+                    image=IndexImage(
+                        "registry.redhat.io/test",
+                        digest=index_digest,
+                        children=[
+                            Image("registry.redhat.io/test", child_digest),
+                        ],
+                    ),
+                    tags=[],
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as destination:
+            if success:
+                await update_sboms(snapshot, Path(destination), cosign)
+            else:
+                with pytest.raises(SBOMVerificationError):
+                    await update_sboms(snapshot, Path(destination), cosign)
