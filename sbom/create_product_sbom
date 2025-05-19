@@ -1,1 +1,3 @@
-create_product_sbom.py
+#!/bin/sh
+
+python3 -m sbom.create_product_sbom "$@"

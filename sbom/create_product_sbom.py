@@ -29,7 +29,7 @@ from spdx_tools.spdx.model.spdx_no_assertion import SpdxNoAssertion
 from spdx_tools.spdx.writer.write_anything import write_file
 
 from sbom import sbomlib
-from sbom.logging import get_sbom_logger, setup_sbom_logger
+from sbom.log import get_sbom_logger, setup_sbom_logger
 from sbom.sbomlib import Component, Snapshot, construct_purl
 
 logger = get_sbom_logger()

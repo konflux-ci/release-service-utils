@@ -16,7 +16,7 @@ import os
 from packageurl import PackageURL
 import pydantic as pdc
 
-from sbom.logging import get_sbom_logger
+from sbom.log import get_sbom_logger
 
 
 logger = get_sbom_logger()

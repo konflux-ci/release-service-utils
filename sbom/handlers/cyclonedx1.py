@@ -2,7 +2,7 @@ from typing import Optional, Union
 from enum import Enum
 
 
-from sbom.logging import get_sbom_logger
+from sbom.log import get_sbom_logger
 from sbom.sbomlib import (
     Component,
     Image,

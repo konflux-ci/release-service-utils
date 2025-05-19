@@ -1,1 +1,3 @@
-update_component_sbom.py
+#!/bin/sh
+
+python3 -m sbom.update_component_sbom "$@"
