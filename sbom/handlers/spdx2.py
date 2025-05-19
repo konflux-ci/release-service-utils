@@ -7,7 +7,7 @@ from typing import Optional, Union, Any
 
 from packageurl import PackageURL
 
-from sbom.logging import get_sbom_logger
+from sbom.log import get_sbom_logger
 from sbom.sbomlib import (
     Component,
     Image,

@@ -17,7 +17,7 @@ import aiofiles
 
 from sbom import sbomlib
 from sbom.handlers import CycloneDXVersion1, SPDXVersion2
-from sbom.logging import get_sbom_logger, setup_sbom_logger
+from sbom.log import get_sbom_logger, setup_sbom_logger
 from sbom.sbomlib import (
     Component,
     SBOMError,
