@@ -102,3 +102,5 @@ ENV PATH="$PATH:/home/pubtools-marketplacesvm-wrapper"
 ENV PATH="$PATH:/home/developer-portal-wrapper"
 ENV PATH="$PATH:/home/publish-to-cgw-wrapper"
 ENV PATH="$PATH:/home/sbom"
+# Need to set PYTHONPATH to be able to run sbom scripts as modules
+ENV PYTHONPATH="$PYTHONPATH:/home"
