@@ -16,56 +16,53 @@ from pathlib import Path
 import aiofiles
 
 from sbom import sbomlib
+from sbom.cosign import Cosign, CosignClient
 from sbom.handlers import CycloneDXVersion1, SPDXVersion2
 from sbom.log import get_sbom_logger, setup_sbom_logger
 from sbom.sbomlib import (
+    SBOM,
     Component,
     SBOMError,
+    SBOMVerificationError,
     Snapshot,
     Image,
     IndexImage,
 )
 
-
 logger = get_sbom_logger()
 
 
-async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
+async def verify_sbom(sbom: SBOM, image: Image, cosign: Cosign) -> None:
     """
-    Download an SBOM for an image reference to a destination directory.
+    Verify that the sha256 digest of the specified SBOM matches the value of
+    SBOM_BLOB_URL in the provenance for the supplied image. Cosign is
+    used to fetch the provenance. If it doesn't match, an SBOMVerificationError
+    is raised.
     """
-    with sbomlib.make_oci_auth_file(reference) as authfile:
-        code, stdout, stderr = await sbomlib.run_async_subprocess(
-            ["cosign", "download", "sbom", reference],
-            env={"DOCKER_CONFIG": authfile},
-            retry_times=3,
+
+    prov = await cosign.fetch_latest_provenance(image)
+    prov_sbom_digest = prov.get_sbom_digest(image)
+
+    if prov_sbom_digest != sbom.digest:
+        raise SBOMVerificationError(
+            prov_sbom_digest,
+            sbom.digest,
         )
 
-    if code != 0:
-        raise SBOMError(f"Failed to fetch SBOM {reference}: {stderr.decode()}")
 
-    digest = reference.split("@", 1)[1]
-    path = destination_dir.joinpath(digest)
-    async with aiofiles.open(path, "wb") as file:
-        await file.write(stdout)
-
-    return path
-
-
-async def load_sbom(reference: str, destination: Path) -> tuple[dict, Path]:
+async def load_sbom(image: Image, cosign: Cosign) -> SBOM:
     """
-    Download the sbom for the image reference, save it to a directory and parse
-    it into a dictionary.
+    Download and parse the sbom for the image reference and verify that its digest
+    matches that in the image provenance.
     """
-    path = await fetch_sbom(destination, reference)
-    async with aiofiles.open(path, "r") as sbom_raw:
-        sbom = json.loads(await sbom_raw.read())
-        return sbom, path
+    sbom = await cosign.fetch_sbom(image)
+    await verify_sbom(sbom, image, cosign)
+    return sbom
 
 
 async def write_sbom(sbom: dict, path: Path) -> None:
     """
-    Write an SBOM dictionary to a file.
+    Write an SBOM doc to a file.
     """
     async with aiofiles.open(path, "w") as fp:
         await fp.write(json.dumps(sbom))
@@ -98,7 +95,7 @@ def update_sbom_in_situ(
 
 
 async def update_sbom(
-    component: Component, image: Union[IndexImage, Image], destination: Path
+    component: Component, image: Union[IndexImage, Image], destination: Path, cosign: Cosign
 ) -> None:
     """
     Update an SBOM of an image in a repository and save it to a directory.
@@ -113,19 +110,21 @@ async def update_sbom(
     """
 
     try:
-        reference = f"{component.repository}@{image.digest}"
-        sbom, sbom_path = await load_sbom(reference, destination)
+        sbom = await load_sbom(image, cosign)
 
-        if not update_sbom_in_situ(component, image, sbom):
-            raise SBOMError(f"Unsupported SBOM format for image {reference}.")
+        if not update_sbom_in_situ(component, image, sbom.doc):
+            raise SBOMError(f"Unsupported SBOM format for image {image}.")
 
-        await write_sbom(sbom, sbom_path)
-        logger.info("Successfully enriched SBOM for image %s", reference)
+        await write_sbom(sbom.doc, destination.joinpath(image.digest))
+        logger.info("Successfully enriched SBOM for image %s", image)
     except (SBOMError, ValueError):
-        logger.exception("Failed to enrich SBOM for image %s.", reference)
+        logger.exception("Failed to enrich SBOM for image %s.", image)
+        raise
 
 
-async def update_component_sboms(component: Component, destination: Path) -> None:
+async def update_component_sboms(
+    component: Component, destination: Path, cosign: Cosign
+) -> None:
     """
     Update SBOMs for a component and save them to a directory.
 
@@ -140,19 +139,22 @@ async def update_component_sboms(component: Component, destination: Path) -> Non
         # for both the index image and the child single arch images.
         index = component.image
         update_tasks = [
-            update_sbom(component, index, destination),
+            update_sbom(component, index, destination, cosign),
         ]
         for child in index.children:
-            update_tasks.append(update_sbom(component, child, destination))
+            update_tasks.append(update_sbom(component, child, destination, cosign))
 
-        await asyncio.gather(*update_tasks)
+        results = await asyncio.gather(*update_tasks, return_exceptions=True)
+        for res in results:
+            if isinstance(res, BaseException):
+                raise res
         return
 
     # Single arch image
-    await update_sbom(component, component.image, destination)
+    await update_sbom(component, component.image, destination, cosign)
 
 
-async def update_sboms(snapshot: Snapshot, destination: Path) -> None:
+async def update_sboms(snapshot: Snapshot, destination: Path, cosign: Cosign) -> None:
     """
     Update component SBOMs with release-time information based on a Snapshot and
     save them to a directory.
@@ -161,9 +163,21 @@ async def update_sboms(snapshot: Snapshot, destination: Path) -> None:
         Snapshot: A object representing a snapshot being released.
         destination (Path): Path to the directory to save the SBOMs to.
     """
-    await asyncio.gather(
-        *[update_component_sboms(component, destination) for component in snapshot.components]
+    # use return_exceptions=True to avoid crashing non-finished tasks if one
+    # task raises an exception.
+    results = await asyncio.gather(
+        *[
+            update_component_sboms(component, destination, cosign)
+            for component in snapshot.components
+        ],
+        return_exceptions=True,
     )
+    # Python 3.11 ExceptionGroup would be nice here, so we can re-raise all the
+    # exceptions that were raised and not just one. Consider when migrating to
+    # mobster.
+    for res in results:
+        if isinstance(res, BaseException):
+            raise res
 
 
 async def main() -> None:
@@ -186,12 +200,19 @@ async def main() -> None:
         type=Path,
         help="Path to the directory to save the updated SBOM files.",
     )
+    parser.add_argument(
+        "--verification-key",
+        required=True,
+        type=Path,
+        help="Path to public key to verify attestations with.",
+    )
     args = parser.parse_args()
 
     setup_sbom_logger()
 
     snapshot = await sbomlib.make_snapshot(args.snapshot_path)
-    await update_sboms(snapshot, args.output_path)
+    cosign = CosignClient(args.verification_key)
+    await update_sboms(snapshot, args.output_path, cosign)
 
 
 if __name__ == "__main__":

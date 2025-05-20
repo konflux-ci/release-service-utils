@@ -12,3 +12,5 @@ pydantic
 aiofiles
 types-aiofiles
 spdx-tools==0.8.3
+python-dateutil==2.9.0.post0
+types-python-dateutil==2.9.0.20241206

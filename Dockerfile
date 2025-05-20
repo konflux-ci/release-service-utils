@@ -67,7 +67,8 @@ RUN pip3 install jinja2 \
     aiofiles \
     types-aiofiles \
     pytest-asyncio \
-    spdx-tools==${SPDX_TOOLS_VERSION}
+    spdx-tools==${SPDX_TOOLS_VERSION} \
+    python-dateutil==2.9.0.post0
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
 RUN dnf -y remove gcc

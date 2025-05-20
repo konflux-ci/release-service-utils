@@ -11,33 +11,33 @@ from sbom.sbomlib import IndexImage, Snapshot, Component, Image, construct_purl
 
 
 @pytest.mark.parametrize(
-    ["auths", "reference", "expected_auths"],
+    ["auths", "image", "expected_auths"],
     [
         pytest.param(
             {
                 "registry.local/repo": {"auth": "some_token"},
                 "another.io/repo": {"auth": "some_token"},
             },
-            "registry.local/repo@sha256:deadbeef",
+            Image("registry.local/repo", "sha256:deadbeef"),
             {"registry.local": {"auth": "some_token"}},
             id="simple",
         ),
         pytest.param(
             {"registry.local/org/repo": {"auth": "some_token"}},
-            "registry.local/org/repo@sha256:deadbeef",
+            Image("registry.local/org/repo", "sha256:deadbeef"),
             {"registry.local": {"auth": "some_token"}},
             id="nested",
         ),
     ],
 )
-def test_get_oci_auth_file(auths, reference, expected_auths):
+def test_get_oci_auth_file(auths, image, expected_auths):
     test_config = {"auths": auths}
 
     with tempfile.NamedTemporaryFile(mode="w") as config:
         json.dump(test_config, config)
         config.flush()
 
-        with sbomlib.make_oci_auth_file(reference, auth=Path(config.name)) as authfile:
+        with sbomlib.make_oci_auth_file(image, auth=Path(config.name)) as authfile:
             with open(authfile, "r") as fp:
                 data = json.loads(fp.read())
                 assert data["auths"] == expected_auths
@@ -78,21 +78,27 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
         components=[
             Component(
                 name="comp-1",
-                repository="registry.redhat.io/repo1",
-                image=IndexImage("sha256:deadbeef", children=[Image("sha256:aaaaffff")]),
+                image=IndexImage(
+                    "registry.redhat.io/repo1",
+                    "sha256:deadbeef",
+                    children=[Image("registry.redhat.io/repo1", "sha256:aaaaffff")],
+                ),
                 tags=["1.0"],
             ),
             Component(
                 name="comp-2",
-                repository="registry.redhat.io/repo2",
-                image=IndexImage("sha256:ffffffff", children=[Image("sha256:bbbbffff")]),
+                image=IndexImage(
+                    "registry.redhat.io/repo2",
+                    "sha256:ffffffff",
+                    children=[Image("registry.redhat.io/repo2", "sha256:bbbbffff")],
+                ),
                 tags=["2.0", "latest"],
             ),
         ],
     )
 
-    def fake_get_image_manifest(repository: str, _: str) -> dict[str, Any]:
-        if repository == "registry.redhat.io/repo1":
+    def fake_get_image_manifest(image: Image) -> dict[str, Any]:
+        if image.repository == "registry.redhat.io/repo1":
             child_digest = "sha256:aaaaffff"
 
             return {
@@ -142,4 +148,4 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
 def test_construct_purl(
     repository: str, digest: str, arch: Optional[str], tag: Optional[str], expected: str
 ) -> None:
-    assert construct_purl(repository, digest, arch, tag) == expected
+    assert construct_purl(Image(repository, digest), arch, tag) == expected
