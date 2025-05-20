@@ -27,9 +27,10 @@ class TestSPDXVersion23:
             components=[
                 Component(
                     name="component",
-                    repository="registry.redhat.io/org/tenant/test",
+                    release_repository="registry.redhat.io/org/tenant/test",
                     image=Image("sha256:deadbeef"),
                     tags=["1.0", "latest"],
+                    repository="quay.io/repo",
                 )
             ],
         )
@@ -65,12 +66,13 @@ class TestSPDXVersion23:
             components=[
                 Component(
                     name="component",
-                    repository="registry.redhat.io/org/tenant/test",
+                    release_repository="registry.redhat.io/org/tenant/test",
                     image=IndexImage(
                         index_digest,
                         children=[Image(child_digest)],
                     ),
                     tags=["1.0", "latest"],
+                    repository="quay.io/repo",
                 )
             ],
         )
@@ -117,12 +119,13 @@ class TestSPDXVersion23:
             components=[
                 Component(
                     name="component",
-                    repository="registry.redhat.io/org/tenant/test",
+                    release_repository="registry.redhat.io/org/tenant/test",
                     image=IndexImage(
                         index_digest,
                         children=[Image(child_digest)],
                     ),
                     tags=["1.0", "latest"],
+                    repository="quay.io/repo",
                 )
             ]
             * num_components,
@@ -264,9 +267,10 @@ class TestCycloneDX:
             components=[
                 Component(
                     name="component",
-                    repository="registry.redhat.io/org/tenant/test",
+                    release_repository="registry.redhat.io/org/tenant/test",
                     image=Image("sha256:deadbeef"),
                     tags=tags,
+                    repository="quay.io/repo",
                 )
             ],
         )
