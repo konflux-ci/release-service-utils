@@ -101,7 +101,7 @@ def get_component_packages(components: List[Component]) -> List[Package]:
         checksum = component.image.digest.split(":", 1)[1]
 
         purls = [
-            construct_purl(component.repository, component.image.digest, tag=tag)
+            construct_purl(component.release_repository, component.image.digest, tag=tag)
             for tag in component.tags
         ]
 

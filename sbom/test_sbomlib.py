@@ -63,12 +63,14 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
                     "containerImage": "quay.io/repo1@sha256:deadbeef",
                     "rh-registry-repo": "registry.redhat.io/repo1",
                     "tags": ["1.0"],
+                    "repository": "quay.io/repo1",
                 },
                 {
                     "name": "comp-2",
                     "containerImage": "quay.io/repo2@sha256:ffffffff",
                     "rh-registry-repo": "registry.redhat.io/repo2",
                     "tags": ["2.0", "latest"],
+                    "repository": "quay.io/repo2",
                 },
             ]
         }
@@ -78,21 +80,23 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
         components=[
             Component(
                 name="comp-1",
-                repository="registry.redhat.io/repo1",
+                release_repository="registry.redhat.io/repo1",
                 image=IndexImage("sha256:deadbeef", children=[Image("sha256:aaaaffff")]),
                 tags=["1.0"],
+                repository="quay.io/repo1",
             ),
             Component(
                 name="comp-2",
-                repository="registry.redhat.io/repo2",
+                release_repository="registry.redhat.io/repo2",
                 image=IndexImage("sha256:ffffffff", children=[Image("sha256:bbbbffff")]),
                 tags=["2.0", "latest"],
+                repository="quay.io/repo2",
             ),
         ],
     )
 
     def fake_get_image_manifest(repository: str, _: str) -> dict[str, Any]:
-        if repository == "registry.redhat.io/repo1":
+        if repository == "quay.io/repo1":
             child_digest = "sha256:aaaaffff"
 
             return {

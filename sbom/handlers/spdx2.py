@@ -205,7 +205,7 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
         """
         Update the SBOM of an index image in a repository.
         """
-        sbom["name"] = make_reference(component.repository, index.digest)
+        sbom["name"] = make_reference(component.release_repository, index.digest)
 
         index_package = cls._find_image_package(sbom, index.digest)
         if not index_package:
@@ -213,7 +213,7 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
 
         index_package.update_external_refs(
             index.digest,
-            component.repository,
+            component.release_repository,
             component.tags,
         )
 
@@ -236,7 +236,7 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
             arch = get_purl_arch(original_purl)
             package.update_external_refs(
                 image.digest,
-                component.repository,
+                component.release_repository,
                 component.tags,
                 arch=arch,
             )
@@ -246,7 +246,7 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
         """
         Update the SBOM of single-arch image in a repository.
         """
-        sbom["name"] = make_reference(component.repository, image.digest)
+        sbom["name"] = make_reference(component.release_repository, image.digest)
 
         image_package = cls._find_image_package(sbom, image.digest)
         if not image_package:
@@ -254,7 +254,7 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
 
         image_package.update_external_refs(
             image.digest,
-            component.repository,
+            component.release_repository,
             component.tags,
         )
 

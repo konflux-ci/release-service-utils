@@ -168,9 +168,10 @@ def verify_package_licenses(sbom) -> None:
                 components=[
                     Component(
                         name="component",
-                        repository="quay.io/repo",
+                        release_repository="quay.io/repo",
                         image=Image(digest=DIGESTS.single_arch),
                         tags=["1.0", "latest"],
+                        repository="quay.io/repo",
                     )
                 ]
             ),
@@ -185,7 +186,7 @@ def verify_package_licenses(sbom) -> None:
                 components=[
                     Component(
                         name="component",
-                        repository="quay.io/repo",
+                        release_repository="quay.io/repo",
                         image=IndexImage(
                             digest=DIGESTS.multi_arch,
                             children=[
@@ -194,6 +195,7 @@ def verify_package_licenses(sbom) -> None:
                             ],
                         ),
                         tags=["1.0", "latest"],
+                        repository="quay.io/repo",
                     )
                 ]
             ),
@@ -208,7 +210,7 @@ def verify_package_licenses(sbom) -> None:
                 components=[
                     Component(
                         name="multiarch-component",
-                        repository="quay.io/repo",
+                        release_repository="quay.io/repo",
                         image=IndexImage(
                             digest=DIGESTS.multi_arch,
                             children=[
@@ -217,12 +219,14 @@ def verify_package_licenses(sbom) -> None:
                             ],
                         ),
                         tags=["1.0", "latest"],
+                        repository="quay.io/repo",
                     ),
                     Component(
                         name="singlearch-component",
-                        repository="quay.io/another-repo",
+                        release_repository="quay.io/another-repo",
                         image=Image(digest=DIGESTS.single_arch),
                         tags=["2.0", "production"],
+                        repository="quay.io/repo",
                     ),
                 ]
             ),

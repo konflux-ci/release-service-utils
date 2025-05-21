@@ -49,9 +49,10 @@ class Component:
     """
 
     name: str
-    repository: str
+    release_repository: str
     image: Union[Image, IndexImage]
     tags: list[str]
+    repository: str
 
 
 @dataclass
@@ -81,6 +82,7 @@ class ComponentModel(pdc.BaseModel):
     image_digest: str = pdc.Field(alias="containerImage")
     rh_registry_repo: str = pdc.Field(alias="rh-registry-repo")
     tags: list[str]
+    repository: str
 
     @pdc.field_validator("image_digest", mode="after")
     @classmethod
@@ -155,13 +157,19 @@ async def construct_image(repository: str, image_digest: str) -> Union[Image, In
 
 
 async def make_component(
-    name: str, repository: str, image_digest: str, tags: list[str]
+    name: str, release_repository: str, image_digest: str, tags: list[str], repository: str
 ) -> Component:
     """
     Creates a component object from input data.
     """
     image: Union[Image, IndexImage] = await construct_image(repository, image_digest)
-    return Component(name=name, repository=repository, image=image, tags=tags)
+    return Component(
+        name=name,
+        release_repository=release_repository,
+        image=image,
+        tags=tags,
+        repository=repository,
+    )
 
 
 async def make_snapshot(snapshot_spec: Path) -> Snapshot:
@@ -179,11 +187,15 @@ async def make_snapshot(snapshot_spec: Path) -> Snapshot:
     component_tasks = []
     for component_model in snapshot_model.components:
         name = component_model.name
-        repository = component_model.rh_registry_repo
+        release_repository = component_model.rh_registry_repo
         image_digest = component_model.image_digest
         tags = component_model.tags
 
-        component_tasks.append(make_component(name, repository, image_digest, tags))
+        component_tasks.append(
+            make_component(
+                name, release_repository, image_digest, tags, component_model.repository
+            )
+        )
 
     components = await asyncio.gather(*component_tasks)
 
@@ -237,12 +249,16 @@ async def run_async_subprocess(
     if retry_times < 0:
         raise ValueError("Retry count cannot be negative.")
 
+    cmd_env = dict(os.environ)
+    if env:
+        cmd_env.update(env)
+
     for _ in range(1 + retry_times):
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=env,
+            env=cmd_env,
         )
 
         stdout, stderr = await proc.communicate()
