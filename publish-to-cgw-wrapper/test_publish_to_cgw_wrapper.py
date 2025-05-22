@@ -1,6 +1,7 @@
 import hashlib
 import pytest
 import requests
+import json
 from unittest.mock import MagicMock, patch, call
 import publish_to_cgw_wrapper as cgw_wrapper
 
@@ -11,16 +12,15 @@ def session():
 
 
 @pytest.fixture
-def content_dir(tmpdir):
-    content_dir = tmpdir.mkdir("content_dir")
+def cosign_content_dir(tmpdir):
+    content_dir = tmpdir.mkdir("content_dir_1")
     files = [
-        "checksum.sig",
         "cosign",
-        "cosign-checksum.gpg",
         "cosign-linux-amd64.gz",
+        "cosign-darwin-amd64.gz",
         "fake-name-linux-amd64.gz",
-        "gitsign-darwin-amd64.gz",
         "ignored",
+        "cosign-checksum.gpg",
         "sha256778877.txt",
     ]
     for filename in files:
@@ -29,28 +29,59 @@ def content_dir(tmpdir):
 
 
 @pytest.fixture
-def data_file():
+def gitsign_content_dir(tmpdir):
+    content_dir = tmpdir.mkdir("content_dir_2")
+    files = [
+        "gitsign",
+        "gitsign-linux-amd64.gz",
+        "gitsign-darwin-amd64.gz",
+        "ignored",
+        "sha256778877.txt",
+        "checksum.sig",
+    ]
+    for filename in files:
+        content_dir.join(filename).write("")
+    return content_dir
+
+
+@pytest.fixture
+def data_json(cosign_content_dir, gitsign_content_dir):
     return {
-        "contentGateway": {
-            "mirrorOpenshiftPush": True,
-            "productName": "product_name_1",
-            "productCode": "product_code_1",
-            "productVersionName": "1.1",
-            "components": [
-                {
-                    "name": "cosign",
-                    "description": "Red Hat OpenShift Local Sandbox Test",
-                    "shortURL": "/cgw/product_code_1/1.1",
-                    "hidden": False,
+        "application": "test-app",
+        "artifacts": {},
+        "components": [
+            {
+                "containerImage": "quay.io/org/tenant/cosign@sha256:abcdef12345",
+                "name": "cosign",
+                "files": [
+                    {"filename": "cosign", "arch": "amd64", "os": "linux"},
+                    {"filename": "cosign-linux-amd64.gz", "arch": "amd64", "os": "linux"},
+                    {"filename": "cosign-darwin-amd64.gz", "arch": "amd64", "os": "darwin"},
+                ],
+                "contentGateway": {
+                    "productName": "product_name_1",
+                    "productCode": "product_code_1",
+                    "productVersionName": "1.1",
+                    "mirrorOpenshiftPush": True,
+                    "contentDir": str(cosign_content_dir),
                 },
-                {
-                    "name": "gitsign",
-                    "description": "Red Hat OpenShift Local Sandbox Test",
-                    "shortURL": "/cgw/product_code_1/1.1",
-                    "hidden": False,
+            },
+            {
+                "containerImage": "quay.io/org/tenant/gitsign@sha256:abcdef12345",
+                "name": "gitsign",
+                "files": [
+                    {"filename": "gitsign", "arch": "amd64", "os": "linux"},
+                    {"filename": "gitsign-linux-amd64.gz", "arch": "amd64", "os": "linux"},
+                    {"filename": "gitsign-darwin-amd64.gz", "arch": "amd64", "os": "darwin"},
+                ],
+                "contentGateway": {
+                    "productName": "product_name_2",
+                    "productCode": "product_code_2",
+                    "productVersionName": "1.2",
+                    "contentDir": str(gitsign_content_dir),
                 },
-            ],
-        }
+            },
+        ],
     }
 
 
@@ -61,37 +92,47 @@ def metadata():
             "type": "FILE",
             "hidden": False,
             "invisible": False,
-            "description": "Red Hat OpenShift Local Sandbox Test",
+            "shortURL": "/pub/cgw/product_code_1/1.1/cosign-darwin-amd64.gz",
+            "productVersionId": 4156067,
+            "downloadURL": (
+                "/content/origin/files/sha256/e3/e3b0c44298fc1c149afbf4c8996fb92427"
+                "ae41e4649b934ca495991b7852b855/cosign-darwin-amd64.gz"
+            ),
+            "label": "cosign-darwin-amd64.gz",
+        },
+        {
+            "type": "FILE",
+            "hidden": False,
+            "invisible": False,
             "shortURL": "/pub/cgw/product_code_1/1.1/cosign-linux-amd64.gz",
             "productVersionId": 4156067,
             "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b9"
-                "34ca495991b7852b855/cosign-linux-amd64.gz"
+                "/content/origin/files/sha256/e3/e3b0c44298fc1c149"
+                "afbf4c8996fb92427ae41e4649b934ca495991b7852b855/cosign-linux-amd64.gz"
             ),
             "label": "cosign-linux-amd64.gz",
         },
         {
-            "productVersionId": 4156067,
-            "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b9"
-                "34ca495991b7852b855/sha256778877.txt"
-            ),
-            "shortURL": "/pub/cgw/product_code_1/1.1/sha256778877.txt",
-            "label": "Checksum",
             "type": "FILE",
             "hidden": False,
             "invisible": False,
+            "productVersionId": 4156067,
+            "downloadURL": (
+                "/content/origin/files/sha256/e3/e3b0c44298fc1c149"
+                "afbf4c8996fb92427ae41e4649b934ca495991b7852b855/sha256778877.txt"
+            ),
+            "shortURL": "/pub/cgw/product_code_1/1.1/sha256778877.txt",
+            "label": "Checksum",
         },
         {
             "type": "FILE",
             "hidden": False,
             "invisible": False,
-            "description": "Red Hat OpenShift Local Sandbox Test",
             "shortURL": "/pub/cgw/product_code_1/1.1/cosign",
             "productVersionId": 4156067,
             "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b9"
-                "34ca495991b7852b855/cosign"
+                "/content/origin/files/sha256/e3/e3b0c44298fc1c149"
+                "afbf4c8996fb92427ae41e4649b934ca495991b7852b855/cosign"
             ),
             "label": "cosign",
         },
@@ -99,49 +140,84 @@ def metadata():
             "type": "FILE",
             "hidden": False,
             "invisible": False,
-            "description": "Red Hat OpenShift Local Sandbox Test",
+            "productVersionId": 4156067,
+            "downloadURL": (
+                "/content/origin/files/sha256/e3/e3b0c44298fc1c149afbf4c8996fb92427"
+                "ae41e4649b934ca495991b7852b855/cosign-checksum.gpg"
+            ),
             "shortURL": "/pub/cgw/product_code_1/1.1/cosign-checksum.gpg",
-            "productVersionId": 4156067,
-            "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b9"
-                "34ca495991b7852b855/cosign-checksum.gpg"
-            ),
-            "label": "cosign-checksum.gpg",
-        },
-        {
-            "type": "FILE",
-            "hidden": False,
-            "invisible": False,
-            "description": "Red Hat OpenShift Local Sandbox Test",
-            "shortURL": "/pub/cgw/product_code_1/1.1/gitsign-darwin-amd64.gz",
-            "productVersionId": 4156067,
-            "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b9"
-                "34ca495991b7852b855/gitsign-darwin-amd64.gz"
-            ),
-            "label": "gitsign-darwin-amd64.gz",
+            "label": "Checksum - GPG",
         },
     ]
 
 
-def test_parse_args():
+def test_load_data_valid(data_json):
+    """Test load_data with valid JSON string."""
+    result = cgw_wrapper.load_data(json.dumps(data_json))
+    assert result == data_json
+
+
+def test_load_data_invalid():
+    """Test load_data raises ValueError on invalid JSON input."""
+    with pytest.raises(ValueError, match="Invalid 'data_json' must be a valid JSON string"):
+        cgw_wrapper.load_data("/some/path/to/data.json")
+
+
+def test_validate_components_success(data_json):
+    """Test validate_components with valid components"""
+    valid_components = cgw_wrapper.validate_components(data_json)
+    assert len(valid_components) == 2
+
+
+def test_validate_components_skips_missing_contentGateway():
+    """Test validate_components skips components with no contentGateway and does not raise."""
+    data = {"components": [{"name": "missing-contentGateway", "files": [{"filename": "foo"}]}]}
+
+    valid_components = cgw_wrapper.validate_components(data)
+    assert len(valid_components) == 0
+
+
+def test_validate_components_missing_fields():
+    """Test validate_components raises error for missing required fields
+    in contentGateway and files."""
+    invalid_data = {
+        "components": [
+            {
+                "name": "",
+                "files": [{"filename": ""}],
+                "contentGateway": {
+                    "productName": "",
+                    "productCode": "",
+                    "productVersionName": "1.1",
+                    "contentDir": "",
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError) as excinfo:
+        cgw_wrapper.validate_components(invalid_data)
+
+    error_msg = str(excinfo.value)
+    assert "Component 1 is missing 'name'" in error_msg
+    assert "Component 1 is missing 'productName'" in error_msg
+    assert "Component 1 is missing 'productCode'" in error_msg
+    assert "Component 1 is missing 'contentDir'" in error_msg
+    assert "Component 1, file 0 is missing or has empty 'filename'" in error_msg
+
+
+def test_parse_args(data_json):
     """Test parsing command line arguments."""
     test_args = [
         "--cgw_host",
         "https://cgw.com/cgw/rest/admin",
-        "--data_file",
-        "./data.json",
-        "--content_dir",
-        "./content_dir",
-        "--output_file",
-        "./result.txt",
+        "--data_json",
+        json.dumps(data_json),
     ]
     with patch("sys.argv", ["publish_to_cgw_wrapper.py"] + test_args):
         args = cgw_wrapper.parse_args()
         assert args.cgw_host == "https://cgw.com/cgw/rest/admin"
-        assert args.data_file == "./data.json"
-        assert args.content_dir == "./content_dir"
-        assert args.output_file == "./result.txt"
+        assert args.data_json == json.dumps(data_json)
 
 
 def test_parse_args_missing_required():
@@ -300,13 +376,17 @@ def test_generate_download_url(tmpdir):
     )
 
 
-def test_generate_metadata(content_dir, data_file, metadata):
+def test_generate_metadata(data_json, metadata):
     """Test generating metadata."""
-    components = data_file["contentGateway"]["components"]
+    content_dir = data_json["components"][0]["contentGateway"]["contentDir"]
+    component_name = data_json["components"][0]["name"]
+    files = data_json["components"][0]["files"]
+
     output_metadata = cgw_wrapper.generate_metadata(
-        content_dir=str(content_dir),
-        components=components,
-        product_Code="product_code_1",
+        content_dir=content_dir,
+        component_name=component_name,
+        files=files,
+        product_code="product_code_1",
         version_id=4156067,
         version_name="1.1",
         mirror_openshift_Push=True,
@@ -550,3 +630,70 @@ def test_create_files_exception(mock_call, metadata):
 
     mock_call.assert_has_calls(expected_calls, any_order=False)
     assert mock_call.call_count == 4
+
+
+@patch("publish_to_cgw_wrapper.create_files")
+@patch("publish_to_cgw_wrapper.generate_metadata")
+@patch("publish_to_cgw_wrapper.get_version_id")
+@patch("publish_to_cgw_wrapper.get_product_id")
+def test_process_component_success(
+    mock_get_product,
+    mock_get_version,
+    mock_generate_meta,
+    mock_create_files,
+    data_json,
+    metadata,
+):
+    """Test successful process_component for a component."""
+    mock_get_product.return_value = 123
+    mock_get_version.return_value = 456
+    mock_generate_meta.return_value = metadata
+    mock_create_files.return_value = ([7, 8, 9], [10, 11])
+
+    component = data_json["components"][0]
+    component_name = data_json["components"][0]["name"]
+    content_dir = data_json["components"][0]["contentGateway"]["contentDir"]
+    files = data_json["components"][0]["files"]
+
+    result = cgw_wrapper.process_component(
+        host="https://cgw.com/cgw/rest/admin",
+        session=None,
+        component=component,
+    )
+
+    mock_get_product.assert_called_once_with(
+        host="https://cgw.com/cgw/rest/admin",
+        session=None,
+        product_name="product_name_1",
+        product_code="product_code_1",
+    )
+    mock_get_version.assert_called_once_with(
+        host="https://cgw.com/cgw/rest/admin",
+        session=None,
+        product_id=123,
+        version_name="1.1",
+    )
+    mock_generate_meta.assert_called_once_with(
+        content_dir=content_dir,
+        component_name=component_name,
+        files=files,
+        product_code="product_code_1",
+        version_id=456,
+        version_name="1.1",
+        mirror_openshift_Push=True,
+    )
+    mock_create_files.assert_called_once_with(
+        host="https://cgw.com/cgw/rest/admin",
+        session=None,
+        product_id=123,
+        version_id=456,
+        metadata=metadata,
+    )
+
+    assert result["product_id"] == 123
+    assert result["product_version_id"] == 456
+    assert result["created_file_ids"] == [7, 8, 9]
+    assert result["no_of_files_processed"] == len(metadata)
+    assert result["no_of_files_created"] == 3
+    assert result["no_of_files_skipped"] == 2
+    assert result["metadata"] == metadata
