@@ -31,25 +31,29 @@ def content_dir(tmpdir):
 @pytest.fixture
 def data_file():
     return {
-        "contentGateway": {
-            "mirrorOpenshiftPush": True,
-            "productName": "product_name_1",
-            "productCode": "product_code_1",
-            "productVersionName": "1.1",
+        "mapping": {
             "components": [
                 {
-                    "name": "cosign",
-                    "description": "Red Hat OpenShift Local Sandbox Test",
-                    "shortURL": "/cgw/product_code_1/1.1",
-                    "hidden": False,
-                },
-                {
-                    "name": "gitsign",
-                    "description": "Red Hat OpenShift Local Sandbox Test",
-                    "shortURL": "/cgw/product_code_1/1.1",
-                    "hidden": False,
-                },
-            ],
+                    "contentGateway": {
+                        "mirrorOpenshiftPush": True,
+                        "productName": "product_name_1",
+                        "productCode": "product_code_1",
+                        "productVersionName": "1.1",
+                        "components": [
+                            {
+                                "name": "cosign",
+                                "description": "Red Hat OpenShift Local Sandbox Test",
+                                "hidden": False,
+                            },
+                            {
+                                "name": "gitsign",
+                                "description": "Red Hat OpenShift Local Sandbox Test",
+                                "hidden": False,
+                            },
+                        ],
+                    }
+                }
+            ]
         }
     }
 
@@ -302,7 +306,9 @@ def test_generate_download_url(tmpdir):
 
 def test_generate_metadata(content_dir, data_file, metadata):
     """Test generating metadata."""
-    components = data_file["contentGateway"]["components"]
+    components = components = data_file["mapping"]["components"][0]["contentGateway"][
+        "components"
+    ]
     output_metadata = cgw_wrapper.generate_metadata(
         content_dir=str(content_dir),
         components=components,
