@@ -26,25 +26,29 @@ def content_dir(tmpdir):
 @pytest.fixture
 def data_file():
     return {
-        "contentGateway": {
-            "mirrorOpenshiftPush": True,
-            "productName": "product_name_1",
-            "productCode": "product_code_1",
-            "productVersionName": "1.1",
+        "mapping": {
             "components": [
                 {
-                    "name": "cosign",
-                    "description": "Red Hat OpenShift Local Sandbox Test",
-                    "shortURL": "/cgw/product_code_1/1.1",
-                    "hidden": False,
-                },
-                {
-                    "name": "gitsign",
-                    "description": "Red Hat OpenShift Local Sandbox Test",
-                    "shortURL": "/cgw/product_code_1/1.1",
-                    "hidden": False,
-                },
-            ],
+                    "contentGateway": {
+                        "mirrorOpenshiftPush": True,
+                        "productName": "product_name_1",
+                        "productCode": "product_code_1",
+                        "productVersionName": "1.1",
+                        "components": [
+                            {
+                                "name": "cosign",
+                                "description": "Red Hat OpenShift Local Sandbox Test",
+                                "hidden": False,
+                            },
+                            {
+                                "name": "gitsign",
+                                "description": "Red Hat OpenShift Local Sandbox Test",
+                                "hidden": False,
+                            },
+                        ],
+                    }
+                }
+            ]
         }
     }
 
