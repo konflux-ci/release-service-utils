@@ -26,25 +26,29 @@ def content_dir(tmpdir):
 @pytest.fixture
 def data_file():
     return {
-        "contentGateway": {
-            "mirrorOpenshiftPush": True,
-            "productName": "product_name_1",
-            "productCode": "product_code_1",
-            "productVersionName": "1.1",
+        "mapping": {
             "components": [
                 {
-                    "name": "cosign",
-                    "description": "Red Hat OpenShift Local Sandbox Test",
-                    "shortURL": "/cgw/product_code_1/1.1",
-                    "hidden": False,
-                },
-                {
-                    "name": "gitsign",
-                    "description": "Red Hat OpenShift Local Sandbox Test",
-                    "shortURL": "/cgw/product_code_1/1.1",
-                    "hidden": False,
-                },
-            ],
+                    "contentGateway": {
+                        "mirrorOpenshiftPush": True,
+                        "productName": "product_name_1",
+                        "productCode": "product_code_1",
+                        "productVersionName": "1.1",
+                        "components": [
+                            {
+                                "name": "cosign",
+                                "description": "Red Hat OpenShift Local Sandbox Test",
+                                "hidden": False,
+                            },
+                            {
+                                "name": "gitsign",
+                                "description": "Red Hat OpenShift Local Sandbox Test",
+                                "hidden": False,
+                            },
+                        ],
+                    }
+                }
+            ]
         }
     }
 
@@ -290,3 +294,43 @@ def test_main_partial_skip_fail_rollback(
     ]
     mock_call.assert_has_calls(expected_delete_calls, any_order=True)
     assert mock_call.call_count == 8
+
+
+@patch("publish_to_cgw_wrapper.call_cgw_api")
+@patch.dict(os.environ, {"CGW_USERNAME": "user", "CGW_PASSWORD": "password"})
+@patch("sys.argv", new_callable=lambda: ["publish_to_cgw_wrapper.py"])
+def test_main_fails_when_components_missing(mock_sys_argv, temp_output_file, tmp_path, caplog):
+    """Test that main() exits when contentGateway.components is missing or empty."""
+    data_file_path = tmp_path / "data.json"
+    invalid_data = {
+        "mapping": {
+            "components": [
+                {
+                    "contentGateway": {
+                        "productName": "product_name_1",
+                        "productCode": "product_code_1",
+                        "productVersionName": "1.1",
+                    }
+                }
+            ]
+        }
+    }
+    data_file_path.write_text(json.dumps(invalid_data))
+
+    test_args = [
+        "--cgw_host",
+        "https://cgw.com/cgw/rest/admin",
+        "--data_file",
+        str(data_file_path),
+        "--content_dir",
+        str(tmp_path),
+        "--output_file",
+        str(temp_output_file),
+    ]
+    mock_sys_argv.extend(test_args)
+
+    with pytest.raises(SystemExit) as exc_info:
+        cgw_wrapper.main()
+
+    assert exc_info.value.code == 1
+    assert "ContentGateway.components is missing or empty in data_file" in caplog.text

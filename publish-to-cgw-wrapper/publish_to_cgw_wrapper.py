@@ -2,7 +2,7 @@
 """
 This script interacts with the Content Gateway (CGW) API to create and manage content files.
 It ensures each file is checked before creation and skips files that already exist.
-The script is idempotent,it can be executed multiple times as long as the label,
+The script is idempotent, it can be executed multiple times as long as the label,
 short URL, and download URL remain unchanged.
 
 ### **Functionality:**
@@ -290,11 +290,16 @@ def main():
         with open(args.data_file, "r") as file:
             data = json.load(file)
 
-        productName = data["contentGateway"]["productName"]
-        productCode = data["contentGateway"]["productCode"]
-        productVersionName = data["contentGateway"]["productVersionName"]
-        mirrorOpenshiftPush = data["contentGateway"].get("mirrorOpenshiftPush")
-        components = data["contentGateway"]["components"]
+        # Extracts the contentGateway from the first component in the mapping.
+        # This logic only handles the first component and does not support multiple components.
+        content_gateway = data["mapping"]["components"][0]["contentGateway"]
+        productName = content_gateway["productName"]
+        productCode = content_gateway["productCode"]
+        productVersionName = content_gateway["productVersionName"]
+        mirrorOpenshiftPush = content_gateway.get("mirrorOpenshiftPush")
+        components = content_gateway.get("components")
+        if not components:
+            raise ValueError("ContentGateway.components is missing or empty in data_file")
 
         product_id = get_product_id(
             host=args.cgw_host,
