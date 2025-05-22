@@ -2,19 +2,21 @@
 """
 This script interacts with the Content Gateway (CGW) API to create and manage content files.
 It ensures each file is checked before creation and skips files that already exist.
-The script is idempotent,it can be executed multiple times as long as the label,
+The script is idempotent, it can be executed multiple times as long as the label,
 short URL, and download URL remain unchanged.
 
 ### **Functionality:**
 1. Reads a JSON metadata file and a directory containing content files.
-2. Retrieves the product ID using the provided product name and product code.
-3. Retrieves the version ID using the product version name.
-4. Generates metadata for each file in the content directory.
-5. Checks for existing files and skips them if they match the label, short URL, and download
-URL.
-6. Creates new files using the metadata.
-7. Rolls back created files if an error occurs during execution.
-8. Writes the final result, including processed, created, and skipped files, to a JSON file.
+2. For each `contentGateway` entry under `mapping.components[*]`:
+    - Retrieves the product ID using the provided product name and product code.
+    - Retrieves the version ID using the product version name.
+    - Generates metadata for each file in the content directory.
+    - Checks for existing files and skips them if they match the label,
+      short URL, and downloadURL.
+    - Creates new files using the metadata.
+    - Rolls back created files if an error occurs during execution.
+    - Return a `result_data` object containing details about the processed component.
+3. Write all `result_data` objects to a final JSON file.
 9. Outputs the path of the generated result.json file to an output file.
 """
 
@@ -202,7 +204,10 @@ def file_already_exists(existing_files, new_file):
 def rollback_files(*, host, session, product_id, version_id, created_file_ids):
     """Rollback created files by listing and deleting them."""
     if created_file_ids:
-        logging.warning("Rolling back created files due to failure")
+        logging.warning(
+            f"Rolling back created files due to failure "
+            f"(productId: {product_id}, productVersionId: {version_id})"
+        )
 
     for file_id in created_file_ids:
         try:
@@ -266,6 +271,64 @@ def create_files(*, host, session, product_id, version_id, metadata):
         raise RuntimeError(f"Failed to create file: {e}")
 
 
+def process_component(*, host, session, content_dir, content_gateway):
+    """
+    Process a contentGateway component retrieve product/version ID,
+    generate file metadata, create files, and return the result
+    data (per component)
+    """
+    productName = content_gateway.get("productName")
+    productCode = content_gateway.get("productCode")
+    productVersionName = content_gateway.get("productVersionName")
+    mirrorOpenshiftPush = content_gateway.get("mirrorOpenshiftPush")
+    components = content_gateway.get("components")
+
+    product_id = get_product_id(
+        host=host,
+        session=session,
+        product_name=productName,
+        product_code=productCode,
+    )
+
+    product_version_id = get_version_id(
+        host=host,
+        session=session,
+        product_id=product_id,
+        version_name=productVersionName,
+    )
+
+    metadata = generate_metadata(
+        content_dir=content_dir,
+        components=components,
+        product_Code=productCode,
+        version_id=product_version_id,
+        version_name=productVersionName,
+        mirror_openshift_Push=mirrorOpenshiftPush,
+    )
+
+    created, skipped = create_files(
+        host=host,
+        session=session,
+        product_id=product_id,
+        version_id=product_version_id,
+        metadata=metadata,
+    )
+
+    logging.info(f"Created {len(created)} files, Skipped {len(skipped)} files.")
+
+    result_data = {
+        "product_id": product_id,
+        "product_version_id": product_version_id,
+        "created_file_ids": created,
+        "no_of_files_processed": len(metadata),
+        "no_of_files_created": len(created),
+        "no_of_files_skipped": len(skipped),
+        "metadata": metadata,
+    }
+
+    return result_data
+
+
 def main():
     try:
         args = parse_args()
@@ -290,53 +353,62 @@ def main():
         with open(args.data_file, "r") as file:
             data = json.load(file)
 
-        productName = data["contentGateway"]["productName"]
-        productCode = data["contentGateway"]["productCode"]
-        productVersionName = data["contentGateway"]["productVersionName"]
-        mirrorOpenshiftPush = data["contentGateway"].get("mirrorOpenshiftPush")
-        components = data["contentGateway"]["components"]
+        content_gateways = [
+            component["contentGateway"]
+            for component in data["mapping"]["components"]
+            if "contentGateway" in component
+        ]
+        if not content_gateways:
+            raise ValueError("No valid 'contentGateway' found in 'mapping.components'.")
 
-        product_id = get_product_id(
-            host=args.cgw_host,
-            session=session,
-            product_name=productName,
-            product_code=productCode,
-        )
-        product_version_id = get_version_id(
-            host=args.cgw_host,
-            session=session,
-            product_id=product_id,
-            version_name=productVersionName,
-        )
-        metadata = generate_metadata(
-            content_dir=args.content_dir,
-            components=components,
-            product_Code=productCode,
-            version_id=product_version_id,
-            version_name=productVersionName,
-            mirror_openshift_Push=mirrorOpenshiftPush,
-        )
-        created, skipped = create_files(
-            host=args.cgw_host,
-            session=session,
-            product_id=product_id,
-            version_id=product_version_id,
-            metadata=metadata,
-        )
-        logging.info(f"Created {len(created)} files and skipped {len(skipped)} files")
+        for components in content_gateways:
+            if "components" not in components:
+                raise ValueError("One or more missing `contentGateway.components' in data")
 
-        result_data = {
-            "no_of_files_processed": len(metadata),
-            "no_of_files_created": len(created),
-            "no_of_files_skipped": len(skipped),
-            "metadata": metadata,
-        }
+        all_results = []
+
+        for num, contentGateway in enumerate(content_gateways, start=1):
+            logging.info(
+                f"Processing component: {num}/{len(content_gateways)} "
+                f"(productName: {contentGateway['productName']} "
+                f"productVersionName: {contentGateway['productVersionName']})"
+            )
+            try:
+                result_data = process_component(
+                    host=args.cgw_host,
+                    session=session,
+                    content_dir=args.content_dir,
+                    content_gateway=contentGateway,
+                )
+                if result_data is None:
+                    continue
+
+                all_results.append(result_data)
+
+            except Exception as e:
+                if all_results:
+                    logging.warning("Rolling back all created files due to error.")
+                    for result in all_results:
+                        rollback_files(
+                            host=args.cgw_host,
+                            session=session,
+                            product_id=result["product_id"],
+                            version_id=result["product_version_id"],
+                            created_file_ids=result["created_file_ids"],
+                        )
+                raise RuntimeError(
+                    f"Error processing component {num} "
+                    f"(productName: {contentGateway.get('productName')}, "
+                    f"productVersionName: {contentGateway.get('productVersionName')}): {e}"
+                )
+
         result_file = os.path.join(os.path.dirname(args.data_file), "result.json")
         with open(result_file, "w") as f:
-            json.dump(result_data, f)
+            json.dump(all_results, f, indent=2)
         with open(args.output_file, "w") as f:
             f.write(result_file)
-
+        logging.info("Processed result:\n%s", json.dumps(all_results, indent=2))
+        logging.info("All components processed successfully.")
     except Exception as e:
         logging.error(e)
         exit(1)

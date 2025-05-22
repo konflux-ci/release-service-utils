@@ -20,6 +20,8 @@ def content_dir(tmpdir):
         "cosign-linux-amd64.gz",
         "fake-name-linux-amd64.gz",
         "gitsign-darwin-amd64.gz",
+        "podman-darwin-amd64.gz",
+        "konflux-darwin-amd64.gz",
         "ignored",
         "sha256778877.txt",
     ]
@@ -31,25 +33,49 @@ def content_dir(tmpdir):
 @pytest.fixture
 def data_file():
     return {
-        "contentGateway": {
-            "mirrorOpenshiftPush": True,
-            "productName": "product_name_1",
-            "productCode": "product_code_1",
-            "productVersionName": "1.1",
+        "mapping": {
             "components": [
                 {
-                    "name": "cosign",
-                    "description": "Red Hat OpenShift Local Sandbox Test",
-                    "shortURL": "/cgw/product_code_1/1.1",
-                    "hidden": False,
+                    "contentGateway": {
+                        "mirrorOpenshiftPush": True,
+                        "productName": "product_name_1",
+                        "productCode": "product_code_1",
+                        "productVersionName": "1.1",
+                        "components": [
+                            {
+                                "name": "cosign",
+                                "description": "Red Hat OpenShift Local Sandbox Test",
+                                "hidden": False,
+                            },
+                            {
+                                "name": "gitsign",
+                                "description": "Red Hat OpenShift Local Sandbox Test",
+                                "hidden": False,
+                            },
+                        ],
+                    }
                 },
                 {
-                    "name": "gitsign",
-                    "description": "Red Hat OpenShift Local Sandbox Test",
-                    "shortURL": "/cgw/product_code_1/1.1",
-                    "hidden": False,
+                    "contentGateway": {
+                        "mirrorOpenshiftPush": True,
+                        "productName": "product_name_2",
+                        "productCode": "product_code_2",
+                        "productVersionName": "1.2",
+                        "components": [
+                            {
+                                "name": "podman",
+                                "description": "Red Hat OpenShift Local Sandbox Test",
+                                "hidden": False,
+                            },
+                            {
+                                "name": "konflux",
+                                "description": "Red Hat OpenShift Local Sandbox Test",
+                                "hidden": False,
+                            },
+                        ],
+                    }
                 },
-            ],
+            ]
         }
     }
 
@@ -302,10 +328,10 @@ def test_generate_download_url(tmpdir):
 
 def test_generate_metadata(content_dir, data_file, metadata):
     """Test generating metadata."""
-    components = data_file["contentGateway"]["components"]
+    component = data_file["mapping"]["components"][0]["contentGateway"]["components"]
     output_metadata = cgw_wrapper.generate_metadata(
         content_dir=str(content_dir),
-        components=components,
+        components=component,
         product_Code="product_code_1",
         version_id=4156067,
         version_name="1.1",
@@ -550,3 +576,68 @@ def test_create_files_exception(mock_call, metadata):
 
     mock_call.assert_has_calls(expected_calls, any_order=False)
     assert mock_call.call_count == 4
+
+
+@patch("publish_to_cgw_wrapper.create_files")
+@patch("publish_to_cgw_wrapper.generate_metadata")
+@patch("publish_to_cgw_wrapper.get_version_id")
+@patch("publish_to_cgw_wrapper.get_product_id")
+def test_process_component_success(
+    mock_get_product,
+    mock_get_version,
+    mock_generate_meta,
+    mock_create_files,
+    data_file,
+    tmpdir,
+    metadata,
+):
+    """Test successful process_component for a component."""
+    mock_get_product.return_value = 123
+    mock_get_version.return_value = 456
+    mock_generate_meta.return_value = metadata
+    mock_create_files.return_value = ([7, 8, 9], [10, 11])
+
+    component = data_file["mapping"]["components"][0]["contentGateway"]
+
+    result = cgw_wrapper.process_component(
+        host="https://cgw.com/cgw/rest/admin",
+        session=None,
+        content_dir=str(tmpdir),
+        content_gateway=component,
+    )
+
+    mock_get_product.assert_called_once_with(
+        host="https://cgw.com/cgw/rest/admin",
+        session=None,
+        product_name="product_name_1",
+        product_code="product_code_1",
+    )
+    mock_get_version.assert_called_once_with(
+        host="https://cgw.com/cgw/rest/admin",
+        session=None,
+        product_id=123,
+        version_name="1.1",
+    )
+    mock_generate_meta.assert_called_once_with(
+        content_dir=str(tmpdir),
+        components=component["components"],
+        product_Code="product_code_1",
+        version_id=456,
+        version_name="1.1",
+        mirror_openshift_Push=True,
+    )
+    mock_create_files.assert_called_once_with(
+        host="https://cgw.com/cgw/rest/admin",
+        session=None,
+        product_id=123,
+        version_id=456,
+        metadata=metadata,
+    )
+
+    assert result["product_id"] == 123
+    assert result["product_version_id"] == 456
+    assert result["created_file_ids"] == [7, 8, 9]
+    assert result["no_of_files_processed"] == len(metadata)
+    assert result["no_of_files_created"] == 3
+    assert result["no_of_files_skipped"] == 2
+    assert result["metadata"] == metadata
