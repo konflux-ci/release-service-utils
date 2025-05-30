@@ -25,7 +25,7 @@ TMPFILE=$(mktemp)  # Create a temporary file for output
 for ((i=1; i<=MAX_RETRIES; i++)); do
     RESPONSE=$(curl -s -o "$TMPFILE" -w "%{http_code}" "$@")
 
-    if [ "$RESPONSE" -eq 200 ]; then
+    if [[ "$RESPONSE" -ge 200 && "$RESPONSE" -lt 300 ]]; then
         cat "$TMPFILE"  # Print the output
         exit 0
     elif [ "$RESPONSE" -eq 429 ]; then # Rate limited
