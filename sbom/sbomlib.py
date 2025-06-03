@@ -364,9 +364,7 @@ def make_oci_auth_file(
     with open(auth, mode="r", encoding="utf-8") as f:
         config = json.load(f)
     auths = config.get("auths", {})
-    logger.debug(
-        "OCI auth in %s available for repositories: %s", auth, list(auths.keys())
-    )
+    logger.debug("OCI auth in %s available for repositories: %s", auth, list(auths.keys()))
 
     current_ref = ref
 
