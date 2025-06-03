@@ -113,7 +113,10 @@ class SBOMHandler(Protocol):
     """
 
     def update_sbom(
-        self, component: Component, image: Union[IndexImage, Image], sbom: dict[str, Any]
+        self,
+        component: Component,
+        image: Union[IndexImage, Image],
+        sbom: dict[str, Any],
     ) -> None:
         """
         Update the specified SBOM in-place based on the provided component information.
@@ -157,7 +160,11 @@ async def construct_image(repository: str, image_digest: str) -> Union[Image, In
 
 
 async def make_component(
-    name: str, release_repository: str, image_digest: str, tags: list[str], repository: str
+    name: str,
+    release_repository: str,
+    image_digest: str,
+    tags: list[str],
+    repository: str,
 ) -> Component:
     """
     Creates a component object from input data.
@@ -338,6 +345,8 @@ def make_oci_auth_file(
     if auth is None:
         auth = Path(os.path.expanduser("~/.docker/config.json"))
 
+    logger.debug("Creating OCI auth file for %s from %s.", reference, auth)
+
     if not auth.is_file():
         raise ValueError(f"No docker config file at {auth}")
 
@@ -355,9 +364,13 @@ def make_oci_auth_file(
     with open(auth, mode="r", encoding="utf-8") as f:
         config = json.load(f)
     auths = config.get("auths", {})
+    logger.debug(
+        "OCI auth in %s available for repositories: %s", auth, list(auths.keys())
+    )
 
     current_ref = ref
 
+    tmpfile = None
     try:
         tmpfile = tempfile.NamedTemporaryFile(mode="w", delete=False)
         while True:
@@ -372,12 +385,14 @@ def make_oci_auth_file(
                 break
             current_ref = current_ref.rsplit("/", 1)[0]
 
+        logger.warning("No authentication for %s found!", reference)
         json.dump({"auths": {}}, tmpfile)
         tmpfile.close()
         yield tmpfile.name
     finally:
         # this also deletes the file
-        tmpfile.close()
+        if tmpfile is not None:
+            tmpfile.close()
 
 
 def without_sha_header(digest: str) -> str:
