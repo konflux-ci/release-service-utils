@@ -113,7 +113,10 @@ class SBOMHandler(Protocol):
     """
 
     def update_sbom(
-        self, component: Component, image: Union[IndexImage, Image], sbom: dict[str, Any]
+        self,
+        component: Component,
+        image: Union[IndexImage, Image],
+        sbom: dict[str, Any],
     ) -> None:
         """
         Update the specified SBOM in-place based on the provided component information.
@@ -157,7 +160,11 @@ async def construct_image(repository: str, image_digest: str) -> Union[Image, In
 
 
 async def make_component(
-    name: str, release_repository: str, image_digest: str, tags: list[str], repository: str
+    name: str,
+    release_repository: str,
+    image_digest: str,
+    tags: list[str],
+    repository: str,
 ) -> Component:
     """
     Creates a component object from input data.
@@ -319,7 +326,7 @@ def make_reference(repository: str, image_digest: str) -> str:
 
 @contextmanager
 def make_oci_auth_file(
-    reference: str, auth: Optional[Path] = None
+    reference: str, authfile: Optional[Path] = None
 ) -> Generator[str, Any, None]:
     """
     Gets path to a temporary file containing the docker config JSON for
@@ -329,17 +336,19 @@ def make_oci_auth_file(
 
     Args:
         reference (str): Reference to an image in the form registry/repo@sha256-deadbeef
-        auth (Path | None): Existing docker config.json
+        authfile (Path | None): Existing docker config.json
 
     Example:
         >>> with make_oci_auth_file(ref) as auth_path:
                 perform_work_in_oci()
     """
-    if auth is None:
-        auth = Path(os.path.expanduser("~/.docker/config.json"))
+    if authfile is None:
+        authfile = Path(os.path.expanduser("~/.docker/config.json"))
 
-    if not auth.is_file():
-        raise ValueError(f"No docker config file at {auth}")
+    logger.debug("Creating OCI auth file for %s from %s.", reference, authfile)
+
+    if not authfile.is_file():
+        raise ValueError(f"No docker config file at {authfile}")
 
     if reference.count(":") > 1:
         logger.warning(
@@ -352,32 +361,45 @@ def make_oci_auth_file(
     # Registry is up to the first slash
     registry = ref.split("/", 1)[0]
 
-    with open(auth, mode="r", encoding="utf-8") as f:
-        config = json.load(f)
-    auths = config.get("auths", {})
+    with open(authfile, mode="r", encoding="utf-8") as fp:
+        config = json.load(fp)
+
+    auths_field = config.get("auths", {})
+    logger.debug(
+        "OCI auth in %s available for repositories: %s", authfile, list(auths_field.keys())
+    )
 
     current_ref = ref
 
+    tempdir = None
+    config_fp = None
     try:
-        tmpfile = tempfile.NamedTemporaryFile(mode="w", delete=False)
+        tempdir = tempfile.TemporaryDirectory()
+        config_path = Path(tempdir.name).joinpath("config.json")
+        config_fp = open(config_path, "w")
+
         while True:
-            token = auths.get(current_ref)
+            token = auths_field.get(current_ref)
             if token is not None:
-                json.dump({"auths": {registry: token}}, tmpfile)
-                tmpfile.close()
-                yield tmpfile.name
+                json.dump({"auths": {registry: token}}, config_fp)
+                config_fp.close()
+                yield str(config_path)
                 return
 
             if "/" not in current_ref:
                 break
             current_ref = current_ref.rsplit("/", 1)[0]
 
-        json.dump({"auths": {}}, tmpfile)
-        tmpfile.close()
-        yield tmpfile.name
+        logger.warning("No authentication for %s found!", reference)
+        json.dump({"auths": {}}, config_fp)
+        config_fp.close()
+        yield str(config_path)
     finally:
-        # this also deletes the file
-        tmpfile.close()
+        if config_fp is not None:
+            config_fp.close()
+
+        if tempdir is not None:
+            tempdir.cleanup()
 
 
 def without_sha_header(digest: str) -> str:

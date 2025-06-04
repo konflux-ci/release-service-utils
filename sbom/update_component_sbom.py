@@ -7,6 +7,7 @@ directory and updates them with release time data.
 Example usage:
 $ update_component_sbom --snapshot-path snapshot_spec.json --output-path sboms/
 """
+
 import argparse
 import asyncio
 import json
@@ -112,8 +113,8 @@ async def update_sbom(
         destination (Path): Path to the directory to save the SBOMs to.
     """
 
+    reference = f"{component.repository}@{image.digest}"
     try:
-        reference = f"{component.repository}@{image.digest}"
         sbom, sbom_path = await load_sbom(reference, destination)
 
         if not update_sbom_in_situ(component, image, sbom):
@@ -123,6 +124,7 @@ async def update_sbom(
         logger.info("Successfully enriched SBOM for image %s", reference)
     except (SBOMError, ValueError):
         logger.exception("Failed to enrich SBOM for image %s.", reference)
+        raise
 
 
 async def update_component_sboms(component: Component, destination: Path) -> None:
