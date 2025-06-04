@@ -326,7 +326,7 @@ def make_reference(repository: str, image_digest: str) -> str:
 
 @contextmanager
 def make_oci_auth_file(
-    reference: str, auth: Optional[Path] = None
+    reference: str, authfile: Optional[Path] = None
 ) -> Generator[str, Any, None]:
     """
     Gets path to a temporary file containing the docker config JSON for
@@ -336,19 +336,19 @@ def make_oci_auth_file(
 
     Args:
         reference (str): Reference to an image in the form registry/repo@sha256-deadbeef
-        auth (Path | None): Existing docker config.json
+        authfile (Path | None): Existing docker config.json
 
     Example:
         >>> with make_oci_auth_file(ref) as auth_path:
                 perform_work_in_oci()
     """
-    if auth is None:
-        auth = Path(os.path.expanduser("~/.docker/config.json"))
+    if authfile is None:
+        authfile = Path(os.path.expanduser("~/.docker/config.json"))
 
-    logger.debug("Creating OCI auth file for %s from %s.", reference, auth)
+    logger.debug("Creating OCI auth file for %s from %s.", reference, authfile)
 
-    if not auth.is_file():
-        raise ValueError(f"No docker config file at {auth}")
+    if not authfile.is_file():
+        raise ValueError(f"No docker config file at {authfile}")
 
     if reference.count(":") > 1:
         logger.warning(
@@ -361,10 +361,13 @@ def make_oci_auth_file(
     # Registry is up to the first slash
     registry = ref.split("/", 1)[0]
 
-    with open(auth, mode="r", encoding="utf-8") as f:
-        config = json.load(f)
-    auths = config.get("auths", {})
-    logger.debug("OCI auth in %s available for repositories: %s", auth, list(auths.keys()))
+    with open(authfile, mode="r", encoding="utf-8") as fp:
+        config = json.load(fp)
+
+    auths_field = config.get("auths", {})
+    logger.debug(
+        "OCI auth in %s available for repositories: %s", authfile, list(auths_field.keys())
+    )
 
     current_ref = ref
 
@@ -376,7 +379,7 @@ def make_oci_auth_file(
         config_fp = open(config_path, "w")
 
         while True:
-            token = auths.get(current_ref)
+            token = auths_field.get(current_ref)
             if token is not None:
                 json.dump({"auths": {registry: token}}, config_fp)
                 config_fp.close()

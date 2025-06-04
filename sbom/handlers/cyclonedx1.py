@@ -121,9 +121,10 @@ class CycloneDXVersion1(SBOMHandler):
     def _update_container_component(
         self, kflx_component: Component, cdx_component: dict, update_tags: bool
     ) -> None:
-        if cdx_component.get("type") != "container":
+        if (comp_type := cdx_component.get("type")) != "container":
             logger.warning(
-                'Called update method on CDX package with type %s instead of "container".'
+                'Called update method on CDX package with type %s instead of "container".',
+                comp_type,
             )
             return
 

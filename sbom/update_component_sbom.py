@@ -113,9 +113,8 @@ async def update_sbom(
         destination (Path): Path to the directory to save the SBOMs to.
     """
 
-    reference = None
+    reference = f"{component.repository}@{image.digest}"
     try:
-        reference = f"{component.repository}@{image.digest}"
         sbom, sbom_path = await load_sbom(reference, destination)
 
         if not update_sbom_in_situ(component, image, sbom):
