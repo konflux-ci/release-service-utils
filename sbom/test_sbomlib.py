@@ -37,7 +37,7 @@ def test_get_oci_auth_file(auths, reference, expected_auths):
         json.dump(test_config, config)
         config.flush()
 
-        with sbomlib.make_oci_auth_file(reference, auth=Path(config.name)) as authfile:
+        with sbomlib.make_oci_auth_file(reference, authfile=Path(config.name)) as authfile:
             with open(authfile, "r") as fp:
                 data = json.loads(fp.read())
                 assert data["auths"] == expected_auths
