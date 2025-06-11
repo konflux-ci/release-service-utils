@@ -32,7 +32,7 @@
 #                       InternalRequest resource. The value of the parameter must be a string. Optional.
 #   -s                  Sync: a flag that indicates whether the script has to finish to complete
 #                       the tasks or exit immediately after creating the resource. Default is true.
-#   -t                  Timeout: Defaults to 600 seconds.
+#   -t                  Timeout: Defaults to 3600 seconds.
 #   --service-account   The name of the service account to be used in the pipelineRun execution. Optional.
 #   --pipeline-timeout  The total timeout for the invoked pipelineRun. Defaults to 60mins
 #   --task-timeout      The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins
@@ -51,9 +51,9 @@
 set -e
 
 # Set defaults
-TIMEOUT=600
 SYNC=true
 PARAMS=""
+TIMEOUT=3600
 PIPELINE_TIMEOUT=1h0m0s
 TASK_TIMEOUT=0h55m0s
 FINALLY_TIMEOUT=0h5m0s
@@ -71,7 +71,7 @@ function usage {
     echo "                      InternalRequest resource. Optional."
     echo "  -s                  Sync: a flag that indicates whether the script has to finish to complete the tasks or"
     echo "                      exit immediately after creating the resource. Default is true."
-    echo "  -t                  Timeout: Defaults to 600 seconds."
+    echo "  -t                  Timeout: Defaults to 3600 seconds."
     echo "  --service-account   The name of the service account to be used in the pipelineRun execution. Optional."
     echo "  --pipeline-timeout  The total timeout for the invoked pipelineRun. Defaults to 60mins."
     echo "  --task-timeout      The timeout for the tasks invoked in the pipelineRun. Defaults to 55mins."
