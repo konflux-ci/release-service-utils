@@ -264,6 +264,7 @@ def test_remove_none_values__success():
         "c": {"d": 2, "e": None, "f": {"g": 3, "h": None}},
         "i": [None, 4, 5, None],
         "j": ["text", None, {"k": None, "l": 6}],
+        "t": [],
     }
 
     expected_result = {
@@ -271,6 +272,7 @@ def test_remove_none_values__success():
         "c": {"d": 2, "f": {"g": 3}},
         "i": [4, 5],
         "j": ["text", {"l": 6}],
+        "t": [],
     }
 
     assert remove_none_values(data) == expected_result
