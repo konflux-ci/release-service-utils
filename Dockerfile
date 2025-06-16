@@ -34,6 +34,7 @@ COPY --from=cosign /usr/local/bin/cosign /usr/local/bin/cosign
 
 RUN dnf -y --setopt=tsflags=nodocs install \
     git \
+    git-lfs \
     jq \
     python3-devel \
     diffutils \
