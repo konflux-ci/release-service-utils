@@ -341,8 +341,7 @@ def remove_none_values(d: Any):
         elif isinstance(value, list):
             # Recursively clean the list
             cleaned_list = [remove_none_values(item) for item in value if item is not None]
-            if cleaned_list:  # Add only if the list is not empty
-                cleaned_dict[key] = cleaned_list
+            cleaned_dict[key] = cleaned_list  # The list can be empty, we add it anyway
         elif value is not None:
             cleaned_dict[key] = value
 
