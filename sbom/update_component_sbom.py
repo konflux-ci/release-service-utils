@@ -30,6 +30,8 @@ from sbom.sbomlib import (
 
 logger = get_sbom_logger()
 
+CONCURRENCY_LIMIT = 8
+
 
 async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
     """
@@ -84,6 +86,7 @@ def update_sbom_in_situ(
         image (IndexImage | Image): Object representing an image or an index
                                     image being released.
         sbom (dict): SBOM parsed as dictionary.
+        semaphore: An asyncio semaphore to limit update concurrency
     """
     if SPDXVersion2.supports(sbom):
         SPDXVersion2().update_sbom(component, image, sbom)
@@ -99,7 +102,10 @@ def update_sbom_in_situ(
 
 
 async def update_sbom(
-    component: Component, image: Union[IndexImage, Image], destination: Path
+    component: Component,
+    image: Union[IndexImage, Image],
+    destination: Path,
+    semaphore: asyncio.Semaphore,
 ) -> None:
     """
     Update an SBOM of an image in a repository and save it to a directory.
@@ -111,23 +117,27 @@ async def update_sbom(
         image (IndexImage | Image): Object representing an image or an index
                                     image being released.
         destination (Path): Path to the directory to save the SBOMs to.
+        semaphore: An asyncio semaphore to limit update concurrency
     """
 
-    reference = f"{component.repository}@{image.digest}"
-    try:
-        sbom, sbom_path = await load_sbom(reference, destination)
+    async with semaphore:
+        reference = f"{component.repository}@{image.digest}"
+        try:
+            sbom, sbom_path = await load_sbom(reference, destination)
 
-        if not update_sbom_in_situ(component, image, sbom):
-            raise SBOMError(f"Unsupported SBOM format for image {reference}.")
+            if not update_sbom_in_situ(component, image, sbom):
+                raise SBOMError(f"Unsupported SBOM format for image {reference}.")
 
-        await write_sbom(sbom, sbom_path)
-        logger.info("Successfully enriched SBOM for image %s", reference)
-    except (SBOMError, ValueError):
-        logger.exception("Failed to enrich SBOM for image %s.", reference)
-        raise
+            await write_sbom(sbom, sbom_path)
+            logger.info("Successfully enriched SBOM for image %s", reference)
+        except (SBOMError, ValueError):
+            logger.exception("Failed to enrich SBOM for image %s.", reference)
+            raise
 
 
-async def update_component_sboms(component: Component, destination: Path) -> None:
+async def update_component_sboms(
+    component: Component, destination: Path, semaphore: asyncio.Semaphore
+) -> None:
     """
     Update SBOMs for a component and save them to a directory.
 
@@ -136,22 +146,23 @@ async def update_component_sboms(component: Component, destination: Path) -> Non
     Args:
         component (Component): Object representing a component being released.
         destination (Path): Path to the directory to save the SBOMs to.
+        semaphore: An asyncio semaphore to limit update concurrency
     """
     if isinstance(component.image, IndexImage):
         # If the image of a component is a multiarch image, we update the SBOMs
         # for both the index image and the child single arch images.
         index = component.image
         update_tasks = [
-            update_sbom(component, index, destination),
+            update_sbom(component, index, destination, semaphore),
         ]
         for child in index.children:
-            update_tasks.append(update_sbom(component, child, destination))
+            update_tasks.append(update_sbom(component, child, destination, semaphore))
 
         await asyncio.gather(*update_tasks)
         return
 
     # Single arch image
-    await update_sbom(component, component.image, destination)
+    await update_sbom(component, component.image, destination, semaphore)
 
 
 async def update_sboms(snapshot: Snapshot, destination: Path) -> None:
@@ -163,8 +174,12 @@ async def update_sboms(snapshot: Snapshot, destination: Path) -> None:
         Snapshot: A object representing a snapshot being released.
         destination (Path): Path to the directory to save the SBOMs to.
     """
+    semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
     await asyncio.gather(
-        *[update_component_sboms(component, destination) for component in snapshot.components]
+        *[
+            update_component_sboms(component, destination, semaphore)
+            for component in snapshot.components
+        ]
     )
 
 
