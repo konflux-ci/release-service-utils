@@ -27,13 +27,9 @@ spec:
 {%- endif %}
   content:
     {{ advisory.spec.content | to_nice_yaml(indent=2) | indent(4) | trim }}
-  synopsis: >-
-    {{ advisory.spec.synopsis | indent(4) }}
-  topic: >-
-    {{ advisory.spec.topic | indent(4) }}
-  description: >-
-    {{ advisory.spec.description | indent(4) }}
-  solution: >-
-    {{ advisory.spec.solution | indent(4) }}
+  synopsis: {{ advisory.spec.synopsis | to_json }}
+  topic: {{ advisory.spec.topic | to_json }}
+  description: {{ advisory.spec.description | to_json }}
+  solution: {{ advisory.spec.solution | to_json }}
   references:
     {{ advisory.spec.references | to_nice_yaml | indent(4) }}

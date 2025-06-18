@@ -70,8 +70,9 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
         "on-and-on-and-on-and-on-and-on,-it's-so-long-that-you-would-"
         "expect-that-something-is-going-to-linewrap-it-at-some-point.-so-long."
     )
+    description = 'Important: colon with a whitespace after should render correctly; "test"'
     # Confirm contributed partial templates are rendered
-    synopsis = "{% if advisory.spec.type == 'RHEA' %} Enhancement{%- endif %} synopsis"
+    synopsis = "{% if advisory.spec.type == 'RHEA' %}Enhancement{%- endif %} synopsis"
     try:
         args = MagicMock()
         args.template = "templates/advisory.yaml.jinja"
@@ -88,7 +89,7 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
                         "cpe": "cpe:/id",
                         "type": "RHEA",
                         "topic": topic,
-                        "description": "description",
+                        "description": description,
                         "solution": solution,
                         "synopsis": synopsis,
                         "references": ["testing"],
@@ -125,6 +126,7 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
 
         assert result["spec"]["solution"] == solution
         assert result["spec"]["topic"] == topic
+        assert result["spec"]["description"] == description
         assert result["spec"]["synopsis"] == "Enhancement synopsis"
         for issue in result["spec"]["issues"]["fixed"]:
             assert len(issue.keys()) == 3
