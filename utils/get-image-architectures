@@ -24,6 +24,7 @@ while [[ $# -gt 0 ]]; do
         "--skopeo-retries")
             shift
             SKOPEO_RETRIES=(--retry-times "$1")
+            shift
             ;;
         -h|--help)
             show_help
