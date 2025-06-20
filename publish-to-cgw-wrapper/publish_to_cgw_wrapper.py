@@ -2,20 +2,22 @@
 """
 This script interacts with the Content Gateway (CGW) API to create and manage content files.
 It ensures each file is checked before creation and skips files that already exist.
-The script is idempotent,it can be executed multiple times as long as the label,
+The script is idempotent, it can be executed multiple times as long as the label,
 short URL, and download URL remain unchanged.
 
 ### **Functionality:**
-1. Reads a JSON metadata file and a directory containing content files.
-2. Retrieves the product ID using the provided product name and product code.
-3. Retrieves the version ID using the product version name.
-4. Generates metadata for each file in the content directory.
-5. Checks for existing files and skips them if they match the label, short URL, and download
-URL.
-6. Creates new files using the metadata.
-7. Rolls back created files if an error occurs during execution.
-8. Writes the final result, including processed, created, and skipped files, to a JSON file.
-9. Outputs the path of the generated result.json file to an output file.
+1. Reads a JSON snapshot containing data that has been injected with contentGateway,
+   files and contentDir.
+2. Validates that all required fields are present and non-empty.
+3. For each `component` entry:
+    - Retrieves the product ID and version ID
+    - Generates metadata for each file listed in `files` and located in the
+      content directory.
+    - Checks for existing files and skips them if they match the label,
+      short URL, and downloadURL.
+    - Creates new files using the metadata.
+    - Rolls back created files if an error occurs during execution.
+4. Output all `result_data`.
 """
 
 import os
@@ -25,14 +27,6 @@ import hashlib
 import logging
 import requests
 from requests.auth import HTTPBasicAuth
-
-# Default values for each component,
-# values from data_file takes precedence over these
-default_values_per_component = {
-    "type": "FILE",
-    "hidden": False,
-    "invisible": False,
-}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -48,22 +42,81 @@ def parse_args():
         help="The hostname of the content-gateway to publish the metadata to",
     )
     parser.add_argument(
-        "--data_file",
+        "--data_json",
         required=True,
-        help="Path to the JSON file containing merged data",
+        help="JSON string containing snapshot merged data",
     )
     parser.add_argument(
-        "--content_dir",
-        required=True,
-        help="Path to the directory containing content to push",
-    )
-    parser.add_argument(
-        "--output_file",
-        required=True,
-        help="Path to the file which write the result.json file path",
+        "--dry_run",
+        action="store_true",
+        help="Simulate the script without API calls",
     )
 
     return parser.parse_args()
+
+
+def load_data(data_arg):
+    """Load JSON from string"""
+    try:
+        return json.loads(data_arg)
+    except json.JSONDecodeError:
+        raise ValueError("Invalid 'data_json' must be a valid JSON string")
+
+
+def validate_components(data):
+    """
+    Validates snapshot component data. Skips components without a 'contentGateway'
+    and fails if required fields are missing in either the 'contentGateway'
+    or any listed files. Returns only the valid components.
+    """
+    required_cg_keys = ["productCode", "productName", "productVersionName", "contentDir"]
+    required_file_keys = ["filename"]
+    errors = []
+    valid_components = []
+
+    components = data.get("components")
+    if not components:
+        raise ValueError("Missing or empty 'components' in data.")
+
+    for c_num, component in enumerate(components, start=1):
+        if "contentGateway" not in component:
+            logging.warning(
+                f"Configuration is not defined for publishing... "
+                f"skipping component {c_num}"
+            )
+            continue
+
+        error = False
+
+        if not component.get("name"):
+            errors.append(f"Component {c_num} is missing 'name'")
+            error = True
+
+        for param in required_cg_keys:
+            if not component["contentGateway"].get(param):
+                errors.append(f"Component {c_num} is missing '{param}'")
+                error = True
+
+        for f_num, file in enumerate(component.get("files"), start=0):
+            for param in required_file_keys:
+                if not file.get(param):
+                    errors.append(
+                        f"Component {c_num}, file {f_num} is missing or has empty '{param}'"
+                    )
+                    error = True
+
+        if not error:
+            valid_components.append(component)
+
+    if errors:
+        raise ValueError("Validation failed with the following errors:\n" + "\n".join(errors))
+
+    logging.info(
+        f"Validation summary: {len(components)} total components, "
+        f"{len(valid_components)} valid components, "
+        f"{len(components) - len(valid_components)} skipped components"
+    )
+    return valid_components
 
 
 def call_cgw_api(*, host, method, endpoint, session, data=None):
@@ -125,66 +178,75 @@ def generate_download_url(content_dir, file_name):
 
 
 def generate_metadata(
-    *, content_dir, components, product_Code, version_id, version_name, mirror_openshift_Push
+    *,
+    content_dir,
+    component_name,
+    files,
+    product_code,
+    version_id,
+    version_name,
+    mirror_openshift_Push,
 ):
     """
-    Generate metadata for each file in
-    content_list that starts with the component name
+    Generate metadata for files listed in 'files' and present in the content_dir.
+    Also includes metadata for checksum files starting with 'sha256' or component name.
     """
-    shortURL_base = "/pub/"
+
+    logging.info(f"Generating metadata for files in {content_dir}")
+
+    default_values_per_component = {
+        "type": "FILE",
+        "hidden": False,
+        "invisible": False,
+    }
+    shortURL_base = "/cgw"
     if mirror_openshift_Push:
         shortURL_base = "/pub/cgw"
-    metadata = []
-    shasum_files_processed = []
-    logging.info(f"Generating metadata for files in {content_dir}")
-    for file in os.listdir(content_dir):
-        matching_component = None
-        for component in components:
-            if file.startswith(component["name"]):
-                matching_component = component.copy()
-                break
 
-        if matching_component:
-            logging.info(f"Processing file: {file}")
-            matching_component.update(
+    file_lookup = {file["filename"] for file in files}
+    metadata = []
+
+    for file_name in os.listdir(content_dir):
+        if file_name in file_lookup:
+            logging.info(f"Processing file: {file_name}")
+            metadata.append(
                 {
+                    **default_values_per_component,
+                    "shortURL": f"{shortURL_base}/{product_code}/{version_name}/{file_name}",
                     "productVersionId": version_id,
-                    "downloadURL": generate_download_url(content_dir, file),
-                    "shortURL": f"{shortURL_base}/{product_Code}/{version_name}/{file}",
-                    "label": file,
+                    "downloadURL": generate_download_url(content_dir, file_name),
+                    "label": file_name,
                 }
             )
-            del matching_component["name"]
-            metadata.append(
-                {"type": "file", **default_values_per_component, **matching_component}
-            )
-        else:
-            if file.startswith("sha256") and file not in shasum_files_processed:
-                shasum_files_processed.append(file)
-                logging.info(f"Processing file: {file}")
-                if file.endswith(".gpg"):
-                    label = "Checksum - GPG"
-                elif file.endswith(".sig"):
-                    label = "Checksum - Signature"
-                elif file.endswith(".txt"):
-                    label = "Checksum"
+        elif file_name.startswith("sha256") or file_name.startswith(component_name):
+            logging.info(f"Processing file: {file_name}")
+            label = None
+            if file_name.endswith(".gpg"):
+                label = "Checksum - GPG"
+            elif file_name.endswith(".sig"):
+                label = "Checksum - Signature"
+            elif file_name.endswith(".txt"):
+                label = "Checksum"
 
+            if label:
                 metadata.append(
                     {
-                        "productVersionId": version_id,
-                        "downloadURL": generate_download_url(content_dir, file),
-                        "shortURL": f"{shortURL_base}/{product_Code}/{version_name}/{file}",
-                        "label": label,
                         **default_values_per_component,
+                        "productVersionId": version_id,
+                        "downloadURL": generate_download_url(content_dir, file_name),
+                        "shortURL": (
+                            f"{shortURL_base}/{product_code}/{version_name}/{file_name}"
+                        ),
+                        "label": label,
                     }
                 )
-            else:
-                # Skip files that do not start with any component name or
-                # sha256
-                logging.info(
-                    f"Skipping file: {file} as it does not start with any component name"
-                )
-                continue
+        else:
+            # Skip files that arent listed in files and aren't a checksum.
+            logging.warning(
+                f"Skipping file: {file_name} "
+                "as it's not listed in component 'files' and not a checksum."
+            )
+            continue
 
     return metadata
 
@@ -202,7 +264,10 @@ def file_already_exists(existing_files, new_file):
 def rollback_files(*, host, session, product_id, version_id, created_file_ids):
     """Rollback created files by listing and deleting them."""
     if created_file_ids:
-        logging.warning("Rolling back created files due to failure")
+        logging.warning(
+            f"Rolling back created files due to failure "
+            f"(productId: {product_id}, productVersionId: {version_id})"
+        )
 
     for file_id in created_file_ids:
         try:
@@ -234,15 +299,13 @@ def create_files(*, host, session, product_id, version_id, metadata):
             if file_check:
                 skipped_files_ids.append(file_check.get("id"))
                 logging.info(
-                    "Skipping creation: File {} already exists with ShortURL {}".format(
-                        file_check["label"], file_check["shortURL"]
-                    )
+                    f"Skipping creation: File {file_check['label']} already exists "
+                    f"with ShortURL {file_check['shortURL']}"
                 )
                 continue
             logging.info(
-                "Creating file: {} with ShortURL {}".format(
-                    file_metadata["label"], file_metadata["shortURL"]
-                )
+                f"Creating file: {file_metadata['label']} "
+                f"with ShortURL {file_metadata['shortURL']}"
             )
             created_file_id = call_cgw_api(
                 host=host,
@@ -252,7 +315,7 @@ def create_files(*, host, session, product_id, version_id, metadata):
                 data=file_metadata,
             )
             created_file_id = created_file_id.json()
-            logging.info(f"Succesfully created file with ID: {created_file_id}")
+            logging.info(f"Successfully created file with ID: {created_file_id}")
             created_file_ids.append(created_file_id)
         return created_file_ids, skipped_files_ids
     except Exception as e:
@@ -264,6 +327,75 @@ def create_files(*, host, session, product_id, version_id, metadata):
             created_file_ids=created_file_ids,
         )
         raise RuntimeError(f"Failed to create file: {e}")
+
+
+def process_component(*, host, session, component, dry_run=False):
+    """
+    Process a component retrieve product/version ID,
+    generate metadata, create files, and return the result
+    data (per component)
+    """
+    productName = component["contentGateway"]["productName"]
+    productCode = component["contentGateway"]["productCode"]
+    productVersionName = component["contentGateway"]["productVersionName"]
+    mirror_openshift_Push = component["contentGateway"].get("mirrorOpenshiftPush")
+    contentDir = component["contentGateway"]["contentDir"]
+    componentName = component["name"]
+    files = component["files"]
+
+    if dry_run:
+        product_id = 999999
+        product_version_id = 999999
+    else:
+        product_id = get_product_id(
+            host=host,
+            session=session,
+            product_name=productName,
+            product_code=productCode,
+        )
+
+        product_version_id = get_version_id(
+            host=host,
+            session=session,
+            product_id=product_id,
+            version_name=productVersionName,
+        )
+
+    metadata = generate_metadata(
+        content_dir=contentDir,
+        component_name=componentName,
+        files=files,
+        product_code=productCode,
+        version_id=product_version_id,
+        version_name=productVersionName,
+        mirror_openshift_Push=mirror_openshift_Push,
+    )
+
+    if dry_run:
+        created = [999999 for _ in metadata]
+        skipped = []
+    else:
+        created, skipped = create_files(
+            host=host,
+            session=session,
+            product_id=product_id,
+            version_id=product_version_id,
+            metadata=metadata,
+        )
+
+    logging.info(f"Created {len(created)} files, Skipped {len(skipped)} files.")
+
+    result_data = {
+        "product_id": product_id,
+        "product_version_id": product_version_id,
+        "created_file_ids": created,
+        "no_of_files_processed": len(metadata),
+        "no_of_files_created": len(created),
+        "no_of_files_skipped": len(skipped),
+        "metadata": metadata,
+    }
+
+    return result_data
 
 
 def main():
@@ -287,56 +419,53 @@ def main():
             }
         )
 
-        with open(args.data_file, "r") as file:
-            data = json.load(file)
+        data = load_data(args.data_json)
+        components = validate_components(data)
+        if not components:
+            # Exit without error if there are no valid components to publish
+            logging.warning("No components eligible for publishing")
+            exit(0)
 
-        productName = data["contentGateway"]["productName"]
-        productCode = data["contentGateway"]["productCode"]
-        productVersionName = data["contentGateway"]["productVersionName"]
-        mirrorOpenshiftPush = data["contentGateway"].get("mirrorOpenshiftPush")
-        components = data["contentGateway"]["components"]
+        all_results = []
+        for num, component in enumerate(components, start=1):
+            content_gateway = component["contentGateway"]
+            logging.info(
+                f"Processing component: {num}/{len(components)} "
+                f"(productName: {content_gateway['productName']} "
+                f"productVersionName: {content_gateway['productVersionName']})"
+            )
+            try:
+                result_data = process_component(
+                    host=args.cgw_host,
+                    session=session,
+                    component=component,
+                    dry_run=args.dry_run,
+                )
+                if result_data is None:
+                    continue
 
-        product_id = get_product_id(
-            host=args.cgw_host,
-            session=session,
-            product_name=productName,
-            product_code=productCode,
-        )
-        product_version_id = get_version_id(
-            host=args.cgw_host,
-            session=session,
-            product_id=product_id,
-            version_name=productVersionName,
-        )
-        metadata = generate_metadata(
-            content_dir=args.content_dir,
-            components=components,
-            product_Code=productCode,
-            version_id=product_version_id,
-            version_name=productVersionName,
-            mirror_openshift_Push=mirrorOpenshiftPush,
-        )
-        created, skipped = create_files(
-            host=args.cgw_host,
-            session=session,
-            product_id=product_id,
-            version_id=product_version_id,
-            metadata=metadata,
-        )
-        logging.info(f"Created {len(created)} files and skipped {len(skipped)} files")
+                all_results.append(result_data)
 
-        result_data = {
-            "no_of_files_processed": len(metadata),
-            "no_of_files_created": len(created),
-            "no_of_files_skipped": len(skipped),
-            "metadata": metadata,
-        }
-        result_file = os.path.join(os.path.dirname(args.data_file), "result.json")
-        with open(result_file, "w") as f:
-            json.dump(result_data, f)
-        with open(args.output_file, "w") as f:
-            f.write(result_file)
+            except Exception as e:
+                if all_results:
+                    logging.warning("Rolling back all created files due to error.")
+                    for result in all_results:
+                        rollback_files(
+                            host=args.cgw_host,
+                            session=session,
+                            product_id=result["product_id"],
+                            version_id=result["product_version_id"],
+                            created_file_ids=result["created_file_ids"],
+                        )
+                raise RuntimeError(
+                    f"Error processing component {num} "
+                    f"(productName: {content_gateway.get('productName')}, "
+                    f"productVersionName: {content_gateway.get('productVersionName')}): {e}"
+                )
 
+        logging.info("Processed result:\n%s", json.dumps(all_results, indent=2))
+        logging.info("All files processed successfully.")
+        return all_results
     except Exception as e:
         logging.error(e)
         exit(1)
