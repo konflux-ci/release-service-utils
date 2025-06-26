@@ -10,14 +10,37 @@
 #
 set -e
 
-IMAGE=$1
+show_help(){
+    echo "Usage: $1 [--skopeo-retries <#retries>] [-h|--help] <image>"
+    exit 1
+}
+
+if [ ${#@} -eq 0 ]; then
+    show_help
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        "--skopeo-retries")
+            SKOPEO_RETRIES=(--retry-times "$2")
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            ;;
+        *)
+            IMAGE=$1
+            shift
+            ;;
+    esac
+done
 
 if [ -z "${IMAGE}" ] || [[ "${IMAGE}" == docker://* ]] ; then
     echo "Error: Please pass an image (without the docker:// prefix) to find the architectures for" >&2
     exit 1
 fi
 
-RAW_OUTPUT=$(skopeo inspect --no-tags --raw docker://${IMAGE})
+RAW_OUTPUT=$(skopeo inspect "${SKOPEO_RETRIES[@]}" --no-tags --raw docker://${IMAGE})
 
 ARTIFACT_TYPE=$(jq -r '.artifactType' <<< $RAW_OUTPUT)
 if [ "$ARTIFACT_TYPE" != "null" ] ; then
@@ -35,7 +58,7 @@ if [ "$ARTIFACT_TYPE" != "null" ] ; then
         '{"platform": {"architecture": "amd64", "os": "linux"}, "digest": $ARGS.named["digest"], "multiarch": false}'
 elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.oci.image.manifest.v1+json" ] ; then
     # Single arch, so need to run skopeo inspect again without --raw
-    RAW_OUTPUT=$(skopeo inspect --no-tags docker://${IMAGE})
+    RAW_OUTPUT=$(skopeo inspect "${SKOPEO_RETRIES[@]}" --no-tags docker://${IMAGE})
     architecture=$(jq -r '.Architecture' <<< $RAW_OUTPUT)
     os=$(jq -r '.Os' <<< $RAW_OUTPUT)
     digest=$(jq -r '.Digest' <<< $RAW_OUTPUT)
@@ -43,7 +66,7 @@ elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.oci.image.manif
     jq -cr -n --arg architecture "$architecture" --arg os "$os" --arg digest "$digest" \
         '{"platform": {"architecture": $ARGS.named["architecture"], "os": $ARGS.named["os"]}, "digest": $ARGS.named["digest"], "multiarch": false}'
 elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.docker.distribution.manifest.v2+json" ] ; then
-    RAW_OUTPUT=$(skopeo inspect --no-tags docker://${IMAGE})
+    RAW_OUTPUT=$(skopeo inspect "${SKOPEO_RETRIES[@]}" --no-tags docker://${IMAGE})
     architecture=$(jq -r '.Architecture // ""' <<< $RAW_OUTPUT)
     os=$(jq -r '.Os // ""' <<< $RAW_OUTPUT)
     digest=$(jq -r '.Digest' <<< $RAW_OUTPUT)
