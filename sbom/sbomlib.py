@@ -362,8 +362,6 @@ def make_oci_auth_file(
     if authfile is None:
         authfile = Path(os.path.expanduser("~/.docker/config.json"))
 
-    logger.debug("Creating OCI auth file for %s from %s.", reference, authfile)
-
     if not authfile.is_file():
         raise ValueError(f"No docker config file at {authfile}")
 
@@ -382,9 +380,6 @@ def make_oci_auth_file(
         config = json.load(fp)
 
     auths_field = config.get("auths", {})
-    logger.debug(
-        "OCI auth in %s available for repositories: %s", authfile, list(auths_field.keys())
-    )
 
     current_ref = ref
 
