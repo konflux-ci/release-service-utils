@@ -1,4 +1,5 @@
 from typing import Any, Optional
+import asyncio
 import json
 import tempfile
 import pytest
@@ -95,7 +96,9 @@ async def test_make_snapshot(index_manifest: dict[str, str]) -> None:
         ],
     )
 
-    def fake_get_image_manifest(repository: str, _: str) -> dict[str, Any]:
+    def fake_get_image_manifest(
+        repository: str, _: str, __: asyncio.Semaphore
+    ) -> dict[str, Any]:
         if repository == "quay.io/repo1":
             child_digest = "sha256:aaaaffff"
 

@@ -122,6 +122,7 @@ async def update_sbom(
 
     async with semaphore:
         reference = f"{component.repository}@{image.digest}"
+        logger.debug("Starting SBOM enrichment for image %s", reference)
         try:
             sbom, sbom_path = await load_sbom(reference, destination)
 
@@ -207,8 +208,11 @@ async def main() -> None:
 
     setup_sbom_logger()
 
+    logger.debug("Starting snapshot parsing.")
     snapshot = await sbomlib.make_snapshot(args.snapshot_path)
+    logger.debug("Starting SBOM update.")
     await update_sboms(snapshot, args.output_path)
+    logger.debug("Finished SBOM update.")
 
 
 if __name__ == "__main__":
