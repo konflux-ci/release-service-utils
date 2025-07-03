@@ -21,6 +21,8 @@ from sbom.log import get_sbom_logger
 
 logger = get_sbom_logger()
 
+CONCURRENCY_LIMIT = 8
+
 
 @dataclass
 class Image:
@@ -131,12 +133,14 @@ class SBOMHandler(Protocol):
         raise NotImplementedError()
 
 
-async def construct_image(repository: str, image_digest: str) -> Union[Image, IndexImage]:
+async def construct_image(
+    repository: str, image_digest: str, semaphore: asyncio.Semaphore
+) -> Union[Image, IndexImage]:
     """
     Creates an Image or IndexImage object based on an image reference. Performs
     a registry call for index images, to parse all their child digests.
     """
-    manifest = await get_image_manifest(repository, image_digest)
+    manifest = await get_image_manifest(repository, image_digest, semaphore)
     media_type = manifest["mediaType"]
 
     if media_type in {
@@ -165,11 +169,14 @@ async def make_component(
     image_digest: str,
     tags: list[str],
     repository: str,
+    semaphore: asyncio.Semaphore,
 ) -> Component:
     """
     Creates a component object from input data.
     """
-    image: Union[Image, IndexImage] = await construct_image(repository, image_digest)
+    image: Union[Image, IndexImage] = await construct_image(
+        repository, image_digest, semaphore
+    )
     return Component(
         name=name,
         release_repository=release_repository,
@@ -191,6 +198,7 @@ async def make_snapshot(snapshot_spec: Path) -> Snapshot:
     with open(snapshot_spec, mode="r", encoding="utf-8") as snapshot_file:
         snapshot_model = SnapshotModel.model_validate_json(snapshot_file.read())
 
+    semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
     component_tasks = []
     for component_model in snapshot_model.components:
         name = component_model.name
@@ -200,7 +208,12 @@ async def make_snapshot(snapshot_spec: Path) -> Snapshot:
 
         component_tasks.append(
             make_component(
-                name, release_repository, image_digest, tags, component_model.repository
+                name,
+                release_repository,
+                image_digest,
+                tags,
+                component_model.repository,
+                semaphore,
             )
         )
 
@@ -278,7 +291,9 @@ async def run_async_subprocess(
     return code, stdout, stderr
 
 
-async def get_image_manifest(repository: str, image_digest: str) -> dict[str, Any]:
+async def get_image_manifest(
+    repository: str, image_digest: str, semaphore: asyncio.Semaphore
+) -> dict[str, Any]:
     """
     Gets a dictionary containing the data from a manifest for an image in a
     repository.
@@ -286,26 +301,28 @@ async def get_image_manifest(repository: str, image_digest: str) -> dict[str, An
     Args:
         repository (str): image repository URL
         image_digest (str): an image digest in the form sha256:<sha>
+        semaphore: An asyncio semaphore to limit manifest fetch concurrency
     """
-    reference = make_reference(repository, image_digest)
-    logger.info("Fetching manifest for %s", reference)
+    async with semaphore:
+        reference = make_reference(repository, image_digest)
+        logger.info("Fetching manifest for %s", reference)
 
-    with make_oci_auth_file(reference) as authfile:
-        code, stdout, stderr = await run_async_subprocess(
-            [
-                "oras",
-                "manifest",
-                "fetch",
-                "--registry-config",
-                authfile,
-                reference,
-            ],
-            retry_times=3,
-        )
-    if code != 0:
-        raise SBOMError(f"Could not get manifest of {reference}: {stderr.decode()}")
+        with make_oci_auth_file(reference) as authfile:
+            code, stdout, stderr = await run_async_subprocess(
+                [
+                    "oras",
+                    "manifest",
+                    "fetch",
+                    "--registry-config",
+                    authfile,
+                    reference,
+                ],
+                retry_times=3,
+            )
+        if code != 0:
+            raise SBOMError(f"Could not get manifest of {reference}: {stderr.decode()}")
 
-    return json.loads(stdout)  # type: ignore
+        return json.loads(stdout)  # type: ignore
 
 
 def make_reference(repository: str, image_digest: str) -> str:
