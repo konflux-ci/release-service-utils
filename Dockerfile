@@ -1,4 +1,4 @@
-FROM quay.io/konflux-ci/oras:latest@sha256:26e7484b4a19a5ab9b6845000d7cac39dd967b0bc5fe60c54bedc268eb6db51e as oras
+FROM quay.io/konflux-ci/oras:latest@sha256:0fcde0e606677c0c0c9661ba3efc642ea7d2d35011976598f290da532c992070 as oras
 FROM registry.redhat.io/rhtas/cosign-rhel9:1.0.2-1719417920 as cosign
 FROM registry.access.redhat.com/ubi9/ubi:9.6-1751445649
 
