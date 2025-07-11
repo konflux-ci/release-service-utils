@@ -21,11 +21,17 @@ def setup_argparser() -> argparse.Namespace:  # pragma: no cover
 
     parser = argparse.ArgumentParser(description="Applies a template.")
 
-    parser.add_argument(
+    # Create mutually exclusive group for data input
+    data_group = parser.add_mutually_exclusive_group(required=True)
+    data_group.add_argument(
         "--data",
         help="JSON string containing data to use in the template.",
-        required=True,
     )
+    data_group.add_argument(
+        "--data-file",
+        help="Path to file containing JSON data to use in the template.",
+    )
+
     parser.add_argument(
         "--template",
         help="Path to the template file to use.",
@@ -48,13 +54,20 @@ def main():  # pragma: no cover
     log_level = logging.DEBUG if args.verbose else logging.INFO
     setup_logger(level=log_level)
 
+    # Load JSON data from either --data argument or --data-file
+    if args.data:
+        template_data = json.loads(args.data)
+    else:  # args.data_file
+        with open(args.data_file, "r") as f:
+            template_data = json.loads(f.read())
+
     with open(args.template) as t:
         template = Template(
             t.read(), extensions=[AnsibleCoreFiltersExtension], undefined=DebugUndefined
         )
     LOGGER.info("Rendering 1st pass")
     try:
-        content = template.render(json.loads(args.data))
+        content = template.render(template_data)
         LOGGER.debug(content)
         first_pass = content
     except exceptions.TemplateSyntaxError as jexc:
@@ -66,7 +79,7 @@ def main():  # pragma: no cover
     # try 2nd pass
     LOGGER.info("Rendering 2nd pass")
     try:
-        content = Template(content).render(json.loads(args.data))
+        content = Template(content).render(template_data)
         LOGGER.debug(content)
     except exceptions.TemplateSyntaxError as jexc:
         LOGGER.exception("Exception with Template Syntax:")
