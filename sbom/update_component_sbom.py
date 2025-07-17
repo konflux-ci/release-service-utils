@@ -10,6 +10,7 @@ $ update_component_sbom --snapshot-path snapshot_spec.json --output-path sboms/
 
 import argparse
 import asyncio
+import contextlib
 import json
 from typing import Union
 from pathlib import Path
@@ -32,6 +33,17 @@ logger = get_sbom_logger()
 
 CONCURRENCY_LIMIT = 8
 
+locks = {}
+
+
+@contextlib.asynccontextmanager
+async def lock(key: Path):
+    """Retrieve a lock specific to a given path, to ensure only one writer"""
+    if not locks.get(key):
+        locks[key] = asyncio.Lock()
+    async with locks[key]:
+        yield
+
 
 async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
     """
@@ -49,8 +61,9 @@ async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
 
     digest = reference.split("@", 1)[1]
     path = destination_dir.joinpath(digest)
-    async with aiofiles.open(path, "wb") as file:
-        await file.write(stdout)
+    async with lock(path):
+        async with aiofiles.open(path, "wb") as file:
+            await file.write(stdout)
 
     return path
 
@@ -70,8 +83,9 @@ async def write_sbom(sbom: dict, path: Path) -> None:
     """
     Write an SBOM dictionary to a file.
     """
-    async with aiofiles.open(path, "w") as fp:
-        await fp.write(json.dumps(sbom))
+    async with lock(path):
+        async with aiofiles.open(path, "w") as fp:
+            await fp.write(json.dumps(sbom))
 
 
 def update_sbom_in_situ(
