@@ -45,7 +45,9 @@ async def lock(key: Path):
         yield
 
 
-async def fetch_sbom(destination_dir: Path, reference: str, component_name: str = None) -> Path:
+async def fetch_sbom(
+    destination_dir: Path, reference: str, component_name: str = None
+) -> Path:
     """
     Download an SBOM for an image reference to a destination directory.
     """
@@ -67,7 +69,7 @@ async def fetch_sbom(destination_dir: Path, reference: str, component_name: str 
         path = destination_dir.joinpath(f"{safe_component_name}-{digest}")
     else:
         path = destination_dir.joinpath(digest)
-    
+
     async with lock(path):
         async with aiofiles.open(path, "wb") as file:
             await file.write(stdout)
@@ -75,7 +77,9 @@ async def fetch_sbom(destination_dir: Path, reference: str, component_name: str 
     return path
 
 
-async def load_sbom(reference: str, destination: Path, component_name: str = None) -> tuple[dict, Path]:
+async def load_sbom(
+    reference: str, destination: Path, component_name: str = None
+) -> tuple[dict, Path]:
     """
     Download the sbom for the image reference, save it to a directory and parse
     it into a dictionary.
