@@ -45,7 +45,7 @@ async def lock(key: Path):
         yield
 
 
-async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
+async def fetch_sbom(destination_dir: Path, reference: str, component_name: str = None) -> Path:
     """
     Download an SBOM for an image reference to a destination directory.
     """
@@ -60,7 +60,14 @@ async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
         raise SBOMError(f"Failed to fetch SBOM {reference}: {stderr.decode()}")
 
     digest = reference.split("@", 1)[1]
-    path = destination_dir.joinpath(digest)
+    # Include component name in the file path to prevent data mixing
+    if component_name:
+        # Sanitize component name for use in file path
+        safe_component_name = component_name.replace("/", "_").replace("\\", "_")
+        path = destination_dir.joinpath(f"{safe_component_name}-{digest}")
+    else:
+        path = destination_dir.joinpath(digest)
+    
     async with lock(path):
         async with aiofiles.open(path, "wb") as file:
             await file.write(stdout)
@@ -68,12 +75,12 @@ async def fetch_sbom(destination_dir: Path, reference: str) -> Path:
     return path
 
 
-async def load_sbom(reference: str, destination: Path) -> tuple[dict, Path]:
+async def load_sbom(reference: str, destination: Path, component_name: str = None) -> tuple[dict, Path]:
     """
     Download the sbom for the image reference, save it to a directory and parse
     it into a dictionary.
     """
-    path = await fetch_sbom(destination, reference)
+    path = await fetch_sbom(destination, reference, component_name)
     async with aiofiles.open(path, "r") as sbom_raw:
         sbom = json.loads(await sbom_raw.read())
         return sbom, path
@@ -138,7 +145,7 @@ async def update_sbom(
         reference = f"{component.repository}@{image.digest}"
         logger.debug("Starting SBOM enrichment for image %s", reference)
         try:
-            sbom, sbom_path = await load_sbom(reference, destination)
+            sbom, sbom_path = await load_sbom(reference, destination, component.name)
 
             if not update_sbom_in_situ(component, image, sbom):
                 raise SBOMError(f"Unsupported SBOM format for image {reference}.")
