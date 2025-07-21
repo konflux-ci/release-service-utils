@@ -119,6 +119,7 @@ class SBOMHandler(Protocol):
         component: Component,
         image: Union[IndexImage, Image],
         sbom: dict[str, Any],
+        release_id: str,
     ) -> None:
         """
         Update the specified SBOM in-place based on the provided component information.
