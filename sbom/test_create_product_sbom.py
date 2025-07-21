@@ -64,6 +64,18 @@ def test_parse_release_notes(data: dict, expected_rn: ReleaseNotes) -> None:
     assert expected_rn == actual
 
 
+def verify_annotations(sbom, release_id: str) -> None:
+    """
+    Verify that the annotations field contains the release_id information.
+    """
+    for annotation in sbom["annotations"]:
+        comment = annotation["comment"]
+        if f"release_id={release_id}" in comment:
+            return
+
+    assert False
+
+
 def verify_cpe(sbom, expected_cpe: Union[str, List[str]]) -> None:
     """
     Verify that all CPE externalRefs are in the first package.
@@ -253,7 +265,8 @@ def test_create_sbom(snapshot: Snapshot, purls: List[str], cpe: Union[str, List[
         cpe=cpe,
     )
 
-    sbom = create_sbom(release_notes, snapshot)
+    release_id = "0661db82-e943-4a4d-acfa-b81a50208306"
+    sbom = create_sbom(release_notes, snapshot, release_id)
     output = StringIO()
 
     write_document_to_stream(sbom, output)  # type: ignore
@@ -267,6 +280,7 @@ def test_create_sbom(snapshot: Snapshot, purls: List[str], cpe: Union[str, List[
     verify_checksums(sbom_dict)
     verify_supplier(sbom_dict)
     verify_package_licenses(sbom_dict)
+    verify_annotations(sbom_dict, release_id)
 
     assert sbom_dict["dataLicense"] == "CC0-1.0"
 

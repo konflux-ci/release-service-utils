@@ -17,6 +17,7 @@ import asyncio
 import pydantic as pdc
 
 from spdx_tools.spdx.model.actor import Actor, ActorType
+from spdx_tools.spdx.model.annotation import Annotation, AnnotationType
 from spdx_tools.spdx.model.checksum import Checksum, ChecksumAlgorithm
 from spdx_tools.spdx.model.document import CreationInfo, Document
 from spdx_tools.spdx.model.package import (
@@ -33,6 +34,8 @@ from sbom.log import get_sbom_logger, setup_sbom_logger
 from sbom.sbomlib import Component, Snapshot, construct_purl
 
 logger = get_sbom_logger()
+
+DOC_ELEMENT_ID = "SPDXRef-DOCUMENT"
 
 
 class ReleaseNotes(pdc.BaseModel):
@@ -142,16 +145,30 @@ def get_component_relationships(
     ]
 
 
-def create_sbom(release_notes: ReleaseNotes, snapshot: Snapshot) -> Document:
+def get_annotations(release_id: str) -> List[Annotation]:
+    """
+    Get a list of annotations containing the release_id information.
+    """
+    return [
+        Annotation(
+            spdx_id=DOC_ELEMENT_ID,
+            annotator=Actor(ActorType.TOOL, "Konflux CI"),
+            annotation_type=AnnotationType.OTHER,
+            annotation_comment=f"release_id={release_id}",
+            annotation_date=datetime.now(timezone.utc),
+        )
+    ]
+
+
+def create_sbom(release_notes: ReleaseNotes, snapshot: Snapshot, release_id: str) -> Document:
     """
     Create an SPDX document based on release notes and a snapshot.
     """
-    doc_elem_id = "SPDXRef-DOCUMENT"
     product_elem_id = "SPDXRef-product"
 
     creation_info = CreationInfo(
         spdx_version="SPDX-2.3",
-        spdx_id=doc_elem_id,
+        spdx_id=DOC_ELEMENT_ID,
         name=f"{release_notes.product_name} {release_notes.product_version}",
         data_license="CC0-1.0",
         document_namespace=f"https://redhat.com/{uuid.uuid4()}.spdx.json",
@@ -163,7 +180,7 @@ def create_sbom(release_notes: ReleaseNotes, snapshot: Snapshot) -> Document:
     )
 
     product_package = create_product_package(product_elem_id, release_notes)
-    product_relationship = create_product_relationship(doc_elem_id, product_elem_id)
+    product_relationship = create_product_relationship(DOC_ELEMENT_ID, product_elem_id)
 
     component_packages = get_component_packages(snapshot.components)
     component_relationships = get_component_relationships(product_elem_id, component_packages)
@@ -172,6 +189,7 @@ def create_sbom(release_notes: ReleaseNotes, snapshot: Snapshot) -> Document:
         creation_info=creation_info,
         packages=[product_package, *component_packages],
         relationships=[product_relationship, *component_relationships],
+        annotations=get_annotations(release_id),
     )
 
 
@@ -212,6 +230,12 @@ def main() -> None:  # pragma: nocover
         type=Path,
         help="Path to directory to save the output SBOM in JSON format.",
     )
+    parser.add_argument(
+        "--release-id",
+        required=True,
+        type=str,
+        help="Release pipelinerun UID, used to match created SBOM with its input data.",
+    )
 
     args = parser.parse_args()
     setup_sbom_logger()
@@ -221,7 +245,7 @@ def main() -> None:  # pragma: nocover
         with open(args.data_path, "r", encoding="utf-8") as fp:
             raw_json = fp.read()
             release_notes = parse_release_notes(raw_json)
-            sbom = create_sbom(release_notes, snapshot)
+            sbom = create_sbom(release_notes, snapshot, args.release_id)
 
         fname = get_filename(release_notes)
         output_path = str(args.output_path.joinpath(fname))
