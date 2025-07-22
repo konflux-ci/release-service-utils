@@ -75,7 +75,7 @@ async def write_sbom(sbom: dict, path: Path) -> None:
 
 
 def update_sbom_in_situ(
-    component: Component, image: Union[IndexImage, Image], sbom: dict
+    component: Component, image: Union[IndexImage, Image], sbom: dict, release_id: str
 ) -> bool:
     """
     Determine the matching SBOM handler and update the SBOM with release-time
@@ -87,15 +87,16 @@ def update_sbom_in_situ(
                                     image being released.
         sbom (dict): SBOM parsed as dictionary.
         semaphore: An asyncio semaphore to limit update concurrency
+        release_id: Pipelinerun UID of the release.
     """
     if SPDXVersion2.supports(sbom):
-        SPDXVersion2().update_sbom(component, image, sbom)
+        SPDXVersion2().update_sbom(component, image, sbom, release_id)
         return True
 
     # The CDX handler does not support updating SBOMs for index images, as those
     # are generated only as SPDX in Konflux.
     if CycloneDXVersion1.supports(sbom) and isinstance(image, Image):
-        CycloneDXVersion1().update_sbom(component, image, sbom)
+        CycloneDXVersion1().update_sbom(component, image, sbom, release_id)
         return True
 
     return False
@@ -106,6 +107,7 @@ async def update_sbom(
     image: Union[IndexImage, Image],
     destination: Path,
     semaphore: asyncio.Semaphore,
+    release_id: str,
 ) -> None:
     """
     Update an SBOM of an image in a repository and save it to a directory.
@@ -118,6 +120,7 @@ async def update_sbom(
                                     image being released.
         destination (Path): Path to the directory to save the SBOMs to.
         semaphore: An asyncio semaphore to limit update concurrency
+        release_id: Pipelinerun UID of the release.
     """
 
     async with semaphore:
@@ -126,7 +129,7 @@ async def update_sbom(
         try:
             sbom, sbom_path = await load_sbom(reference, destination)
 
-            if not update_sbom_in_situ(component, image, sbom):
+            if not update_sbom_in_situ(component, image, sbom, release_id):
                 raise SBOMError(f"Unsupported SBOM format for image {reference}.")
 
             await write_sbom(sbom, sbom_path)
@@ -137,7 +140,7 @@ async def update_sbom(
 
 
 async def update_component_sboms(
-    component: Component, destination: Path, semaphore: asyncio.Semaphore
+    component: Component, destination: Path, semaphore: asyncio.Semaphore, release_id: str
 ) -> None:
     """
     Update SBOMs for a component and save them to a directory.
@@ -148,25 +151,28 @@ async def update_component_sboms(
         component (Component): Object representing a component being released.
         destination (Path): Path to the directory to save the SBOMs to.
         semaphore: An asyncio semaphore to limit update concurrency
+        release_id: Pipelinerun UID of the release.
     """
     if isinstance(component.image, IndexImage):
         # If the image of a component is a multiarch image, we update the SBOMs
         # for both the index image and the child single arch images.
         index = component.image
         update_tasks = [
-            update_sbom(component, index, destination, semaphore),
+            update_sbom(component, index, destination, semaphore, release_id),
         ]
         for child in index.children:
-            update_tasks.append(update_sbom(component, child, destination, semaphore))
+            update_tasks.append(
+                update_sbom(component, child, destination, semaphore, release_id)
+            )
 
         await asyncio.gather(*update_tasks)
         return
 
     # Single arch image
-    await update_sbom(component, component.image, destination, semaphore)
+    await update_sbom(component, component.image, destination, semaphore, release_id)
 
 
-async def update_sboms(snapshot: Snapshot, destination: Path) -> None:
+async def update_sboms(snapshot: Snapshot, destination: Path, release_id: str) -> None:
     """
     Update component SBOMs with release-time information based on a Snapshot and
     save them to a directory.
@@ -174,11 +180,12 @@ async def update_sboms(snapshot: Snapshot, destination: Path) -> None:
     Args:
         Snapshot: A object representing a snapshot being released.
         destination (Path): Path to the directory to save the SBOMs to.
+        release_id: Pipelinerun UID of the release.
     """
     semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
     await asyncio.gather(
         *[
-            update_component_sboms(component, destination, semaphore)
+            update_component_sboms(component, destination, semaphore, release_id)
             for component in snapshot.components
         ]
     )
@@ -204,6 +211,12 @@ async def main() -> None:
         type=Path,
         help="Path to the directory to save the updated SBOM files.",
     )
+    parser.add_argument(
+        "--release-id",
+        required=True,
+        type=str,
+        help="Release pipelinerun UID, used to match augmented SBOMs with their input data.",
+    )
     args = parser.parse_args()
 
     setup_sbom_logger()
@@ -211,7 +224,7 @@ async def main() -> None:
     logger.debug("Starting snapshot parsing.")
     snapshot = await sbomlib.make_snapshot(args.snapshot_path)
     logger.debug("Starting SBOM update.")
-    await update_sboms(snapshot, args.output_path)
+    await update_sboms(snapshot, args.output_path, args.release_id)
     logger.debug("Finished SBOM update.")
 
 

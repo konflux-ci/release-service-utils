@@ -48,5 +48,13 @@
             "relationshipType": "DESCRIBES",
             "relatedSpdxElement": "SPDXRef-image"
         }
+    ],
+    "annotations": [
+        {
+            "annotationDate": "2025-01-01T00:00:00Z",
+            "annotationType": "OTHER",
+            "annotator": "Tool: Konflux CI",
+            "comment": "release_id=0661db82-e943-4a4d-acfa-b81a50208306"
+        }
     ]
 }

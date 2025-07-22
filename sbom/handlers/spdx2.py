@@ -2,7 +2,9 @@
 This module contains the SBOM handler for SPDX version 2 SBOMs.
 """
 
+import datetime
 from enum import Enum
+from datetime import timezone
 from typing import Optional, Union, Any
 
 from packageurl import PackageURL
@@ -198,9 +200,40 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
 
         return None
 
+    @staticmethod
+    def _get_iso_datetime() -> str:
+        """
+        Get the current datetime ISO8601 string.
+        """
+        return (
+            datetime.datetime.now(timezone.utc)
+            .isoformat(
+                timespec="seconds",
+            )
+            .replace("+00:00", "Z")
+        )
+
+    @classmethod
+    def _update_annotations(cls, sbom: dict, release_id: str) -> None:
+        """
+        Update the annotations field of the SBOM with release_id information.
+        """
+        annotations: list[Any] = sbom.get("annotations", [])
+
+        annotation = {
+            "annotationDate": cls._get_iso_datetime(),
+            "annotationType": "OTHER",
+            "annotator": "Tool: Konflux CI",
+            "comment": f"release_id={release_id}",
+        }
+
+        annotations.append(annotation)
+
+        sbom["annotations"] = annotations
+
     @classmethod
     def _update_index_image_sbom(
-        cls, component: Component, index: IndexImage, sbom: dict
+        cls, component: Component, index: IndexImage, sbom: dict, release_id: str
     ) -> None:
         """
         Update the SBOM of an index image in a repository.
@@ -216,6 +249,8 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
             component.release_repository,
             component.tags,
         )
+
+        cls._update_annotations(sbom, release_id)
 
         for image in index.children:
             package = cls._find_image_package(sbom, image.digest)
@@ -242,7 +277,9 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
             )
 
     @classmethod
-    def _update_image_sbom(cls, component: Component, image: Image, sbom: dict) -> None:
+    def _update_image_sbom(
+        cls, component: Component, image: Image, sbom: dict, release_id: str
+    ) -> None:
         """
         Update the SBOM of single-arch image in a repository.
         """
@@ -258,10 +295,16 @@ class SPDXVersion2(SBOMHandler):  # pylint: disable=too-few-public-methods
             component.tags,
         )
 
+        cls._update_annotations(sbom, release_id)
+
     def update_sbom(
-        self, component: Component, image: Union[IndexImage, Image], sbom: dict
+        self,
+        component: Component,
+        image: Union[IndexImage, Image],
+        sbom: dict,
+        release_id: str,
     ) -> None:
         if isinstance(image, IndexImage):
-            SPDXVersion2._update_index_image_sbom(component, image, sbom)
+            SPDXVersion2._update_index_image_sbom(component, image, sbom, release_id)
         elif isinstance(image, Image):
-            SPDXVersion2._update_image_sbom(component, image, sbom)
+            SPDXVersion2._update_image_sbom(component, image, sbom, release_id)
