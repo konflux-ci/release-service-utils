@@ -73,7 +73,7 @@ def verify_annotations(sbom, release_id: str) -> None:
         if f"release_id={release_id}" in comment:
             return
 
-    assert False
+    assert False, "Could not find release_id= annotation in the SBOM"
 
 
 def verify_cpe(sbom, expected_cpe: Union[str, List[str]]) -> None:
