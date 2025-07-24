@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Any, List, Optional, Union
 from enum import Enum
 
 
@@ -56,13 +56,18 @@ class CycloneDXVersion1(SBOMHandler):
         return spec in cls.supported_versions
 
     def update_sbom(
-        self, component: Component, image: Union[IndexImage, Image], sbom: dict
+        self,
+        component: Component,
+        image: Union[IndexImage, Image],
+        sbom: dict,
+        release_id: str,
     ) -> None:
         if isinstance(image, IndexImage):
             raise ValueError("CDX update SBOM does not support index images.")
 
         self._bump_version(sbom)
         self._update_metadata_component(component, sbom)
+        self._update_properties(sbom, release_id)
 
         for cdx_component in sbom.get("components", []):
             if cdx_component.get("type") != "container":
@@ -150,3 +155,13 @@ class CycloneDXVersion1(SBOMHandler):
         else:
             metadata = {"component": component}
             sbom["metadata"] = metadata
+
+    def _update_properties(self, sbom: dict, release_id: str) -> None:
+        """
+        Update the properties field of the SBOM with release_id information.
+        """
+        properties: List[Any] = sbom.get("properties", [])
+
+        properties.append({"name": "release_id", "value": release_id})
+
+        sbom["properties"] = properties

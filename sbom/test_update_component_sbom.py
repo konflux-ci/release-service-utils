@@ -1,3 +1,4 @@
+import datetime
 import json
 import tempfile
 from unittest.mock import patch, AsyncMock, call, ANY
@@ -12,11 +13,27 @@ from sbom.sbomlib import Component, Image, IndexImage, Snapshot, get_purl_digest
 
 TESTDATA_PATH = Path(__file__).parent.joinpath("testdata")
 
+FAKE_DATE: str = (
+    datetime.datetime(
+        year=2025,
+        month=1,
+        day=1,
+        hour=0,
+        minute=0,
+        second=0,
+        tzinfo=datetime.timezone.utc,
+    )
+    .isoformat(timespec="seconds")
+    .replace("+00:00", "Z")
+)
+
 
 class TestSPDXVersion23:
     @pytest.mark.asyncio
     @patch("sbom.update_component_sbom.write_sbom")
-    async def test_single_component_single_arch(self, mock_write_sbom: AsyncMock) -> None:
+    async def test_single_component_single_arch(
+        self, mock_write_sbom: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         data_path = TESTDATA_PATH.joinpath("single-component-single-arch/spdx")
 
         async def fake_load_sbom(
@@ -37,16 +54,23 @@ class TestSPDXVersion23:
             ],
         )
 
+        release_id = "0661db82-e943-4a4d-acfa-b81a50208306"
         with open(data_path.joinpath("release_sbom.json")) as fp:
             expected_sbom = json.load(fp)
 
+        monkeypatch.setattr(
+            "sbom.handlers.spdx2.SPDXVersion2._get_iso_datetime", lambda: FAKE_DATE
+        )
+
         with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
-            await update_sboms(snapshot, Path("dummy"))
+            await update_sboms(snapshot, Path("dummy"), release_id)
             mock_write_sbom.assert_awaited_with(expected_sbom, ANY)
 
     @pytest.mark.asyncio
     @patch("sbom.update_component_sbom.write_sbom")
-    async def test_single_component_multiarch(self, mock_write_sbom: AsyncMock) -> None:
+    async def test_single_component_multiarch(
+        self, mock_write_sbom: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         data_path = TESTDATA_PATH.joinpath("single-component-multiarch/spdx")
 
         index_digest = (
@@ -87,8 +111,13 @@ class TestSPDXVersion23:
         with open(data_path.joinpath("release_image_sbom.json")) as fp:
             expected_image_sbom = json.load(fp)
 
+        monkeypatch.setattr(
+            "sbom.handlers.spdx2.SPDXVersion2._get_iso_datetime", lambda: FAKE_DATE
+        )
+
+        release_id = "0661db82-e943-4a4d-acfa-b81a50208306"
         with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
-            await update_sboms(snapshot, Path("dummy"))
+            await update_sboms(snapshot, Path("dummy"), release_id)
 
             mock_write_sbom.assert_has_awaits(
                 [
@@ -99,7 +128,9 @@ class TestSPDXVersion23:
 
     @pytest.mark.asyncio
     @patch("sbom.update_component_sbom.write_sbom")
-    async def test_multi_component_multiarch(self, mock_write_sbom: AsyncMock) -> None:
+    async def test_multi_component_multiarch(
+        self, mock_write_sbom: AsyncMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         data_path = TESTDATA_PATH.joinpath("single-component-multiarch/spdx")
 
         index_digest = (
@@ -143,8 +174,13 @@ class TestSPDXVersion23:
         with open(data_path.joinpath("release_image_sbom.json")) as fp:
             expected_image_sbom = json.load(fp)
 
+        monkeypatch.setattr(
+            "sbom.handlers.spdx2.SPDXVersion2._get_iso_datetime", lambda: FAKE_DATE
+        )
+
+        release_id = "0661db82-e943-4a4d-acfa-b81a50208306"
         with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
-            await update_sboms(snapshot, Path("dummy"))
+            await update_sboms(snapshot, Path("dummy"), release_id)
 
             mock_write_sbom.assert_has_awaits(
                 [
@@ -163,6 +199,11 @@ class TestCycloneDX:
             purl.qualifiers.get("repository_url") == kflx_component.repository  # type: ignore
         )
         assert purl.name == kflx_component.repository.split("/")[-1]
+
+    @staticmethod
+    def verify_properties(sbom: dict, release_id: str) -> None:
+        properties = sbom["properties"]
+        assert {"name": "release_id", "value": release_id} in properties
 
     @staticmethod
     def verify_tags(kflx_component: Component, cdx_component: dict) -> None:
@@ -283,11 +324,14 @@ class TestCycloneDX:
             ],
         )
 
+        release_id = "0661db82-e943-4a4d-acfa-b81a50208306"
         with patch("sbom.update_component_sbom.load_sbom", side_effect=fake_load_sbom):
-            await update_sboms(snapshot, Path("dummy"))
+            await update_sboms(snapshot, Path("dummy"), release_id)
 
             # get the SBOM that was written
             sbom, _ = mock_write_sbom.call_args[0]
+
+            TestCycloneDX.verify_properties(sbom, release_id)
 
             try:
                 TestCycloneDX.verify_components_updated(snapshot, sbom)
