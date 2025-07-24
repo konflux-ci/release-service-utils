@@ -8,7 +8,7 @@ import pytest
 from pathlib import Path
 
 from sbom.handlers.cyclonedx1 import CDXSpec
-from sbom.update_component_sbom import update_sboms
+from sbom.update_component_sbom import update_sboms, fetch_sbom
 from sbom.sbomlib import Component, Image, IndexImage, Snapshot, get_purl_digest
 
 TESTDATA_PATH = Path(__file__).parent.joinpath("testdata")
@@ -36,7 +36,9 @@ class TestSPDXVersion23:
     ) -> None:
         data_path = TESTDATA_PATH.joinpath("single-component-single-arch/spdx")
 
-        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
+        async def fake_load_sbom(
+            reference: str, _, component_name: str = None
+        ) -> tuple[dict, str]:
             with open(data_path.joinpath("build_sbom.json")) as f:
                 return json.load(f), ""
 
@@ -78,7 +80,9 @@ class TestSPDXVersion23:
             "sha256:84fb3b3c3cef7283a9c5172f25cf00c53274eea4972a9366e24e483ef2507921"
         )
 
-        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
+        async def fake_load_sbom(
+            reference: str, _, component_name: str = None
+        ) -> tuple[dict, str]:
             if index_digest in reference:
                 with open(data_path.joinpath("build_index_sbom.json")) as f:
                     return json.load(f), ""
@@ -138,7 +142,9 @@ class TestSPDXVersion23:
 
         num_components = 250
 
-        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
+        async def fake_load_sbom(
+            reference: str, _, component_name: str = None
+        ) -> tuple[dict, str]:
             if index_digest in reference:
                 with open(data_path.joinpath("build_index_sbom.json")) as f:
                     return json.load(f), ""
@@ -296,7 +302,9 @@ class TestCycloneDX:
     ) -> None:
         data_path = TESTDATA_PATH.joinpath("single-component-single-arch/cdx")
 
-        async def fake_load_sbom(reference: str, _) -> tuple[dict, str]:
+        async def fake_load_sbom(
+            reference: str, _, component_name: str = None
+        ) -> tuple[dict, str]:
             with open(data_path.joinpath("build_sbom.json")) as f:
                 build_sbom = json.load(f)
                 # we can do this, because our build sbom should not contain any
@@ -334,3 +342,50 @@ class TestCycloneDX:
                         f"Failed verification of SBOM: {err}."
                         " Writing generated SBOM to {tmpf.name}"
                     ) from err
+
+
+class TestErrorHandling:
+    """Test component-specific file paths to prevent data mixing."""
+
+    @pytest.mark.asyncio
+    async def test_component_specific_file_paths(self):
+        """Test that component names are properly included in file paths."""
+        with patch(
+            "sbom.update_component_sbom.sbomlib.make_oci_auth_file"
+        ) as mock_auth, patch(
+            "sbom.update_component_sbom.sbomlib.run_async_subprocess"
+        ) as mock_run, patch(
+            "aiofiles.open"
+        ) as mock_open, patch(
+            "sbom.update_component_sbom.lock"
+        ) as mock_lock:
+
+            # Mock the auth file context manager
+            mock_auth.return_value.__enter__.return_value = "/tmp/auth.json"
+            mock_auth.return_value.__exit__.return_value = None
+
+            # Mock cosign returning valid JSON content
+            mock_run.return_value = (0, b'{"test": "data"}', b"")
+
+            # Mock file operations
+            mock_file = AsyncMock()
+            mock_open.return_value.__aenter__.return_value = mock_file
+
+            # Mock lock context manager
+            mock_lock.return_value.__aenter__ = AsyncMock()
+            mock_lock.return_value.__aexit__ = AsyncMock()
+
+            # Test with component name
+            result = await fetch_sbom(
+                Path("/tmp"), "test-registry/test-image@sha256:abc123", "test-component"
+            )
+
+            # Verify the path includes the component name
+            assert "test-component-sha256:abc123" in str(result)
+
+            # Test without component name (backward compatibility)
+            result = await fetch_sbom(Path("/tmp"), "test-registry/test-image@sha256:abc123")
+
+            # Verify the path doesn't include component name
+            assert "test-component" not in str(result)
+            assert "sha256:abc123" in str(result)
