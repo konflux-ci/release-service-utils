@@ -41,8 +41,9 @@ git_commit_and_push() {
 }
 
 git_clone_and_checkout() {
-    OPTIONS=$(getopt -l "repository:,revision:" -o "r:v:" -a -- "$@")
+    OPTIONS=$(getopt -l "repository:,revision:,sparse-dir:" -o "r:v:" -a -- "$@")
     eval set -- "$OPTIONS"
+    SPARSE_DIRS=()
     while true; do
         case "$1" in
             -r|--repository)
@@ -52,6 +53,10 @@ git_clone_and_checkout() {
             -v|--revision)
                 shift
                 REVISION="$1"
+                ;;
+            --sparse-dir)
+                shift
+                SPARSE_DIRS+=("$1")
                 ;;
             --)
                 shift
@@ -67,8 +72,20 @@ git_clone_and_checkout() {
 
     # rewrites the repo url with the auth token
     CLONE_URL="https://oauth2:${ACCESS_TOKEN}@${REPOSITORY#*://}"
-    git clone --depth 1 --branch "${REVISION}" "${CLONE_URL}"
+
+    EXTRA_ARGS=()
+    if [ "${#SPARSE_DIRS[@]}" -gt 0 ]; then
+        EXTRA_ARGS=(--filter=blob:none --no-checkout)
+    fi
+
+    git clone "${EXTRA_ARGS[@]}" --depth 1 --branch "${REVISION}" "${CLONE_URL}"
+
     cd "${REPO_DIR}"
+
+    if [ "${#SPARSE_DIRS[@]}" -gt 0 ]; then
+        git sparse-checkout set "${SPARSE_DIRS[@]}"
+        git checkout "${REVISION}"
+    fi
 }
 
 git_rebase() {
