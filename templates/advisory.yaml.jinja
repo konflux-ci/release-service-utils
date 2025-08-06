@@ -13,7 +13,7 @@ spec:
 {%- if 'severity' in advisory.spec %}
   severity: {{ advisory.spec.severity }}
 {%- endif %}
-{%- if 'issues' in advisory.spec %}
+{%- if 'issues' in advisory.spec and advisory.spec.issues.fixed %}
   issues:
     fixed:
       {%- for issue in advisory.spec.issues.fixed %}
