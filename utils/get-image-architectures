@@ -45,7 +45,8 @@ fi
 RAW_OUTPUT=$(skopeo inspect "${SKOPEO_RETRIES[@]}" --no-tags --raw docker://${IMAGE})
 
 ARTIFACT_TYPE=$(jq -r '.artifactType' <<< $RAW_OUTPUT)
-if [ "$ARTIFACT_TYPE" != "null" ] ; then
+CONFIG_MEDIA_TYPE=$(jq -r '.config.mediaType' <<< $RAW_OUTPUT)
+if [ "$ARTIFACT_TYPE" != "null" ] || [ "$CONFIG_MEDIA_TYPE" == "application/vnd.cncf.helm.config.v1+json" ] ; then
     # OCI artifact (not a normal image)
     digest=$(echo $IMAGE | awk -F '@' '{print $2}')
     if [[ ! "$digest" =~ ^sha256: ]] ; then
