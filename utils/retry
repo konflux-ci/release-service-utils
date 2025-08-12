@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#
+# retry - run a command multiple times until it succeeds or the maximum number of attempts is reached
+#
+# Usage:
+#   retry <max_attempts> <command> [args...]
+#
+# Example:
+#   retry 5 kinit myuser
+#
+# Behavior:
+# - Runs the given command up to <max_attempts> times.
+# - Stops immediately if the command succeeds (exit status 0).
+# - Waits (5 × attempt_number) seconds before each retry (5s before 2nd attempt, 10s before 3rd, etc.).
+# - Exits with 0 if the command eventually succeeds, otherwise with the last command’s exit code.
+
+max_attempts="$1"
+shift
+
+attempt=1
+echo "Running command with up to $max_attempts attempts..." >&2
+until "$@"; do
+    if (( attempt == max_attempts )); then
+        echo "Attempt $attempt failed and there are no more retries left!" >&2
+        exit 1
+    fi
+    sleep_time=$(( 5 * attempt ))
+    echo "Attempt $attempt failed! Trying again in $sleep_time seconds..." >&2
+    sleep "$sleep_time"
+    (( attempt++ ))
+done
