@@ -77,7 +77,6 @@ COPY pubtools-pulp-wrapper /home/pubtools-pulp-wrapper
 COPY pubtools-marketplacesvm-wrapper /home/pubtools-marketplacesvm-wrapper
 COPY developer-portal-wrapper /home/developer-portal-wrapper
 COPY publish-to-cgw-wrapper /home/publish-to-cgw-wrapper
-COPY sbom /home/sbom
 
 # It is mandatory to set these labels
 LABEL name="Konflux Release Service Utils"
@@ -96,6 +95,5 @@ ENV PATH="$PATH:/home/pubtools-pulp-wrapper"
 ENV PATH="$PATH:/home/pubtools-marketplacesvm-wrapper"
 ENV PATH="$PATH:/home/developer-portal-wrapper"
 ENV PATH="$PATH:/home/publish-to-cgw-wrapper"
-ENV PATH="$PATH:/home/sbom"
 # Need to set PYTHONPATH to be able to run sbom scripts as modules
 ENV PYTHONPATH="$PYTHONPATH:/home"
