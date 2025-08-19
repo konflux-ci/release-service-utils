@@ -15,7 +15,6 @@ ARG YQ_VERSION=4.34.1
 ARG GLAB_VERSION=1.48.0
 ARG GH_VERSION=2.32.1
 ARG SYFT_VERSION=1.12.2
-ARG SPDX_TOOLS_VERSION=0.8.3
 
 RUN curl -L https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64 -o /usr/bin/yq &&\
     curl -L https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl -o /usr/bin/kubectl &&\
@@ -63,12 +62,7 @@ RUN pip3 install jinja2 \
     pubtools-exodus==${PUBTOOLS_EXODUS_VERSION} \
     pubtools-marketplacesvm==${PUBTOOLS_MARKETPLACESVM_VERSION} \
     pubtools-sign==${PUBTOOLS_SIGN_VERSION} \
-    pubtools-pyxis==${PUBTOOLS_PYXIS_VERSION} \
-    pydantic \
-    aiofiles \
-    types-aiofiles \
-    pytest-asyncio \
-    spdx-tools==${SPDX_TOOLS_VERSION}
+    pubtools-pyxis==${PUBTOOLS_PYXIS_VERSION}
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
 RUN dnf -y remove gcc
@@ -83,7 +77,6 @@ COPY pubtools-pulp-wrapper /home/pubtools-pulp-wrapper
 COPY pubtools-marketplacesvm-wrapper /home/pubtools-marketplacesvm-wrapper
 COPY developer-portal-wrapper /home/developer-portal-wrapper
 COPY publish-to-cgw-wrapper /home/publish-to-cgw-wrapper
-COPY sbom /home/sbom
 
 # It is mandatory to set these labels
 LABEL name="Konflux Release Service Utils"
@@ -102,6 +95,5 @@ ENV PATH="$PATH:/home/pubtools-pulp-wrapper"
 ENV PATH="$PATH:/home/pubtools-marketplacesvm-wrapper"
 ENV PATH="$PATH:/home/developer-portal-wrapper"
 ENV PATH="$PATH:/home/publish-to-cgw-wrapper"
-ENV PATH="$PATH:/home/sbom"
 # Need to set PYTHONPATH to be able to run sbom scripts as modules
 ENV PYTHONPATH="$PYTHONPATH:/home"
