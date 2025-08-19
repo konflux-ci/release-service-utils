@@ -57,8 +57,13 @@ if [ "$ARTIFACT_TYPE" != "null" ] || [ "$CONFIG_MEDIA_TYPE" == "application/vnd.
 
     # Just report that the image is for linux/amd64, which is not exactly true - but,
     # downstream release-service-catalog tasks expect to find something. Use this as a default.
-    jq -cr -n --arg digest "$digest" \
-        '{"platform": {"architecture": "amd64", "os": "linux"}, "digest": $ARGS.named["digest"], "multiarch": false}'
+    jq -cr -n --arg digest "$digest" --arg config_media_type "$CONFIG_MEDIA_TYPE" \
+        '{
+            "platform": {"architecture": "amd64", "os": "linux"},
+            "digest": $ARGS.named["digest"],
+            "multiarch": false,
+            "configMediaType": $ARGS.named["config_media_type"]
+        }'
 elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.oci.image.manifest.v1+json" ] ; then
     # Single arch, so need to run skopeo inspect again without --raw
     RAW_OUTPUT=$(skopeo inspect "${SKOPEO_RETRIES[@]}" --no-tags docker://${IMAGE})
