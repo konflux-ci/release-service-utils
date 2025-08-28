@@ -1,10 +1,9 @@
 FROM quay.io/konflux-ci/oras:latest@sha256:e52de03c78ea65bf806cebee6892f054e2ae7b554d302e4a83ef28ec5010b2ee as oras
-FROM registry.redhat.io/rhtas/cosign-rhel9:1.0.2-1719417920 as cosign
+FROM registry.redhat.io/rhtas/cosign-rhel9:1.1.1-1736785731 as cosign
 FROM registry.access.redhat.com/ubi9/ubi:9.6-1755678605
 
-ARG COSIGN_VERSION=2.4.0
 ARG KUBECTL_VERSION=1.27.2
-ARG OPM_VERSION=v1.38.0
+ARG OPM_VERSION=v1.50.0
 ARG PUBTOOLS_CGW_VERSION=0.5.4
 ARG PUBTOOLS_PULP_VERSION=1.33.2
 ARG PUBTOOLS_EXODUS_VERSION=1.5.2
@@ -12,9 +11,9 @@ ARG PUBTOOLS_MARKETPLACESVM_VERSION=1.7.0
 ARG PUBTOOLS_SIGN_VERSION=0.0.14
 ARG PUBTOOLS_PYXIS_VERSION=1.3.7
 ARG YQ_VERSION=4.34.1
-ARG GLAB_VERSION=1.48.0
+ARG GLAB_VERSION=1.51.0
 ARG GH_VERSION=2.32.1
-ARG SYFT_VERSION=1.12.2
+ARG SYFT_VERSION=1.19.0
 
 RUN curl -L https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64 -o /usr/bin/yq &&\
     curl -L https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl -o /usr/bin/kubectl &&\
