@@ -136,6 +136,7 @@ def test_apply_template_with_data_file(mock_argparser: MagicMock):
         assert result["spec"]["solution"] == "Test solution"
         assert len(result["spec"]["issues"]["fixed"]) == 1
         assert result["spec"]["issues"]["fixed"][0]["id"] == "TEST-1"
+        assert result["spec"]["skip_customer_notifications"] is False
 
     finally:
         os.remove(data_filename)
@@ -175,6 +176,7 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
                         "product_stream": "stream",
                         "cpe": "cpe:/id",
                         "type": "RHEA",
+                        "skip_customer_notifications": True,
                         "topic": topic,
                         "description": "description",
                         "solution": solution,
@@ -214,6 +216,7 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
         assert result["spec"]["solution"] == solution
         assert result["spec"]["topic"] == topic
         assert result["spec"]["synopsis"] == "Enhancement synopsis"
+        assert result["spec"]["skip_customer_notifications"] is True
         for issue in result["spec"]["issues"]["fixed"]:
             assert len(issue.keys()) == 3
     finally:
