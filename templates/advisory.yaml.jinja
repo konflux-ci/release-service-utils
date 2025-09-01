@@ -24,6 +24,7 @@ spec:
         {%- endif %}
       {%- endfor %}
 {%- endif %}
+  skip_customer_notifications: {{ advisory.spec.skip_customer_notifications | default(False) }}
   content:
     {{ advisory.spec.content | to_nice_yaml(indent=2) | indent(4) | trim }}
   synopsis: >-
