@@ -16,15 +16,15 @@ jobs:
           sudo apt-get -y update
           sudo apt-get install -y libkrb5-dev
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
       - name: Black Lint
-        uses: psf/black@stable
+        uses: psf/black@8a737e727ac5ab2f1d4cf5876720ed276dc8dc4b  # stable
       - name: Setup python environment for flake8 check
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.9"  # Same as in Dockerfile
       - name: flake8 Lint
-        uses: py-actions/flake8@v2
+        uses: py-actions/flake8@84ec6726560b6d5bd68f2a5bed83d62b52bb50ba  # v2
       - name: Run pytest
         run: |
           python -m pip install -r requirements.txt

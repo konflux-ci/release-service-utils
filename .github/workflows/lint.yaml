@@ -12,15 +12,15 @@ jobs:
   yamllint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
       - name: Run yamllint
-        uses: frenck/action-yamllint@v1
+        uses: frenck/action-yamllint@34b4bbcaeabedcfefad6adea8c5bbc42af0e2d47  # v1
   gitlint:
     name: Run gitlint checks
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
