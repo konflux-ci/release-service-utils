@@ -42,8 +42,24 @@ if ! echo "$json2" | jq -e . >/dev/null 2>&1; then
   exit 1
 fi
 
-# Merge the JSON objects
-merged_json=$(printf '%s\n%s' "$json1" "$json2" | jq -cs '.[0] * .[1]')
+# Merge the JSON objects recursively, combining arrays and replacing other values
+merged_json=$(printf '%s\n%s' "$json1" "$json2" | jq -cs '
+def merge_objects(a; b):
+  a as $a | b as $b |
+  ($a | keys) + ($b | keys) | unique | map({
+    key: .,
+    value: (
+      if ($a[.] | type) == "object" and ($b[.] | type) == "object" then
+        merge_objects($a[.]; $b[.])
+      elif ($a[.] | type) == "array" and ($b[.] | type) == "array" then
+        ($a[.] + $b[.]) | unique
+      else
+        $b[.] // $a[.]
+      end
+    )
+  }) | from_entries;
 
+.[0] as $first | .[1] as $second | merge_objects($first; $second)
+')
 # Print the merged JSON
 echo "$merged_json"
