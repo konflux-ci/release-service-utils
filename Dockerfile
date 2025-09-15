@@ -61,7 +61,8 @@ RUN pip3 install jinja2 \
     pubtools-exodus==${PUBTOOLS_EXODUS_VERSION} \
     pubtools-marketplacesvm==${PUBTOOLS_MARKETPLACESVM_VERSION} \
     pubtools-sign==${PUBTOOLS_SIGN_VERSION} \
-    pubtools-pyxis==${PUBTOOLS_PYXIS_VERSION}
+    pubtools-pyxis==${PUBTOOLS_PYXIS_VERSION} \
+    pulp-cli
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
 RUN dnf -y remove gcc
