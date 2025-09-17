@@ -102,17 +102,21 @@ while true; do
     for(( i = 0; i < $IRS_LENGTH; i++)); do
         IR=$(jq -c ".[$i]" <<< "$IRS")
         CONDITION_REASON=$(jq -r '.status.conditions[0].reason // ""' <<< "$IR")
+        PIPELINERUN=$(jq -r '.status.pipelineRun // ""' <<< "$IR")
         NAME=$(jq -r ".metadata.name" <<< "$IR")
+        IR_OUTPUT_FILE="${NAME}-output.json"
         echo -n "  ${NAME}: "
         if [ -z $CONDITION_REASON ]; then
             echo "no condition yet"
         elif [ $CONDITION_REASON = "Running" ]; then
-            echo "running"
+            echo "running - pipelineRun: $PIPELINERUN"
         elif [ $CONDITION_REASON = "Succeeded" ]; then
-            echo "succeeded"
+            echo "succeeded - pipelineRun: $PIPELINERUN"
+            echo '{"name": "'$NAME'", "pipelineRun": "'$PIPELINERUN'"}' >> "$IR_OUTPUT_FILE"
             ((++DONE_COUNT))
         else
             echo $CONDITION_REASON
+            echo '{"name": "'$NAME'", "pipelineRun": "'$PIPELINERUN'"}' >> "$IR_OUTPUT_FILE"
             ((++DONE_COUNT))
             SUCCESS=false
         fi
