@@ -104,7 +104,7 @@ while true; do
         CONDITION_REASON=$(jq -r '.status.conditions[0].reason // ""' <<< "$IR")
         PIPELINERUN=$(jq -r '.status.pipelineRun // ""' <<< "$IR")
         NAME=$(jq -r ".metadata.name" <<< "$IR")
-        IR_OUTPUT_FILE="${NAME}-output.json"
+        IR_OUTPUT_FILE="/tmp/${NAME}-output.json"
         echo -n "  ${NAME}: "
         if [ -z $CONDITION_REASON ]; then
             echo "no condition yet"
@@ -112,10 +112,12 @@ while true; do
             echo "running - pipelineRun: $PIPELINERUN"
         elif [ $CONDITION_REASON = "Succeeded" ]; then
             echo "succeeded - pipelineRun: $PIPELINERUN"
+            echo "writing results to $IR_OUTPUT_FILE"
             echo '{"name": "'$NAME'", "pipelineRun": "'$PIPELINERUN'"}' >> "$IR_OUTPUT_FILE"
             ((++DONE_COUNT))
         else
             echo $CONDITION_REASON
+            echo "writing results to $IR_OUTPUT_FILE"
             echo '{"name": "'$NAME'", "pipelineRun": "'$PIPELINERUN'"}' >> "$IR_OUTPUT_FILE"
             ((++DONE_COUNT))
             SUCCESS=false
