@@ -39,6 +39,7 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     python3-pip \
     python3-requests \
     python3-rpm \
+    rpm-build \
     skopeo \
     krb5-libs \
     krb5-devel \
