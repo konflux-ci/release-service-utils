@@ -54,7 +54,8 @@ def merge_objects(a; b):
       elif ($a[.] | type) == "array" and ($b[.] | type) == "array" then
         ($a[.] + $b[.]) | unique
       else
-        $b[.] // $a[.]
+        # Use check to preserve boolean false values instead of // 
+        if ($b[.] != null) then $b[.] else $a[.] end
       end
     )
   }) | from_entries;
