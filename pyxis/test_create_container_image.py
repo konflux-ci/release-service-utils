@@ -358,19 +358,35 @@ def test_prepare_parsed_data__success(mock_open):
     args = MagicMock()
     args.architecture = "test"
     args.dockerfile = "mydockerfile"
+    args.metadata = "test_metadata.json"
     manifest_content = json.dumps(
         {
             "layers": [{"digest": "1"}, {"digest": "2"}],
         }
     )
+    metadata_json = json.dumps(
+        {
+            "env_variables": [
+                "ENV_VAR_1=VALUE_1",
+                "ENV_VAR_2=VALUE_2",
+            ],
+            "labels": [
+                {"key": "LABEL_1", "value": "VALUE_1"},
+                {"key": "LABEL_2", "value": "VALUE_2"},
+            ],
+        }
+    )
     dockerfile_content = """FROM myimage\n\nRUN command\n"""
     mock_open1 = MagicMock()
     mock_open2 = MagicMock()
-    mock_open.side_effect = [mock_open1, mock_open2]
+    mock_open3 = MagicMock()
+    mock_open.side_effect = [mock_open1, mock_open2, mock_open3]
     file1 = mock_open1.__enter__.return_value
     file2 = mock_open2.__enter__.return_value
+    file3 = mock_open3.__enter__.return_value
     file1.read.return_value = manifest_content
     file2.read.return_value = dockerfile_content
+    file3.read.return_value = metadata_json
 
     parsed_data = prepare_parsed_data(args)
 
@@ -385,6 +401,14 @@ def test_prepare_parsed_data__success(mock_open):
         "uncompressed_size_bytes": 0,
         "top_layer_id": "2",
         "uncompressed_top_layer_id": None,
+        "env_variables": [
+            "ENV_VAR_1=VALUE_1",
+            "ENV_VAR_2=VALUE_2",
+        ],
+        "labels": [
+            {"key": "LABEL_1", "value": "VALUE_1"},
+            {"key": "LABEL_2", "value": "VALUE_2"},
+        ],
     }
 
 
@@ -393,6 +417,7 @@ def test_prepare_parsed_data__success_no_dockerfile(mock_open):
     args = MagicMock()
     args.architecture = "test"
     args.dockerfile = ""
+    args.metadata = ""
     manifest_content = json.dumps(
         {
             "layers": [{"digest": "1"}, {"digest": "2"}],
@@ -419,6 +444,7 @@ def test_prepare_parsed_data__with_layer_sizes(mock_open):
     args = MagicMock()
     args.architecture = "test"
     args.dockerfile = "mydockerfile"
+    args.metadata = ""
     manifest_content = json.dumps(
         {
             "layers": [{"digest": "1", "size": 4}, {"digest": "2", "size": 3}],
@@ -454,6 +480,98 @@ def test_prepare_parsed_data__with_layer_sizes(mock_open):
         "top_layer_id": "2",
         "uncompressed_top_layer_id": "4",
     }
+
+
+@patch("builtins.open")
+def test_prepare_parsed_data__metadata_empty_json(mock_open):
+    args = MagicMock()
+    args.architecture = "test"
+    args.dockerfile = ""
+    args.metadata = ""
+    manifest_content = json.dumps(
+        {
+            "layers": [{"digest": "1"}, {"digest": "2"}],
+        }
+    )
+    file = mock_open.return_value.__enter__.return_value
+    file.read.return_value = manifest_content
+
+    parsed_data = prepare_parsed_data(args)
+
+    assert "env_variables" not in parsed_data
+    assert "labels" not in parsed_data
+
+
+@patch("builtins.open")
+def test_prepare_parsed_data__metadata_empty_object(mock_open):
+    args = MagicMock()
+    args.architecture = "test"
+    args.dockerfile = ""
+    args.metadata = "empty_object_metadata.json"
+    manifest_content = json.dumps(
+        {
+            "layers": [{"digest": "1"}, {"digest": "2"}],
+        }
+    )
+    metadata_json = json.dumps({})
+    mock_open1 = MagicMock()
+    mock_open2 = MagicMock()
+    mock_open.side_effect = [mock_open1, mock_open2]
+    file1 = mock_open1.__enter__.return_value
+    file2 = mock_open2.__enter__.return_value
+    file1.read.return_value = manifest_content
+    file2.read.return_value = metadata_json
+
+    parsed_data = prepare_parsed_data(args)
+
+    assert "env_variables" not in parsed_data
+    assert "labels" not in parsed_data
+
+
+@patch("builtins.open")
+def test_prepare_parsed_data__metadata_env_only(mock_open):
+    args = MagicMock()
+    args.architecture = "test"
+    args.dockerfile = ""
+    args.metadata = "env_only_metadata.json"
+    manifest_content = json.dumps({"layers": [{"digest": "1"}]})
+    metadata_json = json.dumps({"env_variables": ["ENV_VAR_1=VALUE_1"]})
+
+    mock_open1 = MagicMock()
+    mock_open2 = MagicMock()
+    mock_open.side_effect = [mock_open1, mock_open2]
+    file1 = mock_open1.__enter__.return_value
+    file2 = mock_open2.__enter__.return_value
+    file1.read.return_value = manifest_content
+    file2.read.return_value = metadata_json
+
+    parsed_data = prepare_parsed_data(args)
+
+    assert parsed_data["env_variables"] == ["ENV_VAR_1=VALUE_1"]
+    assert "labels" not in parsed_data
+
+
+@patch("builtins.open")
+def test_prepare_parsed_data__metadata_labels_only(mock_open):
+    args = MagicMock()
+    args.architecture = "test"
+    args.dockerfile = ""
+    args.metadata = "labels_only_metadata.json"
+    manifest_content = json.dumps({"layers": [{"digest": "1"}]})
+    metadata_json = json.dumps({"labels": [{"key": "LABEL_1", "value": "VALUE_1"}]})
+
+    mock_open1 = MagicMock()
+    mock_open2 = MagicMock()
+    mock_open.side_effect = [mock_open1, mock_open2]
+    file1 = mock_open1.__enter__.return_value
+    file2 = mock_open2.__enter__.return_value
+    file1.read.return_value = manifest_content
+    file2.read.return_value = metadata_json
+
+    parsed_data = prepare_parsed_data(args)
+
+    assert parsed_data["labels"] == [{"key": "LABEL_1", "value": "VALUE_1"}]
+    assert "env_variables" not in parsed_data
 
 
 def test_pyxis_tags():
