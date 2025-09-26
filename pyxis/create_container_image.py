@@ -85,6 +85,12 @@ def setup_argparser() -> Any:  # pragma: no cover
         required=True,
     )
     parser.add_argument(
+        "--metadata",
+        help="JSON file that contains labels and env_variables metadata"
+        " for the container image",
+        default="",
+    )
+    parser.add_argument(
         "--is-latest",
         help="Should the `latest` tag of the ContainerImage be overwritten?",
         required=True,
@@ -194,9 +200,14 @@ def find_repo_in_image(repository_str: str, image: Dict[str, Any]) -> Optional[i
 
 
 def prepare_parsed_data(args) -> Dict[str, Any]:
-    """Function to extract the data this script needs from provided oras manifest fetch output
+    """Function to extract the data this script needs to create parsed_data.
+       Processes data from:
+        - Architecture from args
+        - ORAS manifest fetch output
+        - Dockerfile content (if provided)
+        - Metadata file with env_variables and labels (if provided)
 
-    :return: Dict of tuples containing pertinent data
+    :return: Dict containing processed data from parsed sources
     """
 
     with open(args.oras_manifest_fetch) as json_file:
@@ -236,6 +247,16 @@ def prepare_parsed_data(args) -> Dict[str, Any]:
         parsed_data["files"] = [
             {"key": "buildfile", "content": dockerfile_content, "filename": "Dockerfile"}
         ]
+
+    if args.metadata != "":
+        with open(args.metadata) as metadata_file:
+            metadata = json.load(metadata_file)
+        env_variables = metadata.get("env_variables", [])
+        labels = metadata.get("labels", [])
+        if env_variables:
+            parsed_data["env_variables"] = env_variables
+        if labels:
+            parsed_data["labels"] = labels
 
     return parsed_data
 
