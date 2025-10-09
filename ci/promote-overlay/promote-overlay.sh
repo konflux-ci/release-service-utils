@@ -140,12 +140,14 @@ RS_COMMITS=($(git rev-list --first-parent --ancestry-path "$RS_TARGET_OVERLAY_CO
 ## now loop through the above array
 for RS_COMMIT in "${RS_COMMITS[@]}"
 do
-  PR_INFO="$(curl -s   -H 'Authorization: token  '"$token"  'https://api.github.com/search/issues?q=is:pr+sha:'"$RS_COMMIT")"
-  PR_URL="$(jq -r '.items[0].pull_request.html_url' <<< "$PR_INFO")"
-  LABEL="$(jq -r '.items[0].labels[].name | select(. | contains("breaking-change"))' <<< "$PR_INFO")"
+  PR_INFO="$(curl -s -H 'Authorization: token '"$token" 'https://api.github.com/search/issues?q=is:pr+sha:'"$RS_COMMIT")"
+  PR_URL="$(jq -r '.items[0].pull_request.html_url // empty' <<< "$PR_INFO")"
+  LABEL="$(jq -r '.items[0].labels[]?.name | select(. | contains("breaking-change")) // empty' <<< "$PR_INFO")"
   [[ -z "$LABEL" ]] || LABEL="($LABEL)"
    # or do whatever with individual element of the array
   description="$description"' - '"$PR_URL $LABEL"'\r\n'
+  # Sleep to avoid GitHub API rate limits (30 requests/minute for authenticated search)
+  sleep 2
 done
 
 cd ${infraDeploymentDir}
