@@ -8,6 +8,15 @@ make_json_safe() {
   echo "$json_safe_string"
 }
 
+print_help(){
+    echo -e "$0 --source-overlay SOURCE_OVERLAY --target-overlay TARGET_OVERLAY --fork-owner FORK_OWNER \
+            [ --skip-cleanup ]\n"
+    echo -e "\t--source-overlay SOURCE_OVERLAY\tName of the source overlay to promote to target"
+    echo -e "\t--target-overlay TARGET_OVERLAY\tName of the overlay to target for promotion"
+    echo -e "\t--fork-owner FORK_OWNER\tName of the owner of your infra-deployments fork in Github"
+    echo -e "\t--skip-cleanup\tDisable cleanup after test. Useful for debugging"
+}
+
 OPTIONS=$(getopt -l "skip-cleanup,source-overlay:,target-overlay:,fork-owner:,help" -o "sc,src:,tgt:,fo:,h" -a -- "$@")
 eval set -- "$OPTIONS"
 while true; do
@@ -38,15 +47,6 @@ while true; do
         *) echo "Error: Unexpected option: $1" % >2
     esac
 done
-
-print_help(){
-    echo -e "$0 --source-overlay SOURCE_OVERLAY --target-overlay TARGET_OVERLAY --fork-owner FORK_OWNER \
-            [ --skip-cleanup ]\n"
-    echo -e "\t--source-overlay SOURCE_OVERLAY\tName of the source overlay to promote to target"
-    echo -e "\t--target-overlay TARGET_OVERLAY\tName of the overlay to target for promotion"
-    echo -e "\t--fork-owner FORK_OWNER\tName of the owner of your infra-deployments fork in Github"
-    echo -e "\t--skip-cleanup\tDisable cleanup after test. Useful for debugging"
-}
 
 if [ -z "${SOURCE_OVERLAY}" ]; then
   echo -e "Error: missing 'source-overlay' argument\n\n"
