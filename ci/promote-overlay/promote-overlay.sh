@@ -17,6 +17,18 @@ print_help(){
     echo -e "\t--skip-cleanup\tDisable cleanup after test. Useful for debugging"
 }
 
+require_arg() {
+    local var_name="$1"
+    local var_value="$2"
+    local arg_name="$3"
+
+    if [ -z "$var_value" ]; then
+        echo -e "Error: missing '$arg_name' argument\n\n"
+        print_help
+        exit 1
+    fi
+}
+
 OPTIONS=$(getopt -l "skip-cleanup,source-overlay:,target-overlay:,fork-owner:,help" -o "sc,src:,tgt:,fo:,h" -a -- "$@")
 eval set -- "$OPTIONS"
 while true; do
@@ -49,28 +61,10 @@ while true; do
     esac
 done
 
-if [ -z "${SOURCE_OVERLAY}" ]; then
-  echo -e "Error: missing 'source-overlay' argument\n\n"
-  print_help
-  exit 1
-fi
-if [ -z "${TARGET_OVERLAY}" ]; then
-  echo -e "Error: missing 'target-overlay' argument\n\n"
-  print_help
-  exit 1
-fi
-if [ -z "${FORK_OWNER}" ]; then
-  echo -e "Error: missing 'fork-owner' argument\n\n"
-  print_help
-  exit 1
-fi
-if [ -z "${GITHUB_TOKEN}" ]; then
-  echo -e "Error: missing 'GITHUB_TOKEN' environment variable\n\n"
-  print_help
-  exit 1
-fi
-
-UPDATE_BRANCH_NAME="release-service-${TARGET_OVERLAY}-update-"$(date '+%Y_%m_%d__%H_%M_%S')
+require_arg "SOURCE_OVERLAY" "${SOURCE_OVERLAY}" "source-overlay"
+require_arg "TARGET_OVERLAY" "${TARGET_OVERLAY}" "target-overlay"
+require_arg "FORK_OWNER" "${FORK_OWNER}" "fork-owner"
+require_arg "GITHUB_TOKEN" "${GITHUB_TOKEN}" "GITHUB_TOKEN environment variable"
 
 # GitHub repository details
 owner="redhat-appstudio"
@@ -79,8 +73,8 @@ repo="infra-deployments"
 # Personal access token with appropriate permissions
 token="${GITHUB_TOKEN}"
 
-# New branch and commit details
-new_branch=${UPDATE_BRANCH_NAME}
+# Branch and commit details
+new_branch="release-service-${TARGET_OVERLAY}-update-"$(date '+%Y_%m_%d__%H_%M_%S')
 commit_message="Promote release-service from ${SOURCE_OVERLAY} to ${TARGET_OVERLAY}"
 
 # Fork repository and branch parameters
@@ -110,7 +104,7 @@ echo -e "Sync fork with upstream:"
 sync_fork_json=$(curl -s -L \
   -X POST \
   -H "Accept: application/vnd.github+json" \
-  -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+  -H "Authorization: Bearer ${token}" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
   https://api.github.com/repos/${FORK_OWNER}/infra-deployments/merge-upstream \
   -d '{"branch":"'${base_branch}'"}')
