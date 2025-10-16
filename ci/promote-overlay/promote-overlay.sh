@@ -115,7 +115,7 @@ sync_fork_json=$(curl -s -L \
   https://api.github.com/repos/${FORK_OWNER}/infra-deployments/merge-upstream \
   -d '{"branch":"'${base_branch}'"}')
 
-echo $sync_fork_json
+echo "$sync_fork_json"
 
 git clone "git@github.com:$FORK_OWNER/$repo.git"
 git clone "git@github.com:$owner/release-service.git"
@@ -169,7 +169,7 @@ pr_creation_json=$(curl -s -X POST "https://api.github.com/repos/$owner/$repo/pu
     "body": "'"$description"'"
   }')
 
-pr_url=$(echo $pr_creation_json | jq -r .html_url)
+pr_url=$(echo "$pr_creation_json" | jq -r .html_url)
 
 if [ "${pr_url}" == "null" ]; then
   echo -e "\nError: failed to create PR. See output: \n${pr_creation_json}"
