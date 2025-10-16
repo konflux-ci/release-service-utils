@@ -23,6 +23,7 @@ while true; do
     case "$1" in
         -sc|--skip-cleanup)
             CLEANUP="true"
+            shift
             ;;
         -src|--source-overlay)
             SOURCE_OVERLAY="$2"
@@ -44,7 +45,7 @@ while true; do
             shift
             break
             ;;
-        *) echo "Error: Unexpected option: $1" % >2
+        *) echo "Error: Unexpected option: $1" >&2
     esac
 done
 
