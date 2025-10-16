@@ -23,6 +23,7 @@ while true; do
     case "$1" in
         -sc|--skip-cleanup)
             CLEANUP="true"
+            shift
             ;;
         -src|--source-overlay)
             SOURCE_OVERLAY="$2"
@@ -44,7 +45,7 @@ while true; do
             shift
             break
             ;;
-        *) echo "Error: Unexpected option: $1" % >2
+        *) echo "Error: Unexpected option: $1" >&2
     esac
 done
 
@@ -114,7 +115,7 @@ sync_fork_json=$(curl -s -L \
   https://api.github.com/repos/${FORK_OWNER}/infra-deployments/merge-upstream \
   -d '{"branch":"'${base_branch}'"}')
 
-echo $sync_fork_json
+echo "$sync_fork_json"
 
 git clone "git@github.com:$FORK_OWNER/$repo.git"
 git clone "git@github.com:$owner/release-service.git"
@@ -168,7 +169,7 @@ pr_creation_json=$(curl -s -X POST "https://api.github.com/repos/$owner/$repo/pu
     "body": "'"$description"'"
   }')
 
-pr_url=$(echo $pr_creation_json | jq -r .html_url)
+pr_url=$(echo "$pr_creation_json" | jq -r .html_url)
 
 if [ "${pr_url}" == "null" ]; then
   echo -e "\nError: failed to create PR. See output: \n${pr_creation_json}"
