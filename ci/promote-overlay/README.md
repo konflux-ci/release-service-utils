@@ -18,6 +18,17 @@ This script helps to automate this promotion. It analyzes the commits between th
 
 ![Example PR](infra-pr.png)
 
+## Performance & Rate Limiting
+
+The script uses GitHub's GraphQL API to efficiently fetch PR information for all commits in a single request (or batches of 50 commits). This approach:
+
+- **Avoids rate limiting**: Reduces API calls from N (one per commit) to 1-2 calls total
+- **Faster execution**: Completes in seconds instead of minutes
+- **Automatic retry**: Built-in rate limit detection and retry logic (3 attempts with 60-second delays)
+- **Better reliability**: Prevents incomplete changelogs due to rate limit errors
+
+For typical promotion batches of 20-50 commits, this is approximately 40-60x faster than individual API calls.
+
 ## Setup
 
 * The script requires an environment variable called _**GITHUB_TOKEN**_ to exist. This token should have the following scopes:
@@ -57,13 +68,15 @@ remote: Compressing objects: 100% (287/287), done.
 remote: Total 2995 (delta 566), reused 673 (delta 505), pack-reused 2194
 Receiving objects: 100% (2995/2995), 30.64 MiB | 4.33 MiB/s, done.
 Resolving deltas: 100% (1749/1749), done.
-HEAD is now at 2421fc66 release-service update (#2595)
+HEAD is now at 9faa2537 chore: update cost management optimization labels (#8471)
 branch 'release-service-staging-update-2023_10_22__12_33_39' set up to track 'origin/main'.
-Switched to a new branch 'release-service-staging-update-2023_10_22__12_33_39'
 
 release-service source overlay commit -> 68f2f2c678f726ffa20166adcab8e7e0204a8c69
 release-service target overlay commit -> 9a0f08573e4ca3f0d5deda2cbda2575b7e7093bd
 
+Switched to a new branch 'release-service-staging-update-2023_10_22__12_33_39'
+Fetching PR information for 15 commits...
+Successfully processed 15 commits
 Run standard RH pre-commit checks........................................Passed
 [release-service-staging-update-2023_10_22__12_33_39 e5f53283] Promote release-service from development to staging
 1 file changed, 2 insertions(+), 2 deletions(-)

@@ -132,18 +132,89 @@ echo ""
 cd  ${releaseServiceDir}
 git fetch --all --tags --prune
 RS_COMMITS=($(git rev-list --first-parent --ancestry-path "$RS_TARGET_OVERLAY_COMMIT"'...'"$RS_SOURCE_OVERLAY_COMMIT"))
-## now loop through the above array
-for RS_COMMIT in "${RS_COMMITS[@]}"
-do
-  PR_INFO="$(curl -s -H 'Authorization: token '"$token" 'https://api.github.com/search/issues?q=is:pr+sha:'"$RS_COMMIT")"
-  PR_URL="$(jq -r '.items[0].pull_request.html_url // empty' <<< "$PR_INFO")"
-  LABEL="$(jq -r '.items[0].labels[]?.name | select(. | contains("breaking-change")) // empty' <<< "$PR_INFO")"
-  [[ -z "$LABEL" ]] || LABEL="($LABEL)"
-   # or do whatever with individual element of the array
-  description="$description"' - '"$PR_URL $LABEL"'\r\n'
-  # Sleep to avoid GitHub API rate limits (30 requests/minute for authenticated search)
-  sleep 2
-done
+
+echo "Fetching PR information for ${#RS_COMMITS[@]} commits..."
+
+graphql_request() {
+  local query="$1"
+  local retries=3
+  local response
+
+  for ((i=1; i<=retries; i++)); do
+    response=$(curl -sf -X POST https://api.github.com/graphql \
+      -H "Authorization: bearer ${token}" \
+      -H "Content-Type: application/json" \
+      -d "$(jq -n --arg q "$query" '{query: $q}')")
+
+    if [ $? -eq 0 ] && ! echo "$response" | jq -e '.errors' >/dev/null 2>&1; then
+      echo "$response"
+      return 0
+    fi
+
+    if [ $i -lt $retries ]; then
+      echo "Request failed. Retrying $i/$retries..." >&2
+      sleep 10
+    fi
+  done
+
+  echo "Error: GraphQL request failed after $retries attempts" >&2
+  return 1
+}
+
+# Process commits in batches of 50
+if [ ${#RS_COMMITS[@]} -eq 0 ]; then
+  echo "No commits to process"
+else
+  batch_size=50
+
+  for ((i=0; i<${#RS_COMMITS[@]}; i+=batch_size)); do
+    # Build GraphQL query for this batch
+    query="query {"
+    batch_end=$((i + batch_size))
+    [ $batch_end -gt ${#RS_COMMITS[@]} ] && batch_end=${#RS_COMMITS[@]}
+
+    for ((j=i; j<batch_end; j++)); do
+      query="$query
+      c$j: search(query: \"repo:konflux-ci/release-service is:pr sha:${RS_COMMITS[$j]}\", type: ISSUE, first: 1) {
+        edges {
+          node {
+            ... on PullRequest {
+              url
+              labels(first: 10) {
+                nodes {
+                  name
+                }
+              }
+            }
+          }
+        }
+      }"
+    done
+    query="$query
+    }"
+
+    response=$(graphql_request "$query")
+    if [ $? -ne 0 ]; then
+      echo "Error: Failed to fetch PR information"
+      exit 1
+    fi
+
+    for ((j=i; j<batch_end; j++)); do
+      pr_url=$(echo "$response" | jq -r ".data.c$j.edges[0]?.node.url // empty")
+
+      if [ -n "$pr_url" ]; then
+        breaking_change=$(echo "$response" | jq -r ".data.c$j.edges[0]?.node.labels.nodes[]?.name | select(contains(\"breaking-change\")) // empty")
+
+        label=""
+        [[ -z "$breaking_change" ]] || label="(breaking-change)"
+
+        description="$description"' - '"$pr_url $label"'\r\n'
+      fi
+    done
+  done
+
+  echo "Successfully processed ${#RS_COMMITS[@]} commits"
+fi
 
 cd ${infraDeploymentDir}
 sed -i "s/$RS_TARGET_OVERLAY_COMMIT/$RS_SOURCE_OVERLAY_COMMIT/g" components/release/${TARGET_OVERLAY}/kustomization.yaml
