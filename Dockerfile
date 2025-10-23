@@ -88,22 +88,8 @@ LABEL io.openshift.tags="konflux"
 LABEL summary="Konflux Release Service Utils"
 LABEL com.redhat.component="release-service-utils"
 
-# Non-root user setup: OpenShift may override UID/GID at runtime (best practices)
-RUN groupadd -g 1001 group1 && \
-    useradd -u 1001 -g 1001 -m -d /tekton/home user1 && \
-    mkdir -p /tekton/home && \
-    chmod -R g+rwX /tekton/home /home && \
-    # Make all files group-owned by root to allow OpenShift's random UID to work
-    chgrp -R 0 /tekton/home /home && \
-    # Ensure group permissions are inherited by new subdirectories
-    find /tekton/home /home -type d -exec chmod g+s {} +
-
-# Switch to a non-root user
-USER 1001
-
 # Set HOME variable to something else than `/` to avoid 'permission denied' problems when writing files.
 ENV HOME=/tekton/home
-WORKDIR $HOME
 ENV PATH="$PATH:/home/pyxis"
 ENV PATH="$PATH:/home/utils"
 ENV PATH="$PATH:/home/pubtools-pulp-wrapper"
