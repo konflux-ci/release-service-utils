@@ -47,6 +47,7 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     rsync \
     gcc \
     python3-qpid-proton \
+    zip \
     && dnf clean all
 
 RUN curl -LO https://github.com/release-engineering/exodus-rsync/releases/latest/download/exodus-rsync && \
