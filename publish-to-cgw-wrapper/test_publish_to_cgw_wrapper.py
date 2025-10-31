@@ -399,7 +399,7 @@ def test_generate_metadata(data_json, metadata):
 def test_file_already_exists(metadata):
     """Test checking if a file already exists."""
     new_file = metadata[0]
-    assert cgw_wrapper.file_already_exists(metadata, new_file) is metadata[0]
+    assert cgw_wrapper.find_existing_file(metadata, new_file) is metadata[0]
 
 
 def test_file_does_not_exist(metadata):
@@ -408,7 +408,7 @@ def test_file_does_not_exist(metadata):
     new_file["label"] = "nonexistent-file.gz"
     new_file["shortURL"] = "/pub/cgw/product_name_1/1.2/nonexistent-file.gz"
     new_file["downloadURL"] = "/content/origin/files/sha256/0d/somehash/nonexistent-file.gz"
-    assert cgw_wrapper.file_already_exists(metadata, new_file) is None
+    assert cgw_wrapper.find_existing_file(metadata, new_file) is None
 
 
 @patch("publish_to_cgw_wrapper.call_cgw_api")
@@ -483,7 +483,7 @@ def test_create_files_success(mock_call, metadata):
     ]
     metadata = metadata[:2]
 
-    created, skipped = cgw_wrapper.create_files(
+    created, updated, skipped = cgw_wrapper.create_files(
         host="https://cgw.com/cgw/rest/admin",
         session=None,
         product_id="101",
@@ -518,6 +518,7 @@ def test_create_files_success(mock_call, metadata):
 
     assert mock_call.call_count == 3
     assert created == [4567, 4568]
+    assert updated == []
     assert skipped == []
 
 
@@ -536,7 +537,7 @@ def test_create_files_with_existing(mock_call, metadata):
         MagicMock(json=lambda: 4570),  # gitsign-darwin-amd64.gz (created)
     ]
 
-    created, skipped = cgw_wrapper.create_files(
+    created, updated, skipped = cgw_wrapper.create_files(
         host="https://cgw.com/cgw/rest/admin",
         session=None,
         product_id="101",
@@ -577,6 +578,7 @@ def test_create_files_with_existing(mock_call, metadata):
     mock_call.assert_has_calls(expected_calls)
     assert mock_call.call_count == 4
     assert created == [4568, 4569, 4570]
+    assert updated == []
     assert skipped == [4566, 4567]
 
 
@@ -648,7 +650,7 @@ def test_process_component_success(
     mock_get_product.return_value = 123
     mock_get_version.return_value = 456
     mock_generate_meta.return_value = metadata
-    mock_create_files.return_value = ([7, 8, 9], [10, 11])
+    mock_create_files.return_value = ([7, 8, 9], [12, 13], [10, 11])
 
     component = data_json["components"][0]
     component_name = data_json["components"][0]["name"]
@@ -693,7 +695,9 @@ def test_process_component_success(
     assert result["product_id"] == 123
     assert result["product_version_id"] == 456
     assert result["created_file_ids"] == [7, 8, 9]
+    assert result["updated_file_ids"] == [12, 13]
     assert result["no_of_files_processed"] == len(metadata)
     assert result["no_of_files_created"] == 3
+    assert result["no_of_files_updated"] == 2
     assert result["no_of_files_skipped"] == 2
     assert result["metadata"] == metadata

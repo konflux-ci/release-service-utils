@@ -251,14 +251,27 @@ def generate_metadata(
     return metadata
 
 
-def file_already_exists(existing_files, new_file):
-    """Check if a file already exists"""
+def find_existing_file(existing_files, new_file):
+    """Find a file with matching shortURL, regardless of downloadURL"""
     for file in existing_files:
-        if all(
-            file.get(key) == new_file.get(key) for key in ["label", "downloadURL", "shortURL"]
-        ):
+        if file.get("shortURL") == new_file.get("shortURL"):
             return file
     return None
+
+
+def update_file(*, host, session, product_id, version_id, file_id, file_metadata):
+    """Update an existing file using POST with ID in body"""
+    # Add the file ID to the metadata for update
+    update_data = {**file_metadata, "id": file_id}
+
+    response = call_cgw_api(
+        host=host,
+        method="POST",
+        endpoint=f"/products/{product_id}/versions/{version_id}/files",
+        session=session,
+        data=update_data,
+    )
+    return response
 
 
 def rollback_files(*, host, session, product_id, version_id, created_file_ids):
@@ -284,6 +297,7 @@ def rollback_files(*, host, session, product_id, version_id, created_file_ids):
 def create_files(*, host, session, product_id, version_id, metadata):
     """Create files using the metadata created and rollback on failure."""
     created_file_ids = []
+    updated_file_ids = []
     skipped_files_ids = []
     try:
         existing_files = call_cgw_api(
@@ -295,29 +309,49 @@ def create_files(*, host, session, product_id, version_id, metadata):
         existing_files = existing_files.json()
 
         for file_metadata in metadata:
-            file_check = file_already_exists(existing_files, file_metadata)
-            if file_check:
-                skipped_files_ids.append(file_check.get("id"))
+            existing_file = find_existing_file(existing_files, file_metadata)
+
+            if existing_file:
+                # Check if downloadURL is different (needs update)
+                if existing_file.get("downloadURL") != file_metadata.get("downloadURL"):
+                    logging.info(
+                        f"Updating file: {file_metadata['label']} "
+                        f"(ID: {existing_file['id']}) with new downloadURL"
+                    )
+                    update_file(
+                        host=host,
+                        session=session,
+                        product_id=product_id,
+                        version_id=version_id,
+                        file_id=existing_file["id"],
+                        file_metadata=file_metadata,
+                    )
+                    updated_file_ids.append(existing_file["id"])
+                    logging.info(f"Successfully updated file ID: {existing_file['id']}")
+                else:
+                    # File exists with same downloadURL - skip
+                    skipped_files_ids.append(existing_file.get("id"))
+                    logging.info(
+                        f"Skipping: File {existing_file['label']} already exists "
+                        f"with same content (ID: {existing_file['id']})"
+                    )
+            else:
+                # File doesn't exist - create new
                 logging.info(
-                    f"Skipping creation: File {file_check['label']} already exists "
-                    f"with ShortURL {file_check['shortURL']}"
+                    f"Creating file: {file_metadata['label']} "
+                    f"with ShortURL {file_metadata['shortURL']}"
                 )
-                continue
-            logging.info(
-                f"Creating file: {file_metadata['label']} "
-                f"with ShortURL {file_metadata['shortURL']}"
-            )
-            created_file_id = call_cgw_api(
-                host=host,
-                method="POST",
-                endpoint=f"/products/{product_id}/versions/{version_id}/files",
-                session=session,
-                data=file_metadata,
-            )
-            created_file_id = created_file_id.json()
-            logging.info(f"Successfully created file with ID: {created_file_id}")
-            created_file_ids.append(created_file_id)
-        return created_file_ids, skipped_files_ids
+                created_file_id = call_cgw_api(
+                    host=host,
+                    method="POST",
+                    endpoint=f"/products/{product_id}/versions/{version_id}/files",
+                    session=session,
+                    data=file_metadata,
+                )
+                created_file_id = created_file_id.json()
+                logging.info(f"Successfully created file with ID: {created_file_id}")
+                created_file_ids.append(created_file_id)
+        return created_file_ids, updated_file_ids, skipped_files_ids
     except Exception as e:
         rollback_files(
             host=host,
@@ -373,9 +407,10 @@ def process_component(*, host, session, component, dry_run=False):
 
     if dry_run:
         created = [999999 for _ in metadata]
+        updated = []
         skipped = []
     else:
-        created, skipped = create_files(
+        created, updated, skipped = create_files(
             host=host,
             session=session,
             product_id=product_id,
@@ -383,14 +418,20 @@ def process_component(*, host, session, component, dry_run=False):
             metadata=metadata,
         )
 
-    logging.info(f"Created {len(created)} files, Skipped {len(skipped)} files.")
+    logging.info(
+        f"Created {len(created)} files, "
+        f"Updated {len(updated)} files, "
+        f"Skipped {len(skipped)} files."
+    )
 
     result_data = {
         "product_id": product_id,
         "product_version_id": product_version_id,
         "created_file_ids": created,
+        "updated_file_ids": updated,
         "no_of_files_processed": len(metadata),
         "no_of_files_created": len(created),
+        "no_of_files_updated": len(updated),
         "no_of_files_skipped": len(skipped),
         "metadata": metadata,
     }
