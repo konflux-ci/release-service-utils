@@ -6,6 +6,8 @@ on:
       - opened
       - synchronize
       - reopened
+  merge_group:
+    types: [checks_requested]
 jobs:
   python:
     runs-on: ubuntu-latest
