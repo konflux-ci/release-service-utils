@@ -89,8 +89,30 @@ LABEL io.openshift.tags="konflux"
 LABEL summary="Konflux Release Service Utils"
 LABEL com.redhat.component="release-service-utils"
 
+# Configure non-root user (UID 1001) for security and compatibility.
+# Note: release-service-catalog unit tests with user 1001 can't write to "/var/workdir" and "/tekton/*" directories
+# And openShift may assign a random UID/GID at runtime.
+# So, below part also sets directory ownership and permissions to ensure write access for unit tests and runtime.
+RUN groupadd -g 1001 group1 && \
+    useradd -m -u 1001 -g 1001 -d /tekton/home user1 && \
+    # Change ownership on directories to ensure write permissions for unit tests
+    mkdir -p /var/workdir && \
+    mkdir -p /tekton/home && \
+    mkdir -p /tekton/results && \
+    chown -R 1001:1001 /var/workdir && \
+    chown -R 1001:1001 /tekton/home /tekton/results && \
+    # Make all files group-owned by root to allow OpenShift's random UID to work
+    chgrp -R 0 /home /tekton && \
+    chmod -R g+rwX /var/workdir /tekton /home && \
+    # Ensure group permissions are inherited by new subdirectories
+    find /var/workdir /home /tekton -type d -exec chmod g+s {} +
+
+# Switch to a non-root user
+USER 1001
+
 # Set HOME variable to something else than `/` to avoid 'permission denied' problems when writing files.
 ENV HOME=/tekton/home
+WORKDIR $HOME
 ENV PATH="$PATH:/home/pyxis"
 ENV PATH="$PATH:/home/utils"
 ENV PATH="$PATH:/home/pubtools-pulp-wrapper"
