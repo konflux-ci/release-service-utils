@@ -18,19 +18,20 @@ def test_signatures_exist(graphql_query):
     args.repository = "scoheb/a"
 
     reference1 = "quay.io/scoheb/a:abc"
+    sig_key_id = "signing_key1"
 
     # signature exists
-    signatures1 = generate_signatures(SIGNATURE_ID, reference1)
+    signatures1 = generate_signatures(SIGNATURE_ID, reference1, sig_key_id)
     graphql_query.side_effect = [
         generate_pyxis_response("find_signatures", signatures1),
     ]
 
     # Act
-    references = find_signatures_for_repository(
+    references_with_keys = find_signatures_for_repository(
         args.pyxis_graphql_api, args.repository, args.manifest_digest
     )
-    assert references
-    assert len(references) == 1
+    assert references_with_keys
+    assert len(references_with_keys) == 1
 
 
 @patch("pyxis.graphql_query")
@@ -47,10 +48,10 @@ def test_signatures_notfound(graphql_query):
     ]
 
     # Act
-    references = find_signatures_for_repository(
+    references_with_keys = find_signatures_for_repository(
         args.pyxis_graphql_api, args.repository, args.manifest_digest
     )
-    assert len(references) == 0
+    assert len(references_with_keys) == 0
 
 
 def generate_pyxis_response(query_name, data):
@@ -64,11 +65,6 @@ def generate_pyxis_response(query_name, data):
     return response_json
 
 
-def generate_signatures(id, reference):
-    signatures = [
-        {
-            "_id": id,
-            "reference": reference,
-        }
-    ]
+def generate_signatures(id, reference, sig_key_id=None):
+    signatures = [{"_id": id, "reference": reference, "sig_key_id": sig_key_id}]
     return signatures
