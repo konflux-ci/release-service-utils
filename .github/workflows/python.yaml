@@ -29,5 +29,7 @@ jobs:
         uses: py-actions/flake8@84ec6726560b6d5bd68f2a5bed83d62b52bb50ba  # v2
       - name: Run pytest
         run: |
-          python -m pip install -r requirements.txt
-          pytest
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv sync --dev
+          uv run pytest
