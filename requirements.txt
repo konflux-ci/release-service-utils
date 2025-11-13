@@ -1,9 +1,0 @@
-pytest
-requests
-jinja2
-jinja2-ansible-filters
-packageurl-python
-pubtools-pulp
-pubtools-exodus
-pubtools-content-gateway
-pubtools-marketplacesvm
