@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Python script to find all signatures in Pyxis for a given repository and manifest_digest
-and save a list of references that are signed in a text file, one reference per line
+and save a list of references with keys that are signed in a text file, one reference per line
 
 Required env vars:
 PYXIS_KEY_PATH
@@ -27,7 +27,7 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
 
     parser = argparse.ArgumentParser(
         description="find all signatures in Pyxis for a given repository and manifest_digest"
-        "and save a list of references that are signed in a text file, one reference"
+        "and save a list of references with keys that are signed in a text file, one reference"
         "per line"
     )
 
@@ -51,7 +51,7 @@ def parse_arguments() -> argparse.Namespace:  # pragma: no cover
     )
     parser.add_argument(
         "--output_file",
-        help="output file of references found",
+        help="output file of references with keys found",
         required=True,
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
@@ -70,7 +70,7 @@ def find_signatures_for_repository(
 ) -> set:
     LOGGER.info(f"repository: {repository}")
     LOGGER.info(f"manifest_digest: {manifest_digest}")
-    references = set()
+    references_with_keys = set()
     query = """
 query ($repository: String!, $manifest_digest: String!, $page: Int!, $page_size: Int!) {
     find_signatures(
@@ -87,6 +87,7 @@ query ($repository: String!, $manifest_digest: String!, $page: Int!, $page_size:
         data {
             _id
             reference
+            sig_key_id
         }
     }
 }
@@ -105,11 +106,13 @@ query ($repository: String!, $manifest_digest: String!, $page: Int!, $page_size:
         data = pyxis.graphql_query(graphql_api, body)
         signatures = data["find_signatures"]["data"]
         LOGGER.debug(f"Found {len(signatures)} signatures.")
-        references.update([signature["reference"] for signature in signatures])
+        references_with_keys.update(
+            [f"{signature['reference']} {signature['sig_key_id']}" for signature in signatures]
+        )
         has_more = len(signatures) == page_size
         page += 1
-    LOGGER.info(f"Found {len(references)} references.")
-    return references
+    LOGGER.info(f"Found {len(references_with_keys)} references.")
+    return references_with_keys
 
 
 def main():  # pragma: no cover
@@ -120,12 +123,12 @@ def main():  # pragma: no cover
 
     LOGGER.debug(f"Pyxis GraphQL API: {args.pyxis_graphql_api}")
 
-    references = find_signatures_for_repository(
+    references_with_keys = find_signatures_for_repository(
         args.pyxis_graphql_api, args.repository, args.manifest_digest
     )
     with open(args.output_file, "w") as f:
-        for line in references:
-            f.write(f"{line}\n")
+        for ref_with_key in references_with_keys:
+            f.write(f"{ref_with_key}\n")
     LOGGER.info(f"Writing references to {args.output_file}")
 
 
