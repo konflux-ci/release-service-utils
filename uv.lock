@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.9"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -1612,7 +1612,7 @@ wheels = [
 
 [[package]]
 name = "pubtools-marketplacesvm"
-version = "1.7.0"
+version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cloudimg" },
@@ -1624,9 +1624,9 @@ dependencies = [
     { name = "starmap-client" },
     { name = "strenum" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/44/8c/9a019124f329848ac597d8db1e5f937c90a4a5c87016791fe990876ecacb/pubtools-marketplacesvm-1.7.0.tar.gz", hash = "sha256:3e3352b5702619756e3c69ab63cdb014a02aad3f8b08c1d58601aae1168bd3fa", size = 58393, upload-time = "2025-04-07T20:34:49.762Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d7/2d/45f6bc790226056957cfea021d3bda2dd0c16ff827576b94d22473c31597/pubtools_marketplacesvm-1.9.0.tar.gz", hash = "sha256:e8e3e3057a98a8587aa8e5c0e8a8abb945a68418380d4b926fdd7dbfac743433", size = 59598, upload-time = "2025-08-11T16:28:42.443Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/16/30/742cb1da634a1d8607f7ec0f63f0a7004d7e6eed989410ec46b770656f54/pubtools_marketplacesvm-1.7.0-py3-none-any.whl", hash = "sha256:d278c7833ef11c0e0fbca5e89dc8b0eda4f9a9c24de80ea8efd85fcbd7f0437a", size = 72847, upload-time = "2025-04-07T20:34:48.814Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/c9/24ce7411998b7abbff9a2d99bd5f0bc6a0b7f45ca9b97f00f484bc36d182/pubtools_marketplacesvm-1.9.0-py3-none-any.whl", hash = "sha256:b0a3f1cdc752f76a020d05e74f9a27d22f36c560448a85f97b35fa677c910773", size = 74222, upload-time = "2025-08-11T16:28:41.33Z" },
 ]
 
 [[package]]
@@ -2298,7 +2298,7 @@ requires-dist = [
     { name = "packaging" },
     { name = "pubtools-content-gateway", specifier = "==0.5.4" },
     { name = "pubtools-exodus", specifier = "==1.5.2" },
-    { name = "pubtools-marketplacesvm", specifier = "==1.7.0" },
+    { name = "pubtools-marketplacesvm", specifier = "==1.9.0" },
     { name = "pubtools-pulp", specifier = "==1.33.2" },
     { name = "pubtools-pyxis", specifier = "==1.3.7" },
     { name = "pubtools-sign", specifier = "==1.0.1" },
