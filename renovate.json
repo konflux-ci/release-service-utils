@@ -6,5 +6,12 @@
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": ["before 5am on monday"]
-  }
+  },
+  "packageRules": [
+    {
+      "description": "Disable updates of pinned dependencies",
+      "matchManagers": ["pep621"],
+      "rangeStrategy": "in-range-only"
+    }
+  ]
 }
