@@ -8,15 +8,15 @@ ARG YQ_VERSION=4.34.1
 ARG GLAB_VERSION=1.51.0
 ARG GH_VERSION=2.82.1
 ARG SYFT_VERSION=1.19.0
-ARG TRIVY_VERSION=0.67.2
+ARG ROXCTL_VERSION=4.9.1
 
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
         GO_ARCH="amd64"; \
-        TRIVY_ARCH="64bit"; \
+        ROXCTL_ARCH=""; \
     elif [ "$ARCH" = "aarch64" ]; then \
         GO_ARCH="arm64"; \
-        TRIVY_ARCH="ARM64"; \
+        ROXCTL_ARCH="-arm64"; \
     fi && \
     curl -L https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${GO_ARCH} -o /usr/bin/yq &&\
     curl -L https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${GO_ARCH}/kubectl -o /usr/bin/kubectl &&\
@@ -24,8 +24,8 @@ RUN ARCH=$(uname -m) && \
     curl -L https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr -xzf - bin/glab &&\
     curl -L https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GO_ARCH}.tar.gz  | tar -C /usr -xzf - --strip=1 gh_${GH_VERSION}_linux_${GO_ARCH}/bin/gh &&\
     curl -L https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr/bin/ -xzf - syft &&\
-    curl -L https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz | tar -C /usr/bin/ -xzf - trivy &&\
-    chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft,trivy}
+    curl -o /usr/bin/roxctl https://mirror.openshift.com/pub/rhacs/assets/${ROXCTL_VERSION}/bin/linux/roxctl${ROXCTL_ARCH} &&\
+    chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft,roxctl}
 
 RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
 
