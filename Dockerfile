@@ -97,13 +97,15 @@ RUN groupadd -g 1001 group1 && \
     mkdir -p /var/workdir && \
     mkdir -p /tekton/home && \
     mkdir -p /tekton/results && \
+    mkdir -p /workspace && \
     chown -R 1001:1001 /var/workdir && \
     chown -R 1001:1001 /tekton/home /tekton/results && \
+    chown -R 1001:1001 /workspace && \
     # Make all files group-owned by root to allow OpenShift's random UID to work
     chgrp -R 0 /home /tekton && \
-    chmod -R g+rwX /var/workdir /tekton /home && \
+    chmod -R g+rwX /var/workdir /tekton /home /workspace && \
     # Ensure group permissions are inherited by new subdirectories
-    find /var/workdir /home /tekton -type d -exec chmod g+s {} +
+    find /var/workdir /home /tekton /workspace -type d -exec chmod g+s {} +
 
 # Switch to a non-root user
 USER 1001
