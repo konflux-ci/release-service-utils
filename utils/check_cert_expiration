@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# check_cert_expiration - Check if a certificate is expired and log its expiration date
+#
+# Usage: check_cert_expiration <cert_file> [warn_days]
+#
+# Exit codes:
+#   0 - Certificate is valid
+#   1 - Certificate is expired
+#   2 - Certificate expires soon (within warn_days, default: 7)
+#   3 - Error (file not found, invalid format, etc.)
+
+set -euo pipefail
+
+CERT_FILE="${1:-}"
+WARN_DAYS="${2:-7}"
+
+if [[ -z "$CERT_FILE" ]]; then
+    echo "ERROR: No certificate file specified" >&2
+    echo "Usage: $0 <cert_file> [warn_days]" >&2
+    exit 3
+fi
+
+if [[ ! -f "$CERT_FILE" ]]; then
+    echo "ERROR: Certificate file not found: $CERT_FILE" >&2
+    exit 3
+fi
+
+# Try PEM format first, then DER
+if ! end_date=$(openssl x509 -enddate -noout -in "$CERT_FILE" 2>/dev/null | cut -d= -f2); then
+    # Try DER format
+    if ! end_date=$(openssl x509 -inform DER -enddate -noout -in "$CERT_FILE" 2>/dev/null | cut -d= -f2); then
+        echo "ERROR: Failed to parse certificate. Ensure it's a valid PEM or DER format." >&2
+        exit 3
+    fi
+fi
+
+if ! end_epoch=$(date -d "$end_date" +%s 2>/dev/null); then
+    echo "ERROR: Failed to parse certificate date: $end_date" >&2
+    exit 3
+fi
+
+now_epoch=$(date +%s)
+warn_epoch=$((now_epoch + WARN_DAYS * 86400))
+days_left=$(( (end_epoch - now_epoch) / 86400 ))
+
+if (( end_epoch < now_epoch )); then
+    echo "ERROR: Certificate expired on: $end_date" >&2
+    exit 1
+elif (( end_epoch < warn_epoch )); then
+    echo "WARNING: Certificate expires in $days_left days on: $end_date"
+    exit 2
+else
+    echo "Certificate is valid until: $end_date ($days_left days)"
+    exit 0
+fi
+

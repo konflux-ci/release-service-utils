@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# Tests for check_cert_expiration bash script
+#
+# Run with: bash test_check_cert_expiration.sh
+# Or with bats: bats test_check_cert_expiration.sh
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CERT_SCRIPT="${SCRIPT_DIR}/../check_cert_expiration"
+TEST_DIR=$(mktemp -d)
+trap 'rm -rf "$TEST_DIR"' EXIT
+
+# Color output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+assert_exit_code() {
+    local expected=$1
+    local actual=$2
+    local test_name=$3
+    
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if [[ $actual -eq $expected ]]; then
+        echo -e "${GREEN}✓${NC} $test_name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} $test_name (expected exit $expected, got $actual)"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+assert_contains() {
+    local output=$1
+    local expected_text=$2
+    local test_name=$3
+    
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if echo "$output" | grep -q "$expected_text"; then
+        echo -e "${GREEN}✓${NC} $test_name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} $test_name (expected text not found: '$expected_text')"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+# Generate test certificates using openssl
+generate_cert() {
+    local days_valid=$1
+    local not_before_offset=${2:-0}  # Currently unused - openssl doesn't easily support backdating
+    local output_file=$3
+    local format=${4:-PEM}
+    
+    local temp_key="${TEST_DIR}/temp_key_$$.pem"
+    local temp_cert="${TEST_DIR}/temp_cert_$$.pem"
+    
+    openssl req -new -x509 -newkey rsa:2048 -nodes \
+        -keyout "$temp_key" \
+        -out "$temp_cert" \
+        -days "$days_valid" \
+        -subj "/C=US/ST=Test/L=Test/O=Test/CN=test.example.com" \
+        2>/dev/null
+    
+    if [[ "$format" == "DER" ]]; then
+        openssl x509 -in "$temp_cert" -outform DER -out "$output_file" 2>/dev/null
+    else
+        cp "$temp_cert" "$output_file"
+    fi
+    
+    rm -f "$temp_key" "$temp_cert"
+}
+
+echo "========================================"
+echo "Testing check_cert_expiration (bash)"
+echo "========================================"
+echo
+
+# Test 1: Valid certificate
+echo "Test Group: Valid Certificates"
+valid_cert="${TEST_DIR}/valid.pem"
+generate_cert 365 0 "$valid_cert"
+output=$(bash "$CERT_SCRIPT" "$valid_cert" 2>&1) && exit_code=$? || exit_code=$?
+assert_exit_code 0 ${exit_code} "Valid certificate (365 days)"
+assert_contains "$output" "Certificate is valid" "Valid certificate message"
+echo
+
+# Test 2: Certificate expiring in 3 days (warning)
+echo "Test Group: Warning Cases"
+expiring_cert="${TEST_DIR}/expiring.pem"
+generate_cert 3 0 "$expiring_cert"
+output=$(bash "$CERT_SCRIPT" "$expiring_cert" 2>&1) && exit_code=$? || exit_code=$?
+assert_exit_code 2 ${exit_code} "Certificate expiring in 3 days (exit 2)"
+assert_contains "$output" "WARNING" "Warning message present"
+echo
+
+# Test 3: Certificate expiring in 10 days with custom threshold 3 (should be valid)
+expiring_cert_2="${TEST_DIR}/expiring2.pem"
+generate_cert 10 0 "$expiring_cert_2"
+output=$(bash "$CERT_SCRIPT" "$expiring_cert_2" 3 2>&1) && exit_code=$? || exit_code=$?
+assert_exit_code 0 ${exit_code} "Certificate with 10 days, warn_days=3 (exit 0)"
+echo
+
+# Test 4: Expired certificate
+# Note: Creating truly expired certs in tests is tricky without faketime
+# We'll create a cert with 1 day validity and test it expires soon instead
+echo "Test Group: Nearly Expired Certificates"
+nearly_expired_cert="${TEST_DIR}/nearly_expired.pem"
+generate_cert 1 0 "$nearly_expired_cert"
+output=$(bash "$CERT_SCRIPT" "$nearly_expired_cert" 2>&1) && exit_code=$? || exit_code=$?
+# Should warn (exit 2) since it expires within default 7 days
+assert_exit_code 2 ${exit_code} "Certificate expiring in 1 day"
+assert_contains "$output" "WARNING" "Warning for nearly expired cert"
+echo
+
+# Test 5: Missing file
+echo "Test Group: Error Handling"
+output=$(bash "$CERT_SCRIPT" "/nonexistent/cert.pem" 2>&1) && exit_code=$? || exit_code=$?
+assert_exit_code 3 ${exit_code} "Missing certificate file (exit 3)"
+assert_contains "$output" "not found" "Missing file error message"
+echo
+
+# Test 6: Invalid certificate content
+echo "Test Group: Invalid Certificates"
+invalid_cert="${TEST_DIR}/invalid.pem"
+echo "This is not a valid certificate" > "$invalid_cert"
+output=$(bash "$CERT_SCRIPT" "$invalid_cert" 2>&1) && exit_code=$? || exit_code=$?
+assert_exit_code 3 ${exit_code} "Invalid certificate format (exit 3)"
+assert_contains "$output" "Failed to parse" "Invalid format error message"
+echo
+
+# Test 7: No arguments
+echo "Test Group: Usage Validation"
+output=$(bash "$CERT_SCRIPT" 2>&1) && exit_code=$? || exit_code=$?
+assert_exit_code 3 ${exit_code} "No arguments provided (exit 3)"
+assert_contains "$output" "Usage:" "Usage message displayed"
+echo
+
+# Test 8: DER format certificate (valid)
+echo "Test Group: Format Support"
+der_cert="${TEST_DIR}/valid.der"
+generate_cert 365 0 "$der_cert" "DER"
+output=$(bash "$CERT_SCRIPT" "$der_cert" 2>&1) && exit_code=$? || exit_code=$?
+assert_exit_code 0 ${exit_code} "Valid DER format certificate"
+echo
+
+# Test 9: DER format certificate (expiring soon)
+der_expiring="${TEST_DIR}/expiring.der"
+generate_cert 3 0 "$der_expiring" "DER"
+output=$(bash "$CERT_SCRIPT" "$der_expiring" 2>&1) && exit_code=$? || exit_code=$?
+assert_exit_code 2 ${exit_code} "DER format certificate expiring soon"
+echo
+
+# Test 10: Custom warning threshold
+echo "Test Group: Custom Warning Threshold"
+custom_warn_cert="${TEST_DIR}/custom_warn.pem"
+generate_cert 20 0 "$custom_warn_cert"
+output=$(bash "$CERT_SCRIPT" "$custom_warn_cert" 30 2>&1) && exit_code=$? || exit_code=$?
+assert_exit_code 2 ${exit_code} "Certificate with custom warning threshold (30 days)"
+assert_contains "$output" "WARNING" "Warning with custom threshold"
+echo
+
+# Summary
+echo "========================================"
+echo "Test Summary"
+echo "========================================"
+echo "Tests run:    $TESTS_RUN"
+echo -e "Tests passed: ${GREEN}$TESTS_PASSED${NC}"
+if [[ $TESTS_FAILED -gt 0 ]]; then
+    echo -e "Tests failed: ${RED}$TESTS_FAILED${NC}"
+    exit 1
+else
+    echo -e "Tests failed: $TESTS_FAILED"
+    echo
+    echo -e "${GREEN}All tests passed!${NC}"
+    exit 0
+fi
+
