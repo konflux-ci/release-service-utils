@@ -48,9 +48,17 @@ def data_json(cosign_content_dir, gitsign_content_dir):
                 "containerImage": "quay.io/org/tenant/cosign@sha256:abcdef12345",
                 "name": "cosign",
                 "files": [
-                    {"filename": "cosign", "arch": "amd64", "os": "linux"},
-                    {"filename": "cosign-linux-amd64.gz", "arch": "amd64", "os": "linux"},
-                    {"filename": "cosign-darwin-amd64.gz", "arch": "amd64", "os": "darwin"},
+                    {"source": "/releases/cosign", "arch": "amd64", "os": "linux"},
+                    {
+                        "source": "/releases/cosign-linux-amd64.gz",
+                        "arch": "amd64",
+                        "os": "linux",
+                    },
+                    {
+                        "source": "/releases/cosign-darwin-amd64.gz",
+                        "arch": "amd64",
+                        "os": "darwin",
+                    },
                 ],
                 "contentGateway": {
                     "productName": "product_name_1",
@@ -63,9 +71,17 @@ def data_json(cosign_content_dir, gitsign_content_dir):
                 "containerImage": "quay.io/org/tenant/gitsign@sha256:abcdef12345",
                 "name": "gitsign",
                 "files": [
-                    {"filename": "gitsign", "arch": "amd64", "os": "linux"},
-                    {"filename": "gitsign-linux-amd64.gz", "arch": "amd64", "os": "linux"},
-                    {"filename": "gitsign-darwin-amd64.gz", "arch": "amd64", "os": "darwin"},
+                    {"source": "/releases/gitsign", "arch": "amd64", "os": "linux"},
+                    {
+                        "source": "/releases/gitsign-linux-amd64.gz",
+                        "arch": "amd64",
+                        "os": "linux",
+                    },
+                    {
+                        "source": "/releases/gitsign-darwin-amd64.gz",
+                        "arch": "amd64",
+                        "os": "darwin",
+                    },
                 ],
                 "contentGateway": {
                     "productName": "product_name_2",
