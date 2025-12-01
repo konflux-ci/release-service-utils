@@ -54,9 +54,17 @@ def data_json(cosign_content_dir, gitsign_content_dir):
                 "containerImage": "quay.io/org/tenant/cosign@sha256:abcdef12345",
                 "name": "cosign",
                 "files": [
-                    {"filename": "cosign", "arch": "amd64", "os": "linux"},
-                    {"filename": "cosign-linux-amd64.gz", "arch": "amd64", "os": "linux"},
-                    {"filename": "cosign-darwin-amd64.gz", "arch": "amd64", "os": "darwin"},
+                    {"source": "/releases/cosign", "arch": "amd64", "os": "linux"},
+                    {
+                        "source": "/releases/cosign-linux-amd64.gz",
+                        "arch": "amd64",
+                        "os": "linux",
+                    },
+                    {
+                        "source": "/releases/cosign-darwin-amd64.gz",
+                        "arch": "amd64",
+                        "os": "darwin",
+                    },
                 ],
                 "contentGateway": {
                     "productName": "product_name_1",
@@ -70,9 +78,17 @@ def data_json(cosign_content_dir, gitsign_content_dir):
                 "containerImage": "quay.io/org/tenant/gitsign@sha256:abcdef12345",
                 "name": "gitsign",
                 "files": [
-                    {"filename": "gitsign", "arch": "amd64", "os": "linux"},
-                    {"filename": "gitsign-linux-amd64.gz", "arch": "amd64", "os": "linux"},
-                    {"filename": "gitsign-darwin-amd64.gz", "arch": "amd64", "os": "darwin"},
+                    {"source": "/releases/gitsign", "arch": "amd64", "os": "linux"},
+                    {
+                        "source": "/releases/gitsign-linux-amd64.gz",
+                        "arch": "amd64",
+                        "os": "linux",
+                    },
+                    {
+                        "source": "/releases/gitsign-darwin-amd64.gz",
+                        "arch": "amd64",
+                        "os": "darwin",
+                    },
                 ],
                 "contentGateway": {
                     "productName": "product_name_2",
@@ -171,7 +187,11 @@ def test_validate_components_success(data_json):
 
 def test_validate_components_skips_missing_contentGateway():
     """Test validate_components skips components with no contentGateway and does not raise."""
-    data = {"components": [{"name": "missing-contentGateway", "files": [{"filename": "foo"}]}]}
+    data = {
+        "components": [
+            {"name": "missing-contentGateway", "files": [{"source": "/releases/foo"}]}
+        ]
+    }
 
     valid_components = cgw_wrapper.validate_components(data)
     assert len(valid_components) == 0
@@ -184,7 +204,7 @@ def test_validate_components_missing_fields():
         "components": [
             {
                 "name": "",
-                "files": [{"filename": ""}],
+                "files": [{}],  # Missing source
                 "contentGateway": {
                     "productName": "",
                     "productCode": "",
@@ -203,7 +223,31 @@ def test_validate_components_missing_fields():
     assert "Component 1 is missing 'productName'" in error_msg
     assert "Component 1 is missing 'productCode'" in error_msg
     assert "Component 1 is missing 'contentDir'" in error_msg
-    assert "Component 1, file 0 is missing or has empty 'filename'" in error_msg
+    assert "Component 1, file 0 is missing or has empty 'source'" in error_msg
+
+
+def test_validate_components_with_source_field_only(cosign_content_dir):
+    """Test validate_components works with only source field (no filename)."""
+    data = {
+        "components": [
+            {
+                "name": "test-component",
+                "files": [
+                    {"source": "/releases/test-file.tar.gz"},
+                ],
+                "contentGateway": {
+                    "productName": "Test Product",
+                    "productCode": "TEST",
+                    "productVersionName": "1.0",
+                    "contentDir": str(cosign_content_dir),
+                },
+            }
+        ]
+    }
+
+    valid_components = cgw_wrapper.validate_components(data)
+    assert len(valid_components) == 1
+    assert valid_components[0]["name"] == "test-component"
 
 
 def test_parse_args(data_json):

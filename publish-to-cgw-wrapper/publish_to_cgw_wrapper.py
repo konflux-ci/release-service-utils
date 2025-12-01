@@ -68,9 +68,10 @@ def validate_components(data):
     Validates snapshot component data. Skips components without a 'contentGateway'
     and fails if required fields are missing in either the 'contentGateway'
     or any listed files. Returns only the valid components.
+
+    Note: Filename is always derived from the 'source' field using basename.
     """
     required_cg_keys = ["productCode", "productName", "productVersionName", "contentDir"]
-    required_file_keys = ["filename"]
     errors = []
     valid_components = []
 
@@ -97,13 +98,13 @@ def validate_components(data):
                 errors.append(f"Component {c_num} is missing '{param}'")
                 error = True
 
-        for f_num, file in enumerate(component.get("files"), start=0):
-            for param in required_file_keys:
-                if not file.get(param):
-                    errors.append(
-                        f"Component {c_num}, file {f_num} is missing or has empty '{param}'"
-                    )
-                    error = True
+        # Validate files array - require source field
+        for f_num, file in enumerate(component.get("files", []), start=0):
+            if not file.get("source"):
+                errors.append(
+                    f"Component {c_num}, file {f_num} is missing or has empty 'source'"
+                )
+                error = True
 
         if not error:
             valid_components.append(component)
@@ -203,7 +204,8 @@ def generate_metadata(
     if mirror_openshift_Push:
         shortURL_base = "/pub/cgw"
 
-    file_lookup = {file["filename"] for file in files}
+    # Build file_lookup from source field (using basename of source)
+    file_lookup = {os.path.basename(file["source"]) for file in files}
     metadata = []
 
     for file_name in os.listdir(content_dir):
