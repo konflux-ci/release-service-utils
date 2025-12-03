@@ -72,6 +72,7 @@ RUN update-ca-trust
 
 COPY pyxis /home/pyxis
 COPY utils /home/utils
+COPY cmd /home/cmd
 COPY templates /home/templates
 COPY pubtools-pulp-wrapper /home/pubtools-pulp-wrapper
 COPY pubtools-marketplacesvm-wrapper /home/pubtools-marketplacesvm-wrapper
@@ -113,6 +114,7 @@ ENV HOME=/tekton/home
 WORKDIR $HOME
 ENV PATH="$PATH:/home/pyxis"
 ENV PATH="$PATH:/home/utils"
+ENV PATH="$PATH:/home/cmd"
 ENV PATH="$PATH:/home/pubtools-pulp-wrapper"
 ENV PATH="$PATH:/home/pubtools-marketplacesvm-wrapper"
 ENV PATH="$PATH:/home/developer-portal-wrapper"
