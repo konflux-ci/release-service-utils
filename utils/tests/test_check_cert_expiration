@@ -51,6 +51,21 @@ assert_contains() {
     fi
 }
 
+assert_not_contains() {
+    local output=$1
+    local unexpected_text=$2
+    local test_name=$3
+    
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if ! echo "$output" | grep -q "$unexpected_text"; then
+        echo -e "${GREEN}✓${NC} $test_name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} $test_name (unexpected text found: '$unexpected_text')"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
 # Generate test certificates using openssl
 generate_cert() {
     local days_valid=$1
@@ -91,12 +106,12 @@ assert_exit_code 0 ${exit_code} "Valid certificate (365 days)"
 assert_contains "$output" "Certificate is valid" "Valid certificate message"
 echo
 
-# Test 2: Certificate expiring in 3 days (warning)
+# Test 2: Certificate expiring in 3 days (warning but no failure)
 echo "Test Group: Warning Cases"
 expiring_cert="${TEST_DIR}/expiring.pem"
 generate_cert 3 0 "$expiring_cert"
 output=$(bash "$CERT_SCRIPT" "$expiring_cert" 2>&1) && exit_code=$? || exit_code=$?
-assert_exit_code 2 ${exit_code} "Certificate expiring in 3 days (exit 2)"
+assert_exit_code 0 ${exit_code} "Certificate expiring in 3 days (exit 0, warning only)"
 assert_contains "$output" "WARNING" "Warning message present"
 echo
 
@@ -107,22 +122,22 @@ output=$(bash "$CERT_SCRIPT" "$expiring_cert_2" 3 2>&1) && exit_code=$? || exit_
 assert_exit_code 0 ${exit_code} "Certificate with 10 days, warn_days=3 (exit 0)"
 echo
 
-# Test 4: Expired certificate
+# Test 4: Nearly expired certificate (still valid, just warning)
 # Note: Creating truly expired certs in tests is tricky without faketime
 # We'll create a cert with 1 day validity and test it expires soon instead
 echo "Test Group: Nearly Expired Certificates"
 nearly_expired_cert="${TEST_DIR}/nearly_expired.pem"
 generate_cert 1 0 "$nearly_expired_cert"
 output=$(bash "$CERT_SCRIPT" "$nearly_expired_cert" 2>&1) && exit_code=$? || exit_code=$?
-# Should warn (exit 2) since it expires within default 7 days
-assert_exit_code 2 ${exit_code} "Certificate expiring in 1 day"
+# Should warn but exit 0 since cert is still valid (expires within default 7 days)
+assert_exit_code 0 ${exit_code} "Certificate expiring in 1 day (warning only, no failure)"
 assert_contains "$output" "WARNING" "Warning for nearly expired cert"
 echo
 
 # Test 5: Missing file
 echo "Test Group: Error Handling"
 output=$(bash "$CERT_SCRIPT" "/nonexistent/cert.pem" 2>&1) && exit_code=$? || exit_code=$?
-assert_exit_code 3 ${exit_code} "Missing certificate file (exit 3)"
+assert_exit_code 2 ${exit_code} "Missing certificate file (exit 2)"
 assert_contains "$output" "not found" "Missing file error message"
 echo
 
@@ -131,14 +146,14 @@ echo "Test Group: Invalid Certificates"
 invalid_cert="${TEST_DIR}/invalid.pem"
 echo "This is not a valid certificate" > "$invalid_cert"
 output=$(bash "$CERT_SCRIPT" "$invalid_cert" 2>&1) && exit_code=$? || exit_code=$?
-assert_exit_code 3 ${exit_code} "Invalid certificate format (exit 3)"
+assert_exit_code 2 ${exit_code} "Invalid certificate format (exit 2)"
 assert_contains "$output" "Failed to parse" "Invalid format error message"
 echo
 
 # Test 7: No arguments
 echo "Test Group: Usage Validation"
 output=$(bash "$CERT_SCRIPT" 2>&1) && exit_code=$? || exit_code=$?
-assert_exit_code 3 ${exit_code} "No arguments provided (exit 3)"
+assert_exit_code 2 ${exit_code} "No arguments provided (exit 2)"
 assert_contains "$output" "Usage:" "Usage message displayed"
 echo
 
@@ -150,11 +165,11 @@ output=$(bash "$CERT_SCRIPT" "$der_cert" 2>&1) && exit_code=$? || exit_code=$?
 assert_exit_code 0 ${exit_code} "Valid DER format certificate"
 echo
 
-# Test 9: DER format certificate (expiring soon)
+# Test 9: DER format certificate (expiring soon - warning only)
 der_expiring="${TEST_DIR}/expiring.der"
 generate_cert 3 0 "$der_expiring" "DER"
 output=$(bash "$CERT_SCRIPT" "$der_expiring" 2>&1) && exit_code=$? || exit_code=$?
-assert_exit_code 2 ${exit_code} "DER format certificate expiring soon"
+assert_exit_code 0 ${exit_code} "DER format certificate expiring soon (warning only)"
 echo
 
 # Test 10: Custom warning threshold
@@ -162,8 +177,72 @@ echo "Test Group: Custom Warning Threshold"
 custom_warn_cert="${TEST_DIR}/custom_warn.pem"
 generate_cert 20 0 "$custom_warn_cert"
 output=$(bash "$CERT_SCRIPT" "$custom_warn_cert" 30 2>&1) && exit_code=$? || exit_code=$?
-assert_exit_code 2 ${exit_code} "Certificate with custom warning threshold (30 days)"
+assert_exit_code 0 ${exit_code} "Certificate with custom warning threshold (30 days, warning only)"
 assert_contains "$output" "WARNING" "Warning with custom threshold"
+echo
+
+# ========================================
+# Notification Tests
+# ========================================
+echo "Test Group: Slack Notification (Disabled)"
+
+# Test 11: With SLACK_WEBHOOK_URL explicitly empty, no notifications sent (valid cert)
+valid_cert_notify="${TEST_DIR}/valid_notify.pem"
+generate_cert 365 0 "$valid_cert_notify"
+output=$(SLACK_WEBHOOK_URL="" bash "$CERT_SCRIPT" "$valid_cert_notify" 2>&1) && exit_code=$? || exit_code=$?
+assert_exit_code 0 ${exit_code} "Valid cert with notifications disabled"
+assert_contains "$output" "Certificate is valid" "Valid message with notifications disabled"
+assert_not_contains "$output" "Slack" "No Slack-related output when webhook empty"
+echo
+
+# Test 12: With SLACK_WEBHOOK_URL explicitly empty, warning case works without notification
+warn_cert_notify="${TEST_DIR}/warn_notify.pem"
+generate_cert 3 0 "$warn_cert_notify"
+output=$(SLACK_WEBHOOK_URL="" bash "$CERT_SCRIPT" "$warn_cert_notify" 2>&1) && exit_code=$? || exit_code=$?
+assert_exit_code 0 ${exit_code} "Warning cert with notifications disabled (no failure)"
+assert_contains "$output" "WARNING" "Warning message with notifications disabled"
+assert_not_contains "$output" "Slack" "No Slack output when webhook empty"
+echo
+
+# Test 13: With invalid SLACK_WEBHOOK_URL, script should still work (graceful failure)
+echo "Test Group: Slack Notification (Graceful Failure)"
+warn_cert_invalid_webhook="${TEST_DIR}/warn_invalid_webhook.pem"
+generate_cert 3 0 "$warn_cert_invalid_webhook"
+output=$(SLACK_WEBHOOK_URL="http://invalid-webhook-url.local/test" bash "$CERT_SCRIPT" "$warn_cert_invalid_webhook" 2>&1) && exit_code=$? || exit_code=$?
+# Script should still exit with code 0 (warning only, no failure) even if Slack fails
+assert_exit_code 0 ${exit_code} "Warning cert with invalid webhook (graceful, no failure)"
+assert_contains "$output" "WARNING" "Warning message still shown with invalid webhook"
+echo
+
+# Test 14: Test with CERT_IDENTIFIER environment variable
+echo "Test Group: Custom Certificate Identifier"
+custom_id_cert="${TEST_DIR}/custom_id.pem"
+generate_cert 365 0 "$custom_id_cert"
+output=$(CERT_IDENTIFIER="my-custom-cert-name" bash "$CERT_SCRIPT" "$custom_id_cert" 2>&1) && exit_code=$? || exit_code=$?
+assert_exit_code 0 ${exit_code} "Valid cert with custom identifier"
+echo
+
+# Test 15: Test environment variables don't break normal operation
+echo "Test Group: Environment Variables Compatibility"
+env_test_cert="${TEST_DIR}/env_test.pem"
+generate_cert 365 0 "$env_test_cert"
+output=$(
+    NOTIFICATION_CONFIGMAP="test-configmap" \
+    NOTIFICATION_NAMESPACE="test-namespace" \
+    CERT_IDENTIFIER="test-cert" \
+    bash "$CERT_SCRIPT" "$env_test_cert" 2>&1
+) && exit_code=$? || exit_code=$?
+assert_exit_code 0 ${exit_code} "Valid cert with all env vars set"
+assert_contains "$output" "Certificate is valid" "Normal output with env vars"
+echo
+
+# Test 16: Verify script handles special characters in cert path for ConfigMap key
+echo "Test Group: ConfigMap Key Generation"
+special_path_cert="${TEST_DIR}/path/with/special-chars_and.dots.pem"
+mkdir -p "${TEST_DIR}/path/with"
+generate_cert 365 0 "$special_path_cert"
+output=$(bash "$CERT_SCRIPT" "$special_path_cert" 2>&1) && exit_code=$? || exit_code=$?
+assert_exit_code 0 ${exit_code} "Cert with special path characters"
 echo
 
 # Summary
@@ -181,4 +260,3 @@ else
     echo -e "${GREEN}All tests passed!${NC}"
     exit 0
 fi
-

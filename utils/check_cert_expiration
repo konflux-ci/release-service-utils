@@ -3,11 +3,17 @@
 #
 # Usage: check_cert_expiration <cert_file> [warn_days]
 #
+# Environment variables (optional):
+#   SEND_SLACK_NOTIFICATION  - Enable Slack notifications (default: false)
+#   SLACK_WEBHOOK_URL        - Override the Slack webhook URL (skips file decoding)
+#   NOTIFICATION_CONFIGMAP   - ConfigMap name for rate limiting (default: cert-expiry-notifications)
+#   NOTIFICATION_NAMESPACE   - Namespace for ConfigMap (default: internal-services)
+#   CERT_IDENTIFIER          - Custom identifier for the cert (default: derived from file path)
+#
 # Exit codes:
-#   0 - Certificate is valid
+#   0 - Certificate is valid (or expires soon but still valid - warning logged)
 #   1 - Certificate is expired
-#   2 - Certificate expires soon (within warn_days, default: 7)
-#   3 - Error (file not found, invalid format, etc.)
+#   2 - Error (file not found, invalid format, etc.)
 
 set -euo pipefail
 
@@ -17,12 +23,354 @@ WARN_DAYS="${2:-7}"
 if [[ -z "$CERT_FILE" ]]; then
     echo "ERROR: No certificate file specified" >&2
     echo "Usage: $0 <cert_file> [warn_days]" >&2
-    exit 3
+    exit 2
+fi
+
+# Notification settings
+# SEND_SLACK_NOTIFICATION must be explicitly set to "true" to enable notifications
+SEND_SLACK_NOTIFICATION="${SEND_SLACK_NOTIFICATION:-false}"
+
+# Load SLACK_WEBHOOK_URL: first check env var, then decode from encrypted file
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WEBHOOK_FILE="${SCRIPT_DIR}/../data/slack-webhook.enc"
+
+_decode_webhook() {
+    # Decode: base64 decode, then reverse the string
+    echo "$1" | base64 -d 2>/dev/null | rev
+}
+
+# Only load webhook if notifications are enabled
+if [[ "$SEND_SLACK_NOTIFICATION" == "true" ]]; then
+    # Only load from file if SLACK_WEBHOOK_URL is not set at all
+    # (allows explicitly setting empty value to disable notifications)
+    if [[ -z "${SLACK_WEBHOOK_URL+x}" ]]; then
+        if [[ -f "$WEBHOOK_FILE" ]]; then
+            encoded=$(cat "$WEBHOOK_FILE" 2>/dev/null | tr -d '\n') || encoded=""
+            if [[ -n "$encoded" ]]; then
+                SLACK_WEBHOOK_URL=$(_decode_webhook "$encoded")
+                export SLACK_WEBHOOK_URL
+            fi
+        fi
+    fi
+fi
+
+SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
+NOTIFICATION_CONFIGMAP="${NOTIFICATION_CONFIGMAP:-cert-expiry-notifications}"
+NOTIFICATION_NAMESPACE="${NOTIFICATION_NAMESPACE:-internal-services}"
+CERT_IDENTIFIER="${CERT_IDENTIFIER:-}"
+
+# Rate limiting: only notify once per 24 hours
+NOTIFICATION_INTERVAL_SECONDS=$((24 * 60 * 60))
+
+#######################################
+# Generate a safe ConfigMap key from cert identifier
+# Replaces special characters with dashes
+#######################################
+get_configmap_key() {
+    local identifier="$1"
+    # Replace /, \, and other special chars with dash, remove leading/trailing dashes
+    echo "$identifier" | sed 's|[^a-zA-Z0-9._-]|-|g' | sed 's|^-*||' | sed 's|-*$||' | cut -c1-253
+}
+
+#######################################
+# Check if we should send a notification (rate limiting)
+# Returns 0 if we should notify, 1 if we should skip
+#######################################
+should_notify() {
+    local cert_key="$1"
+    local namespace="$2"
+    local configmap="$3"
+    
+    if ! command -v kubectl &>/dev/null; then
+        echo "kubectl not available, skipping rate limit check" >&2
+        return 0
+    fi
+    
+    # Try to get the last notification timestamp from ConfigMap
+    local last_notification
+    last_notification=$(kubectl get configmap "$configmap" -n "$namespace" \
+        -o jsonpath="{.data['$cert_key']}" 2>/dev/null) || true
+    
+    if [[ -z "$last_notification" ]]; then
+        # Never notified before
+        return 0
+    fi
+    
+    # Parse the timestamp and check if 24 hours have passed
+    local last_epoch
+    last_epoch=$(date -d "$last_notification" +%s 2>/dev/null) || {
+        echo "Failed to parse last notification timestamp: $last_notification" >&2
+        return 0
+    }
+    
+    local now_epoch
+    now_epoch=$(date +%s)
+    local elapsed=$((now_epoch - last_epoch))
+    
+    if (( elapsed >= NOTIFICATION_INTERVAL_SECONDS )); then
+        return 0
+    else
+        local remaining=$(( (NOTIFICATION_INTERVAL_SECONDS - elapsed) / 3600 ))
+        echo "Notification skipped: already notified within 24 hours (${remaining}h remaining)" >&2
+        return 1
+    fi
+}
+
+#######################################
+# Update the notification timestamp in ConfigMap
+# Returns: 0 on success, 1 on failure (with error message in stdout)
+#######################################
+update_notification_timestamp() {
+    local cert_key="$1"
+    local namespace="$2"
+    local configmap="$3"
+    
+    if ! command -v kubectl &>/dev/null; then
+        echo "kubectl not available, skipping timestamp update" >&2
+        return 0
+    fi
+    
+    local timestamp
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    
+    # Check if ConfigMap exists
+    if kubectl get configmap "$configmap" -n "$namespace" &>/dev/null; then
+        # Update existing ConfigMap
+        if ! kubectl patch configmap "$configmap" -n "$namespace" \
+            --type merge -p "{\"data\":{\"$cert_key\":\"$timestamp\"}}" &>/dev/null; then
+            echo "Failed to update ConfigMap $configmap in namespace $namespace"
+            return 1
+        fi
+    else
+        # Create new ConfigMap
+        if ! kubectl create configmap "$configmap" -n "$namespace" \
+            --from-literal="$cert_key=$timestamp" &>/dev/null; then
+            echo "Failed to create ConfigMap $configmap in namespace $namespace"
+            return 1
+        fi
+    fi
+    
+    echo "Updated notification timestamp for $cert_key" >&2
+    return 0
+}
+
+#######################################
+# Send Slack notification about infrastructure issues
+#######################################
+send_infra_alert() {
+    local error_message="$1"
+    
+    if [[ -z "$SLACK_WEBHOOK_URL" ]]; then
+        return 0
+    fi
+    
+    local payload
+    payload=$(cat <<EOF
+{
+    "attachments": [
+        {
+            "color": "#808080",
+            "blocks": [
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": ":gear: Infrastructure Warning",
+                        "emoji": true
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "*Issue:*\n$error_message\n\n_Rate limiting for certificate expiry notifications may not work correctly._"
+                    }
+                },
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": "Sent by release-service-utils | $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
+EOF
+)
+    
+    curl -s -o /dev/null -X POST \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        "$SLACK_WEBHOOK_URL" &>/dev/null || true
+}
+
+#######################################
+# Send Slack notification
+#######################################
+send_slack_notification() {
+    local status="$1"      # "expired" or "expiring"
+    local message="$2"     # The message to send
+    local cert_id="$3"     # Certificate identifier
+    local days_left="$4"   # Days until expiration (can be negative)
+    local expiry_date="$5" # Expiration date string
+    
+    if [[ -z "$SLACK_WEBHOOK_URL" ]]; then
+        return 0
+    fi
+    
+    local color icon status_text
+    if [[ "$status" == "expired" ]]; then
+        color="#FF0000"  # Red
+        icon=":x:"
+        status_text="Expired"
+    elif [[ "$status" == "renewed" ]]; then
+        color="#36A64F"  # Green
+        icon=":white_check_mark:"
+        status_text="Recently Renewed"
+    else
+        color="#FFA500"  # Orange
+        icon=":warning:"
+        status_text="Expiring Soon"
+    fi
+    
+    local header_text
+    if [[ "$status" == "renewed" ]]; then
+        header_text="$icon Certificate Renewed"
+    else
+        header_text="$icon Certificate Expiration Alert"
+    fi
+
+    local payload
+    payload=$(cat <<EOF
+{
+    "attachments": [
+        {
+            "color": "$color",
+            "blocks": [
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "$header_text",
+                        "emoji": true
+                    }
+                },
+                {
+                    "type": "section",
+                    "fields": [
+                        {
+                            "type": "mrkdwn",
+                            "text": "*Certificate:*\n\`$cert_id\`"
+                        },
+                        {
+                            "type": "mrkdwn",
+                            "text": "*Status:*\n$status_text"
+                        },
+                        {
+                            "type": "mrkdwn",
+                            "text": "*Expiry Date:*\n$expiry_date"
+                        },
+                        {
+                            "type": "mrkdwn",
+                            "text": "*Days Remaining:*\n$days_left"
+                        }
+                    ]
+                },
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": "Sent by release-service-utils | $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
+EOF
+)
+    
+    local http_code
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        "$SLACK_WEBHOOK_URL") || {
+        echo "Failed to send Slack notification" >&2
+        return 1
+    }
+    
+    if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
+        echo "Slack notification sent successfully" >&2
+    else
+        echo "Slack notification failed with HTTP $http_code" >&2
+        return 1
+    fi
+}
+
+#######################################
+# Handle notification (with rate limiting)
+#######################################
+handle_notification() {
+    local status="$1"
+    local message="$2"
+    local days_left="$3"
+    local expiry_date="$4"
+    
+    # Skip if notifications are disabled
+    if [[ "$SEND_SLACK_NOTIFICATION" != "true" ]]; then
+        return 0
+    fi
+    
+    # Skip if no webhook configured
+    if [[ -z "$SLACK_WEBHOOK_URL" ]]; then
+        return 0
+    fi
+    
+    # Use configured namespace (defaults to internal-services)
+    local namespace="${NOTIFICATION_NAMESPACE}"
+    
+    # Determine cert identifier
+    local cert_id="${CERT_IDENTIFIER}"
+    if [[ -z "$cert_id" ]]; then
+        cert_id="$CERT_FILE"
+    fi
+    
+    # Generate safe ConfigMap key
+    local cert_key
+    cert_key=$(get_configmap_key "$cert_id")
+    
+    # Check rate limiting
+    if should_notify "$cert_key" "$namespace" "$NOTIFICATION_CONFIGMAP"; then
+        if send_slack_notification "$status" "$message" "$cert_id" "$days_left" "$expiry_date"; then
+            # Update timestamp - if it fails, notify via Slack but don't fail the script
+            local configmap_error
+            if ! configmap_error=$(update_notification_timestamp "$cert_key" "$namespace" "$NOTIFICATION_CONFIGMAP"); then
+                echo "WARNING: $configmap_error" >&2
+                send_infra_alert "$configmap_error" || true
+            fi
+        fi
+    fi
+}
+
+#######################################
+# Main script logic
+#######################################
+
+if [[ -z "$CERT_FILE" ]]; then
+    echo "ERROR: No certificate file specified" >&2
+    echo "Usage: $0 <cert_file> [warn_days]" >&2
+    exit 2
 fi
 
 if [[ ! -f "$CERT_FILE" ]]; then
     echo "ERROR: Certificate file not found: $CERT_FILE" >&2
-    exit 3
+    exit 2
 fi
 
 # Try PEM format first, then DER
@@ -30,27 +378,56 @@ if ! end_date=$(openssl x509 -enddate -noout -in "$CERT_FILE" 2>/dev/null | cut 
     # Try DER format
     if ! end_date=$(openssl x509 -inform DER -enddate -noout -in "$CERT_FILE" 2>/dev/null | cut -d= -f2); then
         echo "ERROR: Failed to parse certificate. Ensure it's a valid PEM or DER format." >&2
-        exit 3
+        exit 2
     fi
 fi
 
 if ! end_epoch=$(date -d "$end_date" +%s 2>/dev/null); then
     echo "ERROR: Failed to parse certificate date: $end_date" >&2
-    exit 3
+    exit 2
+fi
+
+# Get certificate start date to detect recent renewals
+start_date=""
+if start_date_raw=$(openssl x509 -startdate -noout -in "$CERT_FILE" 2>/dev/null | cut -d= -f2); then
+    start_date="$start_date_raw"
+elif start_date_raw=$(openssl x509 -inform DER -startdate -noout -in "$CERT_FILE" 2>/dev/null | cut -d= -f2); then
+    start_date="$start_date_raw"
 fi
 
 now_epoch=$(date +%s)
 warn_epoch=$((now_epoch + WARN_DAYS * 86400))
 days_left=$(( (end_epoch - now_epoch) / 86400 ))
 
-if (( end_epoch < now_epoch )); then
-    echo "ERROR: Certificate expired on: $end_date" >&2
-    exit 1
-elif (( end_epoch < warn_epoch )); then
-    echo "WARNING: Certificate expires in $days_left days on: $end_date"
-    exit 2
-else
-    echo "Certificate is valid until: $end_date ($days_left days)"
-    exit 0
+# Check if certificate was recently renewed (issued within last 7 days)
+RENEWAL_THRESHOLD_DAYS=7
+recently_renewed=false
+days_since_issued=""
+if [[ -n "$start_date" ]]; then
+    if start_epoch=$(date -d "$start_date" +%s 2>/dev/null); then
+        days_since_issued=$(( (now_epoch - start_epoch) / 86400 ))
+        if (( days_since_issued <= RENEWAL_THRESHOLD_DAYS )); then
+            recently_renewed=true
+        fi
+    fi
 fi
 
+if (( end_epoch < now_epoch )); then
+    message="ERROR: Certificate expired on: $end_date"
+    echo "$message" >&2
+    handle_notification "expired" "$message" "$days_left" "$end_date"
+    exit 1
+elif (( end_epoch < warn_epoch )); then
+    message="WARNING: Certificate expires in $days_left days on: $end_date"
+    echo "$message"
+    handle_notification "expiring" "$message" "$days_left" "$end_date"
+    exit 0
+else
+    echo "Certificate is valid until: $end_date ($days_left days)"
+    # Check if certificate was recently renewed and notify
+    if [[ "$recently_renewed" == "true" ]]; then
+        echo "INFO: Certificate was recently renewed ($days_since_issued days ago, issued on: $start_date)"
+        handle_notification "renewed" "Certificate was recently renewed" "$days_left" "$end_date"
+    fi
+    exit 0
+fi
