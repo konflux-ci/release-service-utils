@@ -1759,7 +1759,7 @@ wheels = [
 
 [[package]]
 name = "pulp-cli"
-version = "0.36.2"
+version = "0.36.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -1771,14 +1771,14 @@ dependencies = [
     { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "tomli-w" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e8/d6/12f647c25d1043443574c75a93808288775b037b274847b8e1dd75e3e527/pulp_cli-0.36.2.tar.gz", hash = "sha256:a944189397a9130bb96fce682cf1135d8f9e0e16fd8af31c5a14f958443c69e0", size = 79072, upload-time = "2025-11-11T13:31:57.955Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6d/5c/969418ddf8e01689fc8b25f624ce8ad275af898b69b20880b3b349f35e4a/pulp_cli-0.36.3.tar.gz", hash = "sha256:aa4c56fa218bab13ffdcc6d259995ae4ef6bd6a5545123dae780c84f5c6699ce", size = 79153, upload-time = "2025-12-12T15:12:45.114Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/97/54c517c6fee1616f7badc7c5aeeaf8f9ffaf9067b43c1ae0e06119ef3e0c/pulp_cli-0.36.2-py3-none-any.whl", hash = "sha256:0056faf6e3801e3bb110f933a858376e6b2a57e395de40a28c1bf2f05e4e0f0f", size = 111931, upload-time = "2025-11-11T13:31:56.584Z" },
+    { url = "https://files.pythonhosted.org/packages/47/df/db0fb14a2e5b918441a693e5af15b053882c9cc5d7387b83beb143ae0390/pulp_cli-0.36.3-py3-none-any.whl", hash = "sha256:29eeaffe0aec9884fc890bb13846f288deb951a063e80453126b1b220d3fcd2d", size = 112049, upload-time = "2025-12-12T15:12:44.043Z" },
 ]
 
 [[package]]
 name = "pulp-glue"
-version = "0.36.2"
+version = "0.36.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "multidict" },
@@ -1786,9 +1786,9 @@ dependencies = [
     { name = "requests" },
     { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bd/f6/308b7c779d382c3fe8e3ae9c945947ee7066874ca417c1f6db2123a18301/pulp_glue-0.36.2.tar.gz", hash = "sha256:6af07f0e6b7d1953876ff987c303d17082d094038ad4263d21c2c936d4ed7479", size = 45822, upload-time = "2025-11-11T13:31:55.046Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7b/46/0094718de1ba7349c75eb76024151d12b91a7fa380b16b7289546b4fd308/pulp_glue-0.36.3.tar.gz", hash = "sha256:63515315cd8526b399302d3558bdcecfd08cec470519d1d95431a549fea0b235", size = 46709, upload-time = "2025-12-12T15:12:42.59Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ac/4a/8b0b67a6bb53597f2320f7349c9e44c8de032786277062548efd30ee606e/pulp_glue-0.36.2-py3-none-any.whl", hash = "sha256:cec945c06c512ca5a51f71d7b61d85e3d43740d319efacd5ca126bf4ae6311a0", size = 47578, upload-time = "2025-11-11T13:31:53.945Z" },
+    { url = "https://files.pythonhosted.org/packages/31/8b/19f5fce1c07dde431cd22d5123276969b2bef2c6a0cd750549df7e302ede/pulp_glue-0.36.3-py3-none-any.whl", hash = "sha256:5d11e7162e19666b4b4ac302d5b7043f8385f81288aea358dc0b12150767a961", size = 48211, upload-time = "2025-12-12T15:12:41.638Z" },
 ]
 
 [[package]]
@@ -2350,7 +2350,7 @@ requires-dist = [
     { name = "pubtools-pulp", specifier = "==1.33.2" },
     { name = "pubtools-pyxis", specifier = "==1.3.7" },
     { name = "pubtools-sign", specifier = "==1.0.2" },
-    { name = "pulp-cli" },
+    { name = "pulp-cli", specifier = "==0.36.3" },
 ]
 
 [package.metadata.requires-dev]
