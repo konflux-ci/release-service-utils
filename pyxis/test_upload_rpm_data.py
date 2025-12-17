@@ -6,7 +6,9 @@ from upload_rpm_data import (
     upload_container_rpm_data_with_retry,
     upload_container_rpm_data,
     get_image_rpm_data,
+    get_image_rpm_manifest,
     create_image_rpm_manifest,
+    patch_image_rpm_manifest,
     update_container_content_sets,
     load_sbom_packages,
     construct_rpm_items_and_content_sets,
@@ -209,6 +211,7 @@ def test_upload_container_rpm_data_with_retry__fails_http_other(
 
 @patch("upload_rpm_data.update_container_content_sets")
 @patch("upload_rpm_data.create_image_rpm_manifest")
+@patch("upload_rpm_data.get_image_rpm_manifest")
 @patch("upload_rpm_data.construct_rpm_items_and_content_sets")
 @patch("upload_rpm_data.load_sbom_packages")
 @patch("upload_rpm_data.get_image_rpm_data")
@@ -216,6 +219,7 @@ def test_upload_container_rpm_data__success(
     mock_get_image_rpm_data,
     mock_load_sbom_packages,
     mock_construct_rpm_items_and_content_sets,
+    mock_get_image_rpm_manifest,
     mock_create_image_rpm_manifest,
     mock_update_container_content_sets,
 ):
@@ -231,9 +235,11 @@ def test_upload_container_rpm_data__success(
     }
     mock_load_sbom_packages.return_value = PACKAGES
     mock_construct_rpm_items_and_content_sets.return_value = ([{"name": "pkg"}], ["myrepo1"])
+    mock_get_image_rpm_manifest.return_value = None
 
     upload_container_rpm_data(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
 
+    mock_get_image_rpm_manifest.assert_called_once_with(GRAPHQL_API, IMAGE_ID)
     mock_construct_rpm_items_and_content_sets.assert_called_once_with(PACKAGES)
     mock_create_image_rpm_manifest.assert_called_once_with(
         GRAPHQL_API,
@@ -277,6 +283,48 @@ def test_upload_container_rpm_data__data_already_exists(
     mock_construct_rpm_items_and_content_sets.assert_called_once_with(PACKAGES)
     mock_create_image_rpm_manifest.assert_not_called()
     mock_update_container_content_sets.assert_not_called()
+
+
+@patch("upload_rpm_data.update_container_content_sets")
+@patch("upload_rpm_data.patch_image_rpm_manifest")
+@patch("upload_rpm_data.create_image_rpm_manifest")
+@patch("upload_rpm_data.get_image_rpm_manifest")
+@patch("upload_rpm_data.construct_rpm_items_and_content_sets")
+@patch("upload_rpm_data.load_sbom_packages")
+@patch("upload_rpm_data.get_image_rpm_data")
+def test_upload_container_rpm_data__manifest_exists_but_rpm_manifest_null(
+    mock_get_image_rpm_data,
+    mock_load_sbom_packages,
+    mock_construct_rpm_items_and_content_sets,
+    mock_get_image_rpm_manifest,
+    mock_create_image_rpm_manifest,
+    mock_patch_image_rpm_manifest,
+    mock_update_container_content_sets,
+):
+    """
+    ContainerImageRPMManifest exists but rpm_manifest field on the image is null.
+    The function should patch the manifest to retrigger sync instead of creating.
+    """
+    mock_get_image_rpm_data.return_value = {
+        "_id": IMAGE_ID,
+        "content_sets": None,
+        "rpm_manifest": None,
+    }
+    mock_load_sbom_packages.return_value = PACKAGES
+    mock_construct_rpm_items_and_content_sets.return_value = ([{"name": "pkg"}], ["myrepo1"])
+    mock_get_image_rpm_manifest.return_value = {"_id": RPM_MANIFEST_ID}
+    mock_patch_image_rpm_manifest.return_value = RPM_MANIFEST_ID
+
+    upload_container_rpm_data(GRAPHQL_API, IMAGE_ID, SBOM_PATH)
+
+    mock_get_image_rpm_manifest.assert_called_once_with(GRAPHQL_API, IMAGE_ID)
+    mock_create_image_rpm_manifest.assert_not_called()
+    mock_patch_image_rpm_manifest.assert_called_once_with(GRAPHQL_API, IMAGE_ID)
+    mock_update_container_content_sets.assert_called_once_with(
+        GRAPHQL_API,
+        IMAGE_ID,
+        ["myrepo1"],
+    )
 
 
 def generate_pyxis_response(query_name, data=None, error=False):
@@ -326,6 +374,39 @@ def test_get_image_rpm_data__error(mock_post):
 
 
 @patch("pyxis.post")
+def test_get_image_rpm_manifest__success(mock_post):
+    """The Pyxis query is called and the manifest data is returned"""
+    manifest = {"_id": RPM_MANIFEST_ID}
+    mock_post.return_value = generate_pyxis_response("get_image_rpm_manifest", manifest)
+
+    result = get_image_rpm_manifest(GRAPHQL_API, IMAGE_ID)
+
+    assert result["_id"] == RPM_MANIFEST_ID
+    mock_post.assert_called_once()
+
+
+@patch("pyxis.post")
+def test_get_image_rpm_manifest__not_found(mock_post):
+    """The manifest does not exist, so None is returned"""
+    mock_post.return_value = generate_pyxis_response("get_image_rpm_manifest", None)
+
+    result = get_image_rpm_manifest(GRAPHQL_API, IMAGE_ID)
+
+    assert result is None
+    mock_post.assert_called_once()
+
+
+@patch("pyxis.post")
+def test_get_image_rpm_manifest__error(mock_post):
+    mock_post.return_value = generate_pyxis_response("get_image_rpm_manifest", error=True)
+
+    with pytest.raises(RuntimeError):
+        get_image_rpm_manifest(GRAPHQL_API, IMAGE_ID)
+
+    mock_post.assert_called_once()
+
+
+@patch("pyxis.post")
 def test_create_image_rpm_manifest__success(mock_post):
     mock_post.return_value = generate_pyxis_response(
         "create_image_rpm_manifest", {"_id": RPM_MANIFEST_ID}
@@ -343,6 +424,28 @@ def test_create_image_rpm_manifest__error(mock_post):
 
     with pytest.raises(RuntimeError):
         create_image_rpm_manifest(GRAPHQL_API, IMAGE_ID, [])
+
+    mock_post.assert_called_once()
+
+
+@patch("pyxis.post")
+def test_patch_image_rpm_manifest__success(mock_post):
+    mock_post.return_value = generate_pyxis_response(
+        "update_image_rpm_manifest", {"_id": RPM_MANIFEST_ID}
+    )
+
+    id = patch_image_rpm_manifest(GRAPHQL_API, IMAGE_ID)
+
+    assert id == RPM_MANIFEST_ID
+    mock_post.assert_called_once()
+
+
+@patch("pyxis.post")
+def test_patch_image_rpm_manifest__error(mock_post):
+    mock_post.return_value = generate_pyxis_response("update_image_rpm_manifest", error=True)
+
+    with pytest.raises(RuntimeError):
+        patch_image_rpm_manifest(GRAPHQL_API, IMAGE_ID)
 
     mock_post.assert_called_once()
 

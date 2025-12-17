@@ -82,7 +82,18 @@ def upload_container_rpm_data(graphql_api: str, image_id: str, sbom_path: str):
         LOGGER.info("RPM manifest already exists for ContainerImage. Skipping...")
         rpm_manifest_id = image["rpm_manifest"]["_id"]
     else:
-        rpm_manifest_id = create_image_rpm_manifest(graphql_api, image_id, rpms)
+        # Check if the ContainerImageRPMManifest already exists
+        existing_manifest = get_image_rpm_manifest(graphql_api, image_id)
+        if existing_manifest is not None:
+            # The manifest exists but rpm_manifest field on the ContainerImage is null.
+            # Patch the manifest with an empty body to retrigger the sync on Pyxis side.
+            LOGGER.warning(
+                "ContainerImageRPMManifest already exists but rpm_manifest is null. "
+                "Patching manifest to retrigger sync..."
+            )
+            rpm_manifest_id = patch_image_rpm_manifest(graphql_api, image_id)
+        else:
+            rpm_manifest_id = create_image_rpm_manifest(graphql_api, image_id, rpms)
     LOGGER.info(f"RPM manifest ID: {rpm_manifest_id}")
 
     if image["content_sets"] is not None:
@@ -159,6 +170,32 @@ query ($id: ObjectIDFilterScalar!) {
     return image
 
 
+def get_image_rpm_manifest(graphql_api: str, image_id: str) -> dict | None:
+    """Get the ContainerImageRPMManifest by image_id from Pyxis using GraphQL API
+
+    Returns:
+        The manifest dict if it exists, or None if it doesn't exist
+    """
+    query = """
+query ($id: String!) {
+    get_image_rpm_manifest(id: $id) {
+        data {
+            _id
+        }
+        error {
+            status
+            detail
+        }
+    }
+}
+"""
+    variables = {"id": image_id}
+    body = {"query": query, "variables": variables}
+
+    data = pyxis.graphql_query(graphql_api, body)
+    return data["get_image_rpm_manifest"]["data"]
+
+
 def create_image_rpm_manifest(graphql_api: str, image_id: str, rpms: list) -> str:
     """Create ContainerImageRPMManifest object in Pyxis using GraphQL API"""
     mutation = """
@@ -173,12 +210,38 @@ mutation ($id: String!, $input: ContainerImageRPMManifestInput!) {
     }
 }
 """
-    variables = {"id": "konflux-" + image_id, "input": {"image_id": image_id, "rpms": rpms}}
+    variables = {"input": {"image_id": image_id, "rpms": rpms}}
     body = {"query": mutation, "variables": variables}
 
     data = pyxis.graphql_query(graphql_api, body)
 
     return data["create_image_rpm_manifest"]["data"]["_id"]
+
+
+def patch_image_rpm_manifest(graphql_api: str, image_id: str) -> str:
+    """Patch ContainerImageRPMManifest object in Pyxis using GraphQL API with an empty body.
+
+    This is used to retrigger the sync on the Pyxis side when the manifest already exists
+    but the rpm_manifest field on the ContainerImage is null.
+    """
+    mutation = """
+mutation ($id: String!, $input: ContainerImageRPMManifestInput!) {
+    update_image_rpm_manifest(id: $id, input: $input) {
+        data {
+            _id
+        }
+        error {
+            detail
+        }
+    }
+}
+"""
+    variables = {"id": image_id, "input": {}}
+    body = {"query": mutation, "variables": variables}
+
+    data = pyxis.graphql_query(graphql_api, body)
+
+    return data["update_image_rpm_manifest"]["data"]["_id"]
 
 
 def update_container_content_sets(graphql_api: str, image_id: str, content_sets: list):
