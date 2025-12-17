@@ -30,6 +30,7 @@ import string
 import os
 from pathlib import Path
 import time
+from typing import Optional
 from urllib.error import HTTPError
 from packageurl import PackageURL
 
@@ -170,7 +171,7 @@ query ($id: ObjectIDFilterScalar!) {
     return image
 
 
-def get_image_rpm_manifest(graphql_api: str, image_id: str) -> dict | None:
+def get_image_rpm_manifest(graphql_api: str, image_id: str) -> Optional[dict]:
     """Get the ContainerImageRPMManifest by image_id from Pyxis using GraphQL API
 
     Returns:
