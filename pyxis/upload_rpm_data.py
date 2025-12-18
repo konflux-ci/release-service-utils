@@ -226,7 +226,7 @@ def patch_image_rpm_manifest(graphql_api: str, image_id: str) -> str:
     but the rpm_manifest field on the ContainerImage is null.
     """
     mutation = """
-mutation ($id: String!, $input: ContainerImageRPMManifestInput!) {
+mutation ($id: ObjectIDFilterScalar!, $input: ContainerImageRPMManifestInput!) {
     update_image_rpm_manifest(id: $id, input: $input) {
         data {
             _id
