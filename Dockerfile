@@ -138,3 +138,7 @@ ENV PATH="$PATH:/home/developer-portal-wrapper"
 ENV PATH="$PATH:/home/publish-to-cgw-wrapper"
 # Need to set PYTHONPATH to be able to run sbom scripts as modules
 ENV PYTHONPATH="$PYTHONPATH:/home"
+
+# uv installs newer requests and certifi which don't use the system CA like the one installed via
+# dnf. So we need to point requests to the system CA bundle explicitly.
+ENV REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt
