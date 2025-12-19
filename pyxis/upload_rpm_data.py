@@ -92,7 +92,7 @@ def upload_container_rpm_data(graphql_api: str, image_id: str, sbom_path: str):
                 "ContainerImageRPMManifest already exists but rpm_manifest is null. "
                 "Patching manifest to retrigger sync..."
             )
-            rpm_manifest_id = patch_image_rpm_manifest(graphql_api, image_id)
+            rpm_manifest_id = patch_image_rpm_manifest(graphql_api, existing_manifest['_id'])
         else:
             rpm_manifest_id = create_image_rpm_manifest(graphql_api, image_id, rpms)
     LOGGER.info(f"RPM manifest ID: {rpm_manifest_id}")
