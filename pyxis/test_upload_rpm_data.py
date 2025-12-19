@@ -319,7 +319,7 @@ def test_upload_container_rpm_data__manifest_exists_but_rpm_manifest_null(
 
     mock_get_image_rpm_manifest.assert_called_once_with(GRAPHQL_API, IMAGE_ID)
     mock_create_image_rpm_manifest.assert_not_called()
-    mock_patch_image_rpm_manifest.assert_called_once_with(GRAPHQL_API, IMAGE_ID)
+    mock_patch_image_rpm_manifest.assert_called_once_with(GRAPHQL_API, RPM_MANIFEST_ID)
     mock_update_container_content_sets.assert_called_once_with(
         GRAPHQL_API,
         IMAGE_ID,
@@ -434,7 +434,7 @@ def test_patch_image_rpm_manifest__success(mock_post):
         "update_image_rpm_manifest", {"_id": RPM_MANIFEST_ID}
     )
 
-    id = patch_image_rpm_manifest(GRAPHQL_API, IMAGE_ID)
+    id = patch_image_rpm_manifest(GRAPHQL_API, RPM_MANIFEST_ID)
 
     assert id == RPM_MANIFEST_ID
     mock_post.assert_called_once()
@@ -445,7 +445,7 @@ def test_patch_image_rpm_manifest__error(mock_post):
     mock_post.return_value = generate_pyxis_response("update_image_rpm_manifest", error=True)
 
     with pytest.raises(RuntimeError):
-        patch_image_rpm_manifest(GRAPHQL_API, IMAGE_ID)
+        patch_image_rpm_manifest(GRAPHQL_API, RPM_MANIFEST_ID)
 
     mock_post.assert_called_once()
 
