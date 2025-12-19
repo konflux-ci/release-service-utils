@@ -1,20 +1,6 @@
 FROM quay.io/konflux-ci/oras:latest@sha256:4542f5a2a046ca36653749a8985e46744a5d2d36ee10ca14409be718ce15129e as oras
 
 FROM registry.redhat.io/rhtas/cosign-rhel9:1.3.1-1763546693 as cosign
-RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" = "x86_64" ]; then \
-        COSIGN_ARCH="amd64"; \
-    elif [ "$ARCH" = "aarch64" ]; then \
-        COSIGN_ARCH="arm64"; \
-    elif [ "$ARCH" = "ppc64le" ]; then \
-        COSIGN_ARCH="ppc64le"; \
-    elif [ "$ARCH" = "s390x" ]; then \
-        COSIGN_ARCH="s390x"; \
-    else \
-        echo "Unsupported architecture: $ARCH" && exit 1; \
-    fi && \
-    gunzip -c /usr/local/bin/cosign-linux-${COSIGN_ARCH}.gz > /usr/local/bin/cosign-extracted && \
-    chmod +x /usr/local/bin/cosign-extracted
 
 FROM registry.access.redhat.com/ubi9/ubi:9.7-1764794285
 
@@ -49,7 +35,22 @@ RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.n
 COPY --from=oras /usr/bin/oras /usr/bin/oras
 COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
 COPY --from=oras /usr/local/bin/get-reference-base /usr/local/bin/get-reference-base
-COPY --from=cosign /usr/local/bin/cosign-extracted /usr/local/bin/cosign
+COPY --from=cosign /usr/local/bin/cosign-linux-*.gz /tmp/
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        COSIGN_ARCH="amd64"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        COSIGN_ARCH="arm64"; \
+    elif [ "$ARCH" = "ppc64le" ]; then \
+        COSIGN_ARCH="ppc64le"; \
+    elif [ "$ARCH" = "s390x" ]; then \
+        COSIGN_ARCH="s390x"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    gunzip -c /tmp/cosign-linux-${COSIGN_ARCH}.gz > /usr/local/bin/cosign && \
+    chmod +x /usr/local/bin/cosign && \
+    rm -f /tmp/cosign-linux-*.gz
 # Install uv via curl
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     mv /root/.local/bin/uv /usr/local/bin/uv
