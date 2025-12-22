@@ -157,6 +157,45 @@ def test_graphql_query__pyxis_error(mock_post: MagicMock):
     mock_post.assert_called_once_with(API_URL, REQUEST_BODY)
 
 
+@patch("pyxis.post")
+def test_graphql_query__allow_not_found_with_404(mock_post: MagicMock):
+    """When allow_not_found=True and the error is a 404,
+    the function should return the data without raising"""
+    mock_post.return_value.json.return_value = {
+        "data": {
+            QUERY: {
+                "data": None,
+                "error": {"status": 404, "detail": "Document not found"},
+            }
+        }
+    }
+
+    data = pyxis.graphql_query(API_URL, REQUEST_BODY, allow_not_found=True)
+
+    assert data[QUERY]["data"] is None
+    assert data[QUERY]["error"]["status"] == 404
+    mock_post.assert_called_once_with(API_URL, REQUEST_BODY)
+
+
+@patch("pyxis.post")
+def test_graphql_query__allow_not_found_with_other_error(mock_post: MagicMock):
+    """When allow_not_found=True but the error is not a 404,
+    the function should still raise"""
+    mock_post.return_value.json.return_value = {
+        "data": {
+            QUERY: {
+                "data": None,
+                "error": {"status": 500, "detail": "Internal server error"},
+            }
+        }
+    }
+
+    with pytest.raises(RuntimeError):
+        pyxis.graphql_query(API_URL, REQUEST_BODY, allow_not_found=True)
+
+    mock_post.assert_called_once_with(API_URL, REQUEST_BODY)
+
+
 @patch("pyxis.session", None)
 @patch("pyxis._get_session")
 def test_put(mock_get_session: MagicMock) -> None:

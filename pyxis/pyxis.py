@@ -110,7 +110,9 @@ def patch(url: str, body: Dict[str, Any]) -> requests.Response:
     return resp
 
 
-def graphql_query(graphql_api: str, body: Dict[str, Any]) -> Dict[str, Any]:
+def graphql_query(
+    graphql_api: str, body: Dict[str, Any], allow_not_found: bool = False
+) -> Dict[str, Any]:
     """Make a request to Pyxis GraphQL API
 
     This will make a POST request and then check the result
@@ -119,6 +121,8 @@ def graphql_query(graphql_api: str, body: Dict[str, Any]) -> Dict[str, Any]:
     Args:
         graphql_api (str): Pyxis GraphQL API URL
         body (Dict[str, Any]): Request payload
+        allow_not_found (bool): If True, 404 errors are ignored and the response
+            data is returned as-is (with None values). Defaults to False.
 
     :return: Pyxis response
     """
@@ -126,13 +130,23 @@ def graphql_query(graphql_api: str, body: Dict[str, Any]) -> Dict[str, Any]:
     resp_json = resp.json()
 
     error_msg = "Pyxis GraphQL query failed"
-    if resp_json.get("data") is None or any(
-        [query["error"] is not None for query in resp_json["data"].values()]
-    ):
+    if resp_json.get("data") is None:
         LOGGER.error(error_msg)
         LOGGER.error(f"Pyxis response: {resp_json}")
         LOGGER.error(f"Pyxis trace_id: {resp.headers.get('trace_id')}")
         raise RuntimeError(error_msg)
+
+    # Check for errors in the response
+    for query in resp_json["data"].values():
+        error = query.get("error")
+        if error is not None:
+            # Allow 404 errors if the flag is set
+            if allow_not_found and error.get("status") == 404:
+                continue
+            LOGGER.error(error_msg)
+            LOGGER.error(f"Pyxis response: {resp_json}")
+            LOGGER.error(f"Pyxis trace_id: {resp.headers.get('trace_id')}")
+            raise RuntimeError(error_msg)
 
     return resp_json["data"]
 

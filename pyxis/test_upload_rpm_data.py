@@ -387,8 +387,17 @@ def test_get_image_rpm_manifest__success(mock_post):
 
 @patch("pyxis.post")
 def test_get_image_rpm_manifest__not_found(mock_post):
-    """The manifest does not exist, so None is returned"""
-    mock_post.return_value = generate_pyxis_response("get_image_rpm_manifest", None)
+    """The manifest does not exist (404 error), so None is returned"""
+    response = Mock()
+    response.json.return_value = {
+        "data": {
+            "get_image_rpm_manifest": {
+                "data": None,
+                "error": {"status": 404, "detail": "Document not found"},
+            }
+        }
+    }
+    mock_post.return_value = response
 
     result = get_image_rpm_manifest(GRAPHQL_API, IMAGE_ID)
 
@@ -398,7 +407,18 @@ def test_get_image_rpm_manifest__not_found(mock_post):
 
 @patch("pyxis.post")
 def test_get_image_rpm_manifest__error(mock_post):
-    mock_post.return_value = generate_pyxis_response("get_image_rpm_manifest", error=True)
+    """Non-404 errors should still raise a RuntimeError"""
+    response = Mock()
+    response.json.return_value = {
+        "data": {
+            "get_image_rpm_manifest": {
+                "data": None,
+                "error": {"status": 500, "detail": "Internal server error"},
+            }
+        }
+    }
+    response.headers = {"trace_id": "test-trace-id"}
+    mock_post.return_value = response
 
     with pytest.raises(RuntimeError):
         get_image_rpm_manifest(GRAPHQL_API, IMAGE_ID)
