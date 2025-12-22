@@ -193,7 +193,7 @@ query ($id: String!) {
     variables = {"id": image_id}
     body = {"query": query, "variables": variables}
 
-    data = pyxis.graphql_query(graphql_api, body)
+    data = pyxis.graphql_query(graphql_api, body, allow_not_found=True)
     return data["get_image_rpm_manifest"]["data"]
 
 
