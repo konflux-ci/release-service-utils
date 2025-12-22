@@ -219,7 +219,7 @@ mutation ($id: String!, $input: ContainerImageRPMManifestInput!) {
     return data["create_image_rpm_manifest"]["data"]["_id"]
 
 
-def patch_image_rpm_manifest(graphql_api: str, image_id: str) -> str:
+def patch_image_rpm_manifest(graphql_api: str, rpm_manifest_id: str) -> str:
     """Patch ContainerImageRPMManifest object in Pyxis using GraphQL API with an empty body.
 
     This is used to retrigger the sync on the Pyxis side when the manifest already exists
