@@ -211,7 +211,7 @@ mutation ($id: String!, $input: ContainerImageRPMManifestInput!) {
     }
 }
 """
-    variables = {"input": {"image_id": image_id, "rpms": rpms}}
+    variables = {"id": "konflux-" + image_id, "input": {"image_id": image_id, "rpms": rpms}}
     body = {"query": mutation, "variables": variables}
 
     data = pyxis.graphql_query(graphql_api, body)
