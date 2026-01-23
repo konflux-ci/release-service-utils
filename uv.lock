@@ -718,11 +718,11 @@ wheels = [
 
 [[package]]
 name = "diffused-lib"
-version = "0.2.0"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/85/ce/c39433b388cb2ea783ad1d9a5f841d4c36874bfc48c4804a83e097083185/diffused_lib-0.2.0.tar.gz", hash = "sha256:e1ee6a2420cc4a7d87ca57bd0fabe318a6e41a7c93e3ddac6e250278025f6bbf", size = 14936, upload-time = "2025-10-22T14:54:16.806Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c7/9e/d3fc024efb6d4603db0fbb2e90a976cf5f54205784c554e3c7a9ce724731/diffused_lib-0.3.0.tar.gz", hash = "sha256:31dfbf644d4676c43af1f9deaf730c652059c19b656fec5df201fa8a99de451c", size = 15140, upload-time = "2026-01-19T19:44:53.106Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4d/d4/c66a97a492ac91e6728fe6f5fdd39fe739f5a64e8d1b3fd47e341ae2414b/diffused_lib-0.2.0-py3-none-any.whl", hash = "sha256:e820d35f65d1f52508cc0ef294f82d8c268aae9e5cdd89a353c506b9cc81072a", size = 9258, upload-time = "2025-10-22T14:54:15.654Z" },
+    { url = "https://files.pythonhosted.org/packages/48/30/cd7eb9172e2e4254d4dce4a04086b710e2104a45dfdfb00757a696eab18a/diffused_lib-0.3.0-py3-none-any.whl", hash = "sha256:930df735d31ac2464197e65a2fa42b479d0b2dbc6b235341869ca4b81116de08", size = 9328, upload-time = "2026-01-19T19:44:51.926Z" },
 ]
 
 [[package]]
@@ -730,7 +730,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -2339,7 +2339,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "check-jsonschema" },
-    { name = "diffused-lib", specifier = "==0.2.0" },
+    { name = "diffused-lib", specifier = "==0.3.0" },
     { name = "jinja2" },
     { name = "jinja2-ansible-filters" },
     { name = "packageurl-python" },
