@@ -80,7 +80,12 @@ RUN curl -LO https://github.com/release-engineering/exodus-rsync/releases/latest
 
 # Install Python dependencies using uv
 COPY pyproject.toml uv.lock ./
-RUN uv pip install -r pyproject.toml --system
+RUN uv pip install -r pyproject.toml --system && \
+    # Remove PyPI's python-qpid-proton so the system RPM (python3-qpid-proton) takes precedence.
+    # The PyPI wheel (0.40.0) causes SSL failures because it bundles its own OpenSSL which
+    # doesn't use the system CA trust store. The system RPM (0.37.0) is properly linked to
+    # UBI9's OpenSSL and respects /etc/pki/ca-trust.
+    pip uninstall -y python-qpid-proton
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
 RUN dnf -y remove gcc
