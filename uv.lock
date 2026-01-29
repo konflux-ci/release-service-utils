@@ -732,7 +732,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -1757,7 +1757,7 @@ wheels = [
 
 [[package]]
 name = "pubtools-sign"
-version = "1.0.4"
+version = "1.0.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ansible-core", version = "2.15.13", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -1779,9 +1779,9 @@ dependencies = [
     { name = "requests" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a2/34/3f9126c5e6010aaf8e5008087137636cfa9d417d0fda0e6a66da8dfb974e/pubtools_sign-1.0.4.tar.gz", hash = "sha256:56f0581777995a5da6cb96824ca838b021769ab29d9802f6a84b5204205f96e2", size = 66748, upload-time = "2026-01-22T10:44:07.081Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d2/c0/bad34a5efbd8b559a51b40cc793d2dd5d9eb4fd2e07c7c261115bec135db/pubtools_sign-1.0.5.tar.gz", hash = "sha256:194df4dbd7474b5a8694f4aa79eb7b7804efe1f575b7e16679ddd9ac93d33482", size = 66827, upload-time = "2026-01-29T03:04:30.151Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a2/31/1632e1d89c704633dcac64d6564e596e191a203288fb26483cbe57113ea2/pubtools_sign-1.0.4-py3-none-any.whl", hash = "sha256:022e4e4ccfe45d0d585a560d8e9d0fd8a2a350428e39913cab9d2e807883186b", size = 39373, upload-time = "2026-01-22T10:44:06.057Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/e1/bb78302da54ba407c8985f6dfdceb5f89ae8b7d1c4bed056bd360d7be868/pubtools_sign-1.0.5-py3-none-any.whl", hash = "sha256:c64ff4a33084f98e0564e42fce5f2806e554f736b0ac8c45b61b40bac9f3225d", size = 39432, upload-time = "2026-01-29T03:04:28.029Z" },
 ]
 
 [[package]]
@@ -2430,7 +2430,7 @@ requires-dist = [
     { name = "pubtools-marketplacesvm", specifier = "==1.9.0" },
     { name = "pubtools-pulp", specifier = "==1.33.2" },
     { name = "pubtools-pyxis", specifier = "==1.3.7" },
-    { name = "pubtools-sign", specifier = "==1.0.4" },
+    { name = "pubtools-sign", specifier = "==1.0.5" },
     { name = "pulp-cli", specifier = "==0.36.3" },
 ]
 
