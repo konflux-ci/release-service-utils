@@ -10,6 +10,7 @@ dependencies = [
     "jinja2-ansible-filters",
     "packaging",
     "packageurl-python",
+    "rh-model-signing>=0.1.0",
     "pubtools-content-gateway==0.5.4",
     "pubtools-pulp==1.33.2",
     "pubtools-exodus==1.5.2",
