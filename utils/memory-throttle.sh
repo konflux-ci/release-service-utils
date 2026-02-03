@@ -101,7 +101,7 @@ wait_for_memory() {
     # Check if memory monitoring is available
     usage=$(get_memory_usage_percent)
     if [ -z "$usage" ]; then
-        $_xtrace_was_set && set -x
+        if $_xtrace_was_set; then set -x; fi
         # Can't read cgroups - don't block, rely on concurrentLimit only
         return 0
     fi
@@ -129,7 +129,7 @@ wait_for_memory() {
         echo "Memory throttle: usage now at $(get_memory_stats), resuming..."
     fi
 
-    $_xtrace_was_set && set -x
+    if $_xtrace_was_set; then set -x; fi
 }
 
 # Log whether memory-based throttling is available (call once at task start)
@@ -146,5 +146,5 @@ log_memory_throttle_status() {
         echo "Memory throttle: enabled with ${threshold}% threshold, current usage: ${stats}"
     fi
 
-    $_xtrace_was_set && set -x
+    if $_xtrace_was_set; then set -x; fi
 }
