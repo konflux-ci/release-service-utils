@@ -62,6 +62,8 @@ def main():  # pragma: no cover
             template_data = json.loads(f.read())
 
     with open(args.template) as t:
+        # DebugUndefined renders undefined variables as empty strings
+        # instead of raising errors.
         template = Template(
             t.read(), extensions=[AnsibleCoreFiltersExtension], undefined=DebugUndefined
         )
@@ -107,30 +109,39 @@ def main():  # pragma: no cover
             LOGGER.error(traceback.format_exc())
             raise exc
 
+    # Convert to JSON for safer parsing. Jinja works cleaner with YAML syntax
+    # but YAML type conversion can corrupt data e.g. "33158e1" to 331580 JSON
+    # output prevents this.
     filename = args.output
-    with open(filename, mode="w", encoding="utf-8") as advisory:
-        advisory.write(content)
+    data = yaml.safe_load(content)
+    with open(filename, mode="w", encoding="utf-8") as data_file:
+        json.dump(data, data_file, indent=2)
         LOGGER.info(f"Wrote {filename}")
 
 
 def setup_logger(level: int = logging.INFO, log_format: Any = None):
-    """Set up and configure logger.
+    """Set up and configure logger with stdout and stderr handlers.
+
+    Logs at passed level to stdout, ERROR and above to stderr.
     Args:
-        level (str, optional): Logging level. Defaults to logging.INFO.
-        log_format (Any, optional): Logging message format. Defaults to None.
-    :return: Logger object
+        level: Minimum logging level for stdout (default: logging.INFO)
+        log_format: Logging message format (default: standard format)
     """
     if log_format is None:
         log_format = "%(asctime)s [%(name)s] %(levelname)s %(message)s"
 
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setLevel(level)
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.handlers.clear()
 
-    logging.basicConfig(
-        level=level,
-        format=log_format,
-        handlers=[stream_handler],
-    )
+    formatter = logging.Formatter(log_format)
+
+    # Add stdout and stderr handlers for Tekton result readability
+    for stream, handler_level in [(sys.stdout, level), (sys.stderr, logging.ERROR)]:
+        handler = logging.StreamHandler(stream)
+        handler.setLevel(handler_level)
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
 
 
 if __name__ == "__main__":  # pragma: no cover
