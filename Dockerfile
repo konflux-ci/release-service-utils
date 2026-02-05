@@ -1,10 +1,10 @@
-FROM quay.io/konflux-ci/oras:latest@sha256:a6ebcd58c6eebac8232cdddfdf768bd11f50d6edda29f4be5f5205777ce3bdf1 as oras
+FROM quay.io/konflux-ci/oras:latest@sha256:2fdb02259e6d197b95e9d757f474e51a1c7412abc54e6901393a00a238bbeb27 as oras
 
 FROM registry.redhat.io/rhtas/cosign-rhel9:1.3.1-1763546693 as cosign
 
 FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.9.2 as roxctl
 
-FROM registry.access.redhat.com/ubi9/ubi:9.7-1769417801
+FROM registry.access.redhat.com/ubi9/ubi:9.7-1770238273
 
 ARG COSIGN_VERSION=2.4.1
 ARG COSIGN3_VERSION=3.0.4
