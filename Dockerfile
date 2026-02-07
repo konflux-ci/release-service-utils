@@ -7,6 +7,7 @@ FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.9.2 as ro
 FROM registry.access.redhat.com/ubi9/ubi:9.7-1770238273
 
 ARG COSIGN_VERSION=2.4.1
+ARG COSIGN3_VERSION=3.0.4
 ARG KUBECTL_VERSION=1.27.2
 ARG OPM_VERSION=v1.50.0
 ARG YQ_VERSION=4.34.1
@@ -49,6 +50,11 @@ RUN ARCH=$(uname -m) && \
     gunzip -c /tmp/cosign-linux-${COSIGN_ARCH}.gz > /usr/local/bin/cosign && \
     chmod +x /usr/local/bin/cosign && \
     rm -f /tmp/cosign-linux-*.gz
+
+RUN ARCH=$(uname -m) && if [ "$ARCH" == "x86_64" ]; then ARCH=amd64; fi && \
+    curl -L https://github.com/sigstore/cosign/releases/download/${COSIGN3_VERSION}/cosign-linux-${ARCH} -o /usr/local/bin/cosign3 && \
+    chmod +x /usr/local/bin/cosign3
+
 
 COPY --from=roxctl /usr/bin/roxctl /usr/bin/roxctl
 
