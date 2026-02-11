@@ -104,6 +104,7 @@ COPY pyxis /home/pyxis
 COPY utils /home/utils
 COPY scripts /home/scripts
 COPY templates /home/templates
+COPY kafka /home/kafka
 COPY pubtools-pulp-wrapper /home/pubtools-pulp-wrapper
 COPY pubtools-marketplacesvm-wrapper /home/pubtools-marketplacesvm-wrapper
 COPY developer-portal-wrapper /home/developer-portal-wrapper
