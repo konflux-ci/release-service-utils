@@ -13,6 +13,7 @@ from create_container_image import (
     create_container_image,
     update_container_image_repositories,
     construct_repository,
+    _rh_push_registry,
 )
 
 
@@ -610,6 +611,27 @@ def test_repository_digest_values__multi_arch():
     }
 
 
+def test_rh_push_registry():
+    """Flatpak namespaces use flatpaks.registry.redhat.io;
+    others use registry.access.redhat.com.
+    """
+    assert (
+        _rh_push_registry("quay.io/rh-flatpaks-prod/foo/bar") == "flatpaks.registry.redhat.io"
+    )
+    assert (
+        _rh_push_registry("quay.io/rh-flatpaks-stage/foo/bar") == "flatpaks.registry.redhat.io"
+    )
+    assert (
+        _rh_push_registry("quay.io/redhat-prod/product----image")
+        == "registry.access.redhat.com"
+    )
+    assert (
+        _rh_push_registry("quay.io/redhat-pending/product----image")
+        == "registry.access.redhat.com"
+    )
+    assert _rh_push_registry("quay.io/some-org/repo") == "registry.access.redhat.com"
+
+
 @patch("create_container_image.datetime")
 def test_construct_repository__rh_push_true(mock_datetime):
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
@@ -641,6 +663,42 @@ def test_construct_repository__rh_push_true(mock_datetime):
         "manifest_list_digest": "some_digest",
         "manifest_schema2_digest": "arch specific digest",
     }
+
+
+@patch("create_container_image.datetime")
+def test_construct_repository__rh_push_true_flatpak_prod(mock_datetime):
+    mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
+    args = MagicMock()
+    args.media_type = "application/vnd.oci.image.manifest.v1+json"
+    args.architecture_digest = "sha256:abc"
+    args.digest = "sha256:top"
+    args.rh_push = "true"
+    args.name = "quay.io/rh-flatpaks-prod/myapp----myflatpak"
+    tags = ["latest"]
+
+    repo = construct_repository(args, tags)
+
+    assert repo["registry"] == "flatpaks.registry.redhat.io"
+    assert repo["repository"] == "myapp/myflatpak"
+    assert repo["published"] is True
+
+
+@patch("create_container_image.datetime")
+def test_construct_repository__rh_push_true_flatpak_stage(mock_datetime):
+    mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
+    args = MagicMock()
+    args.media_type = "application/vnd.oci.image.manifest.v1+json"
+    args.architecture_digest = "sha256:def"
+    args.digest = "sha256:top2"
+    args.rh_push = "true"
+    args.name = "quay.io/rh-flatpaks-stage/namespace----another-flatpak"
+    tags = ["1.0"]
+
+    repo = construct_repository(args, tags)
+
+    assert repo["registry"] == "flatpaks.registry.redhat.io"
+    assert repo["repository"] == "namespace/another-flatpak"  # proxymap: ---- -> /
+    assert repo["published"] is True
 
 
 @patch("create_container_image.datetime")
