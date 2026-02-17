@@ -14,6 +14,7 @@ ARG YQ_VERSION=4.34.1
 ARG GLAB_VERSION=1.51.0
 ARG GH_VERSION=2.82.1
 ARG SYFT_VERSION=1.19.0
+ARG KUBEARCHIVE_VERSION=1.17.3
 
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
@@ -27,7 +28,8 @@ RUN ARCH=$(uname -m) && \
     curl -L https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr -xzf - bin/glab &&\
     curl -L https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GO_ARCH}.tar.gz  | tar -C /usr -xzf - --strip=1 gh_${GH_VERSION}_linux_${GO_ARCH}/bin/gh &&\
     curl -L https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr/bin/ -xzf - syft &&\
-    chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft}
+    curl -L https://github.com/kubearchive/kubearchive/releases/download/v${KUBEARCHIVE_VERSION}/kubectl-ka-linux-${GO_ARCH} -o /usr/bin/kubectl-ka &&\
+    chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft,kubectl-ka}
 
 RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
 
