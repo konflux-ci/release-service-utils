@@ -4,7 +4,7 @@ FROM registry.redhat.io/rhtas/cosign-rhel9:1.3.1-1763546693 as cosign
 
 FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.9.3 as roxctl
 
-FROM registry.access.redhat.com/ubi9/ubi:9.7-1770238273
+FROM registry.access.redhat.com/ubi9/ubi:9.7-1771346757
 
 ARG COSIGN_VERSION=2.4.1
 ARG COSIGN3_VERSION=3.0.4
