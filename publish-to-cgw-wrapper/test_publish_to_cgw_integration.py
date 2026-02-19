@@ -14,8 +14,9 @@ def cosign_content_dir(tmpdir):
         "cosign-darwin-amd64.gz",
         "fake-name-linux-amd64.gz",
         "ignored",
-        "cosign-checksum.gpg",
-        "sha256778877.txt",
+        "sha256sum.txt",
+        "sha256sum.txt.gpg",
+        "sha256sum.txt.sig",
     ]
     for filename in files:
         content_dir.join(filename).write("")
@@ -30,8 +31,9 @@ def gitsign_content_dir(tmpdir):
         "gitsign-linux-amd64.gz",
         "gitsign-darwin-amd64.gz",
         "ignored",
-        "sha256778877.txt",
-        "checksum.sig",
+        "sha256sum.txt",
+        "sha256sum.txt.gpg",
+        "sha256sum.txt.sig",
     ]
     for filename in files:
         content_dir.join(filename).write("")
@@ -96,66 +98,57 @@ def data_json(cosign_content_dir, gitsign_content_dir):
 
 @pytest.fixture
 def metadata():
+    """Metadata fixture: checksums order 1-3, RPA files order component_index*1000+i."""
+    h = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    dl = f"/content/origin/files/sha256/{h[:2]}/{h}"
+    base = {
+        "type": "FILE",
+        "hidden": False,
+        "invisible": False,
+        "productVersionId": 4156067,
+    }
     return [
         {
-            "type": "FILE",
-            "hidden": False,
-            "invisible": False,
-            "shortURL": "/cgw/product_code_1/1.1/cosign-darwin-amd64.gz",
-            "productVersionId": 4156067,
-            "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149afbf4c8996fb92427"
-                "ae41e4649b934ca495991b7852b855/cosign-darwin-amd64.gz"
-            ),
-            "label": "cosign-darwin-amd64.gz",
-        },
-        {
-            "type": "FILE",
-            "hidden": False,
-            "invisible": False,
-            "shortURL": "/cgw/product_code_1/1.1/cosign-linux-amd64.gz",
-            "productVersionId": 4156067,
-            "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149"
-                "afbf4c8996fb92427ae41e4649b934ca495991b7852b855/cosign-linux-amd64.gz"
-            ),
-            "label": "cosign-linux-amd64.gz",
-        },
-        {
-            "type": "FILE",
-            "hidden": False,
-            "invisible": False,
-            "productVersionId": 4156067,
-            "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149"
-                "afbf4c8996fb92427ae41e4649b934ca495991b7852b855/sha256778877.txt"
-            ),
-            "shortURL": "/cgw/product_code_1/1.1/sha256778877.txt",
+            **base,
+            "shortURL": "/cgw/product_code_1/1.1/sha256sum.txt",
+            "downloadURL": f"{dl}/sha256sum.txt",
             "label": "Checksum",
+            "order": 1,
         },
         {
-            "type": "FILE",
-            "hidden": False,
-            "invisible": False,
-            "shortURL": "/cgw/product_code_1/1.1/cosign",
-            "productVersionId": 4156067,
-            "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149"
-                "afbf4c8996fb92427ae41e4649b934ca495991b7852b855/cosign"
-            ),
-            "label": "cosign",
-        },
-        {
-            "type": "FILE",
-            "hidden": False,
-            "invisible": False,
-            "productVersionId": 4156067,
-            "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149afbf4c8996fb92427"
-                "ae41e4649b934ca495991b7852b855/cosign-checksum.gpg"
-            ),
-            "shortURL": "/cgw/product_code_1/1.1/cosign-checksum.gpg",
+            **base,
+            "shortURL": "/cgw/product_code_1/1.1/sha256sum.txt.gpg",
+            "downloadURL": f"{dl}/sha256sum.txt.gpg",
             "label": "Checksum - GPG",
+            "order": 2,
+        },
+        {
+            **base,
+            "shortURL": "/cgw/product_code_1/1.1/sha256sum.txt.sig",
+            "downloadURL": f"{dl}/sha256sum.txt.sig",
+            "label": "Checksum - Signature",
+            "order": 3,
+        },
+        {
+            **base,
+            "shortURL": "/cgw/product_code_1/1.1/cosign",
+            "downloadURL": f"{dl}/cosign",
+            "label": "cosign",
+            "order": 1000,
+        },
+        {
+            **base,
+            "shortURL": "/cgw/product_code_1/1.1/cosign-linux-amd64.gz",
+            "downloadURL": f"{dl}/cosign-linux-amd64.gz",
+            "label": "cosign-linux-amd64.gz",
+            "order": 1001,
+        },
+        {
+            **base,
+            "shortURL": "/cgw/product_code_1/1.1/cosign-darwin-amd64.gz",
+            "downloadURL": f"{dl}/cosign-darwin-amd64.gz",
+            "label": "cosign-darwin-amd64.gz",
+            "order": 1002,
         },
     ]
 
@@ -170,8 +163,8 @@ def test_main_creates_files(
 ):
     """
     Test main() for two components where all files are created:
-    - First component processes 5 files and creates all 5.
-    - Second component processes 4 files and creates all 4.
+    - First component processes 6 files (3 checksums + 3 RPA) and creates all 6.
+    - Second component processes 6 files (3 checksums + 3 RPA) and creates all 6.
     """
     test_args = [
         "--cgw_host",
@@ -190,12 +183,13 @@ def test_main_creates_files(
         ),
         MagicMock(json=lambda: [{"id": 4156067, "versionName": "1.1"}]),  # Get version
         MagicMock(json=lambda: []),  # existing files
-        MagicMock(json=lambda: 4567),  # cosign-darwin-amd64.gz (created)
-        MagicMock(json=lambda: 4568),  # cosign-linux-amd64.gz (created)
-        MagicMock(json=lambda: 4569),  # sha256778877.txt (created)
+        MagicMock(json=lambda: 4567),  # sha256sum.txt (created)
+        MagicMock(json=lambda: 4568),  # sha256sum.txt.gpg (created)
+        MagicMock(json=lambda: 4569),  # sha256sum.txt.sig (created)
         MagicMock(json=lambda: 4570),  # cosign (created)
-        MagicMock(json=lambda: 4571),  # cosign-checksum.gpg (created)
-        # For second components
+        MagicMock(json=lambda: 4571),  # cosign-linux-amd64.gz (created)
+        MagicMock(json=lambda: 4572),  # cosign-darwin-amd64.gz (created)
+        # For second component
         MagicMock(  # Get products
             json=lambda: [
                 {"id": 356068, "name": "product_name_2", "productCode": "product_code_2"}
@@ -203,18 +197,20 @@ def test_main_creates_files(
         ),
         MagicMock(json=lambda: [{"id": 4156068, "versionName": "1.2"}]),  # Get version
         MagicMock(json=lambda: []),  # existing files
-        MagicMock(json=lambda: 4572),  # gitsign-linux-amd64.gz (created)
-        MagicMock(json=lambda: 4573),  # sha256778877.txt (created)
-        MagicMock(json=lambda: 4574),  # gitsign (created)
-        MagicMock(json=lambda: 4574),  # gitsign-darwin-amd64.gz (created)
+        MagicMock(json=lambda: 4573),  # sha256sum.txt (created)
+        MagicMock(json=lambda: 4574),  # sha256sum.txt.gpg (created)
+        MagicMock(json=lambda: 4575),  # sha256sum.txt.sig (created)
+        MagicMock(json=lambda: 4576),  # gitsign (created)
+        MagicMock(json=lambda: 4577),  # gitsign-linux-amd64.gz (created)
+        MagicMock(json=lambda: 4578),  # gitsign-darwin-amd64.gz (created)
     ]
 
     results_json = cgw_wrapper.main()
-    assert results_json[0]["no_of_files_processed"] == 5
-    assert results_json[0]["no_of_files_created"] == 5
+    assert results_json[0]["no_of_files_processed"] == 6
+    assert results_json[0]["no_of_files_created"] == 6
     assert results_json[0]["no_of_files_skipped"] == 0
-    assert results_json[1]["no_of_files_processed"] == 4
-    assert results_json[1]["no_of_files_created"] == 4
+    assert results_json[1]["no_of_files_processed"] == 6
+    assert results_json[1]["no_of_files_created"] == 6
     assert results_json[1]["no_of_files_skipped"] == 0
 
 
@@ -224,8 +220,8 @@ def test_main_creates_files(
 def test_main_skips_3_creates_2(mock_sys_argv, mock_call, data_json, metadata):
     """
     Test main() for two components:
-    - First component should skip 3 existing files and create 2 new files.
-    - Second component should create 4 new files with no skips.
+    - First component should skip 3 existing files and create 3 new files.
+    - Second component should create 6 new files with no skips.
     """
     test_args = [
         "--cgw_host",
@@ -235,6 +231,11 @@ def test_main_skips_3_creates_2(mock_sys_argv, mock_call, data_json, metadata):
     ]
     mock_sys_argv.extend(test_args)
 
+    existing_files_c1 = [
+        {**metadata[0], "id": 4567},  # sha256sum.txt (exists)
+        {**metadata[1], "id": 4568},  # sha256sum.txt.gpg (exists)
+        {**metadata[2], "id": 4569},  # sha256sum.txt.sig (exists)
+    ]
     mock_call.side_effect = [
         # For first component
         MagicMock(  # Get products
@@ -243,15 +244,10 @@ def test_main_skips_3_creates_2(mock_sys_argv, mock_call, data_json, metadata):
             ]
         ),
         MagicMock(json=lambda: [{"id": 4156067, "versionName": "1.1"}]),  # Get version
-        MagicMock(
-            json=lambda: [
-                {**metadata[0], "id": 4567},  # cosign-darwin-amd64.gz (exists)
-                {**metadata[1], "id": 4568},  # cosign-linux-amd64.gz (exists)
-                {**metadata[2], "id": 4569},  # sha256778877.txt (exists)
-            ]  # Get existing files
-        ),
+        MagicMock(json=lambda: existing_files_c1),  # existing files
         MagicMock(json=lambda: 4570),  # cosign (created)
-        MagicMock(json=lambda: 4571),  # cosign-checksum.gpg (created)
+        MagicMock(json=lambda: 4571),  # cosign-linux-amd64.gz (created)
+        MagicMock(json=lambda: 4572),  # cosign-darwin-amd64.gz (created)
         # For second component
         MagicMock(  # Get products
             json=lambda: [
@@ -259,19 +255,21 @@ def test_main_skips_3_creates_2(mock_sys_argv, mock_call, data_json, metadata):
             ]
         ),
         MagicMock(json=lambda: [{"id": 4156068, "versionName": "1.2"}]),  # Get version
-        MagicMock(json=lambda: []),  # Get existing files
-        MagicMock(json=lambda: 4572),  # gitsign-linux-amd64.gz (created)
-        MagicMock(json=lambda: 4573),  # sha256778877.txt (created)
-        MagicMock(json=lambda: 4574),  # gitsign (created)
-        MagicMock(json=lambda: 4575),  # gitsign-darwin-amd64.gz (created)
+        MagicMock(json=lambda: []),  # existing files
+        MagicMock(json=lambda: 4573),  # sha256sum.txt (created)
+        MagicMock(json=lambda: 4574),  # sha256sum.txt.gpg (created)
+        MagicMock(json=lambda: 4575),  # sha256sum.txt.sig (created)
+        MagicMock(json=lambda: 4576),  # gitsign (created)
+        MagicMock(json=lambda: 4577),  # gitsign-linux-amd64.gz (created)
+        MagicMock(json=lambda: 4578),  # gitsign-darwin-amd64.gz (created)
     ]
 
     results_json = cgw_wrapper.main()
-    assert results_json[0]["no_of_files_processed"] == 5
-    assert results_json[0]["no_of_files_created"] == 2
+    assert results_json[0]["no_of_files_processed"] == 6
+    assert results_json[0]["no_of_files_created"] == 3
     assert results_json[0]["no_of_files_skipped"] == 3
-    assert results_json[1]["no_of_files_processed"] == 4
-    assert results_json[1]["no_of_files_created"] == 4
+    assert results_json[1]["no_of_files_processed"] == 6
+    assert results_json[1]["no_of_files_created"] == 6
     assert results_json[1]["no_of_files_skipped"] == 0
 
 
@@ -281,9 +279,9 @@ def test_main_skips_3_creates_2(mock_sys_argv, mock_call, data_json, metadata):
 def test_main_partial_skip_fail_rollback(mock_sys_argv, mock_call, data_json):
     """
     Test main() with 2 components where:
-    - The first component successfully creates 5 files.
+    - The first component successfully creates 6 files.
     - The second component creates 1 file, then fails on the next file.
-    - A failure in the 2 component triggers rollback of its created
+    - A failure in the 2nd component triggers rollback of its created
       file and all files from the first component.
     """
     test_args = [
@@ -302,28 +300,30 @@ def test_main_partial_skip_fail_rollback(mock_sys_argv, mock_call, data_json):
             ]
         ),
         MagicMock(json=lambda: [{"id": 4156067, "versionName": "1.1"}]),  # Get version
-        MagicMock(json=lambda: []),  # Get existing files
-        MagicMock(json=lambda: 4571),  # cosign-darwin-amd64.gz (created)
-        MagicMock(json=lambda: 4572),  # cosign-linux-amd64.gz (created)
-        MagicMock(json=lambda: 4573),  # sha256778877.txt (created)
-        MagicMock(json=lambda: 4574),  # cosign (created)
-        MagicMock(json=lambda: 4575),  # cosign-checksum.gpg (created)
+        MagicMock(json=lambda: []),  # existing files
+        MagicMock(json=lambda: 4567),  # sha256sum.txt (created)
+        MagicMock(json=lambda: 4568),  # sha256sum.txt.gpg (created)
+        MagicMock(json=lambda: 4569),  # sha256sum.txt.sig (created)
+        MagicMock(json=lambda: 4570),  # cosign (created)
+        MagicMock(json=lambda: 4571),  # cosign-linux-amd64.gz (created)
+        MagicMock(json=lambda: 4572),  # cosign-darwin-amd64.gz (created)
         # Second component
         MagicMock(  # Get products
             json=lambda: [
                 {"id": 356068, "name": "product_name_2", "productCode": "product_code_2"}
             ]
-        ),  # Get products
+        ),
         MagicMock(json=lambda: [{"id": 4156068, "versionName": "1.2"}]),  # Get version
-        MagicMock(json=lambda: []),  # Get existing files
-        MagicMock(json=lambda: 4576),  # gitsign-linux-amd64.gz (created)
+        MagicMock(json=lambda: []),  # existing files
+        MagicMock(json=lambda: 4573),  # sha256sum.txt (created)
         RuntimeError("File creation failed in second component"),
-        MagicMock(),  # delete file 4576
+        MagicMock(),  # delete file 4573
+        MagicMock(),  # delete file 4567
+        MagicMock(),  # delete file 4568
+        MagicMock(),  # delete file 4569
+        MagicMock(),  # delete file 4570
         MagicMock(),  # delete file 4571
         MagicMock(),  # delete file 4572
-        MagicMock(),  # delete file 4573
-        MagicMock(),  # delete file 4574
-        MagicMock(),  # delete file 4575
     ]
 
     with pytest.raises(SystemExit) as exc:
@@ -335,10 +335,34 @@ def test_main_partial_skip_fail_rollback(mock_sys_argv, mock_call, data_json):
         call(
             host="https://cgw.com/cgw/rest/admin",
             method="DELETE",
-            endpoint="/products/356068/versions/4156068/files/4576",
+            endpoint="/products/356068/versions/4156068/files/4573",
             session=ANY,
         ),
         # First component files
+        call(
+            host="https://cgw.com/cgw/rest/admin",
+            method="DELETE",
+            endpoint="/products/356067/versions/4156067/files/4567",
+            session=ANY,
+        ),
+        call(
+            host="https://cgw.com/cgw/rest/admin",
+            method="DELETE",
+            endpoint="/products/356067/versions/4156067/files/4568",
+            session=ANY,
+        ),
+        call(
+            host="https://cgw.com/cgw/rest/admin",
+            method="DELETE",
+            endpoint="/products/356067/versions/4156067/files/4569",
+            session=ANY,
+        ),
+        call(
+            host="https://cgw.com/cgw/rest/admin",
+            method="DELETE",
+            endpoint="/products/356067/versions/4156067/files/4570",
+            session=ANY,
+        ),
         call(
             host="https://cgw.com/cgw/rest/admin",
             method="DELETE",
@@ -351,24 +375,6 @@ def test_main_partial_skip_fail_rollback(mock_sys_argv, mock_call, data_json):
             endpoint="/products/356067/versions/4156067/files/4572",
             session=ANY,
         ),
-        call(
-            host="https://cgw.com/cgw/rest/admin",
-            method="DELETE",
-            endpoint="/products/356067/versions/4156067/files/4573",
-            session=ANY,
-        ),
-        call(
-            host="https://cgw.com/cgw/rest/admin",
-            method="DELETE",
-            endpoint="/products/356067/versions/4156067/files/4574",
-            session=ANY,
-        ),
-        call(
-            host="https://cgw.com/cgw/rest/admin",
-            method="DELETE",
-            endpoint="/products/356067/versions/4156067/files/4575",
-            session=ANY,
-        ),
     ]
     mock_call.assert_has_calls(expected_delete_calls, any_order=True)
-    assert mock_call.call_count == 19
+    assert mock_call.call_count == 21
