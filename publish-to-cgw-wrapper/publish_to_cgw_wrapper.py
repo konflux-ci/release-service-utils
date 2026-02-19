@@ -187,10 +187,16 @@ def generate_metadata(
     version_id,
     version_name,
     mirror_openshift_Push,
+    component_index=1,
 ):
     """
     Generate metadata for files listed in 'files' and present in the content_dir.
     Also includes metadata for checksum files starting with 'sha256' or component name.
+
+    Ordering scheme:
+      - Checksum files get fixed orders 1, 2, 3.
+      - Regular files get order = component_index * 1000 + file_position.
+        This keeps each component's files in a unique range.
     """
 
     logging.info(f"Generating metadata for files in {content_dir}")
@@ -204,51 +210,51 @@ def generate_metadata(
     if mirror_openshift_Push:
         shortURL_base = "/pub/cgw"
 
-    # Build file_lookup from source field (using basename of source)
-    file_lookup = {os.path.basename(file["source"]) for file in files}
+    dir_contents = set(os.listdir(content_dir))
+
+    # Checksum files always get fixed orders 1, 2, 3
+    checksum_files = [
+        ("sha256sum.txt", "Checksum", 1),
+        ("sha256sum.txt.gpg", "Checksum - GPG", 2),
+        ("sha256sum.txt.sig", "Checksum - Signature", 3),
+    ]
+
+    # Regular files get order = component_index * 1000 + position
+    rpa_files = [
+        (os.path.basename(f["source"]), os.path.basename(f["source"]))
+        for f in files
+        if os.path.basename(f["source"]) in dir_contents
+    ]
+
     metadata = []
-
-    for file_name in os.listdir(content_dir):
-        if file_name in file_lookup:
-            logging.info(f"Processing file: {file_name}")
-            metadata.append(
-                {
-                    **default_values_per_component,
-                    "shortURL": f"{shortURL_base}/{product_code}/{version_name}/{file_name}",
-                    "productVersionId": version_id,
-                    "downloadURL": generate_download_url(content_dir, file_name),
-                    "label": file_name,
-                }
-            )
-        elif file_name.startswith("sha256") or file_name.startswith(component_name):
-            logging.info(f"Processing file: {file_name}")
-            label = None
-            if file_name.endswith(".gpg"):
-                label = "Checksum - GPG"
-            elif file_name.endswith(".sig"):
-                label = "Checksum - Signature"
-            elif file_name.endswith(".txt"):
-                label = "Checksum"
-
-            if label:
-                metadata.append(
-                    {
-                        **default_values_per_component,
-                        "productVersionId": version_id,
-                        "downloadURL": generate_download_url(content_dir, file_name),
-                        "shortURL": (
-                            f"{shortURL_base}/{product_code}/{version_name}/{file_name}"
-                        ),
-                        "label": label,
-                    }
-                )
-        else:
-            # Skip files that arent listed in files and aren't a checksum.
-            logging.warning(
-                f"Skipping file: {file_name} "
-                "as it's not listed in component 'files' and not a checksum."
-            )
+    for name, label, order in checksum_files:
+        if name not in dir_contents:
             continue
+        logging.info(f"Processing file: {name} (order={order}, label={label})")
+        metadata.append(
+            {
+                **default_values_per_component,
+                "shortURL": f"{shortURL_base}/{product_code}/{version_name}/{name}",
+                "productVersionId": version_id,
+                "downloadURL": generate_download_url(content_dir, name),
+                "label": label,
+                "order": order,
+            }
+        )
+
+    for i, (file_name, label) in enumerate(rpa_files):
+        order = component_index * 1000 + i
+        logging.info(f"Processing file: {file_name} (order={order}, label={label})")
+        metadata.append(
+            {
+                **default_values_per_component,
+                "shortURL": f"{shortURL_base}/{product_code}/{version_name}/{file_name}",
+                "productVersionId": version_id,
+                "downloadURL": generate_download_url(content_dir, file_name),
+                "label": label,
+                "order": order,
+            }
+        )
 
     return metadata
 
@@ -365,7 +371,7 @@ def create_files(*, host, session, product_id, version_id, metadata):
         raise RuntimeError(f"Failed to create file: {e}")
 
 
-def process_component(*, host, session, component, dry_run=False):
+def process_component(*, host, session, component, dry_run=False, component_index=1):
     """
     Process a component retrieve product/version ID,
     generate metadata, create files, and return the result
@@ -405,6 +411,7 @@ def process_component(*, host, session, component, dry_run=False):
         version_id=product_version_id,
         version_name=productVersionName,
         mirror_openshift_Push=mirror_openshift_Push,
+        component_index=component_index,
     )
 
     if dry_run:
@@ -483,6 +490,7 @@ def main():
                     session=session,
                     component=component,
                     dry_run=args.dry_run,
+                    component_index=num,
                 )
                 if result_data is None:
                     continue
