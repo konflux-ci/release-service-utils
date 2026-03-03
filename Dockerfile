@@ -1,10 +1,10 @@
-FROM quay.io/konflux-ci/oras:latest@sha256:64c669a5a51d6340590594f3387a78227f8125846675a9cefb7a58ac6c307172 as oras
+FROM quay.io/konflux-ci/oras:latest@sha256:cb5a53f2842ecb2ee4d614fc5821a9d89ece501760a72ce964bfbae032c1868c as oras
 
 FROM registry.redhat.io/rhtas/cosign-rhel9:1.3.1-1763546693 as cosign
 
-FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.9.2 as roxctl
+FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.9.3 as roxctl
 
-FROM registry.access.redhat.com/ubi9/ubi:9.7-1770238273
+FROM registry.access.redhat.com/ubi9/ubi:9.7-1771346757
 
 ARG COSIGN_VERSION=2.4.1
 ARG COSIGN3_VERSION=3.0.4
@@ -14,6 +14,7 @@ ARG YQ_VERSION=4.34.1
 ARG GLAB_VERSION=1.51.0
 ARG GH_VERSION=2.82.1
 ARG SYFT_VERSION=1.19.0
+ARG KUBEARCHIVE_VERSION=1.17.3
 
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
@@ -27,7 +28,8 @@ RUN ARCH=$(uname -m) && \
     curl -L https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr -xzf - bin/glab &&\
     curl -L https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GO_ARCH}.tar.gz  | tar -C /usr -xzf - --strip=1 gh_${GH_VERSION}_linux_${GO_ARCH}/bin/gh &&\
     curl -L https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr/bin/ -xzf - syft &&\
-    chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft}
+    curl -L https://github.com/kubearchive/kubearchive/releases/download/v${KUBEARCHIVE_VERSION}/kubectl-ka-linux-${GO_ARCH} -o /usr/bin/kubectl-ka &&\
+    chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft,kubectl-ka}
 
 RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
 
@@ -104,6 +106,7 @@ COPY pyxis /home/pyxis
 COPY utils /home/utils
 COPY scripts /home/scripts
 COPY templates /home/templates
+COPY kafka /home/kafka
 COPY pubtools-pulp-wrapper /home/pubtools-pulp-wrapper
 COPY pubtools-marketplacesvm-wrapper /home/pubtools-marketplacesvm-wrapper
 COPY developer-portal-wrapper /home/developer-portal-wrapper
