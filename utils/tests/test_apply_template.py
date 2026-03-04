@@ -3,7 +3,6 @@ import json
 import os
 
 from jinja2 import TemplateSyntaxError
-import yaml
 
 import pytest
 
@@ -61,7 +60,7 @@ def test_apply_template_advisory_template(
     args.output = "somefile"
     args.verbose = True
     mock_argparser.return_value = args
-    mock_render.return_value = "applied template file"
+    mock_render.return_value = "foo: bar"
     mock_open1 = MagicMock()
     mock_open2 = MagicMock()
     mock_open.side_effect = [mock_open1, mock_open2]
@@ -71,7 +70,10 @@ def test_apply_template_advisory_template(
     # Act
     main()
 
-    file.write.assert_called_once_with("applied template file")
+    # Verify output is JSON
+    assert file.write.called
+    written = "".join(call.args[0] for call in file.write.call_args_list)
+    assert json.loads(written) == {"foo": "bar"}
 
 
 @patch("apply_template.setup_argparser")
@@ -128,7 +130,7 @@ def test_apply_template_with_data_file(mock_argparser: MagicMock):
 
         # Verify the output file was created and contains expected content
         with open(output_filename, "r") as f:
-            result = yaml.safe_load(f.read())
+            result = json.load(f)
 
         assert result["spec"]["product_name"] == "Test Product"
         assert result["spec"]["topic"] == "Test topic"
@@ -211,7 +213,7 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
         main()
 
         with open(filename, "r") as f:
-            result = yaml.safe_load(f.read())
+            result = json.load(f)
 
         assert result["spec"]["solution"] == solution
         assert result["spec"]["topic"] == topic

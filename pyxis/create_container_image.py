@@ -18,6 +18,10 @@ in the example above ("----" converted to "/"). This also requires a correspondi
 Container Repository object to exist in Pyxis. This will typically be created as part
 of product onboarding to RHTAP.
 
+Flatpak images use different Quay namespaces and a different Pyxis registry: they are
+pushed to quay.io/rh-flatpaks-prod/* or quay.io/rh-flatpaks-stage/*. For these, the
+registry value in Pyxis is set to flatpaks.registry.redhat.io (for both prod and stage).
+
 For stage, if you want to be able to pull an image from registry.stage.redhat.io,
 the image is pushed to quay.io/redhat-pending, the Container Image is created
 in stage Pyxis, but the registry value in Pyxis is still set to registry.access.redhat.com.
@@ -125,12 +129,14 @@ def setup_argparser() -> Any:  # pragma: no cover
     )
     parser.add_argument(
         "--rh-push",
-        help="If set to true, a second item will be created in ContainerImage.repositories "
-        "with the registry and repository entries converted to use Red Hat's official "
-        "registry. E.g. a mapped repository of "
-        "quay.io/redhat-pending/product---my-image will be converted to use "
-        "registry registry.access.redhat.com and repository product/my-image. Also, "
-        "the image will be marked as published.",
+        help="If set to true, the item created in ContainerImage.repositories "
+        "will have the registry and repository entries converted to use Red Hat's official "
+        "registry. For standard images (quay.io/redhat-prod/*, quay.io/redhat-pending/*) "
+        "registry is registry.access.redhat.com; for flatpaks (quay.io/rh-flatpaks-prod/*, "
+        "quay.io/rh-flatpaks-stage/*) registry is flatpaks.registry.redhat.io. "
+        "E.g. quay.io/redhat-pending/product----my-image becomes registry "
+        "registry.access.redhat.com and repository product/my-image. The image will be "
+        "marked as published.",
         default="false",
     )
     parser.add_argument(
@@ -340,28 +346,46 @@ def update_container_image_repositories(
         raise Exception("Image metadata was not successfully added to Pyxis.")
 
 
-def construct_repository(args, tags):
-    image_name = args.name
-    image_registry = image_name.split("/")[0]
-    image_repo = image_name.split("/", 1)[1]
+def _rh_push_registry(image_name: str) -> str:
+    """Return the Pyxis registry string for rh_push when --rh-push is true.
 
+    For flatpak images (quay.io/rh-flatpaks-prod/* or quay.io/rh-flatpaks-stage/*)
+    returns flatpaks.registry.redhat.io. For other Red Hat images
+    (e.g. quay.io/redhat-prod/*, quay.io/redhat-pending/*) returns
+    registry.access.redhat.com.
+    """
+    parts = image_name.split("/")
+    if len(parts) >= 2 and parts[1] in ("rh-flatpaks-prod", "rh-flatpaks-stage"):
+        return "flatpaks.registry.redhat.io"
+    return "registry.access.redhat.com"
+
+
+def construct_repository(args, tags):
+    """Build the repository dict for the Container Image.
+
+    When rh_push is true, the repository entry it adds will be for Red Hat
+    registries: registry is either registry.access.redhat.com (for standard
+    images like quay.io/redhat-prod/*, quay.io/redhat-pending/*) or
+    flatpaks.registry.redhat.io (for flatpak images quay.io/rh-flatpaks-prod/*,
+    quay.io/rh-flatpaks-stage/*). The repository path is derived via proxymap
+    (e.g. product----image -> product/image).
+    """
+    image_name = args.name
     date_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
 
-    # For images released to registry.redhat.io we need a special repository item
-    # with published=true and registry and repository converted.
-    # E.g. if the name in the oras manifest result is
-    # "quay.io/redhat-prod/rhtas-tech-preview----cosign-rhel9",
-    # repository will be "rhtas-tech-preview/cosign-rhel9"
     if args.rh_push == "true":
-        LOGGER.info("--rh-push is true. Associating registry.access.redhat.com repository.")
+        registry = _rh_push_registry(image_name)
+        LOGGER.info("--rh-push is true. Associating %s repository.", registry)
         repo = {
             "published": True,
-            "registry": "registry.access.redhat.com",
+            "registry": registry,
             "repository": proxymap(image_name),
             "push_date": date_now,
             "tags": pyxis_tags(tags, date_now),
         }
     else:
+        image_registry = image_name.split("/")[0]
+        image_repo = image_name.split("/", 1)[1]
         repo = {
             "published": False,
             "registry": image_registry,

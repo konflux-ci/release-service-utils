@@ -1,45 +1,101 @@
 #!/usr/bin/env sh
 #
-# Script: get_resource
+# Script: get-resource
 #
 # Description: This script receives three parameters: <resource_type>,
 #              <namespaced_name>, and [jsonpath]. It uses `kubectl` to load
 #              the specified Kubernetes resource and print it. If a jsonpath
 #              is supplied, only that part will be printed. If a jsonpath is
 #              supplied and the `kubectl` command fails, `{}` will be printed.
+#              For eligible resource types (e.g. snapshots), the script falls
+#              back to KubeArchive to retrieve archived/deleted resources when
+#              `kubectl` fails.
 #
-# Usage: kubectl_script.sh <resource_type> <namespaced_name> [jsonpath]
+# Usage: get-resource <resource_type> <namespace/name> [jsonpath]
 #
 # Parameters:
-#   <resource_type>   - The Kubernetes resource type (e.g., pod, deployment, service)
-#   <namespaced_name> - The namespaced name of the resource in the form "namespace/name"
-#   [jsonpath]        - Optional JSONPath expression to filter the output
+#   <resource_type>    - The Kubernetes resource type (e.g., pod, deployment, service)
+#   <namespaced_name>  - The namespaced name of the resource in the form "namespace/name"
+#   [jsonpath]         - Optional JSONPath expression to filter the output
 #
 # Requirements:
-#   - This script requires the 'kubectl' cli. Ensure that 'kubectl' is
-#     installed on your system.
+#   - kubectl
+#   - jq
+#   - kubectl-ka plugin (for KubeArchive fallback)
 
-
-# Check if all three parameters are provided
 if [ $# -lt 2 ]; then
-  echo "Usage: $0 <resource_type> <namespaced_name> [jsonpath]"
+  echo "Usage: $0 <resource_type> <namespace/name> [jsonpath]" >&2
   exit 1
 fi
 
-# Assign the parameters to variables
 resource_type=$1
-namespaced_name=$2
 jsonpath=$3
+IFS='/' read -r namespace name <<< "$2"
 
-# Split the namespaced name into namespace and name variables
-IFS='/' read -r namespace name <<< "$namespaced_name"
+# Resource types eligible for KubeArchive fallback (space-separated)
+KA_RESOURCE_TYPES="snapshot snapshots"
 
-# Build the kubectl command based on the parameters
+# Convert kubectl jsonpath ({.metadata.name}) to jq filter (.metadata.name).
+# Covers simple field access and [*] wildcards. Does not handle range/end,
+# recursive descent (..), filters (?(@...)), escaped dots (\.), or unions.
+jsonpath_to_jq() {
+  echo "$1" | sed 's/^{//;s/}$//;s/\[\*\]/[]/g'
+}
 
-# If a jsonpath is provided, append it to the kubectl command
-if [ ! -z "$jsonpath" ]; then
-  kubectl get $resource_type -n $namespace $name -o jsonpath="$jsonpath" \
-  --allow-missing-template-keys=false 2> /dev/null || echo "{}"
+# Retrieve resource from KubeArchive as JSON.
+# Uses a fixed config file so auto-setup only runs once per container lifetime.
+KUBECTL_KA_CONFIG_PATH="${KUBECTL_KA_CONFIG_PATH:-/tmp/kubectl-ka-config}"
+export KUBECTL_KA_CONFIG_PATH
+
+get_from_ka() {
+  _ka_raw=$(kubectl ka get "$resource_type" "$name" \
+    -n "$namespace" --archived -o json </dev/null) || return 1
+
+  # First run triggers auto-setup which mixes prompt text into stdout.
+  # Config is now saved — retry for clean JSON output.
+  echo "$_ka_raw" | jq empty 2>/dev/null || \
+    _ka_raw=$(kubectl ka get "$resource_type" "$name" \
+      -n "$namespace" --archived -o json) || return 1
+
+  # Unwrap list to match kubectl get <name> -o json format (single object).
+  # KubeArchive may return multiple archived versions; take the first item.
+  _item_count=$(echo "$_ka_raw" | jq '.items | length')
+  if [ "$_item_count" = "0" ]; then
+    return 1
+  fi
+  echo "$_ka_raw" | jq '.items[0]'
+}
+
+# Check if resource type is eligible for KubeArchive fallback
+ka_enabled() {
+  case " $KA_RESOURCE_TYPES " in *" $resource_type "*) return 0 ;; esac
+  return 1
+}
+
+# --- Main: try kubectl, fall back to KubeArchive ---
+
+if [ -n "$jsonpath" ]; then
+  result=$(kubectl get "$resource_type" -n "$namespace" "$name" \
+    -o jsonpath="$jsonpath" --allow-missing-template-keys=false 2>/dev/null) \
+    && { echo "$result"; exit 0; }
+
+  if ka_enabled; then
+    ka_json=$(get_from_ka) && {
+      jq_result=$(echo "$ka_json" | jq -r "$(jsonpath_to_jq "$jsonpath")" 2>/dev/null)
+      if [ $? -eq 0 ] && [ -n "$jq_result" ] && [ "$jq_result" != "null" ]; then
+        echo "$jq_result"; exit 0
+      fi
+    }
+  fi
+  echo "{}"
 else
-  kubectl get $resource_type -n $namespace $name -o json
+  kubectl_out=$(kubectl get "$resource_type" -n "$namespace" "$name" -o json 2>&1)
+  kubectl_exit=$?
+  [ $kubectl_exit -eq 0 ] && { echo "$kubectl_out"; exit 0; }
+
+  if ka_enabled; then
+    ka_json=$(get_from_ka) && { echo "$ka_json"; exit 0; }
+  fi
+  echo "$kubectl_out" >&2
+  exit $kubectl_exit
 fi
