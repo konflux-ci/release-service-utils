@@ -20,8 +20,9 @@ def cosign_content_dir(tmpdir):
         "cosign-darwin-amd64.gz",
         "fake-name-linux-amd64.gz",
         "ignored",
-        "cosign-checksum.gpg",
-        "sha256778877.txt",
+        "sha256sum.txt",
+        "sha256sum.txt.gpg",
+        "sha256sum.txt.sig",
     ]
     for filename in files:
         content_dir.join(filename).write("")
@@ -36,8 +37,9 @@ def gitsign_content_dir(tmpdir):
         "gitsign-linux-amd64.gz",
         "gitsign-darwin-amd64.gz",
         "ignored",
-        "sha256778877.txt",
-        "checksum.sig",
+        "sha256sum.txt",
+        "sha256sum.txt.gpg",
+        "sha256sum.txt.sig",
     ]
     for filename in files:
         content_dir.join(filename).write("")
@@ -103,66 +105,57 @@ def data_json(cosign_content_dir, gitsign_content_dir):
 
 @pytest.fixture
 def metadata():
+    """Metadata fixture: checksums order 1-3, RPA files order component_index*1000+i."""
+    h = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    dl = f"/content/origin/files/sha256/{h[:2]}/{h}"
+    base = {
+        "type": "FILE",
+        "hidden": False,
+        "invisible": False,
+        "productVersionId": 4156067,
+    }
     return [
         {
-            "type": "FILE",
-            "hidden": False,
-            "invisible": False,
-            "shortURL": "/pub/cgw/product_code_1/1.1/cosign-darwin-amd64.gz",
-            "productVersionId": 4156067,
-            "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149afbf4c8996fb92427"
-                "ae41e4649b934ca495991b7852b855/cosign-darwin-amd64.gz"
-            ),
-            "label": "cosign-darwin-amd64.gz",
-        },
-        {
-            "type": "FILE",
-            "hidden": False,
-            "invisible": False,
-            "shortURL": "/pub/cgw/product_code_1/1.1/cosign-linux-amd64.gz",
-            "productVersionId": 4156067,
-            "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149"
-                "afbf4c8996fb92427ae41e4649b934ca495991b7852b855/cosign-linux-amd64.gz"
-            ),
-            "label": "cosign-linux-amd64.gz",
-        },
-        {
-            "type": "FILE",
-            "hidden": False,
-            "invisible": False,
-            "productVersionId": 4156067,
-            "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149"
-                "afbf4c8996fb92427ae41e4649b934ca495991b7852b855/sha256778877.txt"
-            ),
-            "shortURL": "/pub/cgw/product_code_1/1.1/sha256778877.txt",
+            **base,
+            "shortURL": "/pub/cgw/product_code_1/1.1/sha256sum.txt",
+            "downloadURL": f"{dl}/sha256sum.txt",
             "label": "Checksum",
+            "order": 1,
         },
         {
-            "type": "FILE",
-            "hidden": False,
-            "invisible": False,
-            "shortURL": "/pub/cgw/product_code_1/1.1/cosign",
-            "productVersionId": 4156067,
-            "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149"
-                "afbf4c8996fb92427ae41e4649b934ca495991b7852b855/cosign"
-            ),
-            "label": "cosign",
-        },
-        {
-            "type": "FILE",
-            "hidden": False,
-            "invisible": False,
-            "productVersionId": 4156067,
-            "downloadURL": (
-                "/content/origin/files/sha256/e3/e3b0c44298fc1c149afbf4c8996fb92427"
-                "ae41e4649b934ca495991b7852b855/cosign-checksum.gpg"
-            ),
-            "shortURL": "/pub/cgw/product_code_1/1.1/cosign-checksum.gpg",
+            **base,
+            "shortURL": "/pub/cgw/product_code_1/1.1/sha256sum.txt.gpg",
+            "downloadURL": f"{dl}/sha256sum.txt.gpg",
             "label": "Checksum - GPG",
+            "order": 2,
+        },
+        {
+            **base,
+            "shortURL": "/pub/cgw/product_code_1/1.1/sha256sum.txt.sig",
+            "downloadURL": f"{dl}/sha256sum.txt.sig",
+            "label": "Checksum - Signature",
+            "order": 3,
+        },
+        {
+            **base,
+            "shortURL": "/pub/cgw/product_code_1/1.1/cosign",
+            "downloadURL": f"{dl}/cosign",
+            "label": "cosign",
+            "order": 1000,
+        },
+        {
+            **base,
+            "shortURL": "/pub/cgw/product_code_1/1.1/cosign-linux-amd64.gz",
+            "downloadURL": f"{dl}/cosign-linux-amd64.gz",
+            "label": "cosign-linux-amd64.gz",
+            "order": 1001,
+        },
+        {
+            **base,
+            "shortURL": "/pub/cgw/product_code_1/1.1/cosign-darwin-amd64.gz",
+            "downloadURL": f"{dl}/cosign-darwin-amd64.gz",
+            "label": "cosign-darwin-amd64.gz",
+            "order": 1002,
         },
     ]
 
@@ -434,10 +427,69 @@ def test_generate_metadata(data_json, metadata):
         version_id=4156067,
         version_name="1.1",
         mirror_openshift_Push=True,
+        component_index=1,
     )
     assert len(output_metadata) is len(metadata)
     for expected_file in metadata:
         assert expected_file in output_metadata
+
+
+def test_generate_metadata_multi_component_ordering(data_json):
+    """Test that multiple components get non-overlapping order ranges.
+
+    Component 1 files should get orders 1000, 1001, 1002, ...
+    Component 2 files should get orders 2000, 2001, 2002, ...
+    Checksum files always get fixed orders 1, 2, 3 regardless of component.
+    """
+    # Generate metadata for component 1 (index=1)
+    comp1 = data_json["components"][0]
+    meta1 = cgw_wrapper.generate_metadata(
+        content_dir=comp1["contentGateway"]["contentDir"],
+        component_name=comp1["name"],
+        files=comp1["files"],
+        product_code="product_code_1",
+        version_id=4156067,
+        version_name="1.1",
+        mirror_openshift_Push=True,
+        component_index=1,
+    )
+
+    # Generate metadata for component 2 (index=2)
+    comp2 = data_json["components"][1]
+    meta2 = cgw_wrapper.generate_metadata(
+        content_dir=comp2["contentGateway"]["contentDir"],
+        component_name=comp2["name"],
+        files=comp2["files"],
+        product_code="product_code_2",
+        version_id=4156068,
+        version_name="1.2",
+        mirror_openshift_Push=False,
+        component_index=2,
+    )
+
+    # Extract orders from each component's metadata
+    orders1 = {m["order"] for m in meta1}
+    orders2 = {m["order"] for m in meta2}
+
+    # Checksum files (orders 1, 2, 3) are shared, so exclude them for overlap check
+    checksum_orders = {1, 2, 3}
+    file_orders1 = orders1 - checksum_orders
+    file_orders2 = orders2 - checksum_orders
+
+    # Component 1 file orders should be in the 1000 range
+    assert all(
+        1000 <= o < 2000 for o in file_orders1
+    ), f"Component 1 file orders should be in 1000-1999 range, got {file_orders1}"
+
+    # Component 2 file orders should be in the 2000 range
+    assert all(
+        2000 <= o < 3000 for o in file_orders2
+    ), f"Component 2 file orders should be in 2000-2999 range, got {file_orders2}"
+
+    # No overlap between non-checksum file orders
+    assert file_orders1.isdisjoint(
+        file_orders2
+    ), f"Component file orders overlap: {file_orders1 & file_orders2}"
 
 
 def test_file_already_exists(metadata):
@@ -570,15 +622,16 @@ def test_create_files_success(mock_call, metadata):
 def test_create_files_with_existing(mock_call, metadata):
     """Test file creation when some files already exist."""
     existing_files = [
-        {**metadata[0], "id": 4566},  # cosign-linux-amd64.gz (exists)
-        {**metadata[1], "id": 4567},  # sha256778877.txt (exists)
+        {**metadata[0], "id": 4566},  # sha256sum.txt (exists)
+        {**metadata[1], "id": 4567},  # sha256sum.txt.gpg (exists)
     ]
 
     mock_call.side_effect = [
         MagicMock(json=lambda: existing_files),
-        MagicMock(json=lambda: 4568),  # cosign (created)
-        MagicMock(json=lambda: 4569),  # cosign-checksum.gpg (created)
-        MagicMock(json=lambda: 4570),  # gitsign-darwin-amd64.gz (created)
+        MagicMock(json=lambda: 4568),  # sha256sum.txt.sig (created)
+        MagicMock(json=lambda: 4569),  # cosign (created)
+        MagicMock(json=lambda: 4570),  # cosign-linux-amd64.gz (created)
+        MagicMock(json=lambda: 4571),  # cosign-darwin-amd64.gz (created)
     ]
 
     created, updated, skipped = cgw_wrapper.create_files(
@@ -617,11 +670,18 @@ def test_create_files_with_existing(mock_call, metadata):
             session=None,
             data=metadata[4],
         ),
+        call(
+            host="https://cgw.com/cgw/rest/admin",
+            method="POST",
+            endpoint="/products/101/versions/202/files",
+            session=None,
+            data=metadata[5],
+        ),
     ]
 
     mock_call.assert_has_calls(expected_calls)
-    assert mock_call.call_count == 4
-    assert created == [4568, 4569, 4570]
+    assert mock_call.call_count == 5
+    assert created == [4568, 4569, 4570, 4571]
     assert updated == []
     assert skipped == [4566, 4567]
 
@@ -705,6 +765,7 @@ def test_process_component_success(
         host="https://cgw.com/cgw/rest/admin",
         session=None,
         component=component,
+        component_index=2,
     )
 
     mock_get_product.assert_called_once_with(
@@ -727,6 +788,7 @@ def test_process_component_success(
         version_id=456,
         version_name="1.1",
         mirror_openshift_Push=True,
+        component_index=2,
     )
     mock_create_files.assert_called_once_with(
         host="https://cgw.com/cgw/rest/admin",
