@@ -1,6 +1,9 @@
 ---
 name: Python Checks for Pull Requests
 on:
+  push:
+    branches:
+      - main
   pull_request:
     types:
       - opened
@@ -27,9 +30,16 @@ jobs:
           python-version: "3.9"  # Same as in Dockerfile
       - name: flake8 Lint
         uses: py-actions/flake8@84ec6726560b6d5bd68f2a5bed83d62b52bb50ba  # v2
-      - name: Run pytest
+      - name: Run pytest with coverage
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           export PATH="$HOME/.local/bin:$PATH"
           uv sync --dev
-          uv run pytest
+          uv run pytest --cov=. --cov-report=xml:coverage.xml
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de  # v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: unit-tests
+          files: coverage.xml
+          fail_ci_if_error: false
