@@ -14,6 +14,7 @@ from upload_rpm_data import (
     construct_rpm_items_and_content_sets,
     get_rpm_summary,
     get_purl_type,
+    _parse_upstream_srpm,
 )
 
 GRAPHQL_API = "myapiurl"
@@ -26,7 +27,7 @@ PACKAGES = [
         "externalRefs": [
             {
                 "referenceType": "purl",
-                "referenceLocator": "pkg:rpm/rhel/pkg1@1-2.el8?arch=x86_64&"
+                "referenceLocator": "pkg:rpm/rhel/pkg1@1-2.el8?arch=x86_64&epoch=1&"
                 + "upstream=pkg1-1-2.el8.src.rpm&distro=rhel-8.0&repository_id=myrepo1",
             }
         ],
@@ -539,13 +540,16 @@ def test_construct_rpm_items_and_content_sets__success():
             "version": "1",
             "release": "2.el8",
             "architecture": "x86_64",
-            "srpm_name": "pkg1-1-2.el8.src.rpm",
+            "epoch": "1",
+            "srpm_name": "pkg1",
+            "srpm_nevra": "pkg1-1:1-2.el8.src",
         },
         {
             "name": "pkg2",
             "summary": "pkg2",
             "architecture": "noarch",
-            "srpm_name": "pkg2-1-2.el8.src.rpm",
+            "srpm_name": "pkg2",
+            "srpm_nevra": "pkg2-0:1-2.el8.src",
         },
         {
             "name": "pkg3",
@@ -554,7 +558,8 @@ def test_construct_rpm_items_and_content_sets__success():
             "version": "9",
             "release": "8.el8",
             "architecture": "noarch",
-            "srpm_name": "pkg3-9-8.el8.src.rpm",
+            "srpm_name": "pkg3",
+            "srpm_nevra": "pkg3-0:9-8.el8.src",
         },
         {
             "name": "pkg4",
@@ -569,13 +574,15 @@ def test_construct_rpm_items_and_content_sets__success():
             "gpg": "199e2f91fd431d51",
             "summary": "pkg5",
             "architecture": "noarch",
-            "srpm_name": "pkg5-1-2.el8.src.rpm",
+            "srpm_name": "pkg5",
+            "srpm_nevra": "pkg5-0:1-2.el8.src",
         },
         {
             "name": "pkg6",
             "summary": "pkg6",
             "architecture": "noarch",
-            "srpm_name": "pkg6-1-2.el8.src.rpm",
+            "srpm_name": "pkg6",
+            "srpm_nevra": "pkg6-0:1-2.el8.src",
         },
         {
             "name": "pkg7",
@@ -589,6 +596,64 @@ def test_construct_rpm_items_and_content_sets__success():
     ]
 
     assert content_sets == ["myrepo1", "myrepo2"]
+
+
+def test_construct_rpm_items_and_content_sets__srpm_name_extracted_from_upstream():
+    """srpm_name is the package name only; srpm_nevra has epoch and no .rpm suffix."""
+    packages = [
+        {
+            "externalRefs": [
+                {
+                    "referenceType": "purl",
+                    "referenceLocator": "pkg:rpm/rhel/python3-pip@1.0-1.el10?arch=noarch"
+                    "&upstream=python3-pip-1.0-1.el10.src.rpm&repository_id=myrepo",
+                }
+            ]
+        }
+    ]
+    rpms, _ = construct_rpm_items_and_content_sets(packages)
+
+    assert len(rpms) == 1
+    assert rpms[0]["srpm_name"] == "python3-pip"
+    assert rpms[0]["srpm_nevra"] == "python3-pip-0:1.0-1.el10.src"
+
+
+def test_parse_upstream_srpm__valid():
+    """Valid NVR upstream returns (name, version-release)."""
+    assert _parse_upstream_srpm("curl-8.12.1-2.el10_1.2.src.rpm") == (
+        "curl",
+        "8.12.1-2.el10_1.2.src",
+    )
+    assert _parse_upstream_srpm("python3-pip-1.0-1.el10.src.rpm") == (
+        "python3-pip",
+        "1.0-1.el10.src",
+    )
+
+
+def test_parse_upstream_srpm__invalid_raises():
+    """Invalid upstream (not name-version-release) raises ValueError."""
+    with pytest.raises(ValueError, match="name-version-release"):
+        _parse_upstream_srpm("single.rpm")  # no hyphens -> 1 part
+    with pytest.raises(ValueError, match="name-version-release"):
+        _parse_upstream_srpm("name-version.rpm")  # only 2 parts
+
+
+def test_construct_rpm_items_and_content_sets__invalid_upstream_raises():
+    """Package with invalid upstream qualifier raises ValueError from _parse_upstream_srpm."""
+    packages = [
+        {
+            "externalRefs": [
+                {
+                    "referenceType": "purl",
+                    "referenceLocator": (
+                        "pkg:rpm/rhel/bad@1.0-1.el10?arch=noarch&upstream=invalid.rpm"
+                    ),
+                }
+            ]
+        }
+    ]
+    with pytest.raises(ValueError, match="name-version-release"):
+        construct_rpm_items_and_content_sets(packages)
 
 
 def test_construct_rpm_items_and_content_sets__no_packages_result_in_empty_list():
