@@ -17,11 +17,10 @@ def load_cert(path):
         return x509.load_pem_x509_certificate(f.read(), default_backend())
 
 
-def cert_info(cert_path, cert_key_path=None, issuer_path=None):
+def cert_info(cert_path, cert_key_path=None, issuer_path=None, ocsp_timeout=10):
     try:
         # 1. Load and Validate Certificate
         cert = load_cert(cert_path)
-        # 2. Load and Validate Private Key
 
         cert_key_match = None
         cert_status_details = {}
@@ -30,6 +29,7 @@ def cert_info(cert_path, cert_key_path=None, issuer_path=None):
             tz=datetime.timezone.utc
         )
 
+        # 2. Load and Validate Private Key
         if cert_key_path:
             with open(cert_key_path, "rb") as f:
                 key_data = f.read()
@@ -50,13 +50,9 @@ def cert_info(cert_path, cert_key_path=None, issuer_path=None):
             else:
                 cert_key_match = False
 
-        if issuer_path:  # and ca_path:
-            # if issuer and CA was provided, we can also check OCSP status (revocation)
-
-            with open(issuer_path, "rb") as f:
-                issuer_cert = load_cert(issuer_path)
-            # with open(ca_path, "rb") as f:
-            #    ca_cert = load_cert(ca_path)
+        if issuer_path:
+            # if issuer provided, we can also check OCSP status (revocation)
+            issuer_cert = load_cert(issuer_path)
 
             builder = ocsp.OCSPRequestBuilder()
             builder = builder.add_certificate(cert, issuer_cert, hashes.SHA1())
@@ -84,7 +80,9 @@ def cert_info(cert_path, cert_key_path=None, issuer_path=None):
                     "Accept": "application/ocsp-response",
                 }
 
-                response = requests.post(ocsp_url, data=ocsp_request_bytes, headers=headers)
+                response = requests.post(
+                    ocsp_url, data=ocsp_request_bytes, headers=headers, timeout=ocsp_timeout
+                )
 
                 if response.status_code != 200:
                     print(
@@ -115,6 +113,11 @@ def cert_info(cert_path, cert_key_path=None, issuer_path=None):
                         else None
                     )
                     cert_status_details["revocation_reason"] = ocsp_response.revocation_reason
+            else:
+                print(
+                    "No OCSP URL found in certificate. Cannot check revocation",
+                    file=sys.stderr,
+                )
 
         return (
             {
@@ -141,13 +144,46 @@ def cert_info(cert_path, cert_key_path=None, issuer_path=None):
 
 
 def make_parser():
-    parser = argparse.ArgumentParser(description="Certificate Checker")
+    parser = argparse.ArgumentParser(
+        description="""Certificate Checker
+This script checks the validity of a certificate by performing the following checks:
+1. Expiration Check: Verifies if the certificate is currently valid based on its
+   'not valid before' and 'not valid after' dates.
+   This check is performed every time the script is run.
+2. Certificate-Key Match: If a private key is provided, the script checks
+   if it matches the public key in the certificate.
+3. OCSP Revocation Check: If an issuer certificate is provided, the script performs
+   an OCSP check to determine if the certificate has been revoked.
+
+Script produce following json to stdout and return 0 if all checks are successful,
+otherwise return 1
+
+{'expired': <boolean>,
+ 'cert_key_match': <boolean>,
+ 'serial_number': <serial_number>,
+ 'issuer': <issuer>,
+ 'subject': <subject>,
+ 'not_valid_before': <YYYY-MM-DDThh:mm:ss+tz:tz>,
+ 'not_valid_after': <YYYY-MM-DDThh:mm:ss+tz:tz>,
+ 'cert_ocsp_details': {'validation_status': 'OCSPResponseStatus.<STATUS>',
+                       'cert_status': 'OCSPCertStatus.<STATUS>',
+                       'this_update': '<YYYY-MM-DDThh:mm:ss+tz:tz>',
+                       'next_update': <YYYY-MM-DDThh:mm:ss+tz:tz> or null,
+                       'revocation_time': <YYYY-MM-DDThh:mm:ss+tz:tz> or null,
+                       'revocation_reason': <reason>}}
+"""
+    )
     parser.add_argument(
         "--cert", required=True, help="Path to the certificate file (PEM format)"
     )
     parser.add_argument("--key", help="Path to the private key file (PEM format)")
     parser.add_argument("--issuer", help="Path to the issuer certificate file (PEM format)")
-    parser.add_argument("--ca", help="Path to the CA certificate file (PEM format)")
+    parser.add_argument(
+        "--ocsp-timeout",
+        type=int,
+        default=10,
+        help="Timeout for OCSP request in seconds (default: 10)",
+    )
     return parser
 
 
@@ -155,11 +191,14 @@ if __name__ == "__main__":
     parser = make_parser()
     args = parser.parse_args()
     cert_info_result, is_valid = cert_info(
-        args.cert, cert_key_path=args.key, issuer_path=args.issuer
+        args.cert,
+        cert_key_path=args.key,
+        issuer_path=args.issuer,
+        ocsp_timeout=args.ocsp_timeout,
     )
     print(cert_info_result)
     if is_valid:
-        print("Certification check succesfull", file=sys.stderr)
+        print("Certification check succesful", file=sys.stderr)
     else:
         print("Certification check failed", file=sys.stderr)
         sys.exit(1)
