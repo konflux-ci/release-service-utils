@@ -326,7 +326,11 @@ def construct_rpm_items_and_content_sets(
                 )
                 rpm_item["summary"] = rpm_item["nvra"]
             if "upstream" in purl_dict["qualifiers"]:
-                rpm_item["srpm_name"] = purl_dict["qualifiers"]["upstream"]
+                upstream = purl_dict["qualifiers"]["upstream"]
+                srpm_name, upstream_rest = _parse_upstream_srpm(upstream)
+                rpm_item["srpm_name"] = srpm_name
+                epoch = purl_dict["qualifiers"].get("epoch", "0")
+                rpm_item["srpm_nevra"] = f"{srpm_name}-{epoch}:{upstream_rest}"
             if "epoch" in purl_dict["qualifiers"]:
                 rpm_item["epoch"] = purl_dict["qualifiers"]["epoch"]
             if "module" in purl_dict["qualifiers"]:
@@ -366,6 +370,32 @@ def get_rpm_summary(package: dict) -> str:
             summary = comment_dict.get("value", "")
             return summary
     return ""
+
+
+def _parse_upstream_srpm(upstream: str) -> tuple[str, str]:
+    """Parse upstream SRPM value (e.g. 'curl-8.12.1-2.el10_1.2.src.rpm') into name and rest.
+
+    Returns (name, rest) where name is the package name (e.g. 'curl') and rest is
+    version-release.arch_or_src (e.g. '8.12.1-2.el10_1.2.src') for building NEVRA.
+    Uses NVR convention: name-version-release, so rsplit("-", 2) gives name and
+    version-release.
+
+    :raises ValueError: if upstream does not follow name-version-release format
+        (e.g. fewer than three segments when splitting from the right on "-").
+    """
+    upstream_no_rpm = upstream.removesuffix(".rpm")
+    nvr_parts = upstream_no_rpm.rsplit("-", 2)
+    if len(nvr_parts) < 3:
+        raise ValueError(
+            f"Upstream SRPM must be in name-version-release form, got: {upstream!r}"
+        )
+    name = nvr_parts[0]
+    rest = "-".join(nvr_parts[1:])
+    if not name or not rest:
+        raise ValueError(
+            f"Upstream SRPM name and version-release must be non-empty, got: {upstream!r}"
+        )
+    return (name, rest)
 
 
 def get_purl_type(purl: str):
