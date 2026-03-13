@@ -173,6 +173,31 @@ def test_get_rh_registry_image_properties__multiple_images__repository_set__succ
     assert tags == ["latest"]
 
 
+def test_get_rh_registry_image_properties__flatpak_registry_success():
+    """When the image has flatpaks.registry.redhat.io (flatpak release),
+    the function returns that registry and repository. Flatpak images only
+    have the flatpaks registry entry, not a quay.io one.
+    """
+    flatpak_repo = "rhel10/flatpak-sdk"
+    image = {
+        "_id": "1111",
+        "architecture": "amd64",
+        "repositories": [
+            {
+                "registry": "flatpaks.registry.redhat.io",
+                "repository": flatpak_repo,
+                "tags": [{"name": "latest"}, {"name": "10.2"}],
+            },
+        ],
+    }
+
+    registry, repository, tags = get_rh_registry_image_properties(image, flatpak_repo)
+
+    assert registry == "flatpaks.registry.redhat.io"
+    assert repository == flatpak_repo
+    assert tags == ["latest", "10.2"]
+
+
 def test_get_rh_registry_image_properties__failure():
     """The Red Hat registry repository is not found in the image,
     so an exception is raised
