@@ -24,6 +24,12 @@ import pyxis
 
 LOGGER = logging.getLogger("cleanup_tags")
 
+# Registries used when --rh-push is true in create_container_image:
+# - registry.access.redhat.com for standard images (quay.io/redhat-prod/*, redhat-pending/*)
+# - flatpaks.registry.redhat.io for flatpak images
+#   (quay.io/rh-flatpaks-prod/*, rh-flatpaks-stage/*)
+RH_PUSH_REGISTRIES = ("registry.access.redhat.com", "flatpaks.registry.redhat.io")
+
 
 def parse_arguments() -> argparse.Namespace:  # pragma: no cover
     """Parse CLI arguments
@@ -141,16 +147,14 @@ query ($id: ObjectIDFilterScalar!) {
 
 
 def get_rh_registry_image_properties(image: Dict, target_repository: str):
-    """Get the registry.access.redhat.com repository properties of the image
-    needed to search for related images.
+    """Get the Red Hat registry repository properties of the image needed to
+    search for related images. Supports both standard (registry.access.redhat.com)
+    and flatpak (flatpaks.registry.redhat.io) releases.
 
     :return: (registry, repository, tags)
     """
     for repo in image["repositories"]:
-        if (
-            repo["registry"] == "registry.access.redhat.com"
-            and repo["repository"] == target_repository
-        ):
+        if repo["registry"] in RH_PUSH_REGISTRIES and repo["repository"] == target_repository:
             if repo["tags"] is None:
                 tags = []
             else:
@@ -158,7 +162,8 @@ def get_rh_registry_image_properties(image: Dict, target_repository: str):
             return repo["registry"], repo["repository"], tags
 
     raise RuntimeError(
-        "Cannot find the registry.access.redhat.com repository entry for the image"
+        f"Cannot find the Red Hat registry ({', '.join(RH_PUSH_REGISTRIES)}) "
+        "repository entry for the image"
     )
 
 
