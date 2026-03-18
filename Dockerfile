@@ -2,7 +2,7 @@ FROM quay.io/konflux-ci/oras:latest@sha256:a24785126ef20a631354f3ee0cb1ca3f75f7c
 
 FROM registry.redhat.io/rhtas/cosign-rhel9:1.3.2-1770107819 as cosign
 
-FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.0 as roxctl
+FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.0-1 as roxctl
 
 FROM registry.access.redhat.com/ubi9/ubi:9.7-1773204657
 
