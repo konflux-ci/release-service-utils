@@ -1,0 +1,489 @@
+---
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: utils-e2e-catalog-pipeline
+spec:
+  description: >-
+    Clone release-service-catalog, patch it to use the utils image from SNAPSHOT, push to a temporary
+    GitHub fork, then optionally start a child PipelineRun for catalog integration tests (the path in
+    catalog is integration-tests/pipelines/e2e-tests-staging-pipeline.yaml today; change the ref if that
+    moves). find-affected-tasks maps the utils diff to affected catalog integration suite directory
+    names; match-affected-suite decides whether PIPELINE_TEST_SUITE is in that set. If not, patch
+    and downstream catalog test tasks are skipped (no-op success). Pipeline params use the same names
+    as the catalog IntegrationTestScenario (PIPELINE_TEST_SUITE, PIPELINE_USED, secret *_NAME params).
+  params:
+    - name: SNAPSHOT
+      type: string
+      description: Konflux Snapshot JSON (utils component build).
+    - name: catalogE2eRunnerImage
+      type: string
+      default: "quay.io/redhat-user-workloads/rhtap-release-2-tenant/release-service-catalog:latest"
+      description: >-
+        release-service-catalog image with /home/e2e/tests (SNAPSHOT.components[0].containerImage in
+        the child catalog test PipelineRun). Optional; omit to use the default.
+    - name: PIPELINE_TEST_SUITE
+      type: string
+      description: >-
+        Name of the catalog integration-tests/<name>/ directory to exercise (e.g. e2e). Same param as
+        catalog e2e; compared to find-affected-tasks’ affected suite list.
+    - name: PIPELINE_USED
+      type: string
+      description: >-
+        Basename under catalog pipelines/managed/<name>/ for the catalog test run (same param as catalog
+        e2e; must pair with PIPELINE_TEST_SUITE the same way as in catalog RPAs).
+    - name: catalogRepo
+      type: string
+      default: konflux-ci/release-service-catalog
+    - name: catalogRef
+      type: string
+      default: development
+    - name: destRepoPrefix
+      type: string
+      default: hacbs-release-tests/catalog-utils-e2e
+      description: >-
+        Prefix for the temporary GitHub repo; each run uses <destRepoPrefix>-<pipelineRun.uid>.
+    - name: VAULT_PASSWORD_SECRET_NAME
+      type: string
+      default: e2e-test-vault-password
+    - name: GITHUB_TOKEN_SECRET_NAME
+      type: string
+      default: e2e-test-github-token
+    - name: KUBECONFIG_SECRET_NAME
+      type: string
+      default: e2e-test-service-account-kubeconfig
+      description: >-
+        Secret name (key kubeconfig) for the child catalog e2e-tests-staging-pipeline (same param name
+        as catalog ITS). Use the kubeconfig that reaches the stage/test cluster where catalog integration
+        steps run.
+    - name: orchestrationKubeconfigSecretName
+      type: string
+      default: e2e-test-konflux-api-kubeconfig
+      description: >-
+        Secret name (key kubeconfig) used only by run-catalog-e2e to run kubectl against the Konflux
+        cluster where this PipelineRun exists.
+    - name: e2eWaitTimeout
+      type: string
+      default: "14400"
+      description: >-
+        Max time in seconds to wait for the child catalog e2e PipelineRun (default 14400 = 4h).
+        Passed through as env E2E_WAIT_TIMEOUT to run_single_catalog_e2e_suite.py.
+  tasks:
+    - name: extract-snapshot
+      params:
+        - name: SNAPSHOT
+          value: $(params.SNAPSHOT)
+      taskSpec:
+        params:
+          - name: SNAPSHOT
+        results:
+          - name: utilsImage
+            type: string
+          - name: utilsSourceUrl
+            type: string
+          - name: utilsSourceRevision
+            type: string
+        steps:
+          - name: extract
+            image: quay.io/konflux-ci/release-service-utils@sha256:e852a62497c4537059bb1f4c3ddf5c1a813b2b22bd9f4bb826cffb36af7d5f65
+            env:
+              - name: "SNAPSHOT_JSON"
+                value: "$(params.SNAPSHOT)"
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              jq -e . <<< "${SNAPSHOT_JSON}" >/dev/null
+              utils_image=$(jq -r '.components[0].containerImage // empty' <<< "${SNAPSHOT_JSON}")
+              utils_git_url=$(jq -r '.components[0].source.git.url // empty' <<< "${SNAPSHOT_JSON}")
+              utils_git_revision=$(jq -r '.components[0].source.git.revision // empty' <<< "${SNAPSHOT_JSON}")
+              if [[ -z "${utils_image}" ]]; then
+                echo "ERROR: SNAPSHOT has no components[0].containerImage" >&2
+                exit 1
+              fi
+              if [[ -z "${utils_git_url}" || -z "${utils_git_revision}" ]]; then
+                echo "ERROR: SNAPSHOT missing source.git url/revision" >&2
+                exit 1
+              fi
+              echo -n "${utils_image}" > "$(results.utilsImage.path)"
+              echo -n "${utils_git_url}" > "$(results.utilsSourceUrl.path)"
+              echo -n "${utils_git_revision}" > "$(results.utilsSourceRevision.path)"
+            securityContext:
+              runAsUser: 1001
+
+    - name: find-affected-tasks
+      runAfter:
+        - extract-snapshot
+      params:
+        - name: catalogRepo
+          value: $(params.catalogRepo)
+        - name: catalogRef
+          value: $(params.catalogRef)
+        - name: utilsSourceUrl
+          value: $(tasks.extract-snapshot.results.utilsSourceUrl)
+        - name: utilsSourceRevision
+          value: $(tasks.extract-snapshot.results.utilsSourceRevision)
+      taskSpec:
+        params:
+          - name: catalogRepo
+          - name: catalogRef
+          - name: utilsSourceUrl
+          - name: utilsSourceRevision
+        results:
+          - name: pipelineTestSuite
+            type: string
+          - name: pipelineUsed
+            type: string
+        steps:
+          - name: detect-changes
+            image: $(tasks.extract-snapshot.results.utilsImage)
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+
+              write_results() {
+                echo -n "$1" > "$(results.pipelineTestSuite.path)"
+                echo -n "$2" > "$(results.pipelineUsed.path)"
+              }
+
+              utils_git_url="$(params.utilsSourceUrl)"
+              utils_git_revision="$(params.utilsSourceRevision)"
+
+              scratch_dir="$(mktemp -d)"
+              git clone -q "${utils_git_url}" "${scratch_dir}/repo"
+              cd "${scratch_dir}/repo"
+              git fetch -q origin main:refs/remotes/origin/main
+              git checkout -q "${utils_git_revision}"
+
+              merge_base=$(git merge-base HEAD origin/main 2>/dev/null || true)
+              if [[ -z "${merge_base}" ]]; then
+                echo "ERROR: find-affected: could not compute merge-base between HEAD and origin/main." >&2
+                echo "  This usually means origin/main is missing (fetch failed?), or HEAD shares no" >&2
+                echo "  common history with main (unrelated histories). Fix the clone/fetch or branch." >&2
+                exit 1
+              fi
+
+              # Full diff vs merge-base; find_catalog_suite_from_utils_diff + Dockerfile map paths to
+              # search tokens—paths outside COPY→/home trees yield no suite match (no pipeline list).
+              changed=$(
+                git diff --name-only "${merge_base}..HEAD" 2>/dev/null || true
+              )
+              if [[ -z "${changed}" ]]; then
+                echo "find-affected: no relevant changes vs merge-base; skipping patch and catalog tests" >&2
+                write_results "" ""
+                exit 0
+              fi
+
+              echo "find-affected: relevant paths changed:" >&2
+              echo "${changed}" >&2
+
+              catalog_clone="${scratch_dir}/catalog"
+              git clone -q --depth 1 --branch "$(params.catalogRef)" \
+                "https://github.com/$(params.catalogRepo).git" "${catalog_clone}"
+              json_result=$(
+                printf '%s\n' "${changed}" | python3 integration-tests/lib/find_catalog_suite_from_utils_diff.py \
+                  --catalog "${catalog_clone}"
+              )
+              # JSON null → empty string so match-affected-suite skips when nothing resolves.
+              suite=$(jq -r '.pipelineTestSuite // ""' <<< "${json_result}")
+              pipelineUsed=$(jq -r '.pipelineUsed // ""' <<< "${json_result}")
+              echo "find-affected: pipelineTestSuite=${suite} pipelineUsed=${pipelineUsed}" >&2
+              write_results "${suite}" "${pipelineUsed}"
+            securityContext:
+              runAsUser: 1001
+
+    - name: match-affected-suite
+      runAfter:
+        - find-affected-tasks
+      params:
+        - name: utilImage
+          value: $(tasks.extract-snapshot.results.utilsImage)
+        - name: affectedSuites
+          value: $(tasks.find-affected-tasks.results.pipelineTestSuite)
+        - name: affectedPipelineUsed
+          value: $(tasks.find-affected-tasks.results.pipelineUsed)
+        - name: PIPELINE_TEST_SUITE
+          value: $(params.PIPELINE_TEST_SUITE)
+      taskSpec:
+        params:
+          - name: utilImage
+          - name: affectedSuites
+          - name: affectedPipelineUsed
+          - name: PIPELINE_TEST_SUITE
+        results:
+          - name: runCatalogE2e
+            type: string
+        steps:
+          - name: decide
+            image: $(params.utilImage)
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              # runCatalogE2e: "yes" = run fork + catalog e2e for this scenario; "no" = skip (success).
+              # Each IntegrationTestScenario sets PIPELINE_TEST_SUITE; we only run heavy work when
+              # that suite is in the PR's affected set AND find-affected found something to test.
+
+              # No affected pipelines → nothing to gate; downstream when: blocks also skip on empty pipelineUsed.
+              if [[ -z "$(params.affectedPipelineUsed)" ]]; then
+                echo "match-affected-suite: pipelineUsed empty -> runCatalogE2e=no (skip fork / catalog e2e)" >&2
+                echo -n no > "$(results.runCatalogE2e.path)"
+                exit 0
+              fi
+
+              # affectedSuites is whitespace-separated integration-tests/<dir>/ names from the utils diff.
+              # If this scenario's dir is among them, we run catalog tests for this check.
+              configured="$(params.PIPELINE_TEST_SUITE)"
+              affected="$(params.affectedSuites)"
+              pipeline_used="$(params.affectedPipelineUsed)"
+              {
+                echo "=== match-affected-suite ==="
+                echo "scenario PIPELINE_TEST_SUITE: ${configured}"
+                echo ""
+                echo "find-affected pipelineTestSuite tokens:"
+                for w in ${affected}; do echo "  ${w}"; done
+                echo ""
+                echo "find-affected pipelineUsed tokens:"
+                for w in ${pipeline_used}; do echo "  ${w}"; done
+                echo ""
+              } >&2
+              python3 -c "
+              import sys
+              configured, aff = sys.argv[1], sys.argv[2]
+              tokens = {w for w in aff.split() if w}
+              print('yes' if configured in tokens else 'no', end='')
+              " "${configured}" "${affected}" | tee "$(results.runCatalogE2e.path)"
+              # Newline on stdout only so logs do not glue tee output to the next line.
+              echo
+              decision=$(tr -d '\n' < "$(results.runCatalogE2e.path)")
+              echo "task result runCatalogE2e: ${decision}" >&2
+            securityContext:
+              runAsUser: 1001
+
+    - name: git-clone-catalog-patch-git-push
+      runAfter:
+        - extract-snapshot
+        - find-affected-tasks
+        - match-affected-suite
+      when:
+        - input: $(tasks.find-affected-tasks.results.pipelineUsed)
+          operator: notin
+          values: [""]
+        - input: $(tasks.match-affected-suite.results.runCatalogE2e)
+          operator: in
+          values: ["yes"]
+      params:
+        - name: utilImage
+          value: $(tasks.extract-snapshot.results.utilsImage)
+        - name: utilsSourceUrl
+          value: $(tasks.extract-snapshot.results.utilsSourceUrl)
+        - name: utilsSourceRevision
+          value: $(tasks.extract-snapshot.results.utilsSourceRevision)
+        - name: catalogRepo
+          value: $(params.catalogRepo)
+        - name: catalogRef
+          value: $(params.catalogRef)
+        - name: destRepoPrefix
+          value: $(params.destRepoPrefix)
+        - name: pipelineUid
+          value: $(context.pipelineRun.uid)
+        - name: GITHUB_TOKEN_SECRET_NAME
+          value: $(params.GITHUB_TOKEN_SECRET_NAME)
+      taskSpec:
+        params:
+          - name: utilImage
+          - name: utilsSourceUrl
+          - name: utilsSourceRevision
+          - name: catalogRepo
+          - name: catalogRef
+          - name: destRepoPrefix
+          - name: pipelineUid
+          - name: GITHUB_TOKEN_SECRET_NAME
+        results:
+          - name: catalogBaseSha
+            type: string
+          - name: catalogGitUrl
+            type: string
+          - name: catalogGitRevision
+            type: string
+          - name: tempRepoName
+            type: string
+        steps:
+          - name: clone-patch-push
+            image: $(params.utilImage)
+            env:
+              - name: GITHUB_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: $(params.GITHUB_TOKEN_SECRET_NAME)
+                    key: token
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              export GITHUB_TOKEN
+              export UTILS_IMAGE="$(params.utilImage)"
+              export CATALOG_REPO="$(params.catalogRepo)"
+              export CATALOG_REF="$(params.catalogRef)"
+              export DEST_REPO_PREFIX="$(params.destRepoPrefix)"
+              export PIPELINE_UID="$(params.pipelineUid)"
+              UTILS_WORK_DIR="$(mktemp -d)"
+              cd "${UTILS_WORK_DIR}"
+              git init -q
+              git remote add origin "$(params.utilsSourceUrl)"
+              git fetch -q --depth 1 origin "$(params.utilsSourceRevision)"
+              git checkout -q FETCH_HEAD
+              bash "${UTILS_WORK_DIR}/integration-tests/lib/catalog_clone_patch_push.sh" \
+                "$(results.catalogBaseSha.path)" \
+                "$(results.catalogGitUrl.path)" \
+                "$(results.catalogGitRevision.path)" \
+                "$(results.tempRepoName.path)"
+            securityContext:
+              runAsUser: 1001
+
+    - name: run-catalog-e2e
+      runAfter:
+        - git-clone-catalog-patch-git-push
+      when:
+        - input: $(tasks.find-affected-tasks.results.pipelineUsed)
+          operator: notin
+          values: [""]
+        - input: $(tasks.match-affected-suite.results.runCatalogE2e)
+          operator: in
+          values: ["yes"]
+      params:
+        - name: utilImage
+          value: $(tasks.extract-snapshot.results.utilsImage)
+        - name: catalogE2eRunnerImage
+          value: $(params.catalogE2eRunnerImage)
+        - name: catalogGitUrl
+          value: $(tasks.git-clone-catalog-patch-git-push.results.catalogGitUrl)
+        - name: catalogGitRevision
+          value: $(tasks.git-clone-catalog-patch-git-push.results.catalogGitRevision)
+        - name: PIPELINE_TEST_SUITE
+          value: $(params.PIPELINE_TEST_SUITE)
+        - name: PIPELINE_USED
+          value: $(params.PIPELINE_USED)
+        - name: VAULT_PASSWORD_SECRET_NAME
+          value: $(params.VAULT_PASSWORD_SECRET_NAME)
+        - name: GITHUB_TOKEN_SECRET_NAME
+          value: $(params.GITHUB_TOKEN_SECRET_NAME)
+        - name: KUBECONFIG_SECRET_NAME
+          value: $(params.KUBECONFIG_SECRET_NAME)
+        - name: orchestrationKubeconfigSecretName
+          value: $(params.orchestrationKubeconfigSecretName)
+        - name: e2eWaitTimeout
+          value: $(params.e2eWaitTimeout)
+        - name: parentPipelineRun
+          value: $(context.pipelineRun.name)
+      taskSpec:
+        params:
+          - name: utilImage
+          - name: catalogE2eRunnerImage
+          - name: catalogGitUrl
+          - name: catalogGitRevision
+          - name: PIPELINE_TEST_SUITE
+          - name: PIPELINE_USED
+          - name: VAULT_PASSWORD_SECRET_NAME
+          - name: GITHUB_TOKEN_SECRET_NAME
+          - name: KUBECONFIG_SECRET_NAME
+          - name: orchestrationKubeconfigSecretName
+          - name: e2eWaitTimeout
+          - name: parentPipelineRun
+        steps:
+          - name: run-catalog-e2e
+            image: $(params.utilImage)
+            env:
+              - name: ORCHESTRATOR_PIPELINE_RUN_UID
+                value: $(context.pipelineRun.uid)
+              - name: KUBECONFIG_SECRET_CONTENT
+                valueFrom:
+                  secretKeyRef:
+                    name: $(params.orchestrationKubeconfigSecretName)
+                    key: kubeconfig
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              kubeconfig_path=$(mktemp)
+              echo "${KUBECONFIG_SECRET_CONTENT:?}" > "${kubeconfig_path}"
+              export KUBECONFIG="${kubeconfig_path}"
+              export CATALOG_E2E_RUNNER_IMAGE="$(params.catalogE2eRunnerImage)"
+              export CATALOG_GIT_URL="$(params.catalogGitUrl)"
+              export CATALOG_GIT_REVISION="$(params.catalogGitRevision)"
+              export PIPELINE_TEST_SUITE="$(params.PIPELINE_TEST_SUITE)"
+              export PIPELINE_USED="$(params.PIPELINE_USED)"
+              export VAULT_PASSWORD_SECRET_NAME="$(params.VAULT_PASSWORD_SECRET_NAME)"
+              export GITHUB_TOKEN_SECRET_NAME="$(params.GITHUB_TOKEN_SECRET_NAME)"
+              export KUBECONFIG_SECRET_NAME="$(params.KUBECONFIG_SECRET_NAME)"
+              export PARENT_PIPELINE_RUN="$(params.parentPipelineRun)"
+              export E2E_WAIT_TIMEOUT="$(params.e2eWaitTimeout)"
+              exec python3 /home/integration-tests/lib/run_single_catalog_e2e_suite.py
+            securityContext:
+              runAsUser: 1001
+
+  finally:
+    - name: cleanup-temp-repo
+      params:
+        - name: destRepoPrefix
+          value: $(params.destRepoPrefix)
+        - name: pipelineRunUid
+          value: $(context.pipelineRun.uid)
+        - name: catalogRepo
+          value: $(params.catalogRepo)
+        - name: catalogRef
+          value: $(params.catalogRef)
+        - name: GITHUB_TOKEN_SECRET_NAME
+          value: $(params.GITHUB_TOKEN_SECRET_NAME)
+        - name: utilImage
+          value: $(tasks.extract-snapshot.results.utilsImage)
+      taskSpec:
+        params:
+          - name: destRepoPrefix
+          - name: pipelineRunUid
+          - name: catalogRepo
+          - name: catalogRef
+          - name: GITHUB_TOKEN_SECRET_NAME
+          - name: utilImage
+        steps:
+          - name: cleanup
+            image: $(params.utilImage)
+            env:
+              - name: GITHUB_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: $(params.GITHUB_TOKEN_SECRET_NAME)
+                    key: token
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              export GITHUB_TOKEN
+              temp_fork_repo="$(params.destRepoPrefix)-$(params.pipelineRunUid)"
+              temp_fork_clone_dir="$(mktemp -d)"
+              if git clone --depth 1 "https://${GITHUB_TOKEN}@github.com/${temp_fork_repo}.git" \
+                  "${temp_fork_clone_dir}/repo" 2>/dev/null; then
+                cd "${temp_fork_clone_dir}/repo"
+                if [[ -f .catalog-clone-base-sha ]]; then
+                  catalog_sha_at_patch="$(tr -d '[:space:]' < .catalog-clone-base-sha)"
+                  catalog_sha_now="$(
+                    git ls-remote "https://github.com/$(params.catalogRepo).git" \
+                      "refs/heads/$(params.catalogRef)" 2>/dev/null \
+                      | awk '{print $1}' | head -1
+                  )"
+                  if [[ -n "${catalog_sha_at_patch}" && -n "${catalog_sha_now}" \
+                      && "${catalog_sha_now}" != "${catalog_sha_at_patch}" ]]; then
+                    echo ""
+                    echo "================================================================================"
+                    echo "  WARNING: $(params.catalogRepo) branch $(params.catalogRef) changed since this test started."
+                    echo "    SHA at catalog clone: ${catalog_sha_at_patch}"
+                    echo "    SHA now:              ${catalog_sha_now}"
+                    echo "  E2E ran against an older catalog snapshot. Consider re-running."
+                    echo "================================================================================"
+                    echo ""
+                  fi
+                fi
+              fi
+              catalog_clone_dir="$(mktemp -d)"
+              git clone --depth 1 --branch "$(params.catalogRef)" \
+                "https://${GITHUB_TOKEN}@github.com/$(params.catalogRepo).git" "${catalog_clone_dir}/catalog"
+              echo "Deleting temporary repo ${temp_fork_repo} (ignore errors if create failed)..."
+              bash "${catalog_clone_dir}/catalog/integration-tests/scripts/delete-repository.sh" \
+                "${temp_fork_repo}" || true
+            securityContext:
+              runAsUser: 1001
