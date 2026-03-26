@@ -1,6 +1,6 @@
 FROM quay.io/konflux-ci/oras:latest@sha256:a24785126ef20a631354f3ee0cb1ca3f75f7c7013b778e901a8983f6cc9a8390 as oras
 
-FROM registry.redhat.io/rhtas/cosign-rhel9:1.3.2-1770107819 as cosign
+FROM registry.redhat.io/rhtas/cosign-rhel9:1.3.3-1773309431 as cosign
 
 FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.0-1 as roxctl
 
