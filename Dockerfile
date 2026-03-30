@@ -106,6 +106,7 @@ RUN update-ca-trust
 
 COPY pyxis /home/pyxis
 COPY utils /home/utils
+COPY integration-tests /home/integration-tests
 COPY scripts /home/scripts
 COPY templates /home/templates
 COPY kafka /home/kafka

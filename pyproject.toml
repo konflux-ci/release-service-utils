@@ -24,6 +24,9 @@ dependencies = [
 [tool.black]
 line-length = 95
 
+[tool.pytest.ini_options]
+pythonpath = ["integration-tests/lib"]
+
 [dependency-groups]
 dev = [
     "black>=25.11.0",
