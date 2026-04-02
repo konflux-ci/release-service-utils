@@ -4,16 +4,15 @@ metadata:
   annotations:
     build.appstudio.openshift.io/repo: https://github.com/konflux-ci/release-service-utils?rev={{revision}}
     build.appstudio.redhat.com/commit_sha: '{{revision}}'
-    build.appstudio.redhat.com/pull_request_number: '{{pull_request_number}}'
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: (event == "pull_request" && target_branch == "main") || (event == "push" && target_branch.startsWith("gh-readonly-queue/main/"))
+    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch == "main"
   creationTimestamp:
   labels:
-    appstudio.openshift.io/application: release-service
-    appstudio.openshift.io/component: release-service-utils
+    appstudio.openshift.io/application: release-service-utils
+    appstudio.openshift.io/component: release-service-utils-standalone
     pipelines.appstudio.openshift.io/type: build
-  name: release-service-utils-on-pull-request
+  name: release-service-utils-standalone-on-push
   namespace: rhtap-release-2-tenant
 spec:
   params:
@@ -21,10 +20,8 @@ spec:
     value: Dockerfile
   - name: git-url
     value: '{{source_url}}'
-  - name: image-expires-after
-    value: 5d
   - name: output-image
-    value: quay.io/redhat-user-workloads/rhtap-release-2-tenant/release-service/release-service-utils:on-pr-{{revision}}
+    value: quay.io/redhat-user-workloads/rhtap-release-2-tenant/release-service-utils-standalone:{{revision}}
   - name: path-context
     value: .
   - name: revision
@@ -458,7 +455,7 @@ spec:
     - name: git-auth
       optional: true
   taskRunTemplate:
-    serviceAccountName: build-pipeline-release-service-utils
+    serviceAccountName: build-pipeline-release-service-utils-standalone
   workspaces:
   - name: workspace
     volumeClaimTemplate:
