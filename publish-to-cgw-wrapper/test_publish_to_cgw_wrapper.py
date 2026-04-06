@@ -434,6 +434,30 @@ def test_generate_metadata(data_json, metadata):
         assert expected_file in output_metadata
 
 
+def test_generate_metadata_no_mirror(data_json):
+    """Test that shortURLs have no /cgw prefix when mirrorOpenshiftPush is False."""
+    content_dir = data_json["components"][0]["contentGateway"]["contentDir"]
+    output_metadata = cgw_wrapper.generate_metadata(
+        content_dir=content_dir,
+        component_name=data_json["components"][0]["name"],
+        files=data_json["components"][0]["files"],
+        product_code="product_code_1",
+        version_id=4156067,
+        version_name="1.1",
+        mirror_openshift_Push=False,
+        component_index=1,
+    )
+    short_urls = {entry["shortURL"] for entry in output_metadata}
+    assert short_urls == {
+        "/product_code_1/1.1/sha256sum.txt",
+        "/product_code_1/1.1/sha256sum.txt.gpg",
+        "/product_code_1/1.1/sha256sum.txt.sig",
+        "/product_code_1/1.1/cosign",
+        "/product_code_1/1.1/cosign-linux-amd64.gz",
+        "/product_code_1/1.1/cosign-darwin-amd64.gz",
+    }
+
+
 def test_generate_metadata_multi_component_ordering(data_json):
     """Test that multiple components get non-overlapping order ranges.
 
