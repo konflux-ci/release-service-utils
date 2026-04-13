@@ -142,6 +142,8 @@ RUN groupadd -g 1001 group1 && \
     # Ensure group permissions are inherited by new subdirectories
     find /var/workdir /home /tekton -type d -exec chmod g+s {} +
 
+RUN chmod -R a+w /etc/pki/
+
 # Switch to a non-root user
 USER 1001
 
