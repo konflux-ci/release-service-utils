@@ -3,7 +3,7 @@ name = "release-service-utils"
 version = "0.1.0"
 description = "Konflux Release Service Utils"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 dependencies = [
     "jinja2",
     "check-jsonschema",
@@ -47,3 +47,10 @@ omit = [
 
 [tool.coverage.report]
 show_missing = true
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"release_service_utils" = "utils/rsutils"}
