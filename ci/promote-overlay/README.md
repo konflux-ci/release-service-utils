@@ -10,7 +10,7 @@ There are 3 overlays:
 - staging
 - production
 
-Currently, when a PR is merged in the release-service repo, a PR in the infra-deployments repo is created by a RHTAP release pipeline which updates the **development** overlay. 
+Currently, when a PR is merged in the release-service repo, a PR in the infra-deployments repo is created by a RHTAP release pipeline which updates the **development** overlay.
 
 Promotion from a lower environment to higher environment is done manually by updating the target overlay.
 
@@ -40,10 +40,21 @@ For typical promotion batches of 20-50 commits, this is approximately 40-60x fas
   * **target-overlay**: Name of the overlay to target for promotion
   * **fork-owner**: Name of the owner of your infra-deployments fork in Github
 
+* Optional flags
+  * **--commit-to COMMIT_SHA**: Promote up to a specific commit.
+  * **--no-grafana**: Skip promoting the Grafana Dashboard overlay.
+  * **--no-release**: Skip promoting the Release Service overlay.
+
 ## Running the script
 
+Promote the full source overlay:
 ```
 % ./ci/promote-overlay/promote-overlay.sh --source-overlay development  --target-overlay staging --fork-owner scoheb
+```
+
+Promote up to a specific commit:
+```
+% ./ci/promote-overlay/promote-overlay.sh --source-overlay development  --target-overlay staging --fork-owner scoheb --commit-to 0ec7f0833cc251378f1e4efbc0a9506122cf4b73
 ```
 
 ## Example output
