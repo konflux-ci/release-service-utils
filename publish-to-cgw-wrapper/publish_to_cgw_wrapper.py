@@ -206,7 +206,7 @@ def generate_metadata(
         "hidden": False,
         "invisible": False,
     }
-    shortURL_base = "/cgw"
+    shortURL_base = ""
     if mirror_openshift_Push:
         shortURL_base = "/pub/cgw"
 
