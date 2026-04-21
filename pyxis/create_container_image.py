@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Python script to create a Container Image object in Pyxis
+Python script to create a Container Image object in Pyxis TEST
 
 NOTE: Any change to this file that changes functionality should be posted for review in
 #forum-metadata-guild on slack. No PR changing functionality should be removed without
