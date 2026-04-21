@@ -5,7 +5,7 @@
 #
 # Required env: GITHUB_TOKEN, UTILS_IMAGE
 # Optional: CATALOG_REPO (default konflux-ci/release-service-catalog), CATALOG_REF (development),
-#           DEST_REPO_PREFIX (default hacbs-release-tests/catalog-e2e), PIPELINE_UID
+#           DEST_REPO_PREFIX (default hacbs-release-tests/utils-e2e), PIPELINE_UID
 set -euo pipefail
 
 : "${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
