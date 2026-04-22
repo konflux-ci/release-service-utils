@@ -264,6 +264,43 @@ if [[ -n "${SERVICEACCOUNT}" ]]; then
         '.spec.serviceAccount = $serviceAccount' <<< $PAYLOAD)
 fi
 
+# Clean up any existing InternalRequests from prior attempts within the same
+# PipelineRun. This handles cases where a managed task retry or timeout left
+# an orphaned InternalRequest whose PipelineRun may still be running on the
+# internal cluster. The internal-services controller will cancel the associated
+# PipelineRun when it detects the InternalRequest deletion.
+PIPELINERUN_UID_LABEL="internal-services.appstudio.openshift.io/pipelinerun-uid"
+PIPELINERUN_UID_VALUE=""
+for label in "${LABELS[@]}"; do
+    KEY=$(echo "$label" | cut -d'=' -f1)
+    VALUE=$(echo "$label" | cut -d'=' -f2-)
+    if [ "$KEY" = "$PIPELINERUN_UID_LABEL" ]; then
+        PIPELINERUN_UID_VALUE="$VALUE"
+        break
+    fi
+done
+
+if [ -n "$PIPELINERUN_UID_VALUE" ]; then
+    EXISTING_IRS=$(kubectl get internalrequest \
+        -l "${PIPELINERUN_UID_LABEL}=${PIPELINERUN_UID_VALUE}" \
+        -o json | jq -r '.items[].metadata.name')
+
+    if [ -n "$EXISTING_IRS" ]; then
+        echo "Found existing InternalRequests from prior attempts. Cleaning up..."
+        while IFS= read -r IR_NAME; do
+            echo "Deleting InternalRequest ${IR_NAME}..."
+            kubectl delete internalrequest "$IR_NAME" --wait=true --timeout=60s
+        done <<< "$EXISTING_IRS"
+        # Sleep to give the internal-services controller time to react to the IR
+        # deletion and cancel the associated PipelineRun before we create a new one.
+        # This is a best-effort heuristic; --wait=true above ensures the IR is gone
+        # from the API server, but cancellation propagation to the internal cluster
+        # is asynchronous and its duration is not observable from here.
+        echo "Cleanup complete. Waiting for PipelineRun cancellation to propagate..."
+        sleep 5
+    fi
+fi
+
 # Create InternalRequest using kubectl
 RESOURCE=$(echo "$PAYLOAD" | kubectl create -f - -o json)
 INTERNAL_REQUEST_NAME=$(echo "$RESOURCE" | jq -r '.metadata.name')
