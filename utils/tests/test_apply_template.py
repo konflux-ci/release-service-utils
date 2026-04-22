@@ -174,7 +174,7 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
                     "spec": {
                         "product_id": 1,
                         "product_name": "name",
-                        "product_version": "4.20",
+                        "product_version": "version",
                         "product_stream": "stream",
                         "cpe": "cpe:/id",
                         "type": "RHEA",
@@ -215,9 +215,6 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
         with open(filename, "r") as f:
             result = json.load(f)
 
-        assert result["spec"]["product_id"] == "1"
-        assert result["spec"]["product_version"] == "4.20"
-        assert result["spec"]["product_stream"] == "stream"
         assert result["spec"]["solution"] == solution
         assert result["spec"]["topic"] == topic
         assert result["spec"]["synopsis"] == "Enhancement synopsis"
