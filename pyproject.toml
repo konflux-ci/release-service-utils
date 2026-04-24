@@ -5,6 +5,8 @@ description = "Konflux Release Service Utils"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "requests",
+    "requests-kerberos",
     "jinja2",
     "check-jsonschema",
     "jinja2-ansible-filters",
@@ -25,7 +27,11 @@ dependencies = [
 line-length = 95
 
 [tool.pytest.ini_options]
-pythonpath = ["integration-tests/lib"]
+pythonpath = [
+  "integration-tests/lib",
+  "scripts/python/helpers",
+  "scripts/python/tasks/internal",
+]
 
 [dependency-groups]
 dev = [
@@ -40,7 +46,7 @@ omit = [
     "**/tests/*",
     ".github/*",
     "ci/*",
-    "scripts/*",
+    "scripts/bash/*",
     "templates/*",
     "data/*",
 ]
