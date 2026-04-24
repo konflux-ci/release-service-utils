@@ -10,7 +10,7 @@ import os
 import pytest
 from unittest.mock import patch
 
-from get_resource import (
+from utils.get_resource import (
     main,
     extract_jsonpath,
     format_jsonpath_result,
@@ -128,7 +128,7 @@ def test_ensure_ka_config_already_exists(tmp_path):
         ensure_ka_config()
 
 
-@patch("get_resource._run")
+@patch("utils.get_resource._run")
 def test_ensure_ka_config_configmap_not_found(mock_run, tmp_path):
     config_file = tmp_path / "ka-config"
     mock_run.return_value = (1, "", "not found")
@@ -137,7 +137,7 @@ def test_ensure_ka_config_configmap_not_found(mock_run, tmp_path):
             ensure_ka_config()
 
 
-@patch("get_resource._run")
+@patch("utils.get_resource._run")
 def test_ensure_ka_config_creation_succeeds(mock_run, tmp_path):
     config_file = tmp_path / "ka-config"
 
@@ -154,7 +154,7 @@ def test_ensure_ka_config_creation_succeeds(mock_run, tmp_path):
         ensure_ka_config()
 
 
-@patch("get_resource._run")
+@patch("utils.get_resource._run")
 def test_ensure_ka_config_set_host_fails(mock_run, tmp_path):
     config_file = tmp_path / "ka-config"
     mock_run.side_effect = [
@@ -166,7 +166,7 @@ def test_ensure_ka_config_set_host_fails(mock_run, tmp_path):
             ensure_ka_config()
 
 
-@patch("get_resource._run")
+@patch("utils.get_resource._run")
 def test_ensure_ka_config_set_ca_fails(mock_run, tmp_path):
     config_file = tmp_path / "ka-config"
     mock_run.side_effect = [
@@ -185,7 +185,7 @@ def test_ensure_ka_config_set_ca_fails(mock_run, tmp_path):
             ensure_ka_config()
 
 
-@patch("get_resource._run")
+@patch("utils.get_resource._run")
 def test_ensure_ka_config_ssl_cert_file_used(mock_run, tmp_path):
     config_file = tmp_path / "ka-config"
 
@@ -215,14 +215,14 @@ def test_ensure_ka_config_ssl_cert_file_used(mock_run, tmp_path):
     assert "/path/to/cert.pem" in ca_calls[0]
 
 
-@patch("get_resource.ensure_ka_config", side_effect=RuntimeError("config unavailable"))
+@patch("utils.get_resource.ensure_ka_config", side_effect=RuntimeError("config unavailable"))
 def test_get_from_ka_config_unavailable(_):
     with pytest.raises(RuntimeError, match="config unavailable"):
         get_from_ka("snapshot", "ns1", "snap1")
 
 
-@patch("get_resource.ensure_ka_config")
-@patch("get_resource._run")
+@patch("utils.get_resource.ensure_ka_config")
+@patch("utils.get_resource._run")
 def test_get_from_ka_named_get_success(mock_run, _):
     ka_response = {
         "items": [
@@ -243,8 +243,8 @@ def test_get_from_ka_named_get_success(mock_run, _):
     assert data["metadata"]["name"] == "snap1"
 
 
-@patch("get_resource.ensure_ka_config")
-@patch("get_resource._run")
+@patch("utils.get_resource.ensure_ka_config")
+@patch("utils.get_resource._run")
 def test_get_from_ka_list_fallback_filters_by_name(mock_run, _):
     list_response = {
         "items": [
@@ -277,8 +277,8 @@ def test_get_from_ka_list_fallback_filters_by_name(mock_run, _):
     assert "wrong" not in data.get("spec", {})
 
 
-@patch("get_resource.ensure_ka_config")
-@patch("get_resource._run")
+@patch("utils.get_resource.ensure_ka_config")
+@patch("utils.get_resource._run")
 def test_get_from_ka_list_fallback_picks_highest_version(mock_run, _):
     list_response = {
         "items": [
@@ -317,8 +317,8 @@ def test_get_from_ka_list_fallback_picks_highest_version(mock_run, _):
     assert data["spec"]["version"] == "newest"
 
 
-@patch("get_resource.ensure_ka_config")
-@patch("get_resource._run")
+@patch("utils.get_resource.ensure_ka_config")
+@patch("utils.get_resource._run")
 def test_get_from_ka_no_matching_items(mock_run, _):
     list_response = {
         "items": [
@@ -339,8 +339,8 @@ def test_get_from_ka_no_matching_items(mock_run, _):
         get_from_ka("snapshot", "ns1", "snap1")
 
 
-@patch("get_resource.ensure_ka_config")
-@patch("get_resource._run")
+@patch("utils.get_resource.ensure_ka_config")
+@patch("utils.get_resource._run")
 def test_get_from_ka_both_get_and_list_fail(mock_run, _):
     mock_run.side_effect = [
         (1, "", ""),
@@ -374,7 +374,7 @@ def test_main_invalid_namespaced_name(capsys):
     assert "expected namespace/name" in capsys.readouterr().err
 
 
-@patch("get_resource._run")
+@patch("utils.get_resource._run")
 def test_main_kubectl_success_json(mock_run, capsys):
     resource_json = json.dumps(
         {
@@ -391,7 +391,7 @@ def test_main_kubectl_success_json(mock_run, capsys):
     assert json.loads(out)["kind"] == "Snapshot"
 
 
-@patch("get_resource._run")
+@patch("utils.get_resource._run")
 def test_main_kubectl_success_jsonpath(mock_run, capsys):
     mock_run.return_value = (0, "snap1", "")
     with patch(
@@ -404,7 +404,7 @@ def test_main_kubectl_success_jsonpath(mock_run, capsys):
     assert capsys.readouterr().out == "snap1"
 
 
-@patch("get_resource._run")
+@patch("utils.get_resource._run")
 def test_main_non_ka_type_no_jsonpath_exits_with_error(mock_run, capsys):
     mock_run.return_value = (
         1,
@@ -418,7 +418,7 @@ def test_main_non_ka_type_no_jsonpath_exits_with_error(mock_run, capsys):
     assert "NotFound" in capsys.readouterr().err
 
 
-@patch("get_resource._run")
+@patch("utils.get_resource._run")
 def test_main_non_ka_type_jsonpath_returns_empty_object(mock_run, capsys):
     mock_run.return_value = (1, "", "not found")
     with patch(
@@ -429,8 +429,8 @@ def test_main_non_ka_type_jsonpath_returns_empty_object(mock_run, capsys):
     assert capsys.readouterr().out.strip() == "{}"
 
 
-@patch("get_resource.get_from_ka")
-@patch("get_resource._run")
+@patch("utils.get_resource.get_from_ka")
+@patch("utils.get_resource._run")
 def test_main_ka_fallback_success(mock_run, mock_ka, capsys):
     mock_run.return_value = (1, "", "not found")
     ka_result = {
@@ -452,8 +452,8 @@ def test_main_ka_fallback_success(mock_run, mock_ka, capsys):
     assert out["metadata"]["name"] == "snap1"
 
 
-@patch("get_resource.get_from_ka")
-@patch("get_resource._run")
+@patch("utils.get_resource.get_from_ka")
+@patch("utils.get_resource._run")
 def test_main_ka_fallback_with_jsonpath(mock_run, mock_ka, capsys):
     mock_run.return_value = (1, "", "not found")
     ka_result = {
@@ -476,8 +476,8 @@ def test_main_ka_fallback_with_jsonpath(mock_run, mock_ka, capsys):
     assert capsys.readouterr().out.strip() == "myapp"
 
 
-@patch("get_resource.get_from_ka", side_effect=RuntimeError("KA failed"))
-@patch("get_resource._run")
+@patch("utils.get_resource.get_from_ka", side_effect=RuntimeError("KA failed"))
+@patch("utils.get_resource._run")
 def test_main_ka_fails_jsonpath_returns_empty(mock_run, mock_ka, capsys):
     mock_run.return_value = (1, "", "")
 
@@ -489,8 +489,8 @@ def test_main_ka_fails_jsonpath_returns_empty(mock_run, mock_ka, capsys):
     assert capsys.readouterr().out.strip() == "{}"
 
 
-@patch("get_resource.get_from_ka", side_effect=RuntimeError("KA failed"))
-@patch("get_resource._run")
+@patch("utils.get_resource.get_from_ka", side_effect=RuntimeError("KA failed"))
+@patch("utils.get_resource._run")
 def test_main_ka_fails_no_jsonpath_exits_nonzero(mock_run, mock_ka, capsys):
     mock_run.return_value = (1, "", "resource not found")
 
@@ -500,8 +500,8 @@ def test_main_ka_fails_no_jsonpath_exits_nonzero(mock_run, mock_ka, capsys):
         assert exc_info.value.code == 1
 
 
-@patch("get_resource.get_from_ka")
-@patch("get_resource._run")
+@patch("utils.get_resource.get_from_ka")
+@patch("utils.get_resource._run")
 def test_main_ka_fallback_wildcard_jsonpath(mock_run, mock_ka, capsys):
     mock_run.return_value = (1, "", "")
     ka_result = {
@@ -536,8 +536,8 @@ def test_main_ka_fallback_wildcard_jsonpath(mock_run, mock_ka, capsys):
     assert "comp-b" in out
 
 
-@patch("get_resource.get_from_ka", side_effect=RuntimeError("KA unavailable"))
-@patch("get_resource._run")
+@patch("utils.get_resource.get_from_ka", side_effect=RuntimeError("KA unavailable"))
+@patch("utils.get_resource._run")
 def test_main_ka_not_available_exits_nonzero(mock_run, mock_ka, capsys):
     mock_run.return_value = (1, "", "")
 
@@ -547,8 +547,8 @@ def test_main_ka_not_available_exits_nonzero(mock_run, mock_ka, capsys):
         assert exc_info.value.code == 1
 
 
-@patch("get_resource.get_from_ka")
-@patch("get_resource._run")
+@patch("utils.get_resource.get_from_ka")
+@patch("utils.get_resource._run")
 def test_main_snapshot_uses_ka(mock_run, mock_ka, capsys):
     mock_run.return_value = (1, "", "")
     ka_data = {"metadata": {"name": "s", "namespace": "n", "resourceVersion": "1"}}
@@ -561,8 +561,8 @@ def test_main_snapshot_uses_ka(mock_run, mock_ka, capsys):
     mock_ka.assert_called_once()
 
 
-@patch("get_resource.get_from_ka")
-@patch("get_resource._run")
+@patch("utils.get_resource.get_from_ka")
+@patch("utils.get_resource._run")
 def test_main_snapshots_uses_ka(mock_run, mock_ka, capsys):
     mock_run.return_value = (1, "", "")
     ka_data = {"metadata": {"name": "s", "namespace": "n", "resourceVersion": "1"}}
@@ -575,8 +575,8 @@ def test_main_snapshots_uses_ka(mock_run, mock_ka, capsys):
     mock_ka.assert_called_once()
 
 
-@patch("get_resource.get_from_ka")
-@patch("get_resource._run")
+@patch("utils.get_resource.get_from_ka")
+@patch("utils.get_resource._run")
 def test_main_deployment_no_ka(mock_run, mock_ka, capsys):
     mock_run.return_value = (1, "", "not found")
 
@@ -587,8 +587,8 @@ def test_main_deployment_no_ka(mock_run, mock_ka, capsys):
     mock_ka.assert_not_called()
 
 
-@patch("get_resource.get_from_ka")
-@patch("get_resource._run")
+@patch("utils.get_resource.get_from_ka")
+@patch("utils.get_resource._run")
 def test_main_pod_no_ka(mock_run, mock_ka, capsys):
     mock_run.return_value = (1, "", "not found")
 
