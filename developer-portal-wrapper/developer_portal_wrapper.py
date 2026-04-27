@@ -1,19 +1,31 @@
 #!/usr/bin/env python3
-"""
-Run push-cgw-metadata command to push metadata to CGW:
-1. Extract all components under contentGateway key from dataPath
-2. Find all the files in contentDir that starts with the component name
-4. Generate necessary metadata for each file
-5. Dump the metadata to a YAML file
-6. Run push-cgw-metadata to push the metadata
-"""
+"""Publish content to CGW using idempotent create/update behavior."""
+
 import os
 import sys
 import yaml
 import hashlib
-import subprocess
 import argparse
 import logging
+import importlib
+from pathlib import Path
+
+import requests
+from requests.auth import HTTPBasicAuth
+
+
+def _load_cgw_idempotency():
+    """Load shared idempotency helpers when run as script or module."""
+    try:
+        return importlib.import_module("utils.cgw_idempotency")
+    except ModuleNotFoundError:
+        root_dir = Path(__file__).resolve().parent.parent
+        if str(root_dir) not in sys.path:
+            sys.path.insert(0, str(root_dir))
+        return importlib.import_module("utils.cgw_idempotency")
+
+
+cgw_idempotency = _load_cgw_idempotency()
 
 LOG = logging.getLogger("developer-portal-wrapper")
 DEFAULT_LOG_FMT = "%(asctime)s [%(levelname)-8s] %(message)s"
@@ -25,7 +37,6 @@ CGW_ENV_VARS_STRICT = (
 
 WORKSPACE_DIR = "/tmp"
 METADATA_FILE_PATH = f"{WORKSPACE_DIR}/cgw_metadata.yaml"
-RESULT_FILE_JSON_PATH = f"{WORKSPACE_DIR}/results.json"
 
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
@@ -52,33 +63,27 @@ def generate_metadata(
     content_list that starts with the component name
     """
     metadata = []
-
     short_url_prefix = f"/cgw/{product_code}/{product_version_name}"
-    for file in content_list:
-        matching_component = file.startswith(file_prefix)
 
-        if matching_component:
-            LOG.info("processing file: %s", file)
-            component_item = {
-                "productName": product_name,
-                "productCode": product_code,
-                "productVersionName": product_version_name,
-                "downloadURL": generate_download_url(content_dir, file),
+    for order, file in enumerate(content_list, start=1):
+        if not file.startswith(file_prefix):
+            LOG.warning(
+                "Skipping file: %s as it does not start with the expected prefix", file
+            )
+            continue
+
+        LOG.info("Processing file: %s", file)
+        metadata.append(
+            {
                 "shortURL": f"{short_url_prefix}/{file}",
+                "downloadURL": generate_download_url(content_dir, file),
                 "label": file,
                 "type": "FILE",
                 "hidden": False,
                 "invisible": False,
+                "order": order,
             }
-            metadata.append(
-                {
-                    "type": "file",
-                    "action": "create",
-                    "metadata": component_item,
-                }
-            )
-        else:
-            LOG.warning(f"Skipping file: {file} as it does not start with any component name")
+        )
 
     return metadata
 
@@ -121,7 +126,10 @@ def parse_args():
     )
     parser.add_argument(
         "--cgw-hostname",
-        help="Content Gateway Hostname in Developer Portal",
+        help=(
+            "Content Gateway base URL in Developer Portal, "
+            "for example: https://developers.qa.redhat.com/content-gateway/rest/admin"
+        ),
         required=True,
     )
     parser.add_argument(
@@ -136,6 +144,65 @@ def parse_args():
     )
 
     return parser.parse_args()
+
+
+def publish_metadata(
+    *,
+    cgw_hostname,
+    product_name,
+    product_code,
+    product_version_name,
+    metadata,
+    dry_run=False,
+):
+    username = os.getenv("CGW_USERNAME")
+    password = os.getenv("CGW_PASSWORD")
+
+    session = requests.Session()
+    session.auth = HTTPBasicAuth(username, password)
+    session.headers.update(
+        {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+    )
+
+    if dry_run:
+        product_id = 999999
+        product_version_id = 999999
+        created_ids = [999999 for _ in metadata]
+        updated_ids = []
+        skipped_ids = []
+    else:
+        product_id = cgw_idempotency.get_product_id(
+            host=cgw_hostname,
+            session=session,
+            product_name=product_name,
+            product_code=product_code,
+        )
+        product_version_id = cgw_idempotency.get_version_id(
+            host=cgw_hostname,
+            session=session,
+            product_id=product_id,
+            version_name=product_version_name,
+        )
+        for item in metadata:
+            item["productVersionId"] = product_version_id
+
+        created_ids, updated_ids, skipped_ids = cgw_idempotency.create_files(
+            host=cgw_hostname,
+            session=session,
+            product_id=product_id,
+            version_id=product_version_id,
+            metadata=metadata,
+        )
+
+    LOG.info(
+        "CGW publish summary: created=%s updated=%s skipped=%s",
+        len(created_ids),
+        len(updated_ids),
+        len(skipped_ids),
+    )
 
 
 def main():
@@ -180,27 +247,34 @@ def main():
         yaml.dump(metadata, file, default_flow_style=False, sort_keys=False)
 
     LOG.info(f"YAML content dumped to {METADATA_FILE_PATH}")
-    cgw_username = os.getenv("CGW_USERNAME")
-    main_command = "push-cgw-metadata"
-    common_args = [
-        "--CGW_filepath",
-        METADATA_FILE_PATH,
-        "--CGW_hostname",
-        cgw_hostname,
-    ]
-    cred_args = ["--CGW_username", cgw_username]
-    command = [main_command] + common_args
-    cmd_str = " ".join(command)
-    command += cred_args
-
     if args.dry_run:
-        LOG.info("Would have run: %s", cmd_str)
+        LOG.info(
+            "Would idempotently publish %s file(s) to CGW host %s for product %s/%s",
+            len(metadata),
+            cgw_hostname,
+            product_code,
+            product_version_name,
+        )
+        publish_metadata(
+            cgw_hostname=cgw_hostname,
+            product_name=product_name,
+            product_code=product_code,
+            product_version_name=product_version_name,
+            metadata=metadata,
+            dry_run=True,
+        )
     else:
         try:
-            LOG.info("Running %s", cmd_str)
-            subprocess.run(command, check=True)
-        except subprocess.CalledProcessError:
-            LOG.exception("Command %s failed, check exception for details", cmd_str)
+            LOG.info("Publishing metadata to CGW using idempotent API flow")
+            publish_metadata(
+                cgw_hostname=cgw_hostname,
+                product_name=product_name,
+                product_code=product_code,
+                product_version_name=product_version_name,
+                metadata=metadata,
+            )
+        except RuntimeError:
+            LOG.exception("CGW publish failed")
             raise
         except Exception as exc:
             LOG.exception("Unknown error occurred")

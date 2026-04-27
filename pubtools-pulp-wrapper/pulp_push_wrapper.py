@@ -26,6 +26,7 @@ UD cache flush credentials:
 * or set path to cert/key with env vars: UDCACHE_CERT and UDCACHE_KEY
 
 """
+
 import argparse
 import json
 import logging
@@ -217,6 +218,8 @@ def wait_for_task(task_href, context):
     deadline = time.time() + POLL_TIMEOUT_SECONDS
     while time.time() < deadline:
         task = pulp_request(task_url, context=context)
+        if task is None:
+            raise RuntimeError(f"Empty response while polling Pulp task status: {task_url}")
         state = task.get("state")
         if state == "finished":
             if task.get("error") or task.get("exception") or task.get("traceback"):
@@ -279,7 +282,9 @@ def prune_matching_content_before_push(parsed):
             len(names_to_remove),
             repo_name,
         )
-        unassociate_url = f"{pulp_base}/pulp/api/v2/repositories/{repo_path}/actions/unassociate/"
+        unassociate_url = (
+            f"{pulp_base}/pulp/api/v2/repositories/{repo_path}/actions/unassociate/"
+        )
         unassociate_payload = {
             "criteria": {
                 "filters": {
@@ -291,7 +296,9 @@ def prune_matching_content_before_push(parsed):
                 }
             }
         }
-        response = pulp_request(unassociate_url, context=context, payload=unassociate_payload) or {}
+        response = (
+            pulp_request(unassociate_url, context=context, payload=unassociate_payload) or {}
+        )
         for task in response.get("spawned_tasks", []):
             href = task.get("_href")
             if href:

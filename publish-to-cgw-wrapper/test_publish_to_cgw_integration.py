@@ -153,7 +153,7 @@ def metadata():
     ]
 
 
-@patch("publish_to_cgw_wrapper.call_cgw_api")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
 @patch.dict(os.environ, {"CGW_USERNAME": "username", "CGW_PASSWORD": "password"})
 @patch("sys.argv", new_callable=lambda: ["publish_to_cgw_wrapper.py"])
 def test_main_creates_files(
@@ -214,7 +214,7 @@ def test_main_creates_files(
     assert results_json[1]["no_of_files_skipped"] == 0
 
 
-@patch("publish_to_cgw_wrapper.call_cgw_api")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
 @patch.dict(os.environ, {"CGW_USERNAME": "user", "CGW_PASSWORD": "password"})
 @patch("sys.argv", new_callable=lambda: ["publish_to_cgw_wrapper.py"])
 def test_main_skips_3_creates_2(mock_sys_argv, mock_call, data_json, metadata):
@@ -273,7 +273,7 @@ def test_main_skips_3_creates_2(mock_sys_argv, mock_call, data_json, metadata):
     assert results_json[1]["no_of_files_skipped"] == 0
 
 
-@patch("publish_to_cgw_wrapper.call_cgw_api")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
 @patch.dict(os.environ, {"CGW_USERNAME": "user", "CGW_PASSWORD": "password"})
 @patch("sys.argv", new_callable=lambda: ["publish_to_cgw_wrapper.py"])
 def test_main_partial_skip_fail_rollback(mock_sys_argv, mock_call, data_json):

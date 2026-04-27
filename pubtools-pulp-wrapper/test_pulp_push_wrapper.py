@@ -128,11 +128,15 @@ def test_get_source_dirs():
 
 def test_normalize_timestamped_name():
     assert (
-        pulp_push_wrapper.normalize_timestamped_name("releng-test-product-1.7-1777068929-x86_64-boot.iso.gz")
+        pulp_push_wrapper.normalize_timestamped_name(
+            "releng-test-product-1.7-1777068929-x86_64-boot.iso.gz"
+        )
         == "releng-test-product-1.7-x86_64-boot.iso.gz"
     )
     assert (
-        pulp_push_wrapper.normalize_timestamped_name("releng-test-product-binaries-linux-amd64-1.7.0.tar.gz")
+        pulp_push_wrapper.normalize_timestamped_name(
+            "releng-test-product-binaries-linux-amd64-1.7.0.tar.gz"
+        )
         == "releng-test-product-binaries-linux-amd64-1.7.0.tar.gz"
     )
 
@@ -164,7 +168,9 @@ def test_pulp_request_with_payload(mock_urlopen):
     mock_response.read.return_value = b'{"ok": true}'
     mock_urlopen.return_value.__enter__.return_value = mock_response
 
-    result = pulp_push_wrapper.pulp_request("https://example.com", context="ctx", payload={"a": 1})
+    result = pulp_push_wrapper.pulp_request(
+        "https://example.com", context="ctx", payload={"a": 1}
+    )
     assert result == {"ok": True}
 
 
@@ -197,6 +203,17 @@ def test_wait_for_task_timeout(mock_pulp_request, mock_time, _mock_sleep):
     mock_pulp_request.return_value = {"state": "running"}
 
     with pytest.raises(TimeoutError):
+        pulp_push_wrapper.wait_for_task("https://example.com/task", context="ctx")
+
+
+@patch("pulp_push_wrapper.time.sleep")
+@patch("pulp_push_wrapper.time.time")
+@patch("pulp_push_wrapper.pulp_request")
+def test_wait_for_task_empty_response(mock_pulp_request, mock_time, _mock_sleep):
+    mock_time.side_effect = [0, 1]
+    mock_pulp_request.return_value = None
+
+    with pytest.raises(RuntimeError, match="Empty response while polling Pulp task"):
         pulp_push_wrapper.wait_for_task("https://example.com/task", context="ctx")
 
 
