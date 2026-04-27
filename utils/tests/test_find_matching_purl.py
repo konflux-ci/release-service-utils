@@ -1,4 +1,4 @@
-from find_matching_purl import find_matching_purl
+from utils.find_matching_purl import find_matching_purl
 
 
 def test_find_matching_purl_success():

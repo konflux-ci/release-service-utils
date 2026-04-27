@@ -1,7 +1,7 @@
 import pytest
 import requests
 from unittest.mock import Mock
-from get_cgw_download_urls import list_download_urls, call_cgw_api, get_version_id
+from utils.get_cgw_download_urls import list_download_urls, call_cgw_api, get_version_id
 
 
 @pytest.fixture
@@ -44,7 +44,7 @@ def test_list_download_urls(monkeypatch, capsys, mock_file_data):
     def mock_api(*args, **kwargs):
         return mock_file_data
 
-    monkeypatch.setattr("get_cgw_download_urls.call_cgw_api", mock_api)
+    monkeypatch.setattr("utils.get_cgw_download_urls.call_cgw_api", mock_api)
     list_download_urls("http://mock", None, 1, 1)
     output = capsys.readouterr().out.strip().split("\n")
     assert len(output) == 3
@@ -82,12 +82,12 @@ def test_get_version_id_success(monkeypatch):
         assert endpoint == "/products/123/versions"
         return mock_versions
 
-    monkeypatch.setattr("get_cgw_download_urls.call_cgw_api", mock_call_cgw_api)
+    monkeypatch.setattr("utils.get_cgw_download_urls.call_cgw_api", mock_call_cgw_api)
     version_id = get_version_id("http://mock", None, 123, "3.15.4")
     assert version_id == 101
 
 
 def test_get_version_id_not_found(monkeypatch):
-    monkeypatch.setattr("get_cgw_download_urls.call_cgw_api", lambda *a, **kw: [])
+    monkeypatch.setattr("utils.get_cgw_download_urls.call_cgw_api", lambda *a, **kw: [])
     with pytest.raises(ValueError, match="Version '3.15.9' not found"):
         get_version_id("http://mock", None, 123, "3.15.9")

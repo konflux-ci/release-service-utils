@@ -29,6 +29,7 @@ line-length = 95
 
 [tool.pytest.ini_options]
 pythonpath = [
+  ".",
   "integration-tests/lib",
   "scripts/python/helpers",
   "scripts/python/tasks/internal",
