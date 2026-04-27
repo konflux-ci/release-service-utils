@@ -151,14 +151,21 @@ spec:
               scratch_dir="$(mktemp -d)"
               git clone -q "${utils_git_url}" "${scratch_dir}/repo"
               cd "${scratch_dir}/repo"
-              git fetch -q origin main:refs/remotes/origin/main
               git checkout -q "${utils_git_revision}"
+              # Compare against upstream utils main, not a fork's possibly stale main.
+              upstream_utils_repo="https://github.com/konflux-ci/release-service-utils.git"
+              if git remote get-url upstream >/dev/null 2>&1; then
+                git remote set-url upstream "${upstream_utils_repo}"
+              else
+                git remote add upstream "${upstream_utils_repo}"
+              fi
+              git fetch -q upstream main:refs/remotes/upstream/main
 
-              merge_base=$(git merge-base HEAD origin/main 2>/dev/null || true)
+              merge_base=$(git merge-base HEAD upstream/main 2>/dev/null || true)
               if [[ -z "${merge_base}" ]]; then
-                echo "ERROR: find-affected: could not compute merge-base between HEAD and origin/main." >&2
-                echo "  This usually means origin/main is missing (fetch failed?), or HEAD shares no" >&2
-                echo "  common history with main (unrelated histories). Fix the clone/fetch or branch." >&2
+                echo "ERROR: find-affected: could not compute merge-base between HEAD and upstream/main." >&2
+                echo "  This usually means upstream/main is missing (fetch failed?), or HEAD shares no" >&2
+                echo "  common history with konflux-ci/release-service-utils main." >&2
                 exit 1
               fi
 
