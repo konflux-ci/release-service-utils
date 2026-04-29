@@ -244,6 +244,34 @@ def test_suites_from_catalog_script_splits_stdout_tokens(tmp_path: Path) -> None
 
 
 @pytest.mark.usefixtures("utils_repo_root")
+def test_resolve_expands_helper_import_to_dependent_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Helper-only diffs also consider ``tasks/*.py`` files that import that helper."""
+    root = Path.cwd()
+    (root / "scripts" / "python" / "helpers").mkdir(parents=True)
+    (root / "scripts" / "python" / "tasks" / "internal").mkdir(parents=True)
+    (root / "scripts" / "python" / "helpers" / "file.py").write_text("#\n", encoding="utf-8")
+    (root / "scripts" / "python" / "tasks" / "internal" / "consumer.py").write_text(
+        "import file\n",
+        encoding="utf-8",
+    )
+    captured: list[list[str]] = []
+    orig_collect = fc._collect_task_search_tokens
+
+    def spy(changed_paths: list[str]):
+        captured.append(list(changed_paths))
+        return orig_collect(changed_paths)
+
+    monkeypatch.setattr(fc, "_collect_task_search_tokens", spy)
+    _write_rpa(tmp_path, "e2e", "p: pipelines/managed/e2e/")
+    with patch.object(fc, "_suites_from_catalog_script", return_value={"e2e"}):
+        fc.resolve(tmp_path, ["scripts/python/helpers/file.py"])
+    assert len(captured) == 1
+    assert "scripts/python/tasks/internal/consumer.py" in captured[0]
+
+
+@pytest.mark.usefixtures("utils_repo_root")
 def test_collect_task_search_tokens_maps_paths_via_dockerfile(tmp_path: Path) -> None:
     """Maps paths using cwd ``Dockerfile`` (same as ``search_tokens_for_changed_paths``)."""
     tokens = fc._collect_task_search_tokens(["pyxis/foo.py"])

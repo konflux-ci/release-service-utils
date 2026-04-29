@@ -15,6 +15,9 @@ Map a release-service-utils diff to catalog ``PIPELINE_TEST_SUITE`` /
    any ``*.md`` file), or changes to the repo-root ``Dockerfile``, force all catalog
    RPA suites—plumbing and image layout are not reliably reflected in Task YAML
    substring search alone.
+5. Changes under ``scripts/python/helpers/*.py`` also add repo paths for task
+   scripts that import those modules (see `helper_task_import_graph`) so
+   catalog Tasks that invoke ``tasks/…/*.py`` still match when only helpers move.
 
 **Stdin** (one changed path per line): print one JSON object
 ``{"pipelineTestSuite": <string|null>, "pipelineUsed": <string|null>}``.
@@ -40,6 +43,7 @@ import sys
 from pathlib import Path
 
 import find_search_tokens_from_dockerfile as fts
+import helper_task_import_graph as htig
 
 _MANAGED_PIPELINE_PATH = re.compile(r"pipelines/managed/([^/]+)/")
 
@@ -265,6 +269,9 @@ def resolve(catalog: Path, changed_lines: list[str]) -> dict[str, str | None]:
     changed = [c.strip() for c in changed_lines if c.strip()]
     if not changed:
         return {"pipelineTestSuite": None, "pipelineUsed": None}
+
+    repo_root = Path.cwd().resolve()
+    changed = htig.expand_changed_paths_for_helper_deps(repo_root, changed)
 
     suites: set[str] = set()
 
