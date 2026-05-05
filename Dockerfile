@@ -89,9 +89,13 @@ RUN dnf -y --setopt=tsflags=nodocs install \
 RUN curl -LO https://github.com/release-engineering/exodus-rsync/releases/latest/download/exodus-rsync && \
     chmod +x exodus-rsync && mv exodus-rsync /usr/local/bin/rsync
 
+# Copy utils before installation
+COPY utils /home/utils
+
 # Install Python dependencies using uv
-COPY pyproject.toml uv.lock ./
-RUN uv pip install -r pyproject.toml --system && \
+COPY README.md pyproject.toml uv.lock /home/
+RUN uv pip install -r /home/pyproject.toml --system && \
+    uv --directory /home/ pip install .  --system && \
     # Remove PyPI's python-qpid-proton so the system RPM (python3-qpid-proton) takes precedence.
     # The PyPI wheel (0.40.0) causes SSL failures because it bundles its own OpenSSL which
     # doesn't use the system CA trust store. The system RPM (0.37.0) is properly linked to
@@ -105,7 +109,6 @@ ADD data/certs/2015-IT-Root-CA.pem data/certs/2022-IT-Root-CA.pem /etc/pki/ca-tr
 RUN update-ca-trust
 
 COPY pyxis /home/pyxis
-COPY utils /home/utils
 COPY integration-tests /home/integration-tests
 COPY scripts /home/scripts
 COPY templates /home/templates
