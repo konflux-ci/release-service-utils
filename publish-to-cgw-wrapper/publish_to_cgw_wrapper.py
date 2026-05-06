@@ -25,8 +25,25 @@ import argparse
 import json
 import hashlib
 import logging
+import importlib
+import sys
+from pathlib import Path
 import requests
 from requests.auth import HTTPBasicAuth
+
+
+def _load_cgw_idempotency():
+    """Load shared idempotency helpers when run as script or module."""
+    try:
+        return importlib.import_module("utils.cgw_idempotency")
+    except ModuleNotFoundError:
+        root_dir = Path(__file__).resolve().parent.parent
+        if str(root_dir) not in sys.path:
+            sys.path.insert(0, str(root_dir))
+        return importlib.import_module("utils.cgw_idempotency")
+
+
+cgw_idempotency = _load_cgw_idempotency()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -118,50 +135,6 @@ def validate_components(data):
         f"{len(components) - len(valid_components)} skipped components"
     )
     return valid_components
-
-
-def call_cgw_api(*, host, method, endpoint, session, data=None):
-    """Make an API call to the Content Gateway service."""
-    try:
-        response = session.request(
-            method=method.upper(),
-            url=f"{host}{endpoint}",
-            json=data,
-        )
-
-        if not response.ok:
-            error_message = (
-                response.text.strip() or f"HTTP {response.status_code}:{response.reason}"
-            )
-            raise RuntimeError(f"API call failed: {error_message}")
-
-        return response
-    except requests.RequestException as e:
-        raise RuntimeError(f"API call failed: {e}")
-
-
-def get_product_id(*, host, session, product_name, product_code):
-    """Retrieve the product ID by name and product code."""
-    products = call_cgw_api(host=host, method="GET", endpoint="/products", session=session)
-    products = products.json()
-    for product in products:
-        if product.get("name") == product_name and product.get("productCode") == product_code:
-            logging.info(f"Found product: {product_name} with ID {product.get('id')}")
-            return product.get("id")
-    raise ValueError(f"Product {product_name} not found with product code {product_code}")
-
-
-def get_version_id(*, host, session, product_id, version_name):
-    """Retrieve the version ID for a specific product."""
-    versions = call_cgw_api(
-        host=host, method="GET", endpoint=f"/products/{product_id}/versions", session=session
-    )
-    versions = versions.json()
-    for version in versions:
-        if version.get("versionName") == version_name:
-            logging.info(f"Found version: {version_name} with ID {version.get('id')}")
-            return version.get("id")
-    raise ValueError(f"Version not found: {version_name}")
 
 
 def generate_download_url(content_dir, file_name):
@@ -259,118 +232,6 @@ def generate_metadata(
     return metadata
 
 
-def find_existing_file(existing_files, new_file):
-    """Find a file with matching shortURL, regardless of downloadURL"""
-    for file in existing_files:
-        if file.get("shortURL") == new_file.get("shortURL"):
-            return file
-    return None
-
-
-def update_file(*, host, session, product_id, version_id, file_id, file_metadata):
-    """Update an existing file using POST with ID in body"""
-    # Add the file ID to the metadata for update
-    update_data = {**file_metadata, "id": file_id}
-
-    response = call_cgw_api(
-        host=host,
-        method="POST",
-        endpoint=f"/products/{product_id}/versions/{version_id}/files",
-        session=session,
-        data=update_data,
-    )
-    return response
-
-
-def rollback_files(*, host, session, product_id, version_id, created_file_ids):
-    """Rollback created files by listing and deleting them."""
-    if created_file_ids:
-        logging.warning(
-            f"Rolling back created files due to failure "
-            f"(productId: {product_id}, productVersionId: {version_id})"
-        )
-
-    for file_id in created_file_ids:
-        try:
-            call_cgw_api(
-                host=host,
-                method="DELETE",
-                endpoint=f"/products/{product_id}/versions/{version_id}/files/{file_id}",
-                session=session,
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to rollback file: {e}")
-
-
-def create_files(*, host, session, product_id, version_id, metadata):
-    """Create files using the metadata created and rollback on failure."""
-    created_file_ids = []
-    updated_file_ids = []
-    skipped_files_ids = []
-    try:
-        existing_files = call_cgw_api(
-            host=host,
-            method="GET",
-            endpoint=f"/products/{product_id}/versions/{version_id}/files",
-            session=session,
-        )
-        existing_files = existing_files.json()
-
-        for file_metadata in metadata:
-            existing_file = find_existing_file(existing_files, file_metadata)
-
-            if existing_file:
-                # Check if downloadURL is different (needs update)
-                if existing_file.get("downloadURL") != file_metadata.get("downloadURL"):
-                    logging.info(
-                        f"Updating file: {file_metadata['label']} "
-                        f"(ID: {existing_file['id']}) with new downloadURL"
-                    )
-                    update_file(
-                        host=host,
-                        session=session,
-                        product_id=product_id,
-                        version_id=version_id,
-                        file_id=existing_file["id"],
-                        file_metadata=file_metadata,
-                    )
-                    updated_file_ids.append(existing_file["id"])
-                    logging.info(f"Successfully updated file ID: {existing_file['id']}")
-                else:
-                    # File exists with same downloadURL - skip
-                    skipped_files_ids.append(existing_file.get("id"))
-                    logging.info(
-                        f"Skipping: File {existing_file['label']} already exists "
-                        f"with same content (ID: {existing_file['id']})"
-                    )
-            else:
-                # File doesn't exist - create new
-                logging.info(
-                    f"Creating file: {file_metadata['label']} "
-                    f"with ShortURL {file_metadata['shortURL']}"
-                )
-                created_file_id = call_cgw_api(
-                    host=host,
-                    method="POST",
-                    endpoint=f"/products/{product_id}/versions/{version_id}/files",
-                    session=session,
-                    data=file_metadata,
-                )
-                created_file_id = created_file_id.json()
-                logging.info(f"Successfully created file with ID: {created_file_id}")
-                created_file_ids.append(created_file_id)
-        return created_file_ids, updated_file_ids, skipped_files_ids
-    except Exception as e:
-        rollback_files(
-            host=host,
-            session=session,
-            product_id=product_id,
-            version_id=version_id,
-            created_file_ids=created_file_ids,
-        )
-        raise RuntimeError(f"Failed to create file: {e}")
-
-
 def process_component(*, host, session, component, dry_run=False, component_index):
     """
     Process a component retrieve product/version ID,
@@ -389,14 +250,14 @@ def process_component(*, host, session, component, dry_run=False, component_inde
         product_id = 999999
         product_version_id = 999999
     else:
-        product_id = get_product_id(
+        product_id = cgw_idempotency.get_product_id(
             host=host,
             session=session,
             product_name=productName,
             product_code=productCode,
         )
 
-        product_version_id = get_version_id(
+        product_version_id = cgw_idempotency.get_version_id(
             host=host,
             session=session,
             product_id=product_id,
@@ -419,7 +280,7 @@ def process_component(*, host, session, component, dry_run=False, component_inde
         updated = []
         skipped = []
     else:
-        created, updated, skipped = create_files(
+        created, updated, skipped = cgw_idempotency.create_files(
             host=host,
             session=session,
             product_id=product_id,
@@ -501,7 +362,7 @@ def main():
                 if all_results:
                     logging.warning("Rolling back all created files due to error.")
                     for result in all_results:
-                        rollback_files(
+                        cgw_idempotency.rollback_files(
                             host=args.cgw_host,
                             session=session,
                             product_id=result["product_id"],

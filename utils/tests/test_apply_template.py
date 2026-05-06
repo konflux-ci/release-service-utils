@@ -8,7 +8,7 @@ import pytest
 
 from unittest.mock import patch, MagicMock
 
-from apply_template import setup_argparser, main
+from utils.apply_template import setup_argparser, main
 
 
 @patch(
@@ -49,8 +49,8 @@ def test_setup_argparser_improper_args():
 
 
 @patch("builtins.open")
-@patch("apply_template.Template.render")
-@patch("apply_template.setup_argparser")
+@patch("utils.apply_template.Template.render")
+@patch("utils.apply_template.setup_argparser")
 def test_apply_template_advisory_template(
     mock_argparser: MagicMock, mock_render: MagicMock, mock_open: MagicMock
 ):
@@ -76,7 +76,7 @@ def test_apply_template_advisory_template(
     assert json.loads(written) == {"foo": "bar"}
 
 
-@patch("apply_template.setup_argparser")
+@patch("utils.apply_template.setup_argparser")
 def test_apply_template_with_data_file(mock_argparser: MagicMock):
     _, data_filename = tempfile.mkstemp(suffix=".json")
     _, output_filename = tempfile.mkstemp()
@@ -145,7 +145,7 @@ def test_apply_template_with_data_file(mock_argparser: MagicMock):
         os.remove(output_filename)
 
 
-@patch("apply_template.setup_argparser")
+@patch("utils.apply_template.setup_argparser")
 def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
     _, filename = tempfile.mkstemp()
 
@@ -225,7 +225,7 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
         os.remove(filename)
 
 
-@patch("apply_template.setup_argparser")
+@patch("utils.apply_template.setup_argparser")
 def test_apply_template_advisory_template_fail_syntax_error(mock_argparser: MagicMock):
     _, filename = tempfile.mkstemp()
 
