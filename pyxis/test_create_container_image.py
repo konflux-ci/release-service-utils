@@ -16,7 +16,6 @@ from create_container_image import (
     _rh_push_registry,
 )
 
-
 PYXIS_URL = "https://catalog.redhat.com/api/containers/"
 
 

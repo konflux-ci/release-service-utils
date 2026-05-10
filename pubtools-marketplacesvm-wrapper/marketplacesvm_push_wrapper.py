@@ -14,6 +14,7 @@ For more information please refer to documentation:
 Red Hat Slack channel:
 #stratosphere-bau
 """
+
 import argparse
 import logging
 import os

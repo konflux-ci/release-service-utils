@@ -43,6 +43,7 @@ registry. But we do also release images with `requires_terms` set to false (e.g.
 so these images are available from both registries
 (registry.redhat.io, registry.access.redhat.com).
 """
+
 import argparse
 from urllib.parse import quote
 from datetime import datetime

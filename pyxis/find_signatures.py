@@ -10,6 +10,7 @@ PYXIS_CERT_PATH
 Optional env vars:
 PYXIS_GRAPHQL_API
 """
+
 import argparse
 import logging
 import os
