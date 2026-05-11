@@ -5,7 +5,6 @@ import pytest
 import pyxis
 from requests import HTTPError, Response, Session
 
-
 API_URL = "https://foo.com/v1/bar"
 REQUEST_BODY = {
     "a": "1",

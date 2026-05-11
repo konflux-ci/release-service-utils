@@ -7,6 +7,7 @@ Run push-cgw-metadata command to push metadata to CGW:
 5. Dump the metadata to a YAML file
 6. Run push-cgw-metadata to push the metadata
 """
+
 import os
 import sys
 import yaml
