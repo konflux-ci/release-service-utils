@@ -22,6 +22,8 @@ jobs:
           sudo apt-get install -y libkrb5-dev
       - name: Check out repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        with:
+          fetch-depth: 0
       - name: Black Lint
         uses: psf/black@9fd9ea2835973981e3f5dc5b8eb76f2ded46aa61  # stable
       - name: Setup python environment for flake8 check
@@ -36,6 +38,44 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           uv sync --dev
           uv run pytest --cov=. --cov-report=xml:coverage.xml
+      - name: docstring test
+        run: |
+          # Get list of changed python files
+          pip install ruff
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          elif [[ "${{ github.event_name }}" == "merge_group" ]]; then
+            BASE_SHA="${{ github.event.merge_group.base_sha }}"
+            HEAD_SHA="${{ github.event.merge_group.head_sha }}"
+          else
+            echo "Unsupported event: ${{ github.event_name }}"
+            exit 1
+          fi
+          echo "Checking files changed between $BASE_SHA and $HEAD_SHA"
+          FILES=$(git diff --name-only --diff-filter=ACMRT "${BASE_SHA}...${HEAD_SHA}" | tr '\n' ' ')
+          if [ -z "$FILES" ]; then
+            echo "No Python files changed."
+          else
+            PYFILES=""
+            for _file in ${FILES}; do
+              echo "Checking file : $_file"
+              if [[ $(file --mime-type "$_file" | cut -d" " -f 2) == "text/x-script.python" ]]; then
+                PYFILES="$PYFILES $_file "
+              else
+                echo "Skipping non-python file: $_file"
+              fi
+            done
+            if [ -z "$PYFILES" ]; then
+              echo "No Python files changed."
+            else
+              echo "Running ruff on: $PYFILES"
+              ruff check --select D ${PYFILES}
+            fi
+          fi
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2  # v6
         with:
