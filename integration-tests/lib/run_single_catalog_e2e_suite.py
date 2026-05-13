@@ -19,6 +19,9 @@ Required env:
   ``$(context.pipelineRun.uid)``); child PLR name is ``utils-e2e-catalog-<uid>``
   (same suffix as the temp GitHub fork).
 
+Optional env:
+  PIPELINE_TEST_SUITE
+
 ``KUBECONFIG_SECRET_NAME`` is the Secret **name** passed to the child catalog
 ``PipelineRun`` as pipeline param ``KUBECONFIG_SECRET_NAME`` (stage/test cluster
 kubeconfig for ``e2e-tests-staging-pipeline`` tasks).
@@ -44,7 +47,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from catalog_e2e_helpers import require_env
+from catalog_e2e_helpers import require_env, opt_env
 
 CATALOG_E2E_NAMESPACE = "rhtap-release-2-tenant"
 
@@ -223,6 +226,7 @@ def _build_catalog_e2e_pipelinerun(
     child_plr_name: str,
     parent: str,
     suite: str,
+    suite_vars: str,
     snap: dict[str, object],
     pipeline_used: str,
     vault_password_secret_name: str,
@@ -260,6 +264,7 @@ def _build_catalog_e2e_pipelinerun(
             "params": [
                 {"name": "SNAPSHOT", "value": json.dumps(snap)},
                 {"name": "PIPELINE_TEST_SUITE", "value": suite},
+                {"name": "PIPELINE_TEST_SUITE_VARS", "value": suite_vars},
                 {"name": "PIPELINE_USED", "value": pipeline_used},
                 {"name": "VAULT_PASSWORD_SECRET_NAME", "value": vault_password_secret_name},
                 {"name": "GITHUB_TOKEN_SECRET_NAME", "value": github_token_secret_name},
@@ -277,6 +282,7 @@ def main() -> None:
     rev = require_env("CATALOG_GIT_REVISION")
     runner = require_env("CATALOG_E2E_RUNNER_IMAGE")
     suite = require_env("PIPELINE_TEST_SUITE")
+    suite_vars = opt_env("PIPELINE_TEST_SUITE_VARS", "{}")
     used = require_env("PIPELINE_USED")
 
     parent = os.environ.get("PARENT_PIPELINE_RUN", "")
@@ -293,6 +299,7 @@ def main() -> None:
         child_plr_name=child_plr_name,
         parent=parent,
         suite=suite,
+        suite_vars=suite_vars,
         snap=snap,
         pipeline_used=used,
         vault_password_secret_name=vault,
