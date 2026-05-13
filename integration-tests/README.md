@@ -28,8 +28,8 @@ Implementation details are in `utils-e2e-catalog-pipeline.yaml` and `lib/find_ca
 
 | Path | Purpose |
 |------|---------|
-| `pipelines/utils-e2e-catalog-pipeline.yaml` | Params mirror catalog ITS (`PIPELINE_TEST_SUITE`, `PIPELINE_USED`, secret names, …); optional params and defaults are in the YAML; tasks above. |
-| `run-test.sh` | Submits a `PipelineRun` with the same param names as catalog ITS (`PIPELINE_TEST_SUITE`, `PIPELINE_USED`, …); optional `--wait` (`./run-test.sh --help`). |
+| `pipelines/utils-e2e-catalog-pipeline.yaml` | Params mirror catalog ITS (`PIPELINE_TEST_SUITE`, `PIPELINE_USED`, `PIPELINE_TEST_SUITE_VARS`, secret names, …); optional params and defaults are in the YAML; tasks above. |
+| `run-test.sh` | Submits a `PipelineRun` with the same param names as catalog ITS (`PIPELINE_TEST_SUITE`, `PIPELINE_USED`, `PIPELINE_TEST_SUITE_VARS` …); optional `--wait` (`./run-test.sh --help`). |
 | `lib/find_catalog_suite_from_utils_diff.py` | Maps a utils diff to affected suites; `--print-all-pairs` for tooling. |
 | `lib/catalog_clone_patch_push.sh` | Clone catalog, patch image refs, temp repo, push. |
 | `lib/run_single_catalog_e2e_suite.py` | Creates the child catalog `PipelineRun` and waits. |
@@ -57,7 +57,7 @@ Files under `integration-tests/lib/` are copied into the utils image at `/home/i
 
 ## How this runs
 
-**Production:** Konflux **IntegrationTestScenario** on **release-service-utils** with `pathInRepo: integration-tests/pipelines/utils-e2e-catalog-pipeline.yaml`, supplying the same param names as catalog ITS (**`PIPELINE_TEST_SUITE`**, **`PIPELINE_USED`**, **`VAULT_PASSWORD_SECRET_NAME`**, …), plus **`SNAPSHOT`**. Omit optional params to use pipeline defaults.
+**Production:** Konflux **IntegrationTestScenario** on **release-service-utils** with `pathInRepo: integration-tests/pipelines/utils-e2e-catalog-pipeline.yaml`, supplying the same param names as catalog ITS (**`PIPELINE_TEST_SUITE`**, **`PIPELINE_USED`**, **`VAULT_PASSWORD_SECRET_NAME`**, **`PIPELINE_TEST_SUITE_VARS`**, …), plus **`SNAPSHOT`**. Omit optional params to use pipeline defaults.
 
 ### Run locally (`run-test.sh`)
 
