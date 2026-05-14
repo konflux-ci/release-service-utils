@@ -481,7 +481,7 @@ wheels = [
 
 [[package]]
 name = "cloudpub"
-version = "1.7.1"
+version = "1.7.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
@@ -491,9 +491,9 @@ dependencies = [
     { name = "requests" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a8/b6/e5ca187b61321661ae7abbf9368796d50d4ccee389eae19eeec37670d97b/cloudpub-1.7.1.tar.gz", hash = "sha256:950ae3f42cdcadd2fa040dc87b2c26a5443ac6b62570ce77cc3188acbdc62669", size = 63814, upload-time = "2026-04-27T14:06:12.507Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/79/00/521693bce4368223b0a97a407e4fda83a197ceb43241c026e43cae4dc458/cloudpub-1.7.2.tar.gz", hash = "sha256:319966c394bfa27f8bdff38729f340cf580ad4871e6310d204f3c15a750b039e", size = 63794, upload-time = "2026-05-04T12:56:18.337Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/21/94/550326cc93d4a00899a5c10c408195d27dbae2b407c8ba978de502540dab/cloudpub-1.7.1-py3-none-any.whl", hash = "sha256:ea8a9e1a49c20b45dc221eb43c59e1b79f58fd6fde5c1fadff3db18492c1a813", size = 58657, upload-time = "2026-04-27T14:06:11.556Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/da/fc402bb349b178ee2d9a063c97597115d29d3fc57281fb72f2a20d0d2e4c/cloudpub-1.7.2-py3-none-any.whl", hash = "sha256:4712fac5039559c6ad84a73154c8a66a631f8e7c292cb039e7f15310210f9eee", size = 58657, upload-time = "2026-05-04T12:56:17.485Z" },
 ]
 
 [[package]]
@@ -763,7 +763,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -1520,7 +1520,7 @@ wheels = [
 
 [[package]]
 name = "pubtools-marketplacesvm"
-version = "1.9.0"
+version = "2.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cloudimg" },
@@ -1532,9 +1532,9 @@ dependencies = [
     { name = "starmap-client" },
     { name = "strenum" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d7/2d/45f6bc790226056957cfea021d3bda2dd0c16ff827576b94d22473c31597/pubtools_marketplacesvm-1.9.0.tar.gz", hash = "sha256:e8e3e3057a98a8587aa8e5c0e8a8abb945a68418380d4b926fdd7dbfac743433", size = 59598, upload-time = "2025-08-11T16:28:42.443Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9d/c3/1e6b08e75260256c0b82ce987d628294d82fde65da9178962c7a7d5dcaf4/pubtools_marketplacesvm-2.1.1.tar.gz", hash = "sha256:95fdf69307a3dfa5c00b8a6b5d31ce5105a6a035d76c6eb12bc2a593f4ae6344", size = 59508, upload-time = "2026-02-10T13:44:28.181Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bf/c9/24ce7411998b7abbff9a2d99bd5f0bc6a0b7f45ca9b97f00f484bc36d182/pubtools_marketplacesvm-1.9.0-py3-none-any.whl", hash = "sha256:b0a3f1cdc752f76a020d05e74f9a27d22f36c560448a85f97b35fa677c910773", size = 74222, upload-time = "2025-08-11T16:28:41.33Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/1a/28692dbae9165bcb5b61f72b3da15105d01b4059f1325091753c2d571004/pubtools_marketplacesvm-2.1.1-py3-none-any.whl", hash = "sha256:bf247b598a5a6fb32d29acd8cd369f05056158b90015de2be2e02453f773ec8d", size = 74248, upload-time = "2026-02-10T13:44:27.006Z" },
 ]
 
 [[package]]
@@ -2061,6 +2061,9 @@ dependencies = [
     { name = "pubtools-pyxis" },
     { name = "pubtools-sign" },
     { name = "pulp-cli" },
+    { name = "requests" },
+    { name = "requests-kerberos" },
+    { name = "starmap-client" },
 ]
 
 [package.dev-dependencies]
@@ -2081,11 +2084,14 @@ requires-dist = [
     { name = "packaging" },
     { name = "pubtools-content-gateway", specifier = "==0.5.4" },
     { name = "pubtools-exodus", specifier = "==1.5.2" },
-    { name = "pubtools-marketplacesvm", specifier = "==1.9.0" },
+    { name = "pubtools-marketplacesvm", specifier = "==2.1.1" },
     { name = "pubtools-pulp", specifier = "==1.33.2" },
     { name = "pubtools-pyxis", specifier = "==1.3.8" },
     { name = "pubtools-sign", specifier = "==1.0.6" },
     { name = "pulp-cli", specifier = "==0.36.3" },
+    { name = "requests" },
+    { name = "requests-kerberos" },
+    { name = "starmap-client", specifier = "==2.4.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -2365,7 +2371,7 @@ wheels = [
 
 [[package]]
 name = "starmap-client"
-version = "2.4.1"
+version = "2.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
@@ -2373,9 +2379,9 @@ dependencies = [
     { name = "requests-mock" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/93/00/862d102308dab8cbe84f59a3615738cc01c16d4e4f4b3fc25ea7d8713d19/starmap_client-2.4.1.tar.gz", hash = "sha256:13d6fedfba251a10d84030b2b63d3e75e15cee78bc82edaf2280c96e5f838664", size = 36801, upload-time = "2026-04-27T14:45:40.182Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2d/fb/298a742a6258bf27d73690e7cfdbdf6408657a73940ee63a84bad4b14d04/starmap_client-2.4.0.tar.gz", hash = "sha256:b7f016cd0d0f7974d96261d6059bfff2d47c10f9b69d15f835326d6c8d2c0b95", size = 29837, upload-time = "2025-07-28T19:52:08.452Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/67/8d78e7905bd27e9711027bee577b09b26effe78a84249b5f2271c3deee75/starmap_client-2.4.1-py3-none-any.whl", hash = "sha256:77193c10371490f93b3f1920791366a7e9fa5f6c73971d7b65e9a2452bb7a75c", size = 26245, upload-time = "2026-04-27T14:45:38.945Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/86/0ef148ecaa52ab19fed261228ccb92bb08e26ae1909dc1e54f98775e6d47/starmap_client-2.4.0-py3-none-any.whl", hash = "sha256:f44271f8005b7124f19425a894468ff38f33dd963eccc48d7ce1543fa9100578", size = 25808, upload-time = "2025-07-28T19:52:07.32Z" },
 ]
 
 [[package]]
