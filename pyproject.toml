@@ -36,6 +36,8 @@ pythonpath = [
   "scripts/python/helpers",
   "scripts/python/tasks/internal",
   "utils",
+  "pubtools-pulp-wrapper",
+  "publish-to-cgw-wrapper",
 ]
 
 [dependency-groups]

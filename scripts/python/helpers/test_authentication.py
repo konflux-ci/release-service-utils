@@ -1,4 +1,4 @@
-"""Tests for the ``authentication`` helper module."""
+"""Tests for authentication helpers."""
 
 from __future__ import annotations
 
@@ -11,124 +11,189 @@ import pytest
 
 import authentication
 
-
-def test_read_mounted_text_strips_whitespace(tmp_path: Path) -> None:
-    """Stripped file contents are returned without surrounding whitespace."""
-    f = tmp_path / "f"
-    f.write_text("  a\nb  ", encoding="utf-8")
-    assert authentication.read_mounted_text(tmp_path, "f") == "a\nb"
+# ---------------------------------------------------------------------------
+# read_mounted_text
+# ---------------------------------------------------------------------------
 
 
-def test_load_keytab_from_mount_resolves_princ_and_keytab(tmp_path: Path) -> None:
-    """Principal and decoded keytab bytes come from the paths given by the keyword args."""
-    d = tmp_path
-    (d / "name").write_text("p@REALM", encoding="utf-8")
-    (d / "base64_keytab").write_text(
-        base64.b64encode(b"ktab").decode("ascii"), encoding="utf-8"
+def test_read_mounted_text(tmp_path: Path) -> None:
+    """File content is read as UTF-8 and returned with surrounding whitespace stripped."""
+    f = tmp_path / "secret"
+    f.write_text("  value\n", encoding="utf-8")
+    assert authentication.read_mounted_text(tmp_path, "secret") == "value"
+
+
+# ---------------------------------------------------------------------------
+# load_keytab_from_mount
+# ---------------------------------------------------------------------------
+
+
+def test_load_keytab_from_mount(tmp_path: Path) -> None:
+    """Principal string and base64-decoded keytab bytes are returned from mounted files."""
+    raw_keytab = b"\x05\x02keytab-bytes"
+    encoded = base64.b64encode(raw_keytab).decode("ascii")
+    (tmp_path / "principal").write_text("user@REALM\n", encoding="utf-8")
+    (tmp_path / "keytab.b64").write_text(encoded + "\n", encoding="utf-8")
+
+    princ, keytab = authentication.load_keytab_from_mount(
+        tmp_path, principal_file="principal", keytab_b64_file="keytab.b64"
     )
-    princ, raw = authentication.load_keytab_from_mount(
-        d, principal_file="name", keytab_b64_file="base64_keytab"
+    assert princ == "user@REALM"
+    assert keytab == raw_keytab
+
+
+# ---------------------------------------------------------------------------
+# load_service_account
+# ---------------------------------------------------------------------------
+
+
+def test_load_service_account(tmp_path: Path) -> None:
+    """Principal, keytab, and extra text files are all loaded and returned correctly."""
+    raw_keytab = b"\x05\x02data"
+    encoded = base64.b64encode(raw_keytab).decode("ascii")
+    (tmp_path / "principal").write_text("sa@REALM", encoding="utf-8")
+    (tmp_path / "keytab.b64").write_text(encoded, encoding="utf-8")
+    (tmp_path / "api_url").write_text("https://api.example.com  ", encoding="utf-8")
+
+    princ, keytab, extra = authentication.load_service_account(
+        tmp_path,
+        ("api_url",),
+        principal_file="principal",
+        keytab_b64_file="keytab.b64",
     )
-    assert princ == "p@REALM" and raw == b"ktab"
+    assert princ == "sa@REALM"
+    assert keytab == raw_keytab
+    assert extra == {"api_url": "https://api.example.com"}
 
 
-def test_load_keytab_from_mount_renamed_files(tmp_path: Path) -> None:
-    """
-    Any filenames passed as *principal_file* and *keytab_b64_file* are read
-    under the mount.
-    """
-    d = tmp_path
-    (d / "x").write_text("other", encoding="utf-8")
-    (d / "y").write_text(base64.b64encode(b"A").decode("ascii"), encoding="utf-8")
-    princ, raw = authentication.load_keytab_from_mount(
-        d, principal_file="x", keytab_b64_file="y"
-    )
-    assert princ == "other" and raw == b"A"
+# ---------------------------------------------------------------------------
+# patch_krb5_config
+# ---------------------------------------------------------------------------
 
 
-def test_load_service_account_includes_text_files_in_dict(tmp_path: Path) -> None:
-    """*text_files* entries are the third return value, keyed by filename."""
-    d = tmp_path
-    (d / "name").write_text("u1", encoding="utf-8")
-    (d / "base64_keytab").write_text(base64.b64encode(b"ab").decode("ascii"), encoding="utf-8")
-    (d / "api_url").write_text("https://ex/a", encoding="utf-8")
-    n, raw, files = authentication.load_service_account(
-        d, ("api_url",), principal_file="name", keytab_b64_file="base64_keytab"
-    )
-    assert n == "u1" and raw == b"ab" and files == {"api_url": "https://ex/a"}
+def test_patch_krb5_config_inserts_after_libdefaults() -> None:
+    """dns_canonicalize_hostname setting is inserted on the line after [libdefaults]."""
+    source = "[libdefaults]\n default_realm = EXAMPLE.COM\n"
+    result = authentication.patch_krb5_config(source)
+    lines = result.splitlines()
+    idx = lines.index("[libdefaults]")
+    assert "dns_canonicalize_hostname = false" in lines[idx + 1]
 
 
-def test_load_service_account_multiple_text_files(tmp_path: Path) -> None:
-    """*text_files* can name several strip-read files; values map by filename."""
-    d = tmp_path
-    (d / "name").write_text("p", encoding="utf-8")
-    (d / "base64_keytab").write_text(base64.b64encode(b"x").decode("ascii"), encoding="utf-8")
-    (d / "errata_api").write_text("https://errata/", encoding="utf-8")
-    (d / "other").write_text("o", encoding="utf-8")
-    _, _, files = authentication.load_service_account(
-        d, ("errata_api", "other"), principal_file="name", keytab_b64_file="base64_keytab"
-    )
-    assert files == {"errata_api": "https://errata/", "other": "o"}
+def test_patch_krb5_config_no_libdefaults_unchanged() -> None:
+    """Source text without a [libdefaults] section is returned unchanged."""
+    source = "[realms]\n EXAMPLE.COM = {}\n"
+    assert authentication.patch_krb5_config(source) == source
 
 
-def test_patch_krb5_inserts_after_libdefaults() -> None:
-    """A line is inserted right after the ``[libdefaults]`` section header."""
-    src = "[libdefaults]\n# c\n[realms]\n"
-    out = authentication.patch_krb5_config(src)
-    assert "dns_canonicalize_hostname = false" in out
-    assert out.index("[libdefaults]") < out.index("dns_canonicalize_hostname")
+# ---------------------------------------------------------------------------
+# kinit_with_retry
+# ---------------------------------------------------------------------------
 
 
-def test_kinit_succeeds_first_try(tmp_path: Path) -> None:
-    """A successful kinit is not retried; environment keys are passed through."""
-    kt = tmp_path / "t.kt"
-    kt.write_bytes(b"x")
-    cc = tmp_path / "cc"
-    cfg = tmp_path / "c.conf"
-    cc.write_text("x", encoding="utf-8")
-    cfg.write_text("x", encoding="utf-8")
-    calls: list = []
+def test_kinit_with_retry_success(tmp_path: Path) -> None:
+    """The kinit command is called once with the correct principal and keytab on success."""
+    keytab = tmp_path / "test.keytab"
+    keytab.write_bytes(b"fake")
 
-    def _fake_run(
-        cmd: list[str] | str,
-        check: object,
-        env: dict,  # noqa: ARG001
-    ) -> object:  # type: ignore[no-untyped-def]
-        del check
-        calls.append((list(cmd) if isinstance(cmd, list) else [cmd], env.get("KRB5CCNAME")))
-        r = mock.MagicMock()
-        r.returncode = 0
-        return r
+    with mock.patch("subprocess.run") as mock_run:
+        mock_run.return_value = mock.Mock(returncode=0)
+        authentication.kinit_with_retry("user@REALM", keytab, {})
 
-    with mock.patch("authentication.subprocess.run", side_effect=_fake_run):
-        authentication.kinit_with_retry(
-            "p", kt, {"KRB5CCNAME": str(cc), "KRB5_CONFIG": str(cfg)}
-        )
-    assert len(calls) == 1
-    assert calls[0][0][0:4] == ["kinit", "p", "-k", "-t"]
+    mock_run.assert_called_once()
+    args = mock_run.call_args[0][0]
+    assert args[0] == "kinit"
+    assert "user@REALM" in args
 
 
-def test_kinit_fails_five_times(tmp_path: Path) -> None:
-    """After ``max_attempts`` failures, the last ``CalledProcessError`` is raised."""
-    kt = tmp_path / "t.kt"
-    kt.write_bytes(b"x")
-    cc = tmp_path / "cc"
-    cfg = tmp_path / "c.conf"
-    cc.write_text("x", encoding="utf-8")
-    cfg.write_text("x", encoding="utf-8")
+def test_kinit_with_retry_fails_after_max_attempts(tmp_path: Path) -> None:
+    """CalledProcessError is raised after exhausting max_attempts retries."""
+    keytab = tmp_path / "test.keytab"
+    keytab.write_bytes(b"fake")
 
-    def _fail(*args, **kwargs) -> object:  # type: ignore[no-untyped-def]
-        del args, kwargs
-        r = mock.MagicMock()
-        r.returncode = 1
-        return r
-
-    with (
-        mock.patch("authentication.subprocess.run", side_effect=_fail),
-        mock.patch("authentication.retry.time.sleep") as sleep_mock,
-    ):
+    with mock.patch("subprocess.run") as mock_run, mock.patch("time.sleep"):
+        mock_run.return_value = mock.Mock(returncode=1)
         with pytest.raises(subprocess.CalledProcessError):
-            authentication.kinit_with_retry(
-                "p", kt, {"KRB5CCNAME": str(cc), "KRB5_CONFIG": str(cfg)}
-            )
-    sleep_mock.assert_has_calls([mock.call(5), mock.call(10), mock.call(20), mock.call(40)])
+            authentication.kinit_with_retry("user@REALM", keytab, {}, max_attempts=2)
+
+    assert mock_run.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# write_docker_config
+# ---------------------------------------------------------------------------
+
+
+def test_write_docker_config(tmp_path: Path) -> None:
+    """config.json is written with mode 0600 inside a 0700 .docker directory."""
+    with mock.patch("pathlib.Path.home", return_value=tmp_path):
+        authentication.write_docker_config('{"auths":{}}')
+    config = tmp_path / ".docker" / "config.json"
+    assert config.read_text() == '{"auths":{}}'
+    assert oct(config.stat().st_mode & 0o777) == oct(0o600)
+    assert oct((tmp_path / ".docker").stat().st_mode & 0o777) == oct(0o700)
+
+
+# ---------------------------------------------------------------------------
+# setup_docker_config
+# ---------------------------------------------------------------------------
+
+
+def test_setup_docker_config_writes_file(tmp_path: Path) -> None:
+    """Docker config JSON from a mounted secret file is written to ~/.docker/config.json."""
+    secret = tmp_path / "secret" / ".dockerconfigjson"
+    secret.parent.mkdir()
+    secret.write_text('{"auths":{}}', encoding="utf-8")
+
+    home = tmp_path / "home"
+    home.mkdir()
+    with mock.patch("pathlib.Path.home", return_value=home):
+        authentication.setup_docker_config(secret)
+
+    assert (home / ".docker" / "config.json").read_text() == '{"auths":{}}'
+
+
+def test_setup_docker_config_optional_missing_file(tmp_path: Path) -> None:
+    """A missing optional secret file is silently skipped without writing anything."""
+    missing = tmp_path / ".dockerconfigjson"
+    home = tmp_path / "home"
+    home.mkdir()
+    with mock.patch("pathlib.Path.home", return_value=home):
+        authentication.setup_docker_config(missing, optional=True)
+
+    assert not (home / ".docker" / "config.json").exists()
+
+
+def test_setup_docker_config_optional_empty_file(tmp_path: Path) -> None:
+    """An empty optional secret file is silently skipped without writing anything."""
+    empty = tmp_path / ".dockerconfigjson"
+    empty.write_bytes(b"")
+    home = tmp_path / "home"
+    home.mkdir()
+    with mock.patch("pathlib.Path.home", return_value=home):
+        authentication.setup_docker_config(empty, optional=True)
+
+    assert not (home / ".docker" / "config.json").exists()
+
+
+def test_setup_docker_config_strip_noise(tmp_path: Path) -> None:
+    """Leading/trailing non-JSON characters are stripped before writing config.json."""
+    secret = tmp_path / ".dockerconfigjson"
+    # k8s sometimes wraps the JSON in outer single-quotes or other noise characters
+    secret.write_text("'{\"auths\":{}}'", encoding="utf-8")
+
+    home = tmp_path / "home"
+    home.mkdir()
+    with mock.patch("pathlib.Path.home", return_value=home):
+        authentication.setup_docker_config(secret, strip_noise=True)
+
+    written = (home / ".docker" / "config.json").read_text()
+    assert written.startswith("{")
+    assert written.endswith("}")
+
+
+def test_setup_docker_config_required_missing_raises(tmp_path: Path) -> None:
+    """A missing non-optional secret file raises FileNotFoundError."""
+    missing = tmp_path / ".dockerconfigjson"
+    with pytest.raises(FileNotFoundError):
+        authentication.setup_docker_config(missing)

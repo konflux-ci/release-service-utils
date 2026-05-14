@@ -8,8 +8,10 @@ service-account / secret file layouts.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import subprocess
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -17,10 +19,11 @@ import retry
 
 
 def read_mounted_text(mount: Path, filename: str) -> str:
-    """
-    Read a UTF-8 file (``mount / filename``) and return the text with leading
-    and trailing whitespace removed. Use for one-line secret values (API base URL,
-    principal name) when a pod mounts a volume as a directory of small files.
+    """Read a UTF-8 file (``mount / filename``) and return stripped text.
+
+    Returns the text with leading and trailing whitespace removed.
+    Use for one-line secret values (API base URL, principal name) when
+    a pod mounts a volume as a directory of small files.
     """
     return (mount / filename).read_text(encoding="utf-8").strip()
 
@@ -31,8 +34,7 @@ def load_keytab_from_mount(
     principal_file: str,
     keytab_b64_file: str,
 ) -> tuple[str, bytes]:
-    """
-    Load a Kerberos principal and raw keytab from files under *mount*.
+    """Load a Kerberos principal and raw keytab from files under *mount*.
 
     *principal_file* is a one-line text file (principal). *keytab_b64_file*
     is the same for a base64-encoded keytab. Returns the principal string and
@@ -50,16 +52,16 @@ def load_service_account(
     principal_file: str,
     keytab_b64_file: str,
 ) -> tuple[str, bytes, dict[str, str]]:
-    """
-    Load a mounted Kubernetes-style service account: principal, keytab, and extra
-    one-value string files (API base URL, usernames, etc.).
+    """Load a mounted Kubernetes-style service account from the filesystem.
+
+    Reads the principal, keytab, and extra one-value string files
+    (API base URL, usernames, etc.) from *mount*.
 
     *principal_file* and *keytab_b64_file* are passed through to
     ``load_keytab_from_mount``. It then reads each additional filename in
-    ``text_files`` and returns a
-    dict mapping that filename to stripped text (for example an API base URL
-    in one file). You can list several files; each name becomes a key in the
-    returned dict.
+    ``text_files`` and returns a dict mapping that filename to stripped text
+    (for example an API base URL in one file). You can list several files;
+    each name becomes a key in the returned dict.
     """
     princ, keytab = load_keytab_from_mount(
         mount, principal_file=principal_file, keytab_b64_file=keytab_b64_file
@@ -69,8 +71,7 @@ def load_service_account(
 
 
 def patch_krb5_config(source: str) -> str:
-    """
-    Return ``source`` with one line added immediately after ``[libdefaults]``.
+    """Return ``source`` with one line added immediately after ``[libdefaults]``.
 
     Inserts ``dns_canonicalize_hostname = false`` to avoid
     "Invalid UID in persistent keyring name" / hostname canonicalization
@@ -92,8 +93,7 @@ def patch_krb5_config(source: str) -> str:
 def kinit_with_retry(
     princ: str, keytab: Path, extra_env: dict[str, str], *, max_attempts: int = 5
 ) -> None:
-    """
-    Run ``kinit`` with a keytab, retrying a few times on non-zero exit.
+    """Run ``kinit`` with a keytab, retrying a few times on non-zero exit.
 
     Merges ``os.environ`` with ``extra_env`` for the ``kinit`` child only.
     If every attempt fails, the last ``CalledProcessError`` is raised. **princ** is
@@ -123,3 +123,57 @@ def kinit_with_retry(
         retry_on=subprocess.CalledProcessError,
         base_sleep_seconds=5,
     )
+
+
+def write_docker_config(config_json: str) -> None:
+    """Write *config_json* to ``~/.docker/config.json``, creating the directory if needed.
+
+    Shared by helpers that authenticate to container registries (Quay, Red Hat workloads
+    registry) before pulling or pushing OCI artifacts.  The caller is responsible for
+    obtaining the JSON string (reading a mounted secret file, stripping noise, etc.).
+
+    The directory is created with mode 0700 and the file is written atomically with
+    mode 0600 to prevent other processes from reading registry credentials.
+    """
+    docker_dir = Path.home() / ".docker"
+    docker_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    config_path = docker_dir / "config.json"
+    fd, tmp_path = tempfile.mkstemp(dir=docker_dir)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(config_json)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, config_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def setup_docker_config(
+    path: Path,
+    *,
+    strip_noise: bool = False,
+    optional: bool = False,
+) -> None:
+    """Read a dockerconfigjson file and write it to ``~/.docker/config.json``.
+
+    *path* is the full path to a ``.dockerconfigjson`` file (typically a mounted
+    Kubernetes secret).  When *optional* is ``True`` and the file is absent or empty,
+    the function returns without writing anything — useful for mounts that may not be
+    present in all environments.  When *strip_noise* is ``True``, any leading/trailing
+    non-JSON characters (e.g. outer quotes added by some k8s secret encodings) are
+    stripped before writing.
+    """
+    if optional and (not path.is_file() or path.stat().st_size == 0):
+        return
+    raw = path.read_text(encoding="utf-8")
+    if strip_noise:
+        first = raw.find("{")
+        last = raw.rfind("}")
+        if first == -1 or last == -1 or first > last:
+            raise ValueError(f"No valid JSON object found in {path}")
+        raw = json.dumps(json.loads(raw[first : last + 1]))
+    write_docker_config(raw)

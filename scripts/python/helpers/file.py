@@ -2,25 +2,33 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 from pathlib import Path
+
+
+def sha256(path: Path) -> str:
+    """Return the hex SHA-256 digest of the file at *path*."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def path_from_env_variable(
     name: str,
     default: str | Path,
 ) -> Path:
-    """
-    Return a filesystem path from the string value of an environment variable, or
-    a default.
+    """Return a filesystem path from the named environment variable, or *default*.
 
-    The value of name in ``os.environ`` (if set and not blank after
-    ``str.strip``) is interpreted as a path; it is not a path to a file whose
-    contents you read, and this function does not open or stat paths.
+    The value of *name* in ``os.environ`` (if set and non-blank after
+    ``str.strip``) is interpreted as a path; this function does not open or
+    stat paths.
 
-    If the variable is missing or only whitespace, default is returned (a str
-    or an existing ``Path``).
+    If the variable is missing or only whitespace, *default* is returned (a
+    str or an existing ``Path``).
 
     Typical use: a Tekton or pod env var that holds a mount directory path, with
     tests setting the same variable to a temp directory. Existence of the path
@@ -36,8 +44,7 @@ def make_tempfile_path(
     prefix: str,
     data: bytes | None = None,
 ) -> Path:
-    """
-    Create a secure private temp file and return a pathlib.Path to it.
+    """Create a secure private temp file and return a pathlib.Path to it.
 
     Uses the standard library ``tempfile.mkstemp``, which creates a new file and
     returns a file handle (a safe pattern). We never use the old ``mktemp`` API
