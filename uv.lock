@@ -763,7 +763,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -2061,6 +2061,9 @@ dependencies = [
     { name = "pubtools-pyxis" },
     { name = "pubtools-sign" },
     { name = "pulp-cli" },
+    { name = "requests" },
+    { name = "requests-kerberos" },
+    { name = "starmap-client" },
 ]
 
 [package.dev-dependencies]
@@ -2086,6 +2089,9 @@ requires-dist = [
     { name = "pubtools-pyxis", specifier = "==1.3.8" },
     { name = "pubtools-sign", specifier = "==1.0.6" },
     { name = "pulp-cli", specifier = "==0.36.3" },
+    { name = "requests" },
+    { name = "requests-kerberos" },
+    { name = "starmap-client", specifier = "==2.4.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -2365,7 +2371,7 @@ wheels = [
 
 [[package]]
 name = "starmap-client"
-version = "2.4.1"
+version = "2.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
@@ -2373,9 +2379,9 @@ dependencies = [
     { name = "requests-mock" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/93/00/862d102308dab8cbe84f59a3615738cc01c16d4e4f4b3fc25ea7d8713d19/starmap_client-2.4.1.tar.gz", hash = "sha256:13d6fedfba251a10d84030b2b63d3e75e15cee78bc82edaf2280c96e5f838664", size = 36801, upload-time = "2026-04-27T14:45:40.182Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2d/fb/298a742a6258bf27d73690e7cfdbdf6408657a73940ee63a84bad4b14d04/starmap_client-2.4.0.tar.gz", hash = "sha256:b7f016cd0d0f7974d96261d6059bfff2d47c10f9b69d15f835326d6c8d2c0b95", size = 29837, upload-time = "2025-07-28T19:52:08.452Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/67/8d78e7905bd27e9711027bee577b09b26effe78a84249b5f2271c3deee75/starmap_client-2.4.1-py3-none-any.whl", hash = "sha256:77193c10371490f93b3f1920791366a7e9fa5f6c73971d7b65e9a2452bb7a75c", size = 26245, upload-time = "2026-04-27T14:45:38.945Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/86/0ef148ecaa52ab19fed261228ccb92bb08e26ae1909dc1e54f98775e6d47/starmap_client-2.4.0-py3-none-any.whl", hash = "sha256:f44271f8005b7124f19425a894468ff38f33dd963eccc48d7ce1543fa9100578", size = 25808, upload-time = "2025-07-28T19:52:07.32Z" },
 ]
 
 [[package]]
