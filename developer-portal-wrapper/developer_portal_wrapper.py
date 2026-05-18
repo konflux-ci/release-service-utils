@@ -197,15 +197,30 @@ def main():
     if args.dry_run:
         LOG.info("Would have run: %s", cmd_str)
     else:
-        try:
-            LOG.info("Running %s", cmd_str)
-            subprocess.run(command, check=True)
-        except subprocess.CalledProcessError:
-            LOG.exception("Command %s failed, check exception for details", cmd_str)
-            raise
-        except Exception as exc:
-            LOG.exception("Unknown error occurred")
-            raise RuntimeError from exc
+        LOG.info("Running %s", cmd_str)
+        result = subprocess.run(command, capture_output=True, text=True)
+        combined_output = f"{result.stdout}\n{result.stderr}"
+
+        if result.returncode != 0:
+            if (
+                "Record already present" in combined_output
+                or "Cannot create new file" in combined_output
+            ):
+                LOG.warning(
+                    "CGW record already exists for %s %s, treating operation"
+                    " as idempotent",
+                    product_name,
+                    product_version_name,
+                )
+                return
+
+            LOG.error("Command %s failed:\n%s", cmd_str, combined_output.strip())
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                command,
+                output=result.stdout,
+                stderr=result.stderr,
+            )
 
 
 if __name__ == "__main__":
