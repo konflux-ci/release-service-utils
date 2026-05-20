@@ -24,6 +24,7 @@ dependencies = [
     "pulp-cli==0.36.3",
     "diffused-lib==0.3.0",
     "confluent-kafka",
+    "python-gitlab>=4.0",
 ]
 
 [tool.black]

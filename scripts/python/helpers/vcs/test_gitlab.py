@@ -27,7 +27,7 @@ def test_read_credentials_from_mount(tmp_path: Path) -> None:
     assert creds.git_repo.endswith("r.git")
 
 
-def test_export_env_for_image_helpers(tmp_path: Path) -> None:
+def test_export_env_for_image_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Export GitLab credentials to env vars for image helper scripts."""
     secret = tmp_path / "secret"
     secret.mkdir()
@@ -40,6 +40,8 @@ def test_export_env_for_image_helpers(tmp_path: Path) -> None:
     gitlab.export_env_for_image_helpers(creds)
     assert os.environ["GITLAB_HOST"] == "h"
     assert os.environ["ACCESS_TOKEN"] == "t"
+    for var in ("GITLAB_HOST", "ACCESS_TOKEN", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL"):
+        monkeypatch.delenv(var, raising=False)
 
 
 def test_raw_file_url() -> None:
@@ -76,3 +78,15 @@ def test_clone_project_sparse_delegates_to_git(tmp_path: Path) -> None:
     assert m.call_args.args[1] == "https://gitlab.example.com/g/r.git"
     assert m.call_args.kwargs["shallow"] is True
     assert "oauth2:" not in m.call_args.args[1]
+
+
+@pytest.mark.parametrize(
+    ("repository", "expected"),
+    [
+        ("https://gitlab.com/org/up.git", "org/up"),
+        ("org/up", "org/up"),
+    ],
+)
+def test_gitlab_project_path(repository: str, expected: str) -> None:
+    """Normalize repository URLs to ``group/project`` paths."""
+    assert gitlab.gitlab_project_path(repository) == expected

@@ -11,6 +11,8 @@ from typing import IO, Any
 
 import retry
 
+from redact import redact_secrets
+
 
 def repository_workdir_name(repository_url: str) -> str:
     """Directory name for *repository_url* (strip `.git` suffix)."""
@@ -20,21 +22,11 @@ def repository_workdir_name(repository_url: str) -> str:
     return base
 
 
-def _redact_credential_urls(text: str) -> str:
-    """Redact oauth2/token credentials embedded in HTTPS URLs in *text*."""
-    return re.sub(
-        r"https://([^/@\s:]+):([^@\s]+)@",
-        r"https://\1:[REDACTED]@",
-        text,
-        flags=re.IGNORECASE,
-    )
-
-
 def _append_cmd_stderr(stderr_path: Path | None, message: str) -> None:
     """Append redacted *message* to *stderr_path* when configured."""
     if stderr_path is None or not message.strip():
         return
-    safe_text = _redact_credential_urls(str(message))
+    safe_text = redact_secrets(str(message))
     with open(
         stderr_path,
         "a",
@@ -256,14 +248,23 @@ def sync_to_origin_main(
 def working_tree_diff(
     repo_dir: Path,
     *,
+    cached: bool = False,
+    other_ref: str | None = None,
     stderr_path: Path | None = None,
 ) -> str:
-    """Return unstaged working-tree diff text for *repo_dir*."""
-    return _run_git_cmd(
-        ["git", "diff"],
-        cwd=repo_dir,
-        stderr_path=stderr_path,
-    ).stdout
+    """Return diff text for *repo_dir*.
+
+    By default return unstaged working-tree diff. With *cached* true, return
+    staged diff. When *other_ref* is set with *cached*, compare the index
+    against that ref.
+    """
+    cmd = ["git", "diff"]
+    if cached:
+        cmd.append("--cached")
+    if other_ref is not None:
+        cmd.append(other_ref)
+    result = _run_git_cmd(cmd, cwd=repo_dir, stderr_path=stderr_path)
+    return result.stdout or ""
 
 
 def changed_paths_from_status(
@@ -329,27 +330,82 @@ def origin_main_has_path_matching(
     return False
 
 
+def commit_staged(
+    repo_root: Path,
+    message: str,
+    *,
+    stderr_path: Path | None = None,
+) -> None:
+    """Commit staged changes via the git CLI."""
+    _run_git_cmd(
+        ["git", "commit", "-m", message],
+        cwd=repo_root,
+        stderr_path=stderr_path,
+    )
+
+
 def index_add_commit(
     repo_root: Path,
     relative_paths: Sequence[str],
     message: str,
     *,
+    commit: bool = True,
     stderr_path: Path | None = None,
 ) -> None:
-    """Stage *relative_paths* and commit with *message* via the git CLI.
+    """Stage *relative_paths* and, when *commit* is true, commit with *message*.
 
-    Call `configure_git_global_user` first so git can identify the committer.
+    Uses the git CLI. Call `configure_git_global_user` first so git can identify
+    the committer when committing.
     """
     _run_git_cmd(
         ["git", "add", *relative_paths],
         cwd=repo_root,
         stderr_path=stderr_path,
     )
+    if commit:
+        commit_staged(repo_root, message, stderr_path=stderr_path)
+
+
+def rebase_onto_remote(
+    repo_root: Path,
+    *,
+    remote_name: str,
+    remote_repository: str,
+    revision: str,
+    stderr_path: Path | None = None,
+) -> None:
+    """Add *remote_name*, fetch *revision*, and rebase onto it."""
+    remotes = _run_git_cmd(
+        ["git", "remote"],
+        cwd=repo_root,
+        stderr_path=stderr_path,
+    ).stdout.splitlines()
+    if remote_name not in remotes:
+        _run_git_cmd(
+            ["git", "remote", "add", remote_name, remote_repository],
+            cwd=repo_root,
+            stderr_path=stderr_path,
+        )
+    fetch(repo_root, remote_name, revision, stderr_path=stderr_path)
     _run_git_cmd(
-        ["git", "commit", "-m", message],
+        ["git", "rebase", f"{remote_name}/{revision}"],
         cwd=repo_root,
         stderr_path=stderr_path,
     )
+
+
+def working_tree_status(
+    repo_root: Path,
+    *,
+    stderr_path: Path | None = None,
+) -> str:
+    """Return ``git status`` output."""
+    result = _run_git_cmd(
+        ["git", "status"],
+        cwd=repo_root,
+        stderr_path=stderr_path,
+    )
+    return result.stdout or ""
 
 
 def commit_and_push(

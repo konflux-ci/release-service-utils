@@ -31,8 +31,8 @@ class GitLabCredentials:
 def read_credentials_from_mount(secret_mount: Path) -> GitLabCredentials:
     """Load credentials from *secret_mount*, where each field is a separate file.
 
-    `gitlab_host`, `gitlab_access_token`, `git_author_name`,
-    `git_author_email`, `git_repo`.
+    Expected files: ``gitlab_host``, ``gitlab_access_token``, ``git_author_name``,
+    ``git_author_email``, ``git_repo``.
     """
     return GitLabCredentials(
         gitlab_host=authentication.read_mounted_text(secret_mount, "gitlab_host"),
@@ -66,6 +66,21 @@ def configure_git_oauth2_auth(access_token: str) -> None:
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
     os.environ["GIT_ASKPASS"] = str(askpass)
     os.environ["GITLAB_OAUTH2_TOKEN"] = access_token
+
+
+def gitlab_project_path(repository: str) -> str:
+    """Normalize *repository* to a ``group/project`` path for the GitLab API."""
+    repo = repository.strip()
+    if "://" in repo:
+        path = repo.split("://", 1)[1]
+        if "/" in path:
+            path = path.split("/", 1)[1]
+        path = path.strip("/")
+    else:
+        path = repo.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    return path
 
 
 def raw_file_url(
