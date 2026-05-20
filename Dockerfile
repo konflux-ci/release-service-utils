@@ -4,7 +4,7 @@ FROM registry.redhat.io/rhtas/cosign-rhel9:1.3.3-1773309431 as cosign
 
 FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.1-1 as roxctl
 
-FROM registry.access.redhat.com/ubi9/ubi:9.7-1777858048
+FROM registry.access.redhat.com/ubi10/ubi:10.1-1778562845
 
 ARG COSIGN_VERSION=2.4.1
 ARG COSIGN3_VERSION=3.0.4
@@ -31,7 +31,7 @@ RUN ARCH=$(uname -m) && \
     curl -L https://github.com/kubearchive/kubearchive/releases/download/v${KUBEARCHIVE_VERSION}/kubectl-ka-linux-${GO_ARCH} -o /usr/bin/kubectl-ka &&\
     chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft,kubectl-ka}
 
-RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
 
 COPY --from=oras /usr/bin/oras /usr/bin/oras
 COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
@@ -66,6 +66,9 @@ COPY --from=roxctl /usr/bin/roxctl /usr/bin/roxctl
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     mv /root/.local/bin/uv /usr/local/bin/uv
 
+RUN dnf install -y 'dnf-command(config-manager)' && \
+    dnf config-manager --set-enabled codeready-builder-for-ubi-10-$(arch)-rpms
+
 RUN dnf -y --setopt=tsflags=nodocs install \
     git \
     git-lfs \
@@ -80,6 +83,7 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     krb5-libs \
     krb5-devel \
     krb5-workstation \
+    openssl \
     rsync \
     gcc \
     python3-qpid-proton \
@@ -93,9 +97,8 @@ RUN curl -LO https://github.com/release-engineering/exodus-rsync/releases/latest
 COPY pyproject.toml uv.lock ./
 RUN uv pip install -r pyproject.toml --system && \
     # Remove PyPI's python-qpid-proton so the system RPM (python3-qpid-proton) takes precedence.
-    # The PyPI wheel (0.40.0) causes SSL failures because it bundles its own OpenSSL which
-    # doesn't use the system CA trust store. The system RPM (0.37.0) is properly linked to
-    # UBI9's OpenSSL and respects /etc/pki/ca-trust.
+    # The PyPI wheel bundles its own OpenSSL which doesn't use the system CA trust store.
+    # The system RPM is properly linked to the distro's OpenSSL and respects /etc/pki/ca-trust.
     pip uninstall -y python-qpid-proton
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
