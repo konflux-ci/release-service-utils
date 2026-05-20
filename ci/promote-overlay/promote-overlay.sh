@@ -189,6 +189,17 @@ if [[ -n "$COMMIT_TO" && "$NO_GRAFANA" != "true" ]] && ! git merge-base --is-anc
   exit 1
 fi
 
+# Validate that the release-service image is available
+if [ "${NO_RELEASE}" != "true" ]; then
+  RS_IMAGE="quay.io/konflux-ci/release-service:${RS_SOURCE_OVERLAY_COMMIT}"
+  echo "Checking image is available: ${RS_IMAGE}"
+  if ! skopeo inspect --raw "docker://${RS_IMAGE}" > /dev/null; then
+    echo "Error: image ${RS_IMAGE} is not available"
+    exit 1
+  fi
+  echo "Image ${RS_IMAGE} is available"
+fi
+
 # Determine commit range for PR listing
 if [ "${NO_RELEASE}" != "true" ]; then
   RANGE_FROM="$RS_TARGET_OVERLAY_COMMIT"

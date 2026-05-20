@@ -154,8 +154,10 @@ ENV PATH="$PATH:/home/pubtools-pulp-wrapper"
 ENV PATH="$PATH:/home/pubtools-marketplacesvm-wrapper"
 ENV PATH="$PATH:/home/developer-portal-wrapper"
 ENV PATH="$PATH:/home/publish-to-cgw-wrapper"
-# Need to set PYTHONPATH to be able to run sbom scripts as modules
-ENV PYTHONPATH="$PYTHONPATH:/home"
+# Flat imports: helpers and task scripts must be importable.
+# Tests use the same layout via pyproject [tool.pytest.ini_options] pythonpath.
+# Keep /home for other modules (e.g. pyxis, sbom) that expect it.
+ENV PYTHONPATH="/home:/home/scripts/python/helpers:/home/scripts/python/tasks/internal"
 
 # uv installs newer requests and certifi which don't use the system CA like the one installed via
 # dnf. So we need to point requests to the system CA bundle explicitly.
