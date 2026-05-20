@@ -2,7 +2,7 @@ import hashlib
 import pytest
 import requests
 import json
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import ANY, MagicMock, call, patch
 import publish_to_cgw_wrapper as cgw_wrapper
 
 
@@ -274,7 +274,7 @@ def test_call_cgw_api_success(mock_request, session):
     mock_response.json.return_value = {"result": "success"}
     mock_request.return_value = mock_response
 
-    response = cgw_wrapper.call_cgw_api(
+    response = cgw_wrapper.cgw_idempotency.call_cgw_api(
         host="https://cgw.com/cgw/rest/admin",
         method="GET",
         endpoint="/endpoint",
@@ -294,7 +294,7 @@ def test_call_cgw_api_failure(mock_request, session):
     mock_response.text = "Unauthorized"
     mock_request.return_value = mock_response
     with pytest.raises(RuntimeError, match="API call failed: Unauthorized"):
-        cgw_wrapper.call_cgw_api(
+        cgw_wrapper.cgw_idempotency.call_cgw_api(
             host="https://cgw.com/cgw/rest/admin",
             method="GET",
             endpoint="/endpoint",
@@ -307,7 +307,7 @@ def test_call_cgw_api_exception(mock_request, session):
     """Test API call failure when an exception is raised."""
     mock_request.side_effect = requests.exceptions.RequestException("Connection error")
     with pytest.raises(RuntimeError, match="API call failed: Connection error"):
-        cgw_wrapper.call_cgw_api(
+        cgw_wrapper.cgw_idempotency.call_cgw_api(
             host="https://cgw.com/cgw/rest/admin",
             method="GET",
             endpoint="/endpoint",
@@ -315,14 +315,14 @@ def test_call_cgw_api_exception(mock_request, session):
         )
 
 
-@patch("publish_to_cgw_wrapper.call_cgw_api")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
 def test_get_product_id(mock_call):
     """Test getting product ID."""
     mock_call.return_value.json.return_value = [
         {"name": "product_name_1", "productCode": "code1", "id": 5468},
         {"name": "product_name_2", "productCode": "code2", "id": 6789},
     ]
-    product_id = cgw_wrapper.get_product_id(
+    product_id = cgw_wrapper.cgw_idempotency.get_product_id(
         host="https://cgw.com/cgw/rest/admin",
         session=None,
         product_name="product_name_1",
@@ -334,7 +334,7 @@ def test_get_product_id(mock_call):
     assert product_id == 5468
 
 
-@patch("publish_to_cgw_wrapper.call_cgw_api")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
 def test_get_product_id_not_found(mock_call):
     """Test getting product ID when product is not found."""
     mock_call.return_value.json.return_value = [
@@ -344,7 +344,7 @@ def test_get_product_id_not_found(mock_call):
     with pytest.raises(
         ValueError, match="Product product_name_3 not found with product code code3"
     ):
-        cgw_wrapper.get_product_id(
+        cgw_wrapper.cgw_idempotency.get_product_id(
             host="https://cgw.com/cgw/rest/admin",
             session=None,
             product_name="product_name_3",
@@ -355,14 +355,14 @@ def test_get_product_id_not_found(mock_call):
     )
 
 
-@patch("publish_to_cgw_wrapper.call_cgw_api")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
 def test_get_version_id(mock_call):
     """Test getting version ID."""
     mock_call.return_value.json.return_value = [
         {"id": 4156067, "versionName": "1.1"},
         {"id": 4156068, "versionName": "1.2"},
     ]
-    version_id = cgw_wrapper.get_version_id(
+    version_id = cgw_wrapper.cgw_idempotency.get_version_id(
         host="https://cgw.com/cgw/rest/admin",
         session=None,
         product_id="4010426",
@@ -377,7 +377,7 @@ def test_get_version_id(mock_call):
     assert version_id == 4156068
 
 
-@patch("publish_to_cgw_wrapper.call_cgw_api")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
 def test_get_version_id_not_found(mock_call):
     """Test getting version ID when version is not found."""
     mock_call.return_value.json.return_value = [
@@ -385,7 +385,7 @@ def test_get_version_id_not_found(mock_call):
         {"id": 4156068, "versionName": "1.2"},
     ]
     with pytest.raises(ValueError, match="Version not found: 1.3"):
-        cgw_wrapper.get_version_id(
+        cgw_wrapper.cgw_idempotency.get_version_id(
             host="https://cgw.com/cgw/rest/admin",
             session=None,
             product_id="4010426",
@@ -519,7 +519,7 @@ def test_generate_metadata_multi_component_ordering(data_json):
 def test_file_already_exists(metadata):
     """Test checking if a file already exists."""
     new_file = metadata[0]
-    assert cgw_wrapper.find_existing_file(metadata, new_file) is metadata[0]
+    assert cgw_wrapper.cgw_idempotency.find_existing_file(metadata, new_file) is metadata[0]
 
 
 def test_file_does_not_exist(metadata):
@@ -528,13 +528,38 @@ def test_file_does_not_exist(metadata):
     new_file["label"] = "nonexistent-file.gz"
     new_file["shortURL"] = "/pub/cgw/product_name_1/1.2/nonexistent-file.gz"
     new_file["downloadURL"] = "/content/origin/files/sha256/0d/somehash/nonexistent-file.gz"
-    assert cgw_wrapper.find_existing_file(metadata, new_file) is None
+    assert cgw_wrapper.cgw_idempotency.find_existing_file(metadata, new_file) is None
 
 
-@patch("publish_to_cgw_wrapper.call_cgw_api")
+def test_find_existing_file_matches_timestamped_shorturl():
+    existing_files = [
+        {
+            "id": 111,
+            "shortURL": (
+                "/cgw/RelengTestProduct/1.8.5/"
+                "releng-test-product-1.7-1777488203-x86_64-boot.iso.gz"
+            ),
+            "downloadURL": "/content/origin/files/sha256/aa/old/old.iso.gz",
+        }
+    ]
+    new_file = {
+        "shortURL": (
+            "/cgw/RelengTestProduct/1.8.5/"
+            "releng-test-product-1.7-1777494747-x86_64-boot.iso.gz"
+        ),
+        "downloadURL": "/content/origin/files/sha256/bb/new/new.iso.gz",
+    }
+
+    assert (
+        cgw_wrapper.cgw_idempotency.find_existing_file(existing_files, new_file)
+        == existing_files[0]
+    )
+
+
+@patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
 def test_rollback_files(mock_call):
     """Test rolling back created files."""
-    response = cgw_wrapper.rollback_files(
+    response = cgw_wrapper.cgw_idempotency.rollback_files(
         host="https://cgw.com/cgw/rest/admin",
         session=None,
         product_id="101",
@@ -561,13 +586,13 @@ def test_rollback_files(mock_call):
     assert response is None
 
 
-@patch("publish_to_cgw_wrapper.call_cgw_api")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
 def test_rollback_files_exception(mock_call):
     """Test rolling back created files when an exception is raised."""
     mock_call.side_effect = [None, RuntimeError("File can not be deleted")]
 
     with pytest.raises(RuntimeError, match="File can not be deleted"):
-        cgw_wrapper.rollback_files(
+        cgw_wrapper.cgw_idempotency.rollback_files(
             host="https://cgw.com/cgw/rest/admin",
             session=None,
             product_id="101",
@@ -593,7 +618,7 @@ def test_rollback_files_exception(mock_call):
     assert mock_call.call_count == 2
 
 
-@patch("publish_to_cgw_wrapper.call_cgw_api")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
 def test_create_files_success(mock_call, metadata):
     """Test successful file creation with no existing files."""
     mock_call.side_effect = [
@@ -603,7 +628,7 @@ def test_create_files_success(mock_call, metadata):
     ]
     metadata = metadata[:2]
 
-    created, updated, skipped = cgw_wrapper.create_files(
+    created, updated, skipped = cgw_wrapper.cgw_idempotency.create_files(
         host="https://cgw.com/cgw/rest/admin",
         session=None,
         product_id="101",
@@ -642,7 +667,7 @@ def test_create_files_success(mock_call, metadata):
     assert skipped == []
 
 
-@patch("publish_to_cgw_wrapper.call_cgw_api")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
 def test_create_files_with_existing(mock_call, metadata):
     """Test file creation when some files already exist."""
     existing_files = [
@@ -658,7 +683,7 @@ def test_create_files_with_existing(mock_call, metadata):
         MagicMock(json=lambda: 4571),  # cosign-darwin-amd64.gz (created)
     ]
 
-    created, updated, skipped = cgw_wrapper.create_files(
+    created, updated, skipped = cgw_wrapper.cgw_idempotency.create_files(
         host="https://cgw.com/cgw/rest/admin",
         session=None,
         product_id="101",
@@ -710,7 +735,7 @@ def test_create_files_with_existing(mock_call, metadata):
     assert skipped == [4566, 4567]
 
 
-@patch("publish_to_cgw_wrapper.call_cgw_api")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
 def test_create_files_exception(mock_call, metadata):
     """Test file creation when an exception is raised and check rollback is successful."""
     mock_call.side_effect = [
@@ -721,7 +746,7 @@ def test_create_files_exception(mock_call, metadata):
     ]
 
     with pytest.raises(RuntimeError, match="File can not be created"):
-        cgw_wrapper.create_files(
+        cgw_wrapper.cgw_idempotency.create_files(
             host="https://cgw.com/cgw/rest/admin",
             session=None,
             product_id="101",
@@ -762,10 +787,88 @@ def test_create_files_exception(mock_call, metadata):
     assert mock_call.call_count == 4
 
 
-@patch("publish_to_cgw_wrapper.create_files")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
+def test_create_files_removes_duplicate_timestamped_entries_and_updates(mock_call):
+    existing_files = [
+        {
+            "id": 1001,
+            "shortURL": (
+                "/cgw/RelengTestProduct/1.8.5/"
+                "releng-test-product-1.7-1777488203-x86_64-boot.iso.gz"
+            ),
+            "downloadURL": "/content/origin/files/sha256/aa/old.iso.gz",
+            "label": "releng-test-product-1.7-1777488203-x86_64-boot.iso.gz",
+        },
+        {
+            "id": 1002,
+            "shortURL": (
+                "/cgw/RelengTestProduct/1.8.5/"
+                "releng-test-product-1.7-1777493915-x86_64-boot.iso.gz"
+            ),
+            "downloadURL": "/content/origin/files/sha256/aa/older.iso.gz",
+            "label": "releng-test-product-1.7-1777493915-x86_64-boot.iso.gz",
+        },
+    ]
+    new_metadata = [
+        {
+            "shortURL": (
+                "/cgw/RelengTestProduct/1.8.5/"
+                "releng-test-product-1.7-1777494747-x86_64-boot.iso.gz"
+            ),
+            "downloadURL": "/content/origin/files/sha256/bb/new.iso.gz",
+            "label": "releng-test-product-1.7-1777494747-x86_64-boot.iso.gz",
+            "productVersionId": 4156460,
+            "type": "FILE",
+            "hidden": False,
+            "invisible": False,
+            "order": 1,
+        }
+    ]
+    mock_call.side_effect = [
+        MagicMock(json=lambda: existing_files),
+        MagicMock(),  # delete duplicate id 1002
+        MagicMock(json=lambda: {"id": 1001}),  # update existing id 1001
+    ]
+
+    created, updated, skipped = cgw_wrapper.cgw_idempotency.create_files(
+        host="https://cgw.com/cgw/rest/admin",
+        session=None,
+        product_id="101",
+        version_id="201",
+        metadata=new_metadata,
+    )
+
+    expected_calls = [
+        call(
+            host="https://cgw.com/cgw/rest/admin",
+            method="GET",
+            endpoint="/products/101/versions/201/files",
+            session=None,
+        ),
+        call(
+            host="https://cgw.com/cgw/rest/admin",
+            method="DELETE",
+            endpoint="/products/101/versions/201/files/1002",
+            session=None,
+        ),
+        call(
+            host="https://cgw.com/cgw/rest/admin",
+            method="POST",
+            endpoint="/products/101/versions/201/files",
+            session=None,
+            data={**new_metadata[0], "id": 1001},
+        ),
+    ]
+    mock_call.assert_has_calls(expected_calls, any_order=False)
+    assert created == []
+    assert updated == [1001]
+    assert skipped == []
+
+
+@patch("publish_to_cgw_wrapper.cgw_idempotency.create_files")
 @patch("publish_to_cgw_wrapper.generate_metadata")
-@patch("publish_to_cgw_wrapper.get_version_id")
-@patch("publish_to_cgw_wrapper.get_product_id")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.get_version_id")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.get_product_id")
 def test_process_component_success(
     mock_get_product,
     mock_get_version,
@@ -831,3 +934,80 @@ def test_process_component_success(
     assert result["no_of_files_updated"] == 2
     assert result["no_of_files_skipped"] == 2
     assert result["metadata"] == metadata
+
+
+@patch("publish_to_cgw_wrapper.cgw_idempotency.create_files")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.get_version_id")
+@patch("publish_to_cgw_wrapper.cgw_idempotency.get_product_id")
+def test_push_artifacts_style_main_with_files_array_uses_idempotent_flow(
+    mock_get_product, mock_get_version, mock_create_files, tmp_path
+):
+    """Validate push-artifacts style flow preserves create/update/skip behavior."""
+    mock_get_product.return_value = 1234
+    mock_get_version.return_value = 5678
+    mock_create_files.return_value = ([1], [2], [3])
+
+    content_dir = tmp_path / "content"
+    content_dir.mkdir()
+    for name in [
+        "releng-test-product-iso-amd64.tar.gz",
+        "releng-test-product-qcow2-amd64.tar.gz",
+        "sha256sum.txt",
+        "sha256sum.txt.sig",
+        "sha256sum.txt.gpg",
+    ]:
+        (content_dir / name).write_text("dummy")
+
+    data_json = {
+        "components": [
+            {
+                "name": "releng-test-product-binaries",
+                "files": [
+                    {"source": "/releases/releng-test-product-iso-amd64.tar.gz"},
+                    {"source": "/releases/releng-test-product-qcow2-amd64.tar.gz"},
+                ],
+                "contentGateway": {
+                    "productName": "Releng Test Product",
+                    "productCode": "RelengTestProduct",
+                    "productVersionName": "1.8.5",
+                    "mirrorOpenshiftPush": True,
+                    "contentDir": str(content_dir),
+                },
+            }
+        ]
+    }
+
+    argv = [
+        "publish_to_cgw_wrapper.py",
+        "--cgw_host",
+        "https://content-gateway.example.com",
+        "--data_json",
+        json.dumps(data_json),
+    ]
+
+    with patch.dict("os.environ", {"CGW_USERNAME": "user", "CGW_PASSWORD": "token"}):
+        with patch("sys.argv", argv):
+            results = cgw_wrapper.main()
+
+    assert len(results) == 1
+    assert results[0]["no_of_files_created"] == 1
+    assert results[0]["no_of_files_updated"] == 1
+    assert results[0]["no_of_files_skipped"] == 1
+
+    mock_get_product.assert_called_once_with(
+        host="https://content-gateway.example.com",
+        session=ANY,
+        product_name="Releng Test Product",
+        product_code="RelengTestProduct",
+    )
+    mock_get_version.assert_called_once_with(
+        host="https://content-gateway.example.com",
+        session=ANY,
+        product_id=1234,
+        version_name="1.8.5",
+    )
+    create_kwargs = mock_create_files.call_args.kwargs
+    assert create_kwargs["host"] == "https://content-gateway.example.com"
+    assert create_kwargs["product_id"] == 1234
+    assert create_kwargs["version_id"] == 5678
+    assert len(create_kwargs["metadata"]) >= 2
