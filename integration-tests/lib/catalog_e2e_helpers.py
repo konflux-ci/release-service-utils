@@ -17,6 +17,10 @@ def require_env(name: str) -> str:
     return v
 
 
+def opt_env(name: str, default: str) -> str:
+    return os.environ.get(name, default).strip()
+
+
 # Any registry/repo path ending in /release-service-utils with :tag or @digest.
 _UTILS_IMAGE_REF = re.compile(
     r"(?:[\w.-]+/)+release-service-utils(?::[^\s\n\"'#]+|@[^\s\n\"'#]+)"

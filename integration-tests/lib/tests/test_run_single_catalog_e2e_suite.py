@@ -427,6 +427,7 @@ def test_build_catalog_e2e_pipelinerun_shape() -> None:
         child_plr_name="utils-e2e-catalog-uid1",
         parent="parent-plr",
         suite="my-suite",
+        suite_vars='{"var":"val"}',
         snap=snap,
         pipeline_used="pipe-a",
         vault_password_secret_name="vp",
@@ -438,6 +439,7 @@ def test_build_catalog_e2e_pipelinerun_shape() -> None:
     assert m["metadata"]["labels"]["utils-e2e/suite"] == "my-suite"
     params = {p["name"]: p["value"] for p in m["spec"]["params"]}
     assert params["PIPELINE_TEST_SUITE"] == "my-suite"
+    assert params["PIPELINE_TEST_SUITE_VARS"] == '{"var":"val"}'
     assert params["PIPELINE_USED"] == "pipe-a"
     assert params["VAULT_PASSWORD_SECRET_NAME"] == "vp"
     assert "SNAPSHOT" in params
@@ -453,6 +455,7 @@ def test_main_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_path, capsys) -> N
     monkeypatch.setenv("CATALOG_GIT_REVISION", "dev")
     monkeypatch.setenv("CATALOG_E2E_RUNNER_IMAGE", "quay.io/runner:v1")
     monkeypatch.setenv("PIPELINE_TEST_SUITE", "suite1")
+    monkeypatch.setenv("PIPELINE_TEST_SUITE_VARS", '{"var":"val"}')
     monkeypatch.setenv("PIPELINE_USED", "pipe1")
     monkeypatch.setenv("ORCHESTRATOR_PIPELINE_RUN_UID", "abc-123")
     monkeypatch.setenv("E2E_WAIT_TIMEOUT", "60")
