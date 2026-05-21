@@ -70,7 +70,7 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     git \
     git-lfs \
     jq \
-    python3-devel \
+    python3.10-devel \
     diffutils \
     python3-pip \
     python3-requests \
