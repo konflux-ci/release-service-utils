@@ -292,9 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     elif step_err is not None:
         # Exception on the way: which step and the original error; process
         # still exits 0 below.
-        rpath.write_text(
-            tekton.result_text_for_check_step_error(name, step_err), encoding="utf-8"
-        )
+        tekton.write_failure_result(rpath, name, step_err)
     # Task step must exit 0 or Tekton may not publish results; the catalog documents this.
     return 0
 
