@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# dummy change to trigger collectors-no-cve e2e test
 """
 Map a release-service-utils diff to catalog ``PIPELINE_TEST_SUITE`` /
 ``PIPELINE_USED`` strings.
