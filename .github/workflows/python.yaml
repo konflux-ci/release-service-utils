@@ -23,7 +23,7 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
       - name: Black Lint
-        uses: psf/black@d2f014ca5da6a1bf903cac45b7aa19dbda9fd864  # stable
+        uses: psf/black@650983f7b32b15feeb0fa30c0ed1a8b6e2a9b28f  # stable
       - name: Setup python environment for flake8 check
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
         with:
