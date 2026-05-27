@@ -167,11 +167,133 @@ def test_find_tasks_referencing_search_tokens_skips_tests_and_non_task(
     fixture.parent.mkdir(parents=True, exist_ok=True)
     not_task.parent.mkdir(parents=True, exist_ok=True)
     path = "/home/scripts/utils/foo.sh"
-    good.write_text(f"kind: Task\nscript: {path}\n", encoding="utf-8")
+    good.write_text(
+        "kind: Task\nspec:\n  steps:\n    - name: run\n      script: |\n        "
+        + path
+        + "\n",
+        encoding="utf-8",
+    )
     fixture.write_text(f"kind: Task\n{path}\n", encoding="utf-8")
     not_task.write_text(f"kind: Pipeline\n{path}\n", encoding="utf-8")
     found = fc._find_tasks_referencing_search_tokens(tmp_path, {path})
     assert found == {"tasks/managed/t/task.yaml"}
+
+
+def test_find_tasks_referencing_search_tokens_ignores_tekton_in_metadata(
+    tmp_path: Path,
+) -> None:
+    """Do not match ``tekton`` from ``apiVersion`` when step scripts do not use it."""
+    tasks = tmp_path / "tasks"
+    with_cmd = tasks / "internal" / "embargo" / "task.yaml"
+    other = tasks / "managed" / "other" / "task.yaml"
+    with_cmd.parent.mkdir(parents=True, exist_ok=True)
+    other.parent.mkdir(parents=True, exist_ok=True)
+    script_path = "/home/scripts/python/tasks/internal/check_embargoed_cves.py"
+    with_cmd.write_text(
+        f"""\
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: check-embargoed-cves
+spec:
+  steps:
+    - name: run
+      command: ["{script_path}"]
+""",
+        encoding="utf-8",
+    )
+    other.write_text(
+        """\
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: other
+spec:
+  steps:
+    - name: noop
+      script: |
+        echo hello
+""",
+        encoding="utf-8",
+    )
+    found = fc._find_tasks_referencing_search_tokens(tmp_path, {"tekton"})
+    assert found == set()
+    found_path = fc._find_tasks_referencing_search_tokens(tmp_path, {script_path})
+    assert found_path == {"tasks/internal/embargo/task.yaml"}
+
+
+def test_extract_task_step_invocation_text_collects_command_args_script() -> None:
+    """Gather only step invocation fields from parsed Task YAML."""
+    text = """\
+kind: Task
+spec:
+  steps:
+    - name: a
+      command: ["/home/pyxis/foo.py"]
+      args: ["--verbose"]
+    - name: b
+      script: |
+        /home/utils/bar.sh
+"""
+    blob = fc._extract_task_step_invocation_text(text)
+    assert "/home/pyxis/foo.py" in blob
+    assert "--verbose" in blob
+    assert "/home/utils/bar.sh" in blob
+
+
+def test_step_invocation_chunks_non_dict_step_returns_empty() -> None:
+    """Non-dict step entries (malformed YAML) yield no invocation chunks."""
+    assert fc._step_invocation_chunks("not-a-step") == []
+    assert fc._step_invocation_chunks(None) == []
+
+
+def test_step_invocation_chunks_string_args() -> None:
+    """``args`` may be a single string instead of a list."""
+    chunks = fc._step_invocation_chunks(
+        {"command": ["/home/pyxis/run.py"], "args": "--dry-run"}
+    )
+    assert chunks == ["/home/pyxis/run.py", "--dry-run"]
+
+
+def test_extract_task_step_invocation_text_invalid_yaml_returns_empty() -> None:
+    """Invalid YAML returns empty invocation text."""
+    assert fc._extract_task_step_invocation_text("kind: Task\nsteps: [\n") == ""
+
+
+def test_extract_task_step_invocation_text_non_dict_document_returns_empty() -> None:
+    """YAML documents that are not mappings return empty invocation text."""
+    assert fc._extract_task_step_invocation_text("- item\n") == ""
+
+
+def test_extract_task_step_invocation_text_non_dict_spec_returns_empty() -> None:
+    """A Task with a non-mapping ``spec`` returns empty invocation text."""
+    text = "kind: Task\nspec: not-a-mapping\n"
+    assert fc._extract_task_step_invocation_text(text) == ""
+
+
+def test_find_tasks_referencing_search_tokens_skips_empty_invocation_text(
+    tmp_path: Path,
+) -> None:
+    """Tasks with no step command/args/script are skipped even if metadata matches."""
+    tasks = tmp_path / "tasks"
+    empty_steps = tasks / "managed" / "empty" / "task.yaml"
+    empty_steps.parent.mkdir(parents=True, exist_ok=True)
+    script = "/home/scripts/python/tasks/internal/check_embargoed_cves.py"
+    empty_steps.write_text(
+        f"""\
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: empty
+  annotations:
+    description: {script}
+spec:
+  steps: []
+""",
+        encoding="utf-8",
+    )
+    found = fc._find_tasks_referencing_search_tokens(tmp_path, {script})
+    assert found == set()
 
 
 def test_find_tasks_referencing_search_tokens_returns_empty_without_tasks_root(
@@ -186,7 +308,10 @@ def test_find_tasks_referencing_search_tokens_skips_unreadable_yaml(tmp_path: Pa
     """Skip a task YAML file when read_text raises OSError."""
     task_yaml = tmp_path / "tasks" / "managed" / "t" / "task.yaml"
     task_yaml.parent.mkdir(parents=True, exist_ok=True)
-    task_yaml.write_text("kind: Task\nscript: /home/scripts/x.sh\n", encoding="utf-8")
+    task_yaml.write_text(
+        "kind: Task\nspec:\n  steps:\n    - name: run\n      script: /home/scripts/x.sh\n",
+        encoding="utf-8",
+    )
     with patch.object(Path, "read_text", side_effect=OSError("boom")):
         found = fc._find_tasks_referencing_search_tokens(tmp_path, {"/home/scripts/x.sh"})
     assert found == set()
