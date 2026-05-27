@@ -88,7 +88,7 @@ def _join_var_names(names: list[str]) -> str:
     return f"{', '.join(names[:-1])}, and {names[-1]}"
 
 
-def result_paths(*env_var_names: str, file: TextIO = sys.stderr) -> tuple[Path, ...]:
+def result_paths_from_env(*env_var_names: str, file: TextIO = sys.stderr) -> tuple[Path, ...]:
     """
     Return pathlib Paths for the given environment variable names, in order.
 
