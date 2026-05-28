@@ -1,5 +1,7 @@
 FROM quay.io/konflux-ci/oras:latest@sha256:6cea0b9e142c2e18429f5cd30d716715d932047cbf1631334c5c31f7e47c3a19 as oras
 
+FROM registry.redhat.io/rhtas/ec-rhel9:0.7@sha256:1fc7c6171d5a6058fa4df1c791906fdbd94df06df048b8230a4d11d1cf9da489 as conforma-cli
+
 FROM registry.redhat.io/rhtas/cosign-rhel9:1.3.3-1773309431 as cosign
 
 FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.3-1 as roxctl
@@ -36,6 +38,7 @@ RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.
 COPY --from=oras /usr/bin/oras /usr/bin/oras
 COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
 COPY --from=oras /usr/local/bin/get-reference-base /usr/local/bin/get-reference-base
+COPY --from=conforma-cli /usr/local/bin/ec_linux_*.gz /tmp/
 COPY --from=cosign /usr/local/bin/cosign-linux-*.gz /tmp/
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
@@ -52,6 +55,18 @@ RUN ARCH=$(uname -m) && \
     gunzip -c /tmp/cosign-linux-${COSIGN_ARCH}.gz > /usr/local/bin/cosign && \
     chmod +x /usr/local/bin/cosign && \
     rm -f /tmp/cosign-linux-*.gz
+
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        EC_ARCH="amd64"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        EC_ARCH="arm64"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    gunzip -c /tmp/ec_linux_${EC_ARCH}.gz > /usr/bin/ec && \
+    chmod +x /usr/bin/ec && \
+    rm -f /tmp/ec_linux_*.gz
 
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" == "x86_64" ]; then ARCH=amd64; fi && \
