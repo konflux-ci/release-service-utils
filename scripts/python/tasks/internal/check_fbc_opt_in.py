@@ -17,12 +17,12 @@ import requests
 from requests.auth import AuthBase
 from requests_kerberos import HTTPKerberosAuth, OPTIONAL
 
-import authentication
-import file
-import http_client
-import image_ref
-import tekton
-from logger import logger
+from release_service_utils.helpers import authentication
+from release_service_utils.helpers import file
+from release_service_utils.helpers import http_client
+from release_service_utils.helpers import image_ref
+from release_service_utils.helpers import tekton
+from release_service_utils.helpers.logger import logger
 
 PROG = "check_fbc_opt_in.py"
 

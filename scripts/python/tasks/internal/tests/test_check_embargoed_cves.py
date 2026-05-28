@@ -8,10 +8,11 @@ import subprocess
 from pathlib import Path
 from unittest import mock
 
-import check_embargoed_cves
-import file
 import pytest
-import tekton
+
+from release_service_utils.tasks.internal import check_embargoed_cves
+from release_service_utils.helpers import file
+from release_service_utils.helpers import tekton
 
 
 def _write_service_account(
@@ -80,7 +81,9 @@ def test_is_embargoed_flaw_response(payload: dict, exp: bool) -> None:
 
 def test_fetch_flaw_state_empty_bodies() -> None:
     """An empty body from the flaws request is an empty result dict."""
-    with mock.patch("http_client.get_text", return_value="") as m:
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_text", return_value=""
+    ) as m:
         d = check_embargoed_cves.fetch_flaw_state("https://u", "t", "CVE-1")
         m.assert_called()
     assert d == {}
@@ -89,7 +92,7 @@ def test_fetch_flaw_state_empty_bodies() -> None:
 def test_fetch_flaw_state_parses_json_body() -> None:
     """A non-empty flaws body is parsed with `json.loads` and returned as a dict."""
     body = '{"results": [{"cve_id": "CVE-1", "embargoed": false}]}'
-    with mock.patch("http_client.get_text", return_value=body):
+    with mock.patch("release_service_utils.helpers.http_client.get_text", return_value=body):
         out = check_embargoed_cves.fetch_flaw_state("https://u", "tok", "CVE-1")
     assert out == {"results": [{"cve_id": "CVE-1", "embargoed": False}]}
 

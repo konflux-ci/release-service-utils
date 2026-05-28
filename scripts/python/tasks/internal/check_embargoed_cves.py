@@ -33,11 +33,11 @@ from typing import Any, Sequence
 import requests
 import urllib.parse
 
-import authentication
-import file
-import http_client
-import osidb
-import tekton
+from release_service_utils.helpers import authentication
+from release_service_utils.helpers import file
+from release_service_utils.helpers import http_client
+from release_service_utils.helpers import osidb
+from release_service_utils.helpers import tekton
 
 PROG = "check_embargoed_cves.py"
 

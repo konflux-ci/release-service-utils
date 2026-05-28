@@ -9,7 +9,7 @@ from unittest import mock
 
 import pytest
 
-import authentication
+from release_service_utils.helpers import authentication
 
 
 def test_read_mounted_text_strips_whitespace(tmp_path: Path) -> None:

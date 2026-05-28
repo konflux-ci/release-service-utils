@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import file
 import pytest
+
+from release_service_utils.helpers import file
 
 
 def test_path_from_env_variable_uses_set_value(

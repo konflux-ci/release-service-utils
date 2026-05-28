@@ -13,7 +13,7 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-import retry
+from release_service_utils.helpers import retry
 
 
 def read_mounted_text(mount: Path, filename: str) -> str:
