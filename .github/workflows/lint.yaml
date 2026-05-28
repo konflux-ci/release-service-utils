@@ -57,4 +57,4 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
       - uses: konflux-ci/renovate-config-validator-action@main
         with:
-          config_file: renovate.json
+          config_file: .github/renovate.json
