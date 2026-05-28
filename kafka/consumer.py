@@ -74,7 +74,9 @@ def main():
             else:
                 seconds_since_epoch = msg.timestamp()[1] / 1000
                 time_str = (
-                    datetime.datetime.utcfromtimestamp(seconds_since_epoch)
+                    datetime.datetime.fromtimestamp(
+                        seconds_since_epoch, tz=datetime.timezone.utc
+                    )
                     .replace(microsecond=0)
                     .isoformat()
                 )
