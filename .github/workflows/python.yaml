@@ -22,6 +22,9 @@ jobs:
         run: |
           sudo apt-get -y update
           sudo apt-get install -y libkrb5-dev
+          curl -L https://github.com/mikefarah/yq/releases/download/v4.34.1/yq_linux_amd64 \
+            -o /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
       - name: Check out repo
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
         with:

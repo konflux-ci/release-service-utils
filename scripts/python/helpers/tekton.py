@@ -1,23 +1,29 @@
-"""Shared helpers for Tekton `result`-file and step-error conventions in task scripts.
+"""Shared helpers for Tekton task scripts: results, step errors, and CLI parsing.
 
 The catalog passes result file locations via environment variables
 (`env.value: $(results.foo.path)` on the task step). Tasks that require those
 paths should fail fast in the same way: print to stderr and exit 1, since
 downstream can only interpret `result` bodies when the step was intended to
 write them.
+
+CLI entrypoints use the same contract: short usage on stderr and exit 1 for
+``--help`` or missing required flags (not argparse's default stdout help or
+exit codes).
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import sys
 from pathlib import Path
-from typing import TextIO
+from typing import NoReturn, TextIO
 
 
 class CheckStepError(Exception):
-    """
+    """Attach a human task action to an underlying exception for Tekton results.
+
     Pairs a short *human* description of what the task was doing (the first
     argument) with the real exception, for the Tekton one-line result file.
     The standard library and `requests` only know about the underlying failure
@@ -26,14 +32,14 @@ class CheckStepError(Exception):
     """
 
     def __init__(self, action: str, cause: BaseException) -> None:
+        """Store *action* and *cause* on the exception instance."""
         self.action = action
         self.cause = cause
         super().__init__(f"{action}: {cause}")
 
 
 def result_text_from_exception(exc: BaseException, *, max_len: int = 500) -> str:
-    """
-    `str(exc)` in a form suitable for a Tekton `result` value.
+    """`str(exc)` in a form suitable for a Tekton `result` value.
 
     Reuses each exception’s normal string (no custom wording per type).
     Newlines are flattened and the text is cut at *max_len* so the value
@@ -74,8 +80,7 @@ def write_failure_result(
     max_log_lines: int = 20,
     max_total_len: int = 8192,
 ) -> None:
-    """
-    Write Tekton `result` text for a failed step.
+    """Write Tekton `result` text for a failed step.
 
     Includes a one-line summary (`CheckStepError` uses its *action*; other
     exceptions use *workflow_action*) and, when *command_log_path* is set, the
@@ -106,8 +111,7 @@ def subprocess_cmd_preview_for_tekton_result(
     *,
     max_len: int = 200,
 ) -> str:
-    """
-    One-line description of a subprocess *cmd* for Tekton `result` files.
+    """One-line description of a subprocess *cmd* for Tekton `result` files.
 
     `CalledProcessError` (and some APIs) expose *cmd* as a string, a list of
     argv pieces, or another object. Result lines stay short, so the joined or
@@ -121,10 +125,7 @@ def subprocess_cmd_preview_for_tekton_result(
 
 
 def _join_var_names(names: list[str]) -> str:
-    """
-    Build a small English list for a one-line error message, for example
-    "A and B" or "A, B, and C".
-    """
+    """Format names as an English list, for example ``A and B`` or ``A, B, and C``."""
     if len(names) == 1:
         return names[0]
     if len(names) == 2:
@@ -133,8 +134,7 @@ def _join_var_names(names: list[str]) -> str:
 
 
 def require_env(name: str, *, file: TextIO = sys.stderr) -> str:
-    """
-    Return the non-empty string value of an environment variable.
+    """Return the non-empty string value of an environment variable.
 
     If *name* is unset or only whitespace, print `{name} must be set` to
     *file* and raise `SystemExit(1)`.
@@ -147,8 +147,7 @@ def require_env(name: str, *, file: TextIO = sys.stderr) -> str:
 
 
 def result_paths_from_env(*env_var_names: str, file: TextIO = sys.stderr) -> tuple[Path, ...]:
-    """
-    Return pathlib Paths for the given environment variable names, in order.
+    """Return pathlib Paths for the given environment variable names, in order.
 
     In Tekton, each result file is often wired as an env var whose value is the
     path the step must write. For every name you pass, the value in `os.environ`
@@ -173,3 +172,24 @@ def result_paths_from_env(*env_var_names: str, file: TextIO = sys.stderr) -> tup
         print(f"{label} must be set", file=file)
         raise SystemExit(1)
     return tuple(out)
+
+
+def tekton_argument_parser(prog: str) -> argparse.ArgumentParser:
+    """Return an ``ArgumentParser`` for Tekton task entrypoints.
+
+    Disables argparse's default help and usage strings so callers can print a
+    short, task-specific usage summary to stderr and exit with code ``1``.
+    Unknown or extra arguments still make ``parse_args`` exit with code ``2``.
+    """
+    return argparse.ArgumentParser(prog=prog, add_help=False, usage=argparse.SUPPRESS)
+
+
+def exit_with_usage(usage: str, code: int = 1) -> NoReturn:
+    """Print *usage* to stderr and terminate with *code*."""
+    print(usage, file=sys.stderr, end="")
+    raise SystemExit(code)
+
+
+def missing_blank_option_values(*options: tuple[str, str | None]) -> list[str]:
+    """Return flag names whose values are missing or whitespace-only."""
+    return [name for name, val in options if not val or not str(val).strip()]

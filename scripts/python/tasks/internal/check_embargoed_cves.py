@@ -40,6 +40,10 @@ import osidb
 import tekton
 
 PROG = "check_embargoed_cves.py"
+USAGE = (
+    f"usage: {PROG} [--cves 'CVE-1 CVE-2']\n"
+    f"  --cves  The CVEs to check (space-separated, quote if you pass several)\n"
+)
 
 
 def parse_cve_list(value: str) -> list[str]:
@@ -48,8 +52,7 @@ def parse_cve_list(value: str) -> list[str]:
 
 
 def is_embargoed_flaw_response(data: dict[str, Any]) -> bool:
-    """
-    Return True if the first flaw in the list response is not clearly not embargoed.
+    """Return True if the first flaw in the list response is not clearly not embargoed.
 
     Only ``results[0].embargoed`` with JSON value ``false`` is treated as
     not embargoed. Empty ``results``, a missing first row, a non-dict first row,
@@ -68,10 +71,7 @@ def is_embargoed_flaw_response(data: dict[str, Any]) -> bool:
 
 
 def _embargo_finding_result_text(program_name: str) -> str:
-    """
-    Text to write to ``RESULT_RESULT`` when the run finished without a Python
-    exception but the OSIDB API indicates at least one listed CVE is embargoed
-    or not clearly public.
+    """Build ``RESULT_RESULT`` text when listed CVEs are not clearly public.
 
     CVE ids are written to ``RESULT_EMBARGOED_CVES``; this string in
     ``RESULT_RESULT`` points readers there.
@@ -83,12 +83,11 @@ def _embargo_finding_result_text(program_name: str) -> str:
 
 
 def fetch_flaw_state(osidb_url: str, token: str, cve_id: str) -> dict[str, Any]:
-    """
-    GET the v2 flaw list for one CVE, asking only for ``cve_id`` and
-    ``embargoed`` fields, using the bearer token.
+    """GET the v2 flaw list for one CVE using the bearer token.
 
-    Returns a parsed JSON object, or an empty dict if the response body is
-    empty (treated as no visible flaw for embargo decisions).
+    Requests only ``cve_id`` and ``embargoed`` fields. Returns a parsed JSON
+    object, or an empty dict if the response body is empty (treated as no
+    visible flaw for embargo decisions).
     """
     q = urllib.parse.urlencode([("cve_id", cve_id), ("include_fields", "cve_id,embargoed")])
     u = f"{osidb_url.rstrip('/')}/osidb/api/v2/flaws?{q}"
@@ -104,33 +103,20 @@ def fetch_flaw_state(osidb_url: str, token: str, cve_id: str) -> dict[str, Any]:
     return json.loads(body)
 
 
-def _usage_text() -> str:
-    """Return the short usage summary printed to stderr on bad CLI usage."""
-    return (
-        f"usage: {PROG} [--cves 'CVE-1 CVE-2']\n"
-        f"  --cves  The CVEs to check (space-separated, quote if you pass several)\n"
-    )
-
-
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    """
-    Parse CLI arguments: ``--cves`` (required) and ``-h`` / ``--help``.
+    """Parse CLI arguments: ``--cves`` (required) and ``-h`` / ``--help``.
 
     The Tekton task uses a fixed argv shape; this uses strict parsing (extra
     arguments are rejected by ``argparse`` with exit 2). Help, or missing/blank
     ``--cves``, print our usage to stderr and exit 1. Returns a namespace
     with a ``cves`` string.
     """
-    p = argparse.ArgumentParser(prog=PROG, add_help=False, usage=argparse.SUPPRESS)
+    p = tekton.tekton_argument_parser(PROG)
     p.add_argument("-h", "--help", action="store_true")
     p.add_argument("--cves", metavar="CVES")
     ns = p.parse_args(argv or [])
-    if ns.help:
-        print(_usage_text(), file=sys.stderr, end="")
-        raise SystemExit(1)
-    if not ns.cves or not str(ns.cves).strip():
-        print(_usage_text(), file=sys.stderr, end="")
-        raise SystemExit(1)
+    if ns.help or tekton.missing_blank_option_values(("--cves", ns.cves)):
+        tekton.exit_with_usage(USAGE)
     return ns
 
 
@@ -143,8 +129,7 @@ def run_check(
     get_flaw: Any = fetch_flaw_state,
     krb5_template: Path = Path("/etc/krb5.conf"),
 ) -> tuple[list[str], int]:
-    """
-    Core check: kinit, then for each CVE fetch token + flaw JSON and test embargo.
+    """Core check: kinit, then for each CVE fetch token + flaw JSON and test embargo.
 
     Writes the keytab and a patched KRB5_CONFIG to temp files, runs ``kinit``,
     then for each id obtains a token and queries flaws. Injected callables
@@ -235,8 +220,7 @@ def run_check(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """
-    CLI entry: bad args return 1; a normal run writes result files and returns 0.
+    """CLI entry: bad args return 1; a normal run writes result files and returns 0.
 
     Normal runs (with ``RESULT_RESULT`` and ``RESULT_EMBARGOED_CVES``) always
     exit 0 at the process level; logical success is ``Success`` in the first

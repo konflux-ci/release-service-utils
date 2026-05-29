@@ -9,6 +9,32 @@ import pytest
 import tekton
 
 
+def test_tekton_argument_parser_suppresses_default_help() -> None:
+    """Built-in help is disabled; unknown args still exit with code 2."""
+    p = tekton.tekton_argument_parser("prog.py")
+    p.add_argument("--foo")
+    with pytest.raises(SystemExit) as exc:
+        p.parse_args(["--help"])
+    assert exc.value.code == 2
+
+
+def test_exit_with_usage() -> None:
+    """Usage text is printed to stderr and the process exits with the given code."""
+    with pytest.raises(SystemExit) as exc:
+        tekton.exit_with_usage("usage: prog\n", code=1)
+    assert exc.value.code == 1
+
+
+def test_missing_blank_option_values() -> None:
+    """Missing, empty, and whitespace-only values are reported by flag name."""
+    assert tekton.missing_blank_option_values(
+        ("--a", None),
+        ("--b", ""),
+        ("--c", "  "),
+        ("--d", "ok"),
+    ) == ["--a", "--b", "--c"]
+
+
 def test_check_step_error() -> None:
     """`CheckStepError` stores the human *action* and the underlying *cause*."""
     inner = KeyError("k")
