@@ -6,8 +6,9 @@ Map a release-service-utils diff to catalog ``PIPELINE_TEST_SUITE`` /
 1. Build search tokens from changed paths using the utils ``Dockerfile``
    (``COPY`` into ``/home``, ``PATH``) via :mod:`find_search_tokens_from_dockerfile`
    (the process cwd must be the utils repo root so ``./Dockerfile`` exists).
-2. Search catalog ``tasks/**/*.yaml`` for those search tokens (skips
-   ``tasks/**/tests/`` fixture YAML).
+2. Search catalog Task step ``command`` / ``args`` / ``script`` fields for those
+   tokens (skips ``tasks/**/tests/`` fixture YAML and Task metadata such as
+   ``apiVersion: tekton.dev``).
 3. Source catalog's ``find_release_pipelines_from_pr.sh`` and run
    ``_catalog_stdin_task_paths_to_testcase_tokens`` (same mapping as catalog PR
    tooling).
@@ -41,6 +42,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+import yaml
 
 import find_search_tokens_from_dockerfile as fts
 import helper_task_import_graph as htig
@@ -153,6 +156,48 @@ def _changed_paths_trigger_global_catalog_run(changed: list[str]) -> bool:
     return False
 
 
+def _step_invocation_chunks(step: object) -> list[str]:
+    """Collect command/args/script strings from one Tekton Task step dict."""
+    if not isinstance(step, dict):
+        return []
+    chunks: list[str] = []
+    for key in ("command", "script"):
+        val = step.get(key)
+        if isinstance(val, str) and val:
+            chunks.append(val)
+        elif isinstance(val, list):
+            chunks.extend(str(item) for item in val if item is not None)
+    args = step.get("args")
+    if isinstance(args, list):
+        chunks.extend(str(item) for item in args if item is not None)
+    elif isinstance(args, str) and args:
+        chunks.append(args)
+    return chunks
+
+
+def _extract_task_step_invocation_text(task_yaml_text: str) -> str:
+    """Return concatenated step command/args/script text from a Task YAML document.
+
+    Ignores ``apiVersion``, annotations, and other metadata so tokens like ``tekton``
+    do not match every Task file.
+    """
+    try:
+        doc = yaml.safe_load(task_yaml_text)
+    except yaml.YAMLError:
+        return ""
+    if not isinstance(doc, dict):
+        return ""
+    spec = doc.get("spec")
+    if not isinstance(spec, dict):
+        return ""
+    chunks: list[str] = []
+    steps = spec.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            chunks.extend(_step_invocation_chunks(step))
+    return "\n".join(chunks)
+
+
 def _is_under_task_tests_dir(path: Path, tasks_root: Path) -> bool:
     """Return whether ``path`` is under a ``tasks/.../tests/`` directory.
 
@@ -167,11 +212,12 @@ def _is_under_task_tests_dir(path: Path, tasks_root: Path) -> bool:
 
 
 def _find_tasks_referencing_search_tokens(catalog: Path, search_tokens: set[str]) -> set[str]:
-    """Find Task YAML files whose content mentions any search token.
+    """Find Task YAML files whose step invocations mention any search token.
 
     Search tokens are in-container paths (e.g. ``/home/pyxis/foo.py``) or command
     tokens (e.g. ``create_container_image``) from
-    :mod:`find_search_tokens_from_dockerfile`. We walk ``catalog/tasks``, skip
+    :mod:`find_search_tokens_from_dockerfile`. Only ``spec.steps`` ``command``,
+    ``args``, and ``script`` fields are searched. We walk ``catalog/tasks``, skip
     ``tasks/**/tests/**``, require ``kind: Task``, and return paths relative to
     ``catalog`` for any substring match.
     """
@@ -189,8 +235,11 @@ def _find_tasks_referencing_search_tokens(catalog: Path, search_tokens: set[str]
         # Ignore non-Task files (e.g. Pipeline snippets) that might live under tasks/.
         if not re.search(r"kind:\s*Task\b", text):
             continue
+        invocation_text = _extract_task_step_invocation_text(text)
+        if not invocation_text:
+            continue
         for token in search_tokens:
-            if token in text:
+            if token in invocation_text:
                 found.add(task_yaml.relative_to(catalog).as_posix())
                 break
     return found
