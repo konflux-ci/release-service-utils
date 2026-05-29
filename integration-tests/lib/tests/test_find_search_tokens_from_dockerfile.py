@@ -23,6 +23,25 @@ def test_parse_dockerfile_home_layout_maps_copy_and_path() -> None:
     assert "/home/pyxis" in layout.path_home_dirs
 
 
+def test_parse_dockerfile_ignores_pythonpath_env() -> None:
+    """``ENV PYTHONPATH`` must not be treated as executable ``PATH``."""
+    text = """
+COPY scripts /home/scripts
+ENV PATH="$PATH:/home/pyxis"
+ENV PYTHONPATH="/home:/home/scripts/python/helpers:/home/scripts/python/tasks/internal"
+"""
+    layout = fts.parse_dockerfile_home_layout(text)
+    assert "/home/pyxis" in layout.path_home_dirs
+    assert "/home/scripts" not in layout.path_home_dirs
+
+
+def test_search_tokens_scripts_py_no_stem_when_scripts_not_on_path() -> None:
+    """``scripts/**/*.py`` only get a full path token when ``/home/scripts`` is not on PATH."""
+    layout = fts.parse_dockerfile_home_layout(MINIMAL_UTILS_DOCKERFILE)
+    tokens = fts.search_tokens_for_repo_path("scripts/python/helpers/tekton.py", layout)
+    assert tokens == frozenset({"/home/scripts/python/helpers/tekton.py"})
+
+
 def test_parse_skips_copy_from_stage() -> None:
     """``COPY --from=`` lines do not define repo layout."""
     text = """

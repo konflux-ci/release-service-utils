@@ -18,6 +18,8 @@ _COPY_HOME = re.compile(
     r"^COPY\s+(?!--from=)(\S+)\s+(/home/\S+)\s*(?:#.*)?$",
     re.IGNORECASE,
 )
+# ``ENV PYTHONPATH`` also contains the substring PATH; match only executable PATH.
+_ENV_PATH = re.compile(r"^ENV\s+PATH\s*=", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -50,13 +52,11 @@ def parse_dockerfile_home_layout(dockerfile_text: str) -> UtilsImageHomeLayout:
             continue
         segment_to_home[src] = dest.rstrip("/")
 
-    # Second pass: PATH adds e.g. /home/pyxis for basename search tokens.
+    # Second pass: ``ENV PATH=`` adds e.g. /home/pyxis for basename search tokens.
     path_dirs: set[str] = set()
     for line in dockerfile_text.splitlines():
         raw = line.split("#", 1)[0].strip()
-        if not raw.upper().startswith("ENV "):
-            continue
-        if "PATH" not in raw:
+        if not _ENV_PATH.match(raw):
             continue
         for hm in re.finditer(r"/home/[a-zA-Z0-9_.-]+", raw):
             path_dirs.add(hm.group(0))
