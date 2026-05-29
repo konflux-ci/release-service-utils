@@ -193,6 +193,55 @@ def test_wait_pipelinerun_terminal_failed_prints_to_stderr(
     assert "step foo died" in capsys.readouterr().err
 
 
+def test_print_run_test_step_logs_no_taskrun(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Skip log dump when run-test TaskRun cannot be resolved."""
+    monkeypatch.setattr(rs, "_taskrun_name_for_pipeline_task", lambda *a, **k: None)
+    rs._print_run_test_step_logs("pr1", "ns1")
+    err = capsys.readouterr().err
+    assert "skipping log dump" in err
+    assert "end run-test logs" not in err
+
+
+def test_print_run_test_step_logs_via_kubectl(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Stream kubectl logs directly to stderr."""
+
+    def fake_run(cmd: list, **kwargs):
+        if cmd[:3] == ["kubectl", "logs", "-n"]:
+            assert kwargs.get("stdout") is sys.stderr
+            sys.stderr.write("line1\nline2\n")
+            return subprocess.CompletedProcess(cmd, 0, None, "")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(rs, "_taskrun_name_for_pipeline_task", lambda *a, **k: "tr-run-test")
+    monkeypatch.setattr(rs.subprocess, "run", fake_run)
+    rs._print_run_test_step_logs("pr1", "ns1")
+    err = capsys.readouterr().err
+    assert "run-test logs" in err
+    assert "line1" in err
+    assert "end run-test logs" in err
+
+
+def test_print_run_test_step_logs_kubectl_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Print kubectl stderr when log fetch fails."""
+
+    def fake_run(cmd: list, **kwargs):
+        if cmd[:3] == ["kubectl", "logs", "-n"]:
+            return subprocess.CompletedProcess(cmd, 1, None, "pods not found\n")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(rs, "_taskrun_name_for_pipeline_task", lambda *a, **k: "tr-run-test")
+    monkeypatch.setattr(rs.subprocess, "run", fake_run)
+    rs._print_run_test_step_logs("pr1", "ns1")
+    err = capsys.readouterr().err
+    assert "could not fetch run-test logs: pods not found" in err
+
+
 def test_taskrun_name_for_pipeline_task_found(monkeypatch: pytest.MonkeyPatch) -> None:
     """Resolve TaskRun name from childReferences."""
     body = json.dumps(
@@ -492,8 +541,8 @@ def test_main_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_path, capsys) -> N
     assert manifests[0]["metadata"]["name"] == "utils-e2e-catalog-abc-123"
 
 
-def test_main_wait_failure_exits_1(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """Exit 1 when _wait_pipelinerun_terminal returns False."""
+def test_main_wait_failure_exits_1(monkeypatch: pytest.MonkeyPatch, tmp_path, capsys) -> None:
+    """Exit 1 when _wait_pipelinerun_terminal returns False and dump run-test logs."""
     monkeypatch.setenv("KUBECONFIG", "/k")
     monkeypatch.setenv("CATALOG_GIT_URL", "u")
     monkeypatch.setenv("CATALOG_GIT_REVISION", "r")
@@ -514,10 +563,114 @@ def test_main_wait_failure_exits_1(monkeypatch: pytest.MonkeyPatch, tmp_path) ->
         lambda cmd, **kw: "n\n",
     )
     monkeypatch.setattr(rs, "_wait_pipelinerun_terminal", lambda **kw: False)
+    log_calls: list[tuple[str, str]] = []
+
+    def fake_logs(pr: str, ns: str) -> None:
+        log_calls.append((pr, ns))
+        print("dumped run-test logs", file=sys.stderr)
+
+    monkeypatch.setattr(rs, "_print_run_test_step_logs", fake_logs)
 
     with pytest.raises(SystemExit) as ei:
         rs.main()
     assert ei.value.code == 1
+    assert log_calls == [("n", rs.CATALOG_E2E_NAMESPACE)]
+    assert "dumped run-test logs" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "test_output",
+    [
+        {"result": "FAILURE"},
+        {"result": "WAT"},
+        {},
+    ],
+)
+def test_main_bad_test_output_dumps_logs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    capsys,
+    test_output: dict,
+) -> None:
+    """Dump run-test logs for any TEST_OUTPUT outcome that is not SUCCESS or SKIPPED."""
+    monkeypatch.setenv("KUBECONFIG", "/tmp/k")
+    monkeypatch.setenv("CATALOG_GIT_URL", "https://github.com/o/c.git")
+    monkeypatch.setenv("CATALOG_GIT_REVISION", "dev")
+    monkeypatch.setenv("CATALOG_E2E_RUNNER_IMAGE", "quay.io/runner:v1")
+    monkeypatch.setenv("PIPELINE_TEST_SUITE", "suite1")
+    monkeypatch.setenv("PIPELINE_USED", "pipe1")
+    monkeypatch.setenv("ORCHESTRATOR_PIPELINE_RUN_UID", "abc-123")
+
+    def fake_mkstemp(suffix: str = "", **kw):
+        path = tmp_path / "plr3.json"
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        return (fd, str(path))
+
+    monkeypatch.setattr(rs.tempfile, "mkstemp", fake_mkstemp)
+    monkeypatch.setattr(
+        rs.subprocess,
+        "check_output",
+        lambda cmd, **kw: "child-plr\n",
+    )
+    monkeypatch.setattr(rs, "_wait_pipelinerun_terminal", lambda **kw: True)
+    monkeypatch.setattr(
+        rs,
+        "_fetch_run_test_task_output_json",
+        lambda pr, ns: test_output,
+    )
+    log_calls: list[tuple[str, str]] = []
+
+    def fake_logs(pr: str, ns: str) -> None:
+        log_calls.append((pr, ns))
+        print("bad outcome log dump", file=sys.stderr)
+
+    monkeypatch.setattr(rs, "_print_run_test_step_logs", fake_logs)
+
+    with pytest.raises(SystemExit) as ei:
+        rs.main()
+    assert ei.value.code == 1
+    assert log_calls == [("child-plr", rs.CATALOG_E2E_NAMESPACE)]
+    assert "bad outcome log dump" in capsys.readouterr().err
+
+
+def test_main_missing_test_output_dumps_logs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, capsys
+) -> None:
+    """Dump run-test logs when TEST_OUTPUT could not be loaded."""
+    monkeypatch.setenv("KUBECONFIG", "/tmp/k")
+    monkeypatch.setenv("CATALOG_GIT_URL", "https://github.com/o/c.git")
+    monkeypatch.setenv("CATALOG_GIT_REVISION", "dev")
+    monkeypatch.setenv("CATALOG_E2E_RUNNER_IMAGE", "quay.io/runner:v1")
+    monkeypatch.setenv("PIPELINE_TEST_SUITE", "suite1")
+    monkeypatch.setenv("PIPELINE_USED", "pipe1")
+    monkeypatch.setenv("ORCHESTRATOR_PIPELINE_RUN_UID", "abc-123")
+
+    def fake_mkstemp(suffix: str = "", **kw):
+        path = tmp_path / "plr4.json"
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        return (fd, str(path))
+
+    monkeypatch.setattr(rs.tempfile, "mkstemp", fake_mkstemp)
+    monkeypatch.setattr(
+        rs.subprocess,
+        "check_output",
+        lambda cmd, **kw: "child-plr\n",
+    )
+    monkeypatch.setattr(rs, "_wait_pipelinerun_terminal", lambda **kw: True)
+    monkeypatch.setattr(rs, "_fetch_run_test_task_output_json", lambda pr, ns: None)
+    log_calls: list[tuple[str, str]] = []
+
+    def fake_logs(pr: str, ns: str) -> None:
+        log_calls.append((pr, ns))
+        print("missing test output log dump", file=sys.stderr)
+
+    monkeypatch.setattr(rs, "_print_run_test_step_logs", fake_logs)
+
+    with pytest.raises(SystemExit) as ei:
+        rs.main()
+    assert ei.value.code == 1
+    assert log_calls == [("child-plr", rs.CATALOG_E2E_NAMESPACE)]
+    assert "missing test output log dump" in capsys.readouterr().err
 
 
 def test_script_main_guard_exits_when_kubeconfig_missing() -> None:
