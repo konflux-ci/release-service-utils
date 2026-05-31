@@ -161,7 +161,7 @@ def run_check(
 def main() -> int:
     """Write `RESULT_OPT_IN_RESULTS` and return exit code `0` on success."""
     # `RESULT_OPT_IN_RESULTS` is the path of the JSON file this step writes.
-    rpath = tekton.result_paths("RESULT_OPT_IN_RESULTS")[0]
+    rpath = tekton.result_paths_from_env("RESULT_OPT_IN_RESULTS")[0]
     raw_images = os.environ.get("CONTAINER_IMAGES", "")
 
     try:
