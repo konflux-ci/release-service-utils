@@ -31,7 +31,7 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - File-based credentials via mounted secrets, not bare env vars for secrets.
 - Retry with exponential backoff: use `retry.retry_with_exponential_backoff()` from helpers.
 - HTTP requests: use `http_client.get_text()` from helpers (retries, 429/404 backoff built in).
-- Tekton result files: use `tekton.result_paths()` to read env var paths, `tekton.CheckStepError` for step failures.
+- Tekton result files: use `tekton.result_paths_from_env()` to read env var paths, `tekton.CheckStepError` for step failures.
 - Cross-cutting helpers go in `scripts/python/helpers/`; task scripts go in `scripts/python/tasks/`.
 
 ## Testing
@@ -58,5 +58,5 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 
 ## Key Patterns
 
-- Some task scripts write results to Tekton result files via `tekton.result_paths()`.
+- Some task scripts write results to Tekton result files via `tekton.result_paths_from_env()`.
 - Wrapper scripts call external tools (pubtools-pulp, pubtools-marketplacesvm, etc.) via subprocess or library APIs.
