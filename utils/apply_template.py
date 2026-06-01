@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import traceback
 
 import yaml
@@ -8,6 +10,7 @@ import argparse
 import json
 import logging
 import sys
+from pathlib import Path
 from typing import Any
 
 LOGGER = logging.getLogger("apply_template")
@@ -47,25 +50,30 @@ def setup_argparser() -> argparse.Namespace:  # pragma: no cover
     return parser.parse_args()
 
 
-def main():  # pragma: no cover
-    """Main func"""
+def render_template_to_json_file(
+    output_path: str | Path,
+    template_path: str | Path,
+    template_data: dict[str, Any],
+    *,
+    verbose: bool = False,
+) -> None:
+    """
+    Two-pass Jinja render of *template_path* with *template_data*; write JSON to
+    *output_path*.
 
-    args = setup_argparser()
-    log_level = logging.DEBUG if args.verbose else logging.INFO
+    YAML is used as an intermediate representation; output is JSON so values like
+    version strings are not corrupted by YAML type coercion.
+    """
+    log_level = logging.DEBUG if verbose else logging.INFO
     setup_logger(level=log_level)
 
-    # Load JSON data from either --data argument or --data-file
-    if args.data:
-        template_data = json.loads(args.data)
-    else:  # args.data_file
-        with open(args.data_file, "r") as f:
-            template_data = json.loads(f.read())
-
-    with open(args.template) as t:
+    with open(template_path, encoding="utf-8") as template_file:
         # DebugUndefined renders undefined variables as empty strings
         # instead of raising errors.
         template = Template(
-            t.read(), extensions=[AnsibleCoreFiltersExtension], undefined=DebugUndefined
+            template_file.read(),
+            extensions=[AnsibleCoreFiltersExtension],
+            undefined=DebugUndefined,
         )
     LOGGER.info("Rendering 1st pass")
     try:
@@ -112,11 +120,27 @@ def main():  # pragma: no cover
     # Convert to JSON for safer parsing. Jinja works cleaner with YAML syntax
     # but YAML type conversion can corrupt data e.g. "33158e1" to 331580 JSON
     # output prevents this.
-    filename = args.output
     data = yaml.safe_load(content)
-    with open(filename, mode="w", encoding="utf-8") as data_file:
+    out = Path(output_path)
+    with open(out, mode="w", encoding="utf-8") as data_file:
         json.dump(data, data_file, indent=2)
-        LOGGER.info(f"Wrote {filename}")
+        LOGGER.info("Wrote %s", out)
+
+
+def main():  # pragma: no cover
+    """CLI entrypoint."""
+    args = setup_argparser()
+    if args.data:
+        template_data = json.loads(args.data)
+    else:
+        with open(args.data_file, encoding="utf-8") as data_file:
+            template_data = json.loads(data_file.read())
+    render_template_to_json_file(
+        args.output,
+        args.template,
+        template_data,
+        verbose=args.verbose,
+    )
 
 
 def setup_logger(level: int = logging.INFO, log_format: Any = None):

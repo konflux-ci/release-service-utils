@@ -13,7 +13,7 @@ import http_client
 
 def test_retries_policy_defaults() -> None:
     """The shared retry config matches the module defaults."""
-    r = http_client._retries()
+    r = http_client._retries(allowed_methods=frozenset({"GET"}))
     assert r.total == 3
     assert r.connect == 3
     assert r.read == 3
@@ -22,6 +22,23 @@ def test_retries_policy_defaults() -> None:
     assert r.raise_on_status is False
     assert set(r.status_forcelist) == {500, 502, 503, 504}
     assert set(r.allowed_methods) == {"GET"}
+
+
+def test_retries_policy_post() -> None:
+    """POST sessions retry transient connection and 5xx HTTP errors."""
+    r = http_client._retries(allowed_methods=frozenset({"POST"}))
+    assert r.total == 3
+    assert set(r.allowed_methods) == {"POST"}
+    assert set(r.status_forcelist) == {500, 502, 503, 504}
+    assert r.raise_on_status is False
+
+
+def test_post_session_mounts_post_retry_adapter() -> None:
+    """`post_session` mounts an adapter that retries POST on transients."""
+    session = http_client.post_session()
+    adapter = session.adapters["https://"]
+    assert isinstance(adapter, HTTPAdapter)
+    assert set(adapter.max_retries.allowed_methods) == {"POST"}
 
 
 def test_get_session_mounts_retry_adapter() -> None:
