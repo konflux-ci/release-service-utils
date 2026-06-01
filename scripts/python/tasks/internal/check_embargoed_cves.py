@@ -258,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
     if not cve_list:
         return 1
 
-    rpath, epath = tekton.result_paths("RESULT_RESULT", "RESULT_EMBARGOED_CVES")
+    rpath, epath = tekton.result_paths_from_env("RESULT_RESULT", "RESULT_EMBARGOED_CVES")
     # Clear both files up front: if run_check throws, the embargoed list
     # stays empty and we still fill result.
     epath.write_text("", encoding="utf-8")
