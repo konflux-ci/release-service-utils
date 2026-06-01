@@ -99,5 +99,6 @@ def clone_project_sparse(
         directory_name=git.repository_workdir_name(repository),
         revision=revision,
         sparse_dirs=sparse_dirs,
+        shallow=True,
         stderr_path=stderr_path,
     )

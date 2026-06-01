@@ -74,4 +74,5 @@ def test_clone_project_sparse_delegates_to_git(tmp_path: Path) -> None:
     assert out is repo_root
     m.assert_called_once()
     assert m.call_args.args[1] == "https://gitlab.example.com/g/r.git"
+    assert m.call_args.kwargs["shallow"] is True
     assert "oauth2:" not in m.call_args.args[1]
