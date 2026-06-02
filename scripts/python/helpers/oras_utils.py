@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import file
+import subprocess_cmd
 from subprocess_cmd import run_cmd
 
 
@@ -50,6 +52,37 @@ def oras_login(registry: str, username: str, password: str) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+def oras_pull(
+    pull_spec: str,
+    download_dir: Path,
+    *,
+    stderr_path: Path | None = None,
+) -> None:
+    """Pull an OCI artifact into *download_dir* using select-oci-auth and oras."""
+    auth_file = file.make_tempfile_path("oras-auth-")
+    try:
+        auth_out = subprocess_cmd.run_cmd(
+            ["select-oci-auth", str(pull_spec)],
+            check=True,
+        ).stdout
+        auth_file.write_text(auth_out, encoding="utf-8")
+        subprocess_cmd.run_cmd(
+            [
+                "oras",
+                "pull",
+                "--registry-config",
+                str(auth_file),
+                str(pull_spec),
+            ],
+            cwd=download_dir,
+            stderr_path=stderr_path,
+            check=True,
+        )
+    finally:
+        # Always remove the auth file; subprocess failures still propagate to callers.
+        auth_file.unlink(missing_ok=True)
 
 
 def oras_push(tag: str, directory: Path, subdirectory: str, component_name: str) -> str:
