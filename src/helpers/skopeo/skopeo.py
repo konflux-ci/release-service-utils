@@ -18,6 +18,7 @@ def inspect(
     no_tags: bool = False,
     override_os: str | None = None,
     override_arch: str | None = None,
+    creds: str | None = None,
     retry_times: int = 3,
     check: bool = False,
 ) -> subprocess.CompletedProcess[str]:
@@ -33,6 +34,8 @@ def inspect(
         cmd += ["--override-os", override_os]
     if override_arch:
         cmd += ["--override-arch", override_arch]
+    if creds:
+        cmd.extend(["--creds", creds])
     cmd.append(f"docker://{image_ref}")
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
@@ -63,11 +66,15 @@ def copy(
     source: str,
     dest: str | Path,
     *,
+    all: bool = False,
+    preserve_digests: bool = False,
+    src_tls_verify: bool | None = None,
+    src_creds: str | None = None,
+    dest_creds: str | None = None,
     retry_times: int = 3,
     extra_args: list[str] | None = None,
     check: bool = False,
     authenticated: bool = False,
-    all: bool = False,
     source_auth_file: Path | None = None,
     dest_auth_file: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -94,13 +101,21 @@ def copy(
         cmd = ["skopeo", "copy", "--retry-times", str(retry_times)]
         if all:
             cmd.append("--all")
+        if preserve_digests:
+            cmd.append("--preserve-digests")
+        if src_tls_verify is not None:
+            cmd.append(f"--src-tls-verify={str(src_tls_verify).lower()}")
+        if src_creds:
+            cmd.extend(["--src-creds", src_creds])
+        if dest_creds:
+            cmd.extend(["--dest-creds", dest_creds])
         if source_auth_file:
             cmd += ["--src-authfile", str(source_auth_file)]
         if dest_auth_file:
             cmd += ["--dest-authfile", str(dest_auth_file)]
         if extra_args:
-            cmd += extra_args
-        cmd += [source, str(dest)]
+            cmd.extend(extra_args)
+        cmd.extend([source, str(dest)])
         return subprocess.run(cmd, capture_output=True, text=True, check=check)
     finally:
         if auth_file is not None:
