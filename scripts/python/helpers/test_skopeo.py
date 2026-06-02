@@ -135,6 +135,32 @@ def test_inspect_image_ref_with_digest() -> None:
     assert cmd[-1] == f"docker://{ref}"
 
 
+def test_inspect_creds_flag() -> None:
+    """``creds`` adds ``--creds`` to the command."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.inspect("img:v1", creds="user:pass")
+
+    cmd = run_mock.call_args[0][0]
+    assert "--creds" in cmd
+    idx = cmd.index("--creds")
+    assert cmd[idx + 1] == "user:pass"
+
+
+def test_inspect_creds_none_omitted() -> None:
+    """``creds=None`` does not add ``--creds`` to the command."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.inspect("img:v1", creds=None)
+
+    cmd = run_mock.call_args[0][0]
+    assert "--creds" not in cmd
+
+
 # ---------------------------------------------------------------------------
 # copy
 # ---------------------------------------------------------------------------
@@ -197,3 +223,106 @@ def test_copy_nonzero_exit_code() -> None:
         result = skopeo.copy("docker://img:v1", "dir:/tmp/out")
 
     assert result.returncode == 1
+
+
+def test_copy_all_flag() -> None:
+    """``all=True`` adds ``--all`` to the command."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.copy("docker://img:v1", "docker://img:v2", all=True)
+
+    cmd = run_mock.call_args[0][0]
+    assert "--all" in cmd
+
+
+def test_copy_preserve_digests_flag() -> None:
+    """``preserve_digests=True`` adds ``--preserve-digests``."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.copy("docker://img:v1", "docker://img:v2", preserve_digests=True)
+
+    cmd = run_mock.call_args[0][0]
+    assert "--preserve-digests" in cmd
+
+
+def test_copy_src_tls_verify_false() -> None:
+    """``src_tls_verify=False`` adds ``--src-tls-verify=false``."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.copy("docker://img:v1", "docker://img:v2", src_tls_verify=False)
+
+    cmd = run_mock.call_args[0][0]
+    assert "--src-tls-verify=false" in cmd
+
+
+def test_copy_src_tls_verify_none_omitted() -> None:
+    """``src_tls_verify=None`` does not add the flag."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.copy("docker://img:v1", "docker://img:v2", src_tls_verify=None)
+
+    cmd = run_mock.call_args[0][0]
+    assert not any("--src-tls-verify" in c for c in cmd)
+
+
+def test_copy_src_creds() -> None:
+    """``src_creds`` adds ``--src-creds`` to the command."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.copy("docker://img:v1", "docker://img:v2", src_creds="user:pass")
+
+    cmd = run_mock.call_args[0][0]
+    assert "--src-creds" in cmd
+    idx = cmd.index("--src-creds")
+    assert cmd[idx + 1] == "user:pass"
+
+
+def test_copy_dest_creds() -> None:
+    """``dest_creds`` adds ``--dest-creds`` to the command."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.copy("docker://img:v1", "docker://img:v2", dest_creds="user:pass")
+
+    cmd = run_mock.call_args[0][0]
+    assert "--dest-creds" in cmd
+    idx = cmd.index("--dest-creds")
+    assert cmd[idx + 1] == "user:pass"
+
+
+def test_copy_all_options_combined() -> None:
+    """All copy options are included when specified."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.copy(
+            "docker://src:v1",
+            "docker://dest:v1",
+            all=True,
+            preserve_digests=True,
+            src_tls_verify=False,
+            src_creds="src-user:pass",
+            dest_creds="dest-user:pass",
+            retry_times=5,
+        )
+
+    cmd = run_mock.call_args[0][0]
+    assert "--all" in cmd
+    assert "--preserve-digests" in cmd
+    assert "--src-tls-verify=false" in cmd
+    assert "--src-creds" in cmd
+    assert "--dest-creds" in cmd
+    assert cmd[-2] == "docker://src:v1"
+    assert cmd[-1] == "docker://dest:v1"
