@@ -41,6 +41,12 @@ def test_run_cmd_stderr_path_on_success(tmp_path) -> None:
     assert log.read_text(encoding="utf-8") == ""
 
 
+def test_run_cmd_captures_stderr_when_no_path_given() -> None:
+    """Stderr is captured in the return value when no stderr_path is provided."""
+    r = subprocess_cmd.run_cmd(["sh", "-c", "echo error-msg >&2"], check=True)
+    assert "error-msg" in r.stderr
+
+
 def test_run_cmd_text_success() -> None:
     """``run_cmd_text`` returns stdout from a successful subprocess."""
     with mock.patch("subprocess_cmd.subprocess.run") as run:
