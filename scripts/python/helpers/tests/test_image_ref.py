@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import image_ref
+from release_service_utils.helpers import image_ref
+
 import pytest
 
 

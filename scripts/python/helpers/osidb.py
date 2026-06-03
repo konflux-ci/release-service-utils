@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import http_client
+from release_service_utils.helpers import http_client
 from requests_kerberos import HTTPKerberosAuth, OPTIONAL
 
 

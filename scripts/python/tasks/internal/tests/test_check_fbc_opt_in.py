@@ -8,10 +8,11 @@ import subprocess
 from pathlib import Path
 from unittest import mock
 
-import check_fbc_opt_in
 import pytest
 import requests
-import tekton
+
+import release_service_utils.helpers.tekton
+import release_service_utils.tasks.internal.check_fbc_opt_in as check_fbc_opt_in
 
 
 def _write_service_account(
@@ -45,18 +46,24 @@ def test_parse_container_images_invalid(raw: str) -> None:
 
 def test_get_fbc_opt_in_true_false_and_missing() -> None:
     """Only explicit `fbc_opt_in: true` maps to `True`."""
-    with mock.patch("http_client.get_text", return_value='{"fbc_opt_in": true}'):
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_text",
+        return_value='{"fbc_opt_in": true}',
+    ):
         assert check_fbc_opt_in.get_fbc_opt_in("https://p", "r.io/repo/i:1", None) is True
-    with mock.patch("http_client.get_text", return_value='{"fbc_opt_in": false}'):
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_text",
+        return_value='{"fbc_opt_in": false}',
+    ):
         assert check_fbc_opt_in.get_fbc_opt_in("https://p", "r.io/repo/i:1", None) is False
-    with mock.patch("http_client.get_text", return_value="{}"):
+    with mock.patch("release_service_utils.helpers.http_client.get_text", return_value="{}"):
         assert check_fbc_opt_in.get_fbc_opt_in("https://p", "r.io/repo/i:1", None) is False
 
 
 def test_get_fbc_opt_in_http_error_returns_false() -> None:
     """HTTP exceptions are treated as opt-out."""
     with mock.patch(
-        "http_client.get_text",
+        "release_service_utils.helpers.http_client.get_text",
         side_effect=requests.HTTPError("boom", response=mock.MagicMock()),
     ):
         assert check_fbc_opt_in.get_fbc_opt_in("https://p", "r.io/repo/i:1", None) is False
@@ -90,7 +97,10 @@ def test_run_check_wraps_service_account_errors(tmp_path: Path) -> None:
     """Missing principal/keytab files become `CheckStepError` with mount context."""
     cfg = tmp_path / "cfg"
     _write_krb5(cfg)
-    with pytest.raises(tekton.CheckStepError, match="mounted IIB service account"):
+    with pytest.raises(
+        release_service_utils.helpers.tekton.CheckStepError,
+        match="mounted IIB service account",
+    ):
         check_fbc_opt_in.run_check(["r/repo/i:1"], "https://pyxis/v1", tmp_path / "sa", cfg)
 
 
@@ -98,7 +108,9 @@ def test_run_check_wraps_krb5_errors(tmp_path: Path) -> None:
     """Missing `krb5.conf` becomes `CheckStepError` with Kerberos context."""
     sa = tmp_path / "sa"
     _write_service_account(sa)
-    with pytest.raises(tekton.CheckStepError, match="Kerberos configuration"):
+    with pytest.raises(
+        release_service_utils.helpers.tekton.CheckStepError, match="Kerberos configuration"
+    ):
         check_fbc_opt_in.run_check(["r/repo/i:1"], "https://pyxis/v1", sa, tmp_path / "cfg")
 
 
@@ -112,7 +124,9 @@ def test_run_check_wraps_kinit_error(tmp_path: Path) -> None:
     def _fail_kinit(*_a: object, **_k: object) -> None:
         raise subprocess.CalledProcessError(1, "kinit")
 
-    with pytest.raises(tekton.CheckStepError, match="logging in with Kerberos"):
+    with pytest.raises(
+        release_service_utils.helpers.tekton.CheckStepError, match="logging in with Kerberos"
+    ):
         check_fbc_opt_in.run_check(
             ["r/repo/i:1"],
             "https://pyxis/v1",

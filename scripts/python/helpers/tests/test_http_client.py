@@ -8,7 +8,7 @@ import pytest
 import requests
 from requests.adapters import HTTPAdapter
 
-import http_client
+from release_service_utils.helpers import http_client
 
 
 def test_retries_policy_defaults() -> None:
@@ -43,7 +43,9 @@ def test_get_text_uses_session_and_headers() -> None:
     r.text = "body"
     r.raise_for_status = mock.MagicMock()
     session.get.return_value = r
-    with mock.patch("http_client.get_session", return_value=session):
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_session", return_value=session
+    ):
         out = http_client.get_text("https://e/x", headers={"A": "b", "C": "d"})
 
     assert out == "body"
@@ -63,7 +65,9 @@ def test_get_text_auth_passed() -> None:
     r.text = "t"
     session.get.return_value = r
     ra = object()
-    with mock.patch("http_client.get_session", return_value=session):
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_session", return_value=session
+    ):
         assert http_client.get_text("https://u", auth=ra) == "t"
     assert session.get.call_args[1]["auth"] is ra
 
@@ -75,7 +79,9 @@ def test_get_text_http_error() -> None:
     r.status_code = 500
     r.raise_for_status.side_effect = requests.HTTPError("nope", response=mock.MagicMock())
     session.get.return_value = r
-    with mock.patch("http_client.get_session", return_value=session):
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_session", return_value=session
+    ):
         with pytest.raises(requests.HTTPError):
             http_client.get_text("https://u/")
 
@@ -99,9 +105,11 @@ def test_get_text_retries_429_then_succeeds() -> None:
     session.get.side_effect = [r1, r2, r3]
 
     with (
-        mock.patch("http_client.get_session", return_value=session),
-        mock.patch("http_client.random.randint", return_value=0),
-        mock.patch("http_client.time.sleep") as sleep_mock,
+        mock.patch(
+            "release_service_utils.helpers.http_client.get_session", return_value=session
+        ),
+        mock.patch("release_service_utils.helpers.http_client.random.randint", return_value=0),
+        mock.patch("release_service_utils.helpers.http_client.time.sleep") as sleep_mock,
     ):
         assert http_client.get_text("https://u") == "ok"
 
@@ -125,9 +133,11 @@ def test_get_text_retries_404_when_enabled(monkeypatch: pytest.MonkeyPatch) -> N
     session.get.side_effect = [r1, r2]
 
     with (
-        mock.patch("http_client.get_session", return_value=session),
-        mock.patch("http_client.random.randint", return_value=0),
-        mock.patch("http_client.time.sleep") as sleep_mock,
+        mock.patch(
+            "release_service_utils.helpers.http_client.get_session", return_value=session
+        ),
+        mock.patch("release_service_utils.helpers.http_client.random.randint", return_value=0),
+        mock.patch("release_service_utils.helpers.http_client.time.sleep") as sleep_mock,
     ):
         assert http_client.get_text("https://u") == "ok"
 

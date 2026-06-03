@@ -23,6 +23,21 @@ dependencies = [
     "confluent-kafka",
 ]
 
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+    "release_service_utils",
+    "release_service_utils.helpers",
+    "release_service_utils.tasks",
+    "release_service_utils.tasks.internal",
+]
+
+[tool.setuptools.package-dir]
+"release_service_utils" = "scripts/python"
+
 [tool.black]
 line-length = 95
 
