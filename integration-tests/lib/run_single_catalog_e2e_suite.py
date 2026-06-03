@@ -137,6 +137,46 @@ def _taskrun_name_for_pipeline_task(pr_name: str, ns: str, pipeline_task: str) -
     return None
 
 
+def _print_run_test_step_logs(pr_name: str, ns: str) -> None:
+    """Print run-test TaskRun logs to stderr."""
+    tr_name = _taskrun_name_for_pipeline_task(pr_name, ns, "run-test")
+    if not tr_name:
+        print(
+            "NOTE: could not resolve run-test TaskRun for "
+            f"pipelinerun/{pr_name} in {ns}; skipping log dump",
+            file=sys.stderr,
+        )
+        return
+
+    print(
+        f"--- run-test logs (TaskRun {tr_name}, pipelinerun/{pr_name} in {ns}) ---",
+        file=sys.stderr,
+        flush=True,
+    )
+
+    result = subprocess.run(
+        [
+            "kubectl",
+            "logs",
+            "-n",
+            ns,
+            "-l",
+            f"tekton.dev/taskRun={tr_name}",
+            "--tail=-1",
+            "--all-containers",
+        ],
+        stdout=sys.stderr,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        err = (result.stderr or "empty").rstrip("\n")
+        print(f"NOTE: could not fetch run-test logs: {err}", file=sys.stderr)
+
+    print("--- end run-test logs ---", file=sys.stderr, flush=True)
+
+
 def _fetch_run_test_task_output_json(pr_name: str, ns: str) -> dict | None:
     """Load JSON from TaskRun ``run-test`` result TEST_OUTPUT."""
     tr_name = _taskrun_name_for_pipeline_task(pr_name, ns, "run-test")
@@ -326,9 +366,14 @@ def main() -> None:
         # Do not use kubectl wait --for=condition=Succeeded: on failure Succeeded
         # stays False, so the step would hang until timeout and delay finally cleanup.
         if not _wait_pipelinerun_terminal(name=name, ns=ns, timeout_seconds=wait_seconds):
+            _print_run_test_step_logs(name, ns)
             sys.exit(1)
         # Catalog run-test exits 0 even on test failure; status is task TEST_OUTPUT.
-        _require_test_output_success(_fetch_run_test_task_output_json(name, ns))
+        test_output = _fetch_run_test_task_output_json(name, ns)
+        outcome = str((test_output or {}).get("result", "")).strip().upper()
+        if test_output is None or outcome not in ("SUCCESS", "SKIPPED"):
+            _print_run_test_step_logs(name, ns)
+        _require_test_output_success(test_output)
         print(f"PipelineRun {name} succeeded (TEST_OUTPUT ok)", flush=True)
     finally:
         if path is not None:
