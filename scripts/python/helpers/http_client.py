@@ -23,8 +23,8 @@ MAX_404_ATTEMPTS = 3
 BASE_SLEEP_TIME_SECONDS = 1
 
 
-def _retries() -> Retry:
-    """Transients similar to common ``curl --retry 3`` (connection + some HTTP)."""
+def _retries(*, allowed_methods: frozenset[str]) -> Retry:
+    """Transients similar to common `curl --retry 3` (connection + some HTTP)."""
     return Retry(
         total=3,
         connect=3,
@@ -32,9 +32,18 @@ def _retries() -> Retry:
         status=2,
         backoff_factor=0.4,
         status_forcelist=(500, 502, 503, 504),
-        allowed_methods=frozenset({"GET"}),
+        allowed_methods=allowed_methods,
         raise_on_status=False,
     )
+
+
+def post_session() -> requests.Session:
+    """`requests.Session` with retries on transient connection/HTTP errors for POST."""
+    session = requests.Session()
+    adapter = HTTPAdapter(max_retries=_retries(allowed_methods=frozenset({"POST"})))
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 def get_session() -> requests.Session:
@@ -43,7 +52,7 @@ def get_session() -> requests.Session:
     ``get_text`` uses this. Tests can patch this function to supply a custom session.
     """
     s = requests.Session()
-    a = HTTPAdapter(max_retries=_retries())
+    a = HTTPAdapter(max_retries=_retries(allowed_methods=frozenset({"GET"})))
     s.mount("https://", a)
     s.mount("http://", a)
     return s
