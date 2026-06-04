@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 from pathlib import Path
 
 import file
@@ -78,3 +79,18 @@ def test_make_tempfile_path_with_bytes() -> None:
         assert p.read_bytes() == b"hello"
     finally:
         p.unlink(missing_ok=True)
+
+
+def test_decompress_gzip_bounded_roundtrip() -> None:
+    """Valid gzip input decompresses to the original bytes."""
+    raw = b'[{"repository": "foo"}]'
+    compressed = gzip.compress(raw)
+    assert file.decompress_gzip_bounded(compressed, max_bytes=1024) == raw
+
+
+def test_decompress_gzip_bounded_rejects_oversized_output() -> None:
+    """Decompression stops once output exceeds *max_bytes*."""
+    raw = b"x" * 5000
+    compressed = gzip.compress(raw)
+    with pytest.raises(ValueError, match="gzip bomb"):
+        file.decompress_gzip_bounded(compressed, max_bytes=1000)

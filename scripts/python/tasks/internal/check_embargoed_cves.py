@@ -31,11 +31,9 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import requests
-import urllib.parse
 
 import authentication
 import file
-import http_client
 import osidb
 import tekton
 
@@ -73,6 +71,8 @@ def is_embargoed_flaw_response(data: dict[str, Any]) -> bool:
 def _embargo_finding_result_text(program_name: str) -> str:
     """Build ``RESULT_RESULT`` text when listed CVEs are not clearly public.
 
+    Used when the run finished without a Python exception but the OSIDB API
+    indicates at least one listed CVE is embargoed or not clearly public.
     CVE ids are written to ``RESULT_EMBARGOED_CVES``; this string in
     ``RESULT_RESULT`` points readers there.
     """
@@ -89,14 +89,11 @@ def fetch_flaw_state(osidb_url: str, token: str, cve_id: str) -> dict[str, Any]:
     object, or an empty dict if the response body is empty (treated as no
     visible flaw for embargo decisions).
     """
-    q = urllib.parse.urlencode([("cve_id", cve_id), ("include_fields", "cve_id,embargoed")])
-    u = f"{osidb_url.rstrip('/')}/osidb/api/v2/flaws?{q}"
-    body = http_client.get_text(
-        u,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-        },
+    body = osidb.fetch_flaw_response(
+        osidb_url,
+        token,
+        cve_id,
+        include_fields="cve_id,embargoed",
     )
     if not body.strip():
         return {}
