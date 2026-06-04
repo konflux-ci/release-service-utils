@@ -6,6 +6,7 @@ import base64
 import gzip
 import json
 import os
+import subprocess
 from pathlib import Path
 from unittest import mock
 
@@ -65,12 +66,14 @@ def _valid_advisory_yaml_dict() -> dict:
 
 @pytest.fixture
 def creds(tmp_path: Path) -> gitlab.GitLabCredentials:
+    """GitLab credentials loaded from a temporary secret mount."""
     secret = tmp_path / "gitlab"
     _write_gitlab_secret(secret)
     return gitlab.read_credentials_from_mount(secret)
 
 
 def test_reserve_errata_live_id_posts_json(tmp_path: Path) -> None:
+    """Return `live_id` from a successful Errata API reserve POST."""
     mount = tmp_path / "errata"
     _write_errata_mount(mount)
     krb5 = tmp_path / "k5.conf"
@@ -98,6 +101,7 @@ def test_reserve_errata_live_id_posts_json(tmp_path: Path) -> None:
 
 
 def test_reserve_errata_live_id_krb5_read_error(tmp_path: Path) -> None:
+    """Wrap Kerberos setup failures in `CheckStepError`."""
     mount = tmp_path / "errata"
     _write_errata_mount(mount)
     missing = tmp_path / "missing.conf"
@@ -112,6 +116,7 @@ def test_reserve_errata_live_id_krb5_read_error(tmp_path: Path) -> None:
 
 
 def test_reserve_errata_live_id_request_failure_logs_stderr(tmp_path: Path) -> None:
+    """Append reserve POST failures to the optional stderr log."""
     mount = tmp_path / "errata"
     _write_errata_mount(mount)
     krb5 = tmp_path / "k5.conf"
@@ -134,6 +139,7 @@ def test_reserve_errata_live_id_request_failure_logs_stderr(tmp_path: Path) -> N
 
 
 def test_reserve_errata_live_id_missing_live_id(tmp_path: Path) -> None:
+    """Fail when the Errata API response omits `live_id`."""
     mount = tmp_path / "errata"
     _write_errata_mount(mount)
     krb5 = tmp_path / "k5.conf"
@@ -161,24 +167,27 @@ def test_reserve_errata_live_id_missing_live_id(tmp_path: Path) -> None:
 
 
 def test_clone_advisory_repo(tmp_path: Path, creds: gitlab.GitLabCredentials) -> None:
+    """Sparse-clone the advisory repo and return its root and tenant base path."""
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "data" / "advisories" / "tenant").mkdir(parents=True)
     with mock.patch("create_advisory.gitlab.clone_project_sparse", return_value=repo):
-        root, base = create_advisory._clone_advisory_repo(
+        out_repo_root, base = create_advisory._clone_advisory_repo(
             creds, "tenant", tmp_path, stderr_path=tmp_path / "e.log"
         )
-    assert root == repo
+    assert out_repo_root == repo
     assert base == repo / "data" / "advisories" / "tenant"
 
 
 def test_write_initial_content_file(tmp_path: Path) -> None:
+    """Write the content list slice from decoded advisory JSON to a temp file."""
     decoded = {"content": {"images": [{"a": 1}]}}
     path = create_advisory._write_initial_content_file(tmp_path, decoded, ".content.images")
     assert json.loads(path.read_text(encoding="utf-8")) == [{"a": 1}]
 
 
 def test_customer_portal_url() -> None:
+    """Build the customer portal errata URL from type and advisory id."""
     assert (
         create_advisory._customer_portal_url(
             "https://access.redhat.com/errata", "RHSA", "2025:1"
@@ -188,6 +197,7 @@ def test_customer_portal_url() -> None:
 
 
 def test_write_success_results(tmp_path: Path) -> None:
+    """Write Success and portal URLs to Tekton result files."""
     paths = {
         "result": tmp_path / "r",
         "advisory_url": tmp_path / "u",
@@ -203,6 +213,7 @@ def test_write_success_results(tmp_path: Path) -> None:
 
 
 def test_finish_if_all_content_already_published_true(tmp_path: Path) -> None:
+    """Return True and write results when all content is already published."""
     repo = tmp_path / "repo"
     base = repo / "data" / "advisories" / "t" / "2025" / "0001"
     base.mkdir(parents=True)
@@ -239,6 +250,7 @@ def test_finish_if_all_content_already_published_true(tmp_path: Path) -> None:
 
 
 def test_finish_if_all_content_already_published_false(tmp_path: Path) -> None:
+    """Return False when no existing advisory covers the requested content."""
     repo = tmp_path / "repo"
     base = repo / "data" / "advisories" / "t"
     base.mkdir(parents=True)
@@ -265,6 +277,7 @@ def test_finish_if_all_content_already_published_false(tmp_path: Path) -> None:
 
 
 def test_finish_raises_when_no_latest_path(tmp_path: Path) -> None:
+    """Fail when idempotency cannot resolve a latest advisory path."""
     repo = tmp_path / "repo"
     base = repo / "data" / "advisories" / "t" / "2025" / "0001"
     base.mkdir(parents=True)
@@ -295,6 +308,7 @@ def test_finish_raises_when_no_latest_path(tmp_path: Path) -> None:
 
 
 def test_build_merged_advisory_with_signing_key(tmp_path: Path) -> None:
+    """Merge content and attach the signing key from the config map."""
     content = tmp_path / "c.json"
     content.write_text(json.dumps([{"a": 1}]), encoding="utf-8")
     decoded = {"type": "RHSA", "content": {"images": []}}
@@ -320,6 +334,7 @@ def test_build_merged_advisory_with_signing_key_empty_fails(tmp_path: Path) -> N
 
 
 def test_resolve_live_id_from_decoded() -> None:
+    """Use `live_id` from decoded advisory JSON when present."""
     assert (
         create_advisory._resolve_live_id_number(
             {"live_id": 7},
@@ -332,6 +347,7 @@ def test_resolve_live_id_from_decoded() -> None:
 
 
 def test_resolve_live_id_reserves(tmp_path: Path) -> None:
+    """Reserve a new live id via Errata when decoded JSON has none."""
     mount = tmp_path / "errata"
     _write_errata_mount(mount)
     with mock.patch("create_advisory._reserve_errata_live_id", return_value=99) as reserve:
@@ -346,17 +362,24 @@ def test_resolve_live_id_reserves(tmp_path: Path) -> None:
 
 
 def test_ensure_advisory_number_unused_raises(tmp_path: Path) -> None:
+    """Fail when the advisory number already exists on `origin/main`."""
+    listing = tmp_path / "origin_ls_tree.txt"
     with mock.patch(
-        "create_advisory.git.origin_ls_tree_name_only",
-        return_value="data/advisories/t/2025/0042/advisory.yaml\n",
+        "create_advisory.git.origin_main_has_path_matching",
+        return_value=True,
     ):
         with pytest.raises(ValueError, match="already exists"):
             create_advisory._ensure_advisory_number_unused(
-                tmp_path, "2025", "0042", stderr_path=tmp_path / "e.log"
+                tmp_path,
+                "2025",
+                "0042",
+                listing,
+                stderr_path=tmp_path / "e.log",
             )
 
 
 def test_render_and_validate_advisory_yaml(tmp_path: Path) -> None:
+    """Render advisory YAML from the template and pass schema validation."""
     repo = tmp_path / "repo"
     schema_dir = repo / "schema"
     schema_dir.mkdir(parents=True)
@@ -388,6 +411,7 @@ def test_render_and_validate_advisory_yaml(tmp_path: Path) -> None:
 
 
 def test_render_and_validate_schema_failure(tmp_path: Path) -> None:
+    """Fail schema validation and log the invalid advisory YAML."""
     repo = tmp_path / "repo"
     (repo / "schema").mkdir(parents=True)
     (repo / "schema" / "advisory.json").write_text(
@@ -418,16 +442,23 @@ def test_render_and_validate_schema_failure(tmp_path: Path) -> None:
 
 
 def test_commit_and_push_new_advisory(tmp_path: Path) -> None:
-    with mock.patch("create_advisory.git.index_add_commit") as add:
-        with mock.patch("create_advisory.git.push") as push:
-            create_advisory._commit_and_push_new_advisory(
-                tmp_path, "path/y.yaml", "grp", stderr_path=tmp_path / "e.log"
-            )
-    add.assert_called_once()
-    push.assert_called_once()
+    """Commit the new advisory file and push to the default branch."""
+    with mock.patch("create_advisory.git.commit_and_push") as commit_push:
+        create_advisory._commit_and_push_new_advisory(
+            tmp_path, "path/y.yaml", "grp", stderr_path=tmp_path / "e.log"
+        )
+    commit_push.assert_called_once_with(
+        tmp_path,
+        ["path/y.yaml"],
+        "[Konflux Release] new advisory for grp",
+        gitlab.DEFAULT_BRANCH,
+        retries=5,
+        stderr_path=tmp_path / "e.log",
+    )
 
 
 def test_create_new_advisory(tmp_path: Path, creds: gitlab.GitLabCredentials) -> None:
+    """Render, commit, and write success results for a new advisory."""
     repo = tmp_path / "repo"
     base = repo / "data" / "advisories" / "t"
     base.mkdir(parents=True)
@@ -463,6 +494,7 @@ def test_create_new_advisory(tmp_path: Path, creds: gitlab.GitLabCredentials) ->
 def test_run_create_advisory_idempotent_early_return(
     tmp_path: Path, creds: gitlab.GitLabCredentials
 ) -> None:
+    """Stop after idempotency when all content is already published."""
     secret = tmp_path / "gitlab"
     _write_gitlab_secret(secret)
     errata = tmp_path / "errata"
@@ -477,7 +509,10 @@ def test_run_create_advisory_idempotent_early_return(
     with mock.patch("create_advisory.gitlab.read_credentials_from_mount", return_value=creds):
         with mock.patch(
             "create_advisory._clone_advisory_repo",
-            return_value=(tmp_path / "repo", tmp_path / "repo" / "data" / "advisories" / "t"),
+            return_value=(
+                tmp_path / "repo",
+                tmp_path / "repo" / "data" / "advisories" / "t",
+            ),
         ):
             with mock.patch(
                 "create_advisory._finish_if_all_content_already_published",
@@ -503,6 +538,7 @@ def test_run_create_advisory_idempotent_early_return(
 def test_run_create_advisory_full_create_path(
     tmp_path: Path, creds: gitlab.GitLabCredentials
 ) -> None:
+    """Run the full create path when idempotency does not apply."""
     secret = tmp_path / "gitlab"
     _write_gitlab_secret(secret)
     errata = tmp_path / "errata"
@@ -573,12 +609,14 @@ def _setup_main_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
 
 
 def test_main_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exit zero when the advisory workflow completes successfully."""
     _setup_main_env(tmp_path, monkeypatch)
     with mock.patch("create_advisory.run_create_advisory"):
         assert create_advisory.main(["create_advisory.py"]) == 0
 
 
 def test_main_writes_failure_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Write workflow errors to the Tekton result file and exit zero."""
     paths = _setup_main_env(tmp_path, monkeypatch)
     with mock.patch(
         "create_advisory.run_create_advisory",
@@ -590,6 +628,7 @@ def test_main_writes_failure_result(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 def test_main_check_step_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Include the `CheckStepError` action in the Tekton failure result."""
     paths = _setup_main_env(tmp_path, monkeypatch)
     err = tekton.CheckStepError("reading secrets", OSError("no mount"))
     with mock.patch("create_advisory.run_create_advisory", side_effect=err):
@@ -853,14 +892,12 @@ def test_run_create_advisory_clone_failure(
     _write_gitlab_secret(secret)
     errata = tmp_path / "errata"
     _write_errata_mount(errata)
-    import git as gitpython
-
     with mock.patch("create_advisory.gitlab.read_credentials_from_mount", return_value=creds):
         with mock.patch(
             "create_advisory._clone_advisory_repo",
-            side_effect=gitpython.exc.GitCommandError("clone", "failing-tenant"),
+            side_effect=subprocess.CalledProcessError(1, "git clone"),
         ):
-            with pytest.raises(gitpython.exc.GitCommandError):
+            with pytest.raises(subprocess.CalledProcessError):
                 create_advisory.run_create_advisory(
                     advisory_secret=secret,
                     errata_mount=errata,
@@ -1237,29 +1274,28 @@ def test_run_create_advisory_happy_path_writes_portal_url(
                         "create_advisory._reserve_errata_live_id", return_value=1234
                     ):
                         with mock.patch(
-                            "create_advisory.git.origin_ls_tree_name_only",
-                            return_value="",
+                            "create_advisory.git.origin_main_has_path_matching",
+                            return_value=False,
                         ):
                             with mock.patch.object(
                                 create_advisory, "ADVISORY_TEMPLATE_PATH", template
                             ):
-                                with mock.patch("create_advisory.git.index_add_commit"):
-                                    with mock.patch("create_advisory.git" ".push"):
-                                        create_advisory.run_create_advisory(
-                                            advisory_secret=secret,
-                                            errata_mount=errata,
-                                            stderr_path=tmp_path / "e.log",
-                                            result_paths=results,
-                                            params={
-                                                "component_group": "test-app",
-                                                "origin": "not-existing-origin",
-                                                "config_map_name": "cm",
-                                                "content_type": "image",
-                                                "internal_request_pr_name": "pr",
-                                                "task_run_name": "tr",
-                                            },
-                                            decoded=decoded,
-                                        )
+                                with mock.patch("create_advisory.git.commit_and_push"):
+                                    create_advisory.run_create_advisory(
+                                        advisory_secret=secret,
+                                        errata_mount=errata,
+                                        stderr_path=tmp_path / "e.log",
+                                        result_paths=results,
+                                        params={
+                                            "component_group": "test-app",
+                                            "origin": "not-existing-origin",
+                                            "config_map_name": "cm",
+                                            "content_type": "image",
+                                            "internal_request_pr_name": "pr",
+                                            "task_run_name": "tr",
+                                        },
+                                        decoded=decoded,
+                                    )
     assert results["result"].read_text(encoding="utf-8") == "Success"
     url = results["advisory_url"].read_text(encoding="utf-8")
     assert url.startswith("https://access.redhat.com/errata/RHSA-")
