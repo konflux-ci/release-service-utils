@@ -21,7 +21,7 @@ jobs:
           sudo apt-get -y update
           sudo apt-get install -y libkrb5-dev
       - name: Check out repo
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
       - name: Black Lint
         uses: psf/black@d246367ab471cd56298407858661d475c33b3e36  # stable
       - name: Setup python environment for flake8 check
