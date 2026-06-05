@@ -148,7 +148,14 @@ def run(
 
     default_public = data.get("mapping", {}).get("defaults", {}).get("public", False)
 
-    session = http_client.get_session()
+    session = http_client.get_retry_session(
+        total=3,
+        connect=3,
+        read=3,
+        status=2,
+        backoff_factor=0.4,
+        allowed_methods=frozenset({"GET", "POST"}),
+    )
     quay_cache: dict[str, bool] = {}
 
     target_registry: str | None = None

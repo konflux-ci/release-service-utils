@@ -115,7 +115,14 @@ def _reserve_errata_live_id(
         }
         os.environ.update(krb5_env_for_process)
         reserve_live_id_url = f"{errata_api.rstrip('/')}/advisory/reserve_live_id"
-        session = http_client.post_session()
+        session = http_client.get_retry_session(
+            total=3,
+            connect=3,
+            read=3,
+            status=2,
+            backoff_factor=0.4,
+            allowed_methods=frozenset({"POST"}),
+        )
         auth = HTTPKerberosAuth(mutual_authentication=OPTIONAL)
         try:
             resp = session.post(reserve_live_id_url, auth=auth, timeout=120)

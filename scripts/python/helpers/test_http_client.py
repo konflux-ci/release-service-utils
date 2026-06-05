@@ -11,56 +11,57 @@ from requests.adapters import HTTPAdapter
 import http_client
 
 
-def test_retries_policy_defaults() -> None:
-    """The shared retry config matches the module defaults."""
-    r = http_client._retries(allowed_methods=frozenset({"GET"}))
-    assert r.total == 3
-    assert r.connect == 3
-    assert r.read == 3
-    assert r.status == 2
-    assert r.backoff_factor == 0.4
-    assert r.raise_on_status is False
-    assert set(r.status_forcelist) == {500, 502, 503, 504}
-    assert set(r.allowed_methods) == {"GET"}
-
-
-def test_retries_policy_post() -> None:
-    """POST sessions retry transient connection and 5xx HTTP errors."""
-    r = http_client._retries(allowed_methods=frozenset({"POST"}))
-    assert r.total == 3
-    assert set(r.allowed_methods) == {"POST"}
-    assert set(r.status_forcelist) == {500, 502, 503, 504}
-    assert r.raise_on_status is False
-
-
-def test_post_session_mounts_post_retry_adapter() -> None:
-    """`post_session` mounts an adapter that retries POST on transients."""
-    session = http_client.post_session()
+def test_get_retry_session_custom_methods_and_status_codes() -> None:
+    """Callers can configure retried methods and HTTP status codes."""
+    session = http_client.get_retry_session(
+        total=5,
+        connect=5,
+        read=5,
+        status=5,
+        backoff_factor=5.0,
+        status_forcelist=(503,),
+        allowed_methods=frozenset({"PATCH"}),
+    )
     adapter = session.adapters["https://"]
     assert isinstance(adapter, HTTPAdapter)
-    assert set(adapter.max_retries.allowed_methods) == {"POST"}
+    retry = adapter.max_retries
+    assert retry.total == 5
+    assert retry.connect == 5
+    assert retry.read == 5
+    assert retry.status == 5
+    assert retry.backoff_factor == 5.0
+    assert set(retry.status_forcelist) == {503}
+    assert set(retry.allowed_methods) == {"PATCH"}
 
 
-def test_get_session_mounts_retry_adapter() -> None:
-    """`get_session` mounts an `HTTPAdapter` for both HTTP schemes."""
-    s = http_client.get_session()
-    https_adapter = s.adapters["https://"]
-    http_adapter = s.adapters["http://"]
+def test_get_retry_session_get_defaults() -> None:
+    """GET retry settings used by get_text mount adapters on both schemes."""
+    session = http_client.get_retry_session(
+        total=3,
+        connect=3,
+        read=3,
+        status=2,
+        backoff_factor=0.4,
+        allowed_methods=frozenset({"GET"}),
+    )
+    https_adapter = session.adapters["https://"]
+    http_adapter = session.adapters["http://"]
     assert isinstance(https_adapter, HTTPAdapter)
     assert isinstance(http_adapter, HTTPAdapter)
     assert https_adapter.max_retries.total == 3
     assert http_adapter.max_retries.total == 3
+    assert set(https_adapter.max_retries.allowed_methods) == {"GET"}
 
 
 def test_get_text_uses_session_and_headers() -> None:
-    """``get_text`` passes *headers* through to ``get_session``’s ``.get`` call."""
+    """``get_text`` passes *headers* through to the session ``.get`` call."""
     session = mock.MagicMock()
     r = mock.MagicMock()
     r.status_code = 200
     r.text = "body"
     r.raise_for_status = mock.MagicMock()
     session.get.return_value = r
-    with mock.patch("http_client.get_session", return_value=session):
+    with mock.patch("http_client.get_retry_session", return_value=session):
         out = http_client.get_text("https://e/x", headers={"A": "b", "C": "d"})
 
     assert out == "body"
@@ -80,7 +81,7 @@ def test_get_text_auth_passed() -> None:
     r.text = "t"
     session.get.return_value = r
     ra = object()
-    with mock.patch("http_client.get_session", return_value=session):
+    with mock.patch("http_client.get_retry_session", return_value=session):
         assert http_client.get_text("https://u", auth=ra) == "t"
     assert session.get.call_args[1]["auth"] is ra
 
@@ -92,7 +93,7 @@ def test_get_text_http_error() -> None:
     r.status_code = 500
     r.raise_for_status.side_effect = requests.HTTPError("nope", response=mock.MagicMock())
     session.get.return_value = r
-    with mock.patch("http_client.get_session", return_value=session):
+    with mock.patch("http_client.get_retry_session", return_value=session):
         with pytest.raises(requests.HTTPError):
             http_client.get_text("https://u/")
 
@@ -116,7 +117,7 @@ def test_get_text_retries_429_then_succeeds() -> None:
     session.get.side_effect = [r1, r2, r3]
 
     with (
-        mock.patch("http_client.get_session", return_value=session),
+        mock.patch("http_client.get_retry_session", return_value=session),
         mock.patch("http_client.random.randint", return_value=0),
         mock.patch("http_client.time.sleep") as sleep_mock,
     ):
@@ -142,7 +143,7 @@ def test_get_text_retries_404_when_enabled(monkeypatch: pytest.MonkeyPatch) -> N
     session.get.side_effect = [r1, r2]
 
     with (
-        mock.patch("http_client.get_session", return_value=session),
+        mock.patch("http_client.get_retry_session", return_value=session),
         mock.patch("http_client.random.randint", return_value=0),
         mock.patch("http_client.time.sleep") as sleep_mock,
     ):
@@ -150,3 +151,52 @@ def test_get_text_retries_404_when_enabled(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert session.get.call_count == 2
     sleep_mock.assert_called_once_with(1)
+
+
+def test_get_text_allow_error_status_returns_body() -> None:
+    """Non-2xx responses return body text when `allow_error_status` is true."""
+    session = mock.MagicMock()
+    response = mock.MagicMock()
+    response.status_code = 404
+    response.text = '{"error": true}'
+    session.get.return_value = response
+    with mock.patch("http_client.get_retry_session", return_value=session):
+        out = http_client.get_text("https://u/", allow_error_status=True)
+    assert out == '{"error": true}'
+
+
+def test_get_text_allow_error_status_retries_429() -> None:
+    """429 retries still run when `allow_error_status` is true."""
+    session = mock.MagicMock()
+
+    rate_limited = mock.MagicMock()
+    rate_limited.status_code = 429
+    rate_limited.text = "rate-limited"
+    ok = mock.MagicMock()
+    ok.status_code = 200
+    ok.text = "ok"
+    session.get.side_effect = [rate_limited, ok]
+
+    with (
+        mock.patch("http_client.get_retry_session", return_value=session),
+        mock.patch("http_client.random.randint", return_value=0),
+        mock.patch("http_client.time.sleep") as sleep_mock,
+    ):
+        out = http_client.get_text("https://u/", allow_error_status=True)
+
+    assert out == "ok"
+    assert session.get.call_count == 2
+    sleep_mock.assert_called_once_with(1)
+
+
+def test_get_text_cert_on_session() -> None:
+    """Client certificate paths are applied to the shared session."""
+    session = mock.MagicMock()
+    response = mock.MagicMock()
+    response.status_code = 200
+    response.text = "ok"
+    session.get.return_value = response
+    cert = ("/tmp/cert", "/tmp/key")
+    with mock.patch("http_client.get_retry_session", return_value=session):
+        assert http_client.get_text("https://u/", cert=cert) == "ok"
+    assert session.cert == cert
