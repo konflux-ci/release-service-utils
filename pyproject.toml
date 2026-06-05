@@ -35,6 +35,7 @@ pythonpath = [
   "integration-tests/lib",
   "scripts/python/helpers",
   "scripts/python/tasks/internal",
+  "scripts/python/tasks/managed",
   "utils",
   "pubtools-pulp-wrapper",
   "publish-to-cgw-wrapper",
