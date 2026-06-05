@@ -17,8 +17,7 @@ def retry_with_exponential_backoff(
     base_sleep_seconds: int = 5,
     sleep_fn: Callable[[float], None] | None = None,
 ) -> T:
-    """
-    Run ``operation`` up to ``max_attempts`` times, retrying selected failures.
+    """Run ``operation`` up to ``max_attempts`` times, retrying selected failures.
 
     On each retry, waits ``base_sleep_seconds * 2 ** (attempt - 1)`` seconds (5,
     10, 20, 40, ... by default). If a failure is not in ``retry_on``, it is

@@ -11,16 +11,14 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import tarfile
 import tempfile
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import skopeo
 import tekton
 from logger import logger
+from skopeo import SkopeoClient
 
 BINARIES_DIR = "binaries"
 
@@ -109,13 +107,16 @@ def extract_checksums(
     image_binaries_path: str,
     snapshot_rel_path: str,
     *,
-    copy_image: Callable[..., subprocess.CompletedProcess[str]] = skopeo.copy,
+    skopeo_client: SkopeoClient | None = None,
 ) -> str:
     """Extract SHA256SUMS files from container images in the snapshot.
 
     Returns the relative binaries path (e.g. ``uid123/binaries``) for
     writing to the Tekton result file.
     """
+    if skopeo_client is None:
+        skopeo_client = SkopeoClient()
+
     snapshot = load_snapshot(snapshot_path)
 
     relative_binaries = f"{Path(snapshot_rel_path).parent}/{BINARIES_DIR}"
@@ -136,15 +137,7 @@ def extract_checksums(
 
         tmp_dir = Path(tempfile.mkdtemp())
         try:
-            result = copy_image(f"docker://{image_url}", f"dir:{tmp_dir}")
-            if result.returncode != 0:
-                logger.error("skopeo copy failed: %s", result.stderr)
-                raise subprocess.CalledProcessError(
-                    result.returncode,
-                    result.args,
-                    output=result.stdout,
-                    stderr=result.stderr,
-                )
+            skopeo_client.copy(f"docker://{image_url}", f"dir:{tmp_dir}")
 
             extract_binaries_from_layers(tmp_dir, image_binaries_path)
 

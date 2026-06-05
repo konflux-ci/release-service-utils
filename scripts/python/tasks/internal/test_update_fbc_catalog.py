@@ -15,6 +15,7 @@ import authentication
 import iib
 import tekton
 import update_fbc_catalog
+from skopeo import SkopeoClientError, ContainerImageConfig
 
 # ---------------------------------------------------------------------------
 # parse_fbc_fragments
@@ -153,10 +154,12 @@ def _skopeo_result(
 def test_inspect_image_created_success() -> None:
     """A valid skopeo response returns the created date string."""
     with mock.patch(
-        "skopeo.subprocess.run",
-        return_value=_skopeo_result('{"created": "2024-01-15T10:30:00Z"}'),
-    ):
+        "skopeo.SkopeoClient.inspect",
+        return_value=ContainerImageConfig.from_json('{"created": "2024-01-15T10:30:00Z"}'),
+    ) as mock_inspect:
         assert update_fbc_catalog.inspect_image_created("img:v1") == "2024-01-15T10:30:00Z"
+        print(mock_inspect.mock_calls[0])
+        assert mock_inspect.mock_calls[0].args[0] == "docker://img:v1"
 
 
 def test_inspect_image_created_skopeo_failure() -> None:
@@ -171,8 +174,8 @@ def test_inspect_image_created_skopeo_failure() -> None:
 def test_inspect_image_created_no_created_field() -> None:
     """Missing ``created`` field returns ``None``."""
     with mock.patch(
-        "skopeo.subprocess.run",
-        return_value=_skopeo_result("{}"),
+        "skopeo.SkopeoClient.inspect",
+        return_value=ContainerImageConfig.from_json("{}"),
     ):
         assert update_fbc_catalog.inspect_image_created("img:v1") is None
 
@@ -711,10 +714,16 @@ def test_get_manifest_digests_not_multiarch() -> None:
 def test_get_manifest_digests_skopeo_failure() -> None:
     """Raise ``RuntimeError`` when skopeo fails."""
     with mock.patch(
-        "skopeo.subprocess.run",
-        return_value=_skopeo_result(returncode=1),
+        "skopeo.SkopeoClient.inspect",
+        side_effect=SkopeoClientError(
+            message="skopeo inspect --raw failed",
+            command="inspect",
+            returncode=1,
+            stdout="",
+            stderr="error",
+        ),
     ):
-        with pytest.raises(RuntimeError, match="skopeo inspect --raw failed"):
+        with pytest.raises(SkopeoClientError, match="skopeo inspect --raw failed.*"):
             update_fbc_catalog.get_manifest_digests("img:v1")
 
 
@@ -1230,8 +1239,14 @@ def test_poll_and_collect_digest_extraction_fails() -> None:
     with (
         mock.patch("iib.get_build", return_value=build),
         mock.patch(
-            "skopeo.subprocess.run",
-            return_value=_skopeo_result(returncode=1),
+            "skopeo.SkopeoClient.inspect",
+            side_effect=SkopeoClientError(
+                message="skopeo inspect --raw failed",
+                command="inspect",
+                returncode=1,
+                stdout="",
+                stderr="error",
+            ),
         ),
     ):
         result = update_fbc_catalog._poll_and_collect(

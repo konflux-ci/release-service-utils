@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import io
 import json
-import subprocess
 import tarfile
 from pathlib import Path
 from unittest import mock
 
 import extract_checksums_from_image as ecfi
 import pytest
+from skopeo import SkopeoClient, SkopeoClientError
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -70,33 +70,29 @@ def _write_manifest(image_dir: Path, digests: list[str]) -> None:
     (image_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
-def _fake_copy_image(image_dir: Path, base_dir: str, files: dict[str, str]):
-    """Return a copy_image callable that populates *image_dir* with a layer."""
+def _fake_copy_client(image_dir: Path, base_dir: str, files: dict[str, str]) -> mock.MagicMock:
+    """Return a mock ``SkopeoClient`` whose copy populates *image_dir*."""
     digest = _make_layer_tar(image_dir, base_dir, files)
     _write_manifest(image_dir, [digest])
 
-    def _copy(source: str, dest: str) -> subprocess.CompletedProcess[str]:
+    def _copy(source: str, dest: str, **kwargs) -> None:
         import shutil
 
         dest_path = Path(dest.removeprefix("dir:"))
         for item in image_dir.iterdir():
             if item.is_file():
                 shutil.copy2(item, dest_path)
-        return subprocess.CompletedProcess(
-            args=["skopeo", "copy"], returncode=0, stdout="", stderr=""
-        )
 
-    return _copy
+    client = mock.MagicMock(spec=SkopeoClient)
+    client.copy.side_effect = _copy
+    return client
 
 
-def _stub_copy(source: str, dest: str) -> subprocess.CompletedProcess[str]:
+def _stub_copy(source: str, dest: str, **kwargs) -> None:
     """Copy stub that writes a minimal valid layer with a SHA256SUMS file."""
     dest_path = Path(dest.removeprefix("dir:"))
     digest = _make_layer_tar(dest_path, "releases", {"SHA256SUMS": "stub"})
     _write_manifest(dest_path, [digest])
-    return subprocess.CompletedProcess(
-        args=["skopeo", "copy"], returncode=0, stdout="", stderr=""
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -306,14 +302,14 @@ def test_extract_checksums_single_component(tmp_path: Path) -> None:
 
     image_staging = tmp_path / "staging"
     image_staging.mkdir()
-    copy_fn = _fake_copy_image(
+    client = _fake_copy_client(
         image_staging,
         "releases",
         {"app.zip": "binary", "app-SHA256SUMS": "deadbeef  app.zip"},
     )
 
     result = ecfi.extract_checksums(
-        snapshot_path, data_path, data_dir, "releases", rel, copy_image=copy_fn
+        snapshot_path, data_path, data_dir, "releases", rel, skopeo_client=client
     )
 
     assert result == "uid123/binaries"
@@ -329,12 +325,8 @@ def test_extract_checksums_multiple_components(tmp_path: Path) -> None:
     ]
     snapshot_path, data_path, data_dir, rel = _setup_extract(tmp_path, components)
 
-    call_count = 0
-
-    def _counting_copy(source: str, dest: str) -> subprocess.CompletedProcess[str]:
-        nonlocal call_count
-        call_count += 1
-        return _stub_copy(source, dest)
+    client = mock.MagicMock(spec=SkopeoClient)
+    client.copy.side_effect = _stub_copy
 
     ecfi.extract_checksums(
         snapshot_path,
@@ -342,10 +334,10 @@ def test_extract_checksums_multiple_components(tmp_path: Path) -> None:
         data_dir,
         "releases",
         rel,
-        copy_image=_counting_copy,
+        skopeo_client=client,
     )
 
-    assert call_count == 3
+    assert client.copy.call_count == 3
 
 
 def test_extract_checksums_component_filtering(tmp_path: Path) -> None:
@@ -359,11 +351,8 @@ def test_extract_checksums_component_filtering(tmp_path: Path) -> None:
         tmp_path, components, data_names=["c1", "c3"]
     )
 
-    processed: list[str] = []
-
-    def _tracking_copy(source: str, dest: str) -> subprocess.CompletedProcess[str]:
-        processed.append(source)
-        return _stub_copy(source, dest)
+    client = mock.MagicMock(spec=SkopeoClient)
+    client.copy.side_effect = _stub_copy
 
     ecfi.extract_checksums(
         snapshot_path,
@@ -371,13 +360,14 @@ def test_extract_checksums_component_filtering(tmp_path: Path) -> None:
         data_dir,
         "releases",
         rel,
-        copy_image=_tracking_copy,
+        skopeo_client=client,
     )
 
-    assert len(processed) == 2
-    assert any("img1" in s for s in processed)
-    assert any("img3" in s for s in processed)
-    assert not any("img2" in s for s in processed)
+    sources = [call.args[0] for call in client.copy.call_args_list]
+    assert len(sources) == 2
+    assert any("img1" in s for s in sources)
+    assert any("img3" in s for s in sources)
+    assert not any("img2" in s for s in sources)
 
 
 def test_extract_checksums_empty_image_url_raises(tmp_path: Path) -> None:
@@ -439,13 +429,13 @@ def test_extract_checksums_missing_binaries_path_raises(tmp_path: Path) -> None:
         [{"name": "c1", "containerImage": "registry.io/img:v1"}],
     )
 
-    def _copy_without_binaries(source: str, dest: str) -> subprocess.CompletedProcess[str]:
+    def _copy_without_binaries(source: str, dest: str, **kwargs) -> None:
         dest_path = Path(dest.removeprefix("dir:"))
         digest = _make_empty_layer_tar(dest_path)
         _write_manifest(dest_path, [digest])
-        return subprocess.CompletedProcess(
-            args=["skopeo", "copy"], returncode=0, stdout="", stderr=""
-        )
+
+    client = mock.MagicMock(spec=SkopeoClient)
+    client.copy.side_effect = _copy_without_binaries
 
     with pytest.raises(ValueError, match="does not contain the 'releases' directory"):
         ecfi.extract_checksums(
@@ -454,33 +444,34 @@ def test_extract_checksums_missing_binaries_path_raises(tmp_path: Path) -> None:
             data_dir,
             "releases",
             rel,
-            copy_image=_copy_without_binaries,
+            skopeo_client=client,
         )
 
 
 def test_extract_checksums_skopeo_failure_raises(tmp_path: Path) -> None:
-    """Non-zero skopeo exit code raises CalledProcessError."""
+    """Skopeo copy failure raises SkopeoClientError."""
     snapshot_path, data_path, data_dir, rel = _setup_extract(
         tmp_path,
         [{"name": "c1", "containerImage": "registry.io/img:v1"}],
     )
 
-    def _failing_copy(source: str, dest: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(
-            args=["skopeo", "copy"],
-            returncode=1,
-            stdout="",
-            stderr="unauthorized",
-        )
+    client = mock.MagicMock(spec=SkopeoClient)
+    client.copy.side_effect = SkopeoClientError(
+        "Skopeo command failed with exit code 1",
+        command=["skopeo", "copy"],
+        returncode=1,
+        stdout="",
+        stderr="unauthorized",
+    )
 
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(SkopeoClientError):
         ecfi.extract_checksums(
             snapshot_path,
             data_path,
             data_dir,
             "releases",
             rel,
-            copy_image=_failing_copy,
+            skopeo_client=client,
         )
 
 
@@ -495,8 +486,8 @@ def test_extract_checksums_returns_correct_relative_path(
     rel = "deep/nested/snapshot.json"
     _write_snapshot(data_dir / rel, [{"name": "c1", "containerImage": "r/i:1"}])
 
-    def _noop_copy(source: str, dest: str) -> subprocess.CompletedProcess[str]:
-        return _stub_copy(source, dest)
+    client = mock.MagicMock(spec=SkopeoClient)
+    client.copy.side_effect = _stub_copy
 
     result = ecfi.extract_checksums(
         data_dir / rel,
@@ -504,7 +495,7 @@ def test_extract_checksums_returns_correct_relative_path(
         data_dir,
         "releases",
         rel,
-        copy_image=_noop_copy,
+        skopeo_client=client,
     )
 
     assert result == "deep/nested/binaries"
@@ -527,18 +518,24 @@ def test_extract_checksums_temp_dir_cleaned_on_failure(
         created_dirs.append(Path(d))
         return d
 
-    def _failing_copy(source: str, dest: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="fail")
+    client = mock.MagicMock(spec=SkopeoClient)
+    client.copy.side_effect = SkopeoClientError(
+        "Skopeo command failed with exit code 1",
+        command=["skopeo", "copy"],
+        returncode=1,
+        stdout="",
+        stderr="fail",
+    )
 
     with mock.patch.object(ecfi.tempfile, "mkdtemp", _tracking_mkdtemp):
-        with pytest.raises(subprocess.CalledProcessError):
+        with pytest.raises(SkopeoClientError):
             ecfi.extract_checksums(
                 snapshot_path,
                 data_path,
                 data_dir,
                 "releases",
                 rel,
-                copy_image=_failing_copy,
+                skopeo_client=client,
             )
 
     assert created_dirs
