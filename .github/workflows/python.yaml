@@ -27,7 +27,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Black Lint
-        uses: psf/black@d246367ab471cd56298407858661d475c33b3e36  # stable
+        uses: psf/black@ce1897a8f20d0f64844dd666d07f4003500d0e09  # stable
       - name: Setup python environment for flake8 check
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
         with:
