@@ -27,6 +27,12 @@ spec:
       description: >-
         Name of the catalog integration-tests/<name>/ directory to exercise (e.g. e2e). Same param as
         catalog e2e; compared to find-affected-tasks’ affected suite list.
+    - name: PIPELINE_TEST_SUITE_VARS
+      type: string
+      description: >-
+        A JSON string containing key-value pairs of variables to be passed to the test suite.
+        These will be available as environment variables in the test task.
+      default: "{}"
     - name: PIPELINE_USED
       type: string
       description: >-
@@ -374,6 +380,8 @@ spec:
           value: $(params.GITHUB_TOKEN_SECRET_NAME)
         - name: KUBECONFIG_SECRET_NAME
           value: $(params.KUBECONFIG_SECRET_NAME)
+        - name: PIPELINE_TEST_SUITE_VARS
+          value: $(params.PIPELINE_TEST_SUITE_VARS)
         - name: orchestrationKubeconfigSecretName
           value: $(params.orchestrationKubeconfigSecretName)
         - name: e2eWaitTimeout
@@ -391,6 +399,7 @@ spec:
           - name: VAULT_PASSWORD_SECRET_NAME
           - name: GITHUB_TOKEN_SECRET_NAME
           - name: KUBECONFIG_SECRET_NAME
+          - name: PIPELINE_TEST_SUITE_VARS
           - name: orchestrationKubeconfigSecretName
           - name: e2eWaitTimeout
           - name: parentPipelineRun
@@ -415,6 +424,7 @@ spec:
               export CATALOG_GIT_URL="$(params.catalogGitUrl)"
               export CATALOG_GIT_REVISION="$(params.catalogGitRevision)"
               export PIPELINE_TEST_SUITE="$(params.PIPELINE_TEST_SUITE)"
+              export PIPELINE_TEST_SUITE_VARS="$(params.PIPELINE_TEST_SUITE_VARS)"
               export PIPELINE_USED="$(params.PIPELINE_USED)"
               export VAULT_PASSWORD_SECRET_NAME="$(params.VAULT_PASSWORD_SECRET_NAME)"
               export GITHUB_TOKEN_SECRET_NAME="$(params.GITHUB_TOKEN_SECRET_NAME)"

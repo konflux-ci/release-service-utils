@@ -10,11 +10,17 @@ from pathlib import Path
 
 
 def require_env(name: str) -> str:
+    """Return the value of the environment variable ``name``."""
     v = os.environ.get(name, "").strip()
     if not v:
         print(f"ERROR: {name} is required", file=sys.stderr)
         sys.exit(1)
     return v
+
+
+def opt_env(name: str, default: str) -> str:
+    """Like ``require_env``, but returns ``default`` if the variable is not set or is empty."""
+    return os.environ.get(name, default).strip()
 
 
 # Any registry/repo path ending in /release-service-utils with :tag or @digest.
