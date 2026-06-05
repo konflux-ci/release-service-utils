@@ -40,26 +40,19 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           uv sync --dev
           uv run pytest --cov=. --cov-report=xml:coverage.xml
+      - name: Get changed Python files
+        id: changed-files
+        uses: tj-actions/changed-files@c3a1bb2c992d77180ae65be6ae6c166cf40f857c  # v45
+        with:
+          files: |
+            **/*.py
       - name: docstring test
+        if: steps.changed-files.outputs.any_changed == 'true'
         run: |
-          # Get list of changed python files
           pip install ruff
-          FILES=$(gh pr view ${{ github.event.pull_request.number }} --json files --jq '.files.[].path')
-          PYFILES=""
-          for _file in ${FILES}; do
-            echo "Checking file : $_file"
-            if [[ $(file --mime-type "$_file" | cut -d" " -f 2) == "text/x-script.python" ]]; then
-              PYFILES="$PYFILES $_file "
-            else
-              echo "Skipping non-python file: $_file"
-            fi
-          done
-          if [ -z "$PYFILES" ]; then
-            echo "No Python files changed."
-          else
-            echo "Running ruff on: $PYFILES"
-            ruff check --select D ${PYFILES}
-          fi
+          echo "Running ruff on changed Python files:"
+          echo "${{ steps.changed-files.outputs.all_changed_files }}"
+          ruff check --select D ${{ steps.changed-files.outputs.all_changed_files }}
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354  # v6
         with:
