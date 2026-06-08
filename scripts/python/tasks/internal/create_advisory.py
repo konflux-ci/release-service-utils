@@ -246,6 +246,34 @@ def _finish_if_all_content_already_published(
     return False
 
 
+def _read_signing_key_from_config_map(
+    config_map_name: str,
+    *,
+    stderr_path: Path,
+) -> str:
+    """Return `SIG_KEY_NAMES` from the configmap, or `SIG_KEY_NAME` if absent."""
+    raw = subprocess_cmd.run_cmd(
+        [
+            "kubectl",
+            "get",
+            "configmap",
+            config_map_name,
+            "-o",
+            "json",
+        ],
+        stderr_path=stderr_path,
+    ).stdout
+    data = json.loads(raw).get("data") or {}
+    signing_key = (data.get("SIG_KEY_NAMES") or data.get("SIG_KEY_NAME") or "").strip()
+    if not signing_key:
+        msg = (
+            f"configmap {config_map_name!r} has neither SIG_KEY_NAMES nor "
+            f"SIG_KEY_NAME data"
+        )
+        raise ValueError(msg)
+    return signing_key
+
+
 def _build_merged_advisory_with_signing_key(
     decoded: dict[str, Any],
     content_file: Path,
@@ -258,21 +286,10 @@ def _build_merged_advisory_with_signing_key(
     merged = json.loads(json.dumps(decoded))
     merged_content_rows = json.loads(content_file.read_text(encoding="utf-8"))
     advisory_data.set_decoded_content_array(merged, content_list_path, merged_content_rows)
-    # Signing key name comes from cluster config; merged JSON is what the template sees.
-    signing_key = subprocess_cmd.run_cmd(
-        [
-            "kubectl",
-            "get",
-            "configmap",
-            config_map_name,
-            "-o",
-            "jsonpath={.data.SIG_KEY_NAME}",
-        ],
+    signing_key = _read_signing_key_from_config_map(
+        config_map_name,
         stderr_path=stderr_path,
-    ).stdout.strip()
-    if not signing_key:
-        msg = f"configmap {config_map_name!r} has no SIG_KEY_NAME data"
-        raise ValueError(msg)
+    )
     # Only fill signingKey when a row does not already have one (see advisory_data).
     advisory_data.append_signing_key_to_content(merged, content_list_path, signing_key)
     return merged
