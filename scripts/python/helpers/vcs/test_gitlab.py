@@ -13,6 +13,7 @@ from . import gitlab
 
 
 def test_read_credentials_from_mount(tmp_path: Path) -> None:
+    """Load GitLab host, token, author, and repo URL from a secret mount."""
     secret = tmp_path / "secret"
     secret.mkdir()
     (secret / "gitlab_host").write_text("gitlab.example.com", encoding="utf-8")
@@ -27,6 +28,7 @@ def test_read_credentials_from_mount(tmp_path: Path) -> None:
 
 
 def test_export_env_for_image_helpers(tmp_path: Path) -> None:
+    """Export GitLab credentials to env vars for image helper scripts."""
     secret = tmp_path / "secret"
     secret.mkdir()
     (secret / "gitlab_host").write_text("h", encoding="utf-8")
@@ -41,6 +43,7 @@ def test_export_env_for_image_helpers(tmp_path: Path) -> None:
 
 
 def test_raw_file_url() -> None:
+    """Build a GitLab raw file URL for a path on the default branch."""
     url = gitlab.raw_file_url(
         "https://gitlab.example.com/g/r.git",
         "path/to/file.yaml",
@@ -49,6 +52,7 @@ def test_raw_file_url() -> None:
 
 
 def test_configure_git_oauth2_auth_sets_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configure OAuth2 token and GIT_ASKPASS for non-interactive git."""
     monkeypatch.delenv("GIT_ASKPASS", raising=False)
     gitlab.configure_git_oauth2_auth("my-token")
     assert os.environ["GITLAB_OAUTH2_TOKEN"] == "my-token"
@@ -57,7 +61,9 @@ def test_configure_git_oauth2_auth_sets_env(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_clone_project_sparse_delegates_to_git(tmp_path: Path) -> None:
-    with mock.patch.object(git, "clone", return_value=tmp_path / "repo") as m:
+    """Sparse-clone via `git.clone` using an OAuth2-authenticated URL."""
+    repo_root = tmp_path / "repo"
+    with mock.patch.object(git, "clone", return_value=repo_root) as m:
         out = gitlab.clone_project_sparse(
             "https://gitlab.example.com/g/r.git",
             "main",
@@ -65,7 +71,7 @@ def test_clone_project_sparse_delegates_to_git(tmp_path: Path) -> None:
             parent_dir=tmp_path,
             stderr_path=None,
         )
-    assert out == tmp_path / "repo"
+    assert out is repo_root
     m.assert_called_once()
     assert m.call_args.args[1] == "https://gitlab.example.com/g/r.git"
     assert "oauth2:" not in m.call_args.args[1]
