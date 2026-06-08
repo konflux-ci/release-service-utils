@@ -29,8 +29,7 @@ class GitLabCredentials:
 
 
 def read_credentials_from_mount(secret_mount: Path) -> GitLabCredentials:
-    """
-    Load credentials from *secret_mount*, where each field is a separate file:
+    """Load credentials from *secret_mount*, where each field is a separate file.
 
     `gitlab_host`, `gitlab_access_token`, `git_author_name`,
     `git_author_email`, `git_repo`.
@@ -53,8 +52,7 @@ def export_env_for_image_helpers(credentials: GitLabCredentials) -> None:
 
 
 def configure_git_oauth2_auth(access_token: str) -> None:
-    """
-    Set process env so git HTTPS uses OAuth2 without embedding the token in URLs.
+    """Set process env so git HTTPS uses OAuth2 without embedding the token in URLs.
 
     Installs a small `GIT_ASKPASS` helper for clone, fetch, and push in this
     process. Call once before any GitLab git operations.
@@ -88,11 +86,12 @@ def clone_project_sparse(
     parent_dir: Path,
     stderr_path: Path | None,
 ) -> Path:
-    """
-    Shallow sparse clone of a GitLab *repository* HTTPS URL.
+    """Shallow sparse clone of a GitLab *repository* HTTPS URL.
 
     Requires `configure_git_oauth2_auth()` in this process so git can
     authenticate without a token embedded in the clone URL.
+
+    Returns the repository root directory.
     """
     return git.clone(
         parent_dir,
