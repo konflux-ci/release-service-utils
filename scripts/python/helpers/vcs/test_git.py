@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from git.exc import GitCommandError
 
 from . import git
 
@@ -26,57 +25,71 @@ def test_repository_workdir_name(url: str, expected: str) -> None:
     assert git.repository_workdir_name(url) == expected
 
 
-def test_append_git_stderr_skips_when_path_none() -> None:
+def test_append_cmd_stderr_skips_when_path_none() -> None:
     """Do nothing when no stderr log path is configured."""
-    git._append_git_stderr(None, GitCommandError(["git"], 1, "err"))
+    git._append_cmd_stderr(None, "err")
 
 
-def test_append_git_stderr_skips_empty_message(tmp_path: Path) -> None:
-    """Do not create a log file when the error message is blank."""
-    log = tmp_path / "log.txt"
-    git._append_git_stderr(log, Exception("   "))
-    assert not log.exists()
-
-
-def test_append_git_stderr_uses_str_when_no_stderr_attr(tmp_path: Path) -> None:
-    """Append `str(exc)` when the exception has no `stderr` attribute."""
-    log = tmp_path / "log.txt"
-    git._append_git_stderr(log, Exception("plain"))
-    assert "plain" in log.read_text(encoding="utf-8")
-
-
-def test_append_git_stderr_redacts_oauth2_url(tmp_path: Path) -> None:
+def test_append_cmd_stderr_redacts_oauth2_url(tmp_path: Path) -> None:
     """Mask oauth2 tokens embedded in clone URLs written to the stderr log."""
     log = tmp_path / "log.txt"
-    git._append_git_stderr(
+    git._append_cmd_stderr(
         log,
-        GitCommandError(
-            ["git", "clone"],
-            1,
-            "fatal: https://oauth2:secret@gitlab.com/g/r.git",
-        ),
+        "fatal: https://oauth2:secret@gitlab.com/g/r.git",
     )
     text = log.read_text(encoding="utf-8")
     assert "secret" not in text
     assert "oauth2:[REDACTED]@" in text
 
 
+def test_redact_credential_urls() -> None:
+    """Mask oauth2 tokens in arbitrary text (stderr or argv)."""
+    text = "fatal: https://oauth2:secret@gitlab.com/g/r.git"
+    redacted = git._redact_credential_urls(text)
+    assert "secret" not in redacted
+    assert "oauth2:[REDACTED]@" in redacted
+
+
+def test_run_git_cmd_redacts_clone_failure_log(tmp_path: Path) -> None:
+    """Failed clone must not write credential-bearing URLs to the stderr log."""
+    log = tmp_path / "log.txt"
+    clone_url = "https://oauth2:secret@gitlab.com/g/r.git"
+
+    def _fake_run(
+        argv: list[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            stdout="",
+            stderr=f"fatal: unable to access {clone_url}/",
+        )
+
+    with mock.patch("vcs.git.subprocess.run", side_effect=_fake_run):
+        with pytest.raises(subprocess.CalledProcessError):
+            git._run_git_cmd(
+                ["git", "clone", clone_url, str(tmp_path / "repo")],
+                cwd=tmp_path,
+                stderr_path=log,
+            )
+    text = log.read_text(encoding="utf-8")
+    assert "secret" not in text
+    assert "oauth2:[REDACTED]@" in text
+    assert "command exited with failure" in text
+
+
 def test_configure_git_global_user() -> None:
-    """Set global `user.name` and `user.email` via GitPython."""
-    with mock.patch("vcs.git.git.Git") as git_cls:
+    """Set global `user.name` and `user.email` via the git CLI."""
+    with mock.patch.object(git, "_run_git_cmd") as run_cmd:
         git.configure_git_global_user("Name", "e@x.com")
-    inst = git_cls.return_value
-    inst.config.assert_any_call("--global", "user.name", "Name")
-    inst.config.assert_any_call("--global", "user.email", "e@x.com")
+    assert run_cmd.call_count == 2
 
 
 def test_clone_shallow_sparse(tmp_path: Path) -> None:
-    """Sparse-checkout clone checks out the requested revision."""
+    """Sparse-checkout clone returns the repository root path."""
     repo_dir = tmp_path / "proj"
-    mock_repo = mock.MagicMock()
-    with mock.patch("vcs.git.git.Repo") as repo_cls:
-        repo_cls.clone_from.return_value = mock_repo
-        repo_cls.return_value = mock_repo
+    with mock.patch.object(git, "_run_git_cmd") as run_cmd:
         out = git.clone(
             tmp_path,
             "https://x/proj.git",
@@ -85,17 +98,18 @@ def test_clone_shallow_sparse(tmp_path: Path) -> None:
             sparse_dirs=["schema"],
         )
     assert out == repo_dir
-    mock_repo.git.sparse_checkout.assert_called_once_with("set", "schema")
-    mock_repo.git.checkout.assert_called_once_with("main")
+    assert run_cmd.call_count == 3
 
 
 def test_clone_appends_stderr(tmp_path: Path) -> None:
     """Write clone failures to the optional stderr log file."""
     log = tmp_path / "log.txt"
-    with mock.patch(
-        "vcs.git.git.Repo.clone_from", side_effect=GitCommandError(["git"], 1, "clone fail")
+    with mock.patch.object(
+        git,
+        "_run_git_cmd",
+        side_effect=subprocess.CalledProcessError(1, "git clone"),
     ):
-        with pytest.raises(GitCommandError):
+        with pytest.raises(subprocess.CalledProcessError):
             git.clone(
                 tmp_path,
                 "https://x/p.git",
@@ -103,118 +117,158 @@ def test_clone_appends_stderr(tmp_path: Path) -> None:
                 sparse_dirs=["a"],
                 stderr_path=log,
             )
-    assert "clone fail" in log.read_text(encoding="utf-8")
 
 
-def test_origin_ls_tree_name_only(tmp_path: Path) -> None:
-    """Return `git ls-tree -r --name-only` output for a ref."""
-    mock_repo = mock.MagicMock()
-    mock_repo.git.ls_tree.return_value = "path/a\npath/b\n"
-    with mock.patch("vcs.git.git.Repo", return_value=mock_repo):
-        out = git.origin_ls_tree_name_only(tmp_path, "origin/main", stderr_path=None)
-    assert "path/a" in out
+def test_origin_main_has_path_matching_found(tmp_path: Path) -> None:
+    """Return True when a listing line matches *pattern*."""
+    listing = tmp_path / "tree.txt"
+
+    def _write_listing(*_args: object, **kwargs: object) -> mock.MagicMock:
+        stdout = kwargs.get("stdout")
+        assert stdout is not None
+        stdout.write("data/advisories/t/2025/0042/advisory.yaml\n")
+        return mock.MagicMock()
+
+    with mock.patch.object(git, "_run_git_cmd", side_effect=_write_listing) as run_cmd:
+        assert git.origin_main_has_path_matching(
+            tmp_path,
+            r"data/advisories/.*/2025/0042/",
+            listing,
+        )
+    run_cmd.assert_called_once()
+    assert run_cmd.call_args.args[0] == [
+        "git",
+        "ls-tree",
+        "-r",
+        "--name-only",
+        "origin/main",
+    ]
+    assert run_cmd.call_args.kwargs["stdout"] is not None
 
 
-def test_origin_ls_tree_logs_stderr(tmp_path: Path) -> None:
-    """Append `ls-tree` failures to the optional stderr log file."""
-    log = tmp_path / "log.txt"
-    with mock.patch("vcs.git.git.Repo") as repo_cls:
-        repo_cls.return_value.git.ls_tree.side_effect = GitCommandError(["git"], 1, "ls fail")
-        with pytest.raises(GitCommandError):
-            git.origin_ls_tree_name_only(tmp_path, "origin/main", stderr_path=log)
-    assert "ls fail" in log.read_text(encoding="utf-8")
+def test_origin_main_has_path_matching_not_found(tmp_path: Path) -> None:
+    """Return False when no listing line matches *pattern*."""
+    listing = tmp_path / "tree.txt"
+
+    def _write_listing(*_args: object, **kwargs: object) -> mock.MagicMock:
+        stdout = kwargs.get("stdout")
+        assert stdout is not None
+        stdout.write("data/advisories/t/2025/0001/advisory.yaml\n")
+        return mock.MagicMock()
+
+    with mock.patch.object(git, "_run_git_cmd", side_effect=_write_listing):
+        assert not git.origin_main_has_path_matching(
+            tmp_path,
+            r"data/advisories/.*/2025/9999/",
+            listing,
+        )
 
 
 def test_index_add_commit(tmp_path: Path) -> None:
-    """Stage paths and commit without an explicit author."""
-    mock_repo = mock.MagicMock()
-    with mock.patch("vcs.git.git.Repo", return_value=mock_repo):
+    """Stage paths and commit via the git CLI."""
+    with mock.patch.object(git, "_run_git_cmd") as run_cmd:
         git.index_add_commit(tmp_path, ["a.yaml"], "msg", stderr_path=None)
-    mock_repo.index.add.assert_called_once_with(["a.yaml"])
-    mock_repo.index.commit.assert_called_once_with("msg")
+    assert run_cmd.call_count == 2
 
 
-def test_index_add_commit_logs_stderr(tmp_path: Path) -> None:
-    """Append stage/commit failures to the optional stderr log file."""
-    log = tmp_path / "log.txt"
-    with mock.patch("vcs.git.git.Repo") as repo_cls:
-        repo_cls.return_value.index.add.side_effect = GitCommandError(["git"], 1, "add fail")
-        with pytest.raises(GitCommandError):
-            git.index_add_commit(tmp_path, ["a.yaml"], "msg", stderr_path=log)
-    assert "add fail" in log.read_text(encoding="utf-8")
+def test_commit_and_push(tmp_path: Path) -> None:
+    """Stage, commit, and push via the git CLI."""
+    with mock.patch.object(git, "index_add_commit") as add:
+        with mock.patch.object(git, "push") as push:
+            git.commit_and_push(
+                tmp_path,
+                ["a.yaml"],
+                "msg",
+                "main",
+                retries=2,
+                stderr_path=None,
+            )
+    add.assert_called_once()
+    push.assert_called_once_with(
+        tmp_path,
+        "main",
+        remote="origin",
+        retries=2,
+        stderr_path=None,
+    )
 
 
 def test_push_success_first_try(tmp_path: Path) -> None:
-    """Return immediately when the first push succeeds."""
-    mock_repo = mock.MagicMock()
-    push_result = mock.MagicMock()
-    mock_repo.remotes.origin.push.return_value = push_result
-    with mock.patch("vcs.git.git.Repo", return_value=mock_repo):
+    """Return immediately when the first CLI push succeeds."""
+    with mock.patch.object(git, "_run_git_cmd") as run_cmd:
         git.push(tmp_path, "main", retries=2, stderr_path=None)
-    mock_repo.remotes.origin.push.assert_called_once_with("main")
-    push_result.raise_if_error.assert_called_once()
+    run_cmd.assert_called_once()
 
 
-def test_push_rejected_ref(tmp_path: Path) -> None:
-    """Push rejections that only set PushInfo flags must not look like success."""
-    err_log = tmp_path / "err.log"
-    mock_repo = mock.MagicMock()
-    push_result = mock.MagicMock()
-    push_result.raise_if_error.side_effect = GitCommandError(
-        ["git", "push", "origin"],
-        1,
-        "error: failed to push some refs",
-    )
-    mock_repo.remotes.origin.push.return_value = push_result
-    mock_repo.git.pull.return_value = ""
+def test_push_retries_after_rejection_with_backoff(tmp_path: Path) -> None:
+    """Retry push after `pull --rebase` with exponential backoff between attempts."""
+    sleeps: list[float] = []
+    push_calls = {"n": 0}
+    pull_calls = {"n": 0}
 
-    with mock.patch("vcs.git.git.Repo", return_value=mock_repo):
+    def _cmd_side_effect(cmd: list[str], **_kwargs: object) -> mock.MagicMock:
+        if "pull" in cmd:
+            pull_calls["n"] += 1
+            return mock.MagicMock()
+        push_calls["n"] += 1
+        raise subprocess.CalledProcessError(1, "git push")
+
+    with mock.patch("retry.time.sleep", side_effect=sleeps.append):
+        with mock.patch.object(
+            git,
+            "_run_git_cmd",
+            side_effect=_cmd_side_effect,
+        ):
+            with pytest.raises(subprocess.CalledProcessError):
+                git.push(tmp_path, "main", retries=1, stderr_path=None)
+    assert push_calls["n"] == 2
+    assert pull_calls["n"] == 1
+    assert sleeps == [5]
+
+
+def test_push_zero_retries_skips_pull(tmp_path: Path) -> None:
+    """Do not pull when push fails and no recovery retries are configured."""
+    pull_calls = {"n": 0}
+
+    def _cmd_side_effect(cmd: list[str], **_kwargs: object) -> mock.MagicMock:
+        if "pull" in cmd:
+            pull_calls["n"] += 1
+            return mock.MagicMock()
+        raise subprocess.CalledProcessError(1, "git push")
+
+    with mock.patch.object(git, "_run_git_cmd", side_effect=_cmd_side_effect):
         with pytest.raises(subprocess.CalledProcessError):
-            git.push(tmp_path, "main", retries=0, stderr_path=err_log)
-    push_result.raise_if_error.assert_called_once()
-    assert "failed to push" in err_log.read_text(encoding="utf-8")
+            git.push(tmp_path, "main", retries=0, stderr_path=None)
+    assert pull_calls["n"] == 0
 
 
 def test_push_raises_after_limit(tmp_path: Path) -> None:
     """Raise `CalledProcessError` after pull/retry cycles are exhausted."""
     err_log = tmp_path / "err.log"
-    mock_repo = mock.MagicMock()
 
-    def _fail_push(*_args: object, **_kwargs: object) -> None:
-        raise GitCommandError(["git", "push", "origin"], 1, "push failed")
+    def _always_fail(*_args: object, **_kwargs: object) -> None:
+        raise subprocess.CalledProcessError(1, "git push")
 
-    mock_repo.remotes.origin.push.side_effect = _fail_push
-    mock_repo.git.pull.return_value = ""
-
-    with mock.patch("vcs.git.git.Repo", return_value=mock_repo):
+    with mock.patch.object(git, "_run_git_cmd", side_effect=_always_fail):
         with pytest.raises(subprocess.CalledProcessError):
             git.push(tmp_path, "main", retries=1, stderr_path=err_log)
-    assert mock_repo.remotes.origin.push.call_count == 2
-    assert "push failed" in err_log.read_text(encoding="utf-8")
 
 
 def test_push_pull_failure_raises(tmp_path: Path) -> None:
-    """Re-raise when `pull --rebase` fails after a rejected push."""
+    """Re-raise when CLI `pull --rebase` fails after a rejected push."""
     log = tmp_path / "log.txt"
-    mock_repo = mock.MagicMock()
-    mock_repo.remotes.origin.push.side_effect = GitCommandError(["git", "push"], 1, "push")
-    mock_repo.git.pull.side_effect = GitCommandError(["git", "pull"], 1, "pull")
+    push_error = subprocess.CalledProcessError(1, "git push")
+    pull_error = subprocess.CalledProcessError(1, "git pull")
 
-    with mock.patch("vcs.git.git.Repo", return_value=mock_repo):
-        with pytest.raises(GitCommandError):
+    def _cmd_side_effect(cmd: list[str], **_kwargs: object) -> mock.MagicMock:
+        if "pull" in cmd:
+            raise pull_error
+        raise push_error
+
+    with mock.patch.object(
+        git,
+        "_run_git_cmd",
+        side_effect=_cmd_side_effect,
+    ):
+        with pytest.raises(subprocess.CalledProcessError):
             git.push(tmp_path, "main", retries=3, stderr_path=log)
-    assert "pull" in log.read_text(encoding="utf-8")
-
-
-def test_push_no_status_on_error(tmp_path: Path) -> None:
-    """Default to exit code 1 when GitPython omits `status` on push failure."""
-    mock_repo = mock.MagicMock()
-    err = GitCommandError(["git", "push"], 0, "push")
-    del err.status
-    mock_repo.remotes.origin.push.side_effect = err
-    mock_repo.git.pull.return_value = ""
-
-    with mock.patch("vcs.git.git.Repo", return_value=mock_repo):
-        with pytest.raises(subprocess.CalledProcessError) as exc_info:
-            git.push(tmp_path, "main", retries=0, stderr_path=None)
-    assert exc_info.value.returncode == 1

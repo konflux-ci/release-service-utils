@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import sys
 import tempfile
@@ -34,9 +33,9 @@ import file
 import http_client
 import internal_request
 import requests
-import yaml
 import subprocess_cmd
 import tekton
+import yaml
 from jsonschema import ValidationError
 from jsonschema.validators import validator_for
 from requests_kerberos import OPTIONAL, HTTPKerberosAuth
@@ -186,8 +185,7 @@ def _finish_if_all_content_already_published(
     stderr_path: Path,
     result_paths: dict[str, Path],
 ) -> bool:
-    """
-    Walk existing advisories (newest first) and filter *content_file*.
+    """Walk existing advisories (newest first) and filter *content_file*.
 
     Return True when every row was already published and success results were
     written; False when a new advisory must be created.
@@ -304,16 +302,19 @@ def _ensure_advisory_number_unused(
     repo_root: Path,
     year: str,
     advisory_number_segment: str,
+    listing_path: Path,
     *,
     stderr_path: Path,
 ) -> None:
     # Another pipeline may have pushed the same year/number.
     # Sparse clone may not list every tenant path.
-    origin_main_tree = git.origin_ls_tree_name_only(
-        repo_root, "origin/main", stderr_path=stderr_path
-    )
-    duplicate_pattern = re.compile(rf"data/advisories/.*/{year}/{advisory_number_segment}/")
-    if any(duplicate_pattern.search(tree_line) for tree_line in origin_main_tree.splitlines()):
+    pattern = rf"data/advisories/.*/{year}/{advisory_number_segment}/"
+    if git.origin_main_has_path_matching(
+        repo_root,
+        pattern,
+        listing_path,
+        stderr_path=stderr_path,
+    ):
         msg = f"An advisory with number {advisory_number_segment} already exists"
         raise ValueError(msg)
 
@@ -375,15 +376,10 @@ def _commit_and_push_new_advisory(
     *,
     stderr_path: Path,
 ) -> None:
-    git.index_add_commit(
+    git.commit_and_push(
         repo_root,
         [yaml_repo_path],
         f"[Konflux Release] new advisory for {component_group}",
-        stderr_path=stderr_path,
-    )
-    # Rebase on push handles concurrent advisory commits to the same default branch.
-    git.push(
-        repo_root,
         gitlab.DEFAULT_BRANCH,
         retries=5,
         stderr_path=stderr_path,
@@ -504,10 +500,12 @@ def run_create_advisory(
         )
         # Directory name under data/advisories/<origin>/<year>/ (four-digit live id).
         advisory_number_segment = f"{live_num:04d}"
+        origin_ls_tree_listing = work_dir / "origin_ls_tree.txt"
         _ensure_advisory_number_unused(
             repo_root,
             year,
             advisory_number_segment,
+            origin_ls_tree_listing,
             stderr_path=stderr_path,
         )
         portal_advisory_id = f"{year}:{advisory_number_segment}"
@@ -533,6 +531,11 @@ def run_create_advisory(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry: decode advisory JSON, run the workflow, and write Tekton results.
+
+    Always returns 0; logical success is ``Success`` in ``RESULT_RESULT``, and
+    failures are recorded there via ``write_failure_result``.
+    """
     (
         path_step_result,
         path_advisory_url,
