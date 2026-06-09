@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
-"""
-This script interacts with the Content Gateway (CGW) API to create and manage content files.
-It ensures each file is checked before creation and skips files that already exist.
-The script is idempotent, it can be executed multiple times as long as the label,
-short URL, and download URL remain unchanged.
+"""Interact with the Content Gateway (CGW) API to create and manage content files.
 
-### **Functionality:**
-1. Reads a JSON snapshot containing data that has been injected with contentGateway,
-   files and contentDir.
-2. Validates that all required fields are present and non-empty.
-3. For each `component` entry:
-    - Retrieves the product ID and version ID
-    - Generates metadata for each file listed in `files` and located in the
-      content directory.
-    - Checks for existing files and skips them if they match the label,
-      short URL, and downloadURL.
-    - Creates new files using the metadata.
-    - Rolls back created files if an error occurs during execution.
-4. Output all `result_data`.
+Idempotent: each file is checked before creation and skipped when it already
+exists with matching label, short URL, and download URL.
+
+Functionality:
+
+1. Read a JSON snapshot containing data injected with contentGateway,
+   files, and contentDir.
+2. Validate that all required fields are present and non-empty.
+3. For each ``component`` entry:
+
+   - Retrieve the product ID and version ID.
+   - Generate metadata for each file listed in ``files`` and located in the
+     content directory.
+   - Check for existing files and skip them when they match the label,
+     short URL, and downloadURL.
+   - Create new files using the metadata.
+   - Roll back created files if an error occurs during execution.
+
+4. Output all ``result_data``.
 """
 
 import os
@@ -32,7 +34,7 @@ from utils import cgw_idempotency
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-def parse_args():
+def parse_args(argv=None):
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         prog="publish_to_cgw_wrapper", description="Publish content to the Content Gateway"
@@ -53,11 +55,11 @@ def parse_args():
         help="Simulate the script without API calls",
     )
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def load_data(data_arg):
-    """Load JSON from string"""
+    """Load JSON from string."""
     try:
         return json.loads(data_arg)
     except json.JSONDecodeError:
@@ -65,12 +67,12 @@ def load_data(data_arg):
 
 
 def validate_components(data):
-    """
-    Validates snapshot component data. Skips components without a 'contentGateway'
-    and fails if required fields are missing in either the 'contentGateway'
-    or any listed files. Returns only the valid components.
+    """Validate snapshot component data and return only valid components.
 
-    Note: Filename is always derived from the 'source' field using basename.
+    Skip components without a ``contentGateway`` key and raise ``ValueError``
+    if required fields are missing in ``contentGateway`` or any listed file.
+
+    Note: filename is always derived from the ``source`` field using basename.
     """
     required_cg_keys = ["productCode", "productName", "productVersionName", "contentDir"]
     errors = []
@@ -122,9 +124,9 @@ def validate_components(data):
 
 
 def generate_download_url(content_dir, file_name):
-    """
-    Generate a download URL in this format:
-    /content/origin/files/sha256/{checksum[:2]}{checksum}/{file_name}
+    """Generate a CDN download URL for *file_name* inside *content_dir*.
+
+    URL format: ``/content/origin/files/sha256/{checksum[:2]}/{checksum}/{file_name}``.
     """
     prefix = "/content/origin/files/sha256"
     sha256_hash = hashlib.sha256()
@@ -146,16 +148,17 @@ def generate_metadata(
     mirror_openshift_Push,
     component_index,
 ):
-    """
-    Generate metadata for files listed in 'files' and present in the content_dir.
-    Also includes metadata for checksum files starting with 'sha256' or component name.
+    """Generate CGW file-metadata records for a component's content directory.
+
+    Includes metadata for checksum files (sha256sum.txt, .gpg, .sig) and for
+    every file in ``files`` that is present on disk.
 
     Ordering scheme:
-      - Checksum files get fixed orders 1, 2, 3.
-      - Regular files get order = component_index * 1000 + file_position.
-        This keeps each component's files in a unique range.
-    """
 
+    - Checksum files get fixed orders 1, 2, 3.
+    - Regular files get order = component_index * 1000 + file_position,
+      keeping each component's files in a unique range.
+    """
     logging.info(f"Generating metadata for files in {content_dir}")
 
     default_values_per_component = {
@@ -217,10 +220,9 @@ def generate_metadata(
 
 
 def process_component(*, host, session, component, dry_run=False, component_index):
-    """
-    Process a component retrieve product/version ID,
-    generate metadata, create files, and return the result
-    data (per component)
+    """Process one component: retrieve IDs, generate metadata, and create files.
+
+    Return a result dict with counts and IDs for created, updated, and skipped files.
     """
     productName = component["contentGateway"]["productName"]
     productCode = component["contentGateway"]["productCode"]
@@ -293,79 +295,80 @@ def process_component(*, host, session, component, dry_run=False, component_inde
     return result_data
 
 
-def main():
-    try:
-        args = parse_args()
+def main(argv=None):
+    """Run the CGW publishing workflow end-to-end and return all result records."""
+    args = parse_args(argv)
 
-        USERNAME = os.getenv("CGW_USERNAME")
-        PASSWORD = os.getenv("CGW_PASSWORD")
+    USERNAME = os.getenv("CGW_USERNAME")
+    PASSWORD = os.getenv("CGW_PASSWORD")
 
-        if not USERNAME or not PASSWORD:
-            raise ValueError(
-                "CGW_USERNAME and CGW_PASSWORD environment variables are required"
-            )
+    if not USERNAME or not PASSWORD:
+        raise ValueError("CGW_USERNAME and CGW_PASSWORD environment variables are required")
 
-        session = requests.Session()
-        session.auth = HTTPBasicAuth(USERNAME, PASSWORD)
-        session.headers.update(
-            {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            }
+    session = requests.Session()
+    session.auth = HTTPBasicAuth(USERNAME, PASSWORD)
+    session.headers.update(
+        {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+    )
+
+    data = load_data(args.data_json)
+    components = validate_components(data)
+    if not components:
+        logging.warning("No components eligible for publishing")
+        return []
+
+    all_results = []
+    for num, component in enumerate(components, start=1):
+        content_gateway = component["contentGateway"]
+        logging.info(
+            f"Processing component: {num}/{len(components)} "
+            f"(productName: {content_gateway['productName']} "
+            f"productVersionName: {content_gateway['productVersionName']})"
         )
-
-        data = load_data(args.data_json)
-        components = validate_components(data)
-        if not components:
-            # Exit without error if there are no valid components to publish
-            logging.warning("No components eligible for publishing")
-            exit(0)
-
-        all_results = []
-        for num, component in enumerate(components, start=1):
-            content_gateway = component["contentGateway"]
-            logging.info(
-                f"Processing component: {num}/{len(components)} "
-                f"(productName: {content_gateway['productName']} "
-                f"productVersionName: {content_gateway['productVersionName']})"
+        try:
+            result_data = process_component(
+                host=args.cgw_host,
+                session=session,
+                component=component,
+                dry_run=args.dry_run,
+                component_index=num,
             )
-            try:
-                result_data = process_component(
-                    host=args.cgw_host,
-                    session=session,
-                    component=component,
-                    dry_run=args.dry_run,
-                    component_index=num,
-                )
-                if result_data is None:
-                    continue
+            if result_data is None:
+                continue
 
-                all_results.append(result_data)
+            all_results.append(result_data)
 
-            except Exception as e:
-                if all_results:
-                    logging.warning("Rolling back all created files due to error.")
-                    for result in all_results:
-                        cgw_idempotency.rollback_files(
-                            host=args.cgw_host,
-                            session=session,
-                            product_id=result["product_id"],
-                            version_id=result["product_version_id"],
-                            created_file_ids=result["created_file_ids"],
-                        )
-                raise RuntimeError(
-                    f"Error processing component {num} "
-                    f"(productName: {content_gateway.get('productName')}, "
-                    f"productVersionName: {content_gateway.get('productVersionName')}): {e}"
-                )
-
-        logging.info("Processed result:\n%s", json.dumps(all_results, indent=2))
-        logging.info("All files processed successfully.")
-        return all_results
-    except Exception as e:
-        logging.error(e)
-        exit(1)
+        except Exception as e:
+            if all_results:
+                logging.warning("Rolling back all created files due to error.")
+                for result in all_results:
+                    cgw_idempotency.rollback_files(
+                        host=args.cgw_host,
+                        session=session,
+                        product_id=result["product_id"],
+                        version_id=result["product_version_id"],
+                        created_file_ids=result["created_file_ids"],
+                    )
+            logging.error(
+                "Error processing component %d "
+                "(productName: %s, productVersionName: %s): %s",
+                num,
+                content_gateway.get("productName"),
+                content_gateway.get("productVersionName"),
+                e,
+            )
+            raise SystemExit(1) from e
+    logging.info("Processed result:\n%s", json.dumps(all_results, indent=2))
+    logging.info("All files processed successfully.")
+    return all_results
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logging.error(e)
+        raise SystemExit(1) from e

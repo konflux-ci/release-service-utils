@@ -1,30 +1,23 @@
 #!/usr/bin/env python3
-"""
-Python script to push staged content to CDN using rhsm-pulp and exodus-gw integration.
+"""Push staged content to CDN using rhsm-pulp and exodus-gw integration.
 
-This is a simple wrapper pubtools-pulp-push command that is able to push and publish
-content via Pulp. This wrapper supports pushing content only from staged source
-with unit types supported in rhsm-pulp (as of July 2024).
+Wrapper around ``pubtools-pulp-push`` that supports staged sources with unit
+types supported by rhsm-pulp (as of July 2024).
 
-For more information please refer to documentation:
+Documentation:
+
 * https://release-engineering.github.io/pubtools-pulp/
 * https://release-engineering.github.io/pubtools-exodus/
 * https://release-engineering.github.io/pushsource/
 
 Required env vars for exodus-gw integration:
-* EXODUS_PULP_HOOK_ENABLED
-* EXODUS_GW_CERT
-* EXODUS_GW_KEY
-* EXODUS_GW_URL
-* EXODUS_GW_ENV
+``EXODUS_PULP_HOOK_ENABLED``, ``EXODUS_GW_CERT``, ``EXODUS_GW_KEY``,
+``EXODUS_GW_URL``, ``EXODUS_GW_ENV``.
 
-Optional env vars:
-* EXODUS_GW_TIMEOUT
+Optional: ``EXODUS_GW_TIMEOUT``.
 
-UD cache flush credentials:
-* either use username/password via CLI args
-* or set path to cert/key with env vars: UDCACHE_CERT and UDCACHE_KEY
-
+UD cache flush credentials: pass ``--udcache-user`` / ``--udcache-password``
+via CLI args, or set ``UDCACHE_CERT`` and ``UDCACHE_KEY`` env vars.
 """
 
 import argparse
@@ -55,7 +48,8 @@ EXODUS_ENV_VARS_STRICT = (
 EXODUS_ENV_VARS_OTHERS = ("EXODUS_GW_TIMEOUT",)
 
 
-def parse_args():
+def parse_args(argv=None):
+    """Parse and return command-line arguments for the Pulp push wrapper."""
     parser = argparse.ArgumentParser(
         prog="pulp_push_wrapper",
         description="Push staged content to CDN via rhsm-pulp and exodus-gw.",
@@ -120,10 +114,11 @@ def parse_args():
         default=False,
     )
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def get_source_url(stagedirs):
+    """Validate *stagedirs* paths and return a ``staged:`` source URL."""
     for item in stagedirs:
         if not re.match(r"^/[^,]{1,4000}$", item):
             raise ValueError("Not a valid staging directory: %s" % item)
@@ -132,12 +127,14 @@ def get_source_url(stagedirs):
 
 
 def get_source_dirs(source_url):
+    """Return the list of staging directories encoded in *source_url*."""
     if not source_url.startswith("staged:"):
         return []
     return [item for item in source_url.removeprefix("staged:").split(",") if item]
 
 
 def normalize_timestamped_name(filename):
+    """Return *filename* with any embedded timestamp token removed."""
     tokens = filename.split("-")
     for idx, token in enumerate(tokens):
         # Remove a timestamp-like token between stable filename parts.
@@ -147,6 +144,7 @@ def normalize_timestamped_name(filename):
 
 
 def build_timestamp_search_patterns(filename):
+    """Return sorted regex patterns that match *filename* and its timestamped variants."""
     tokens = filename.split("-")
     patterns = set()
 
@@ -170,6 +168,7 @@ def build_timestamp_search_patterns(filename):
 
 
 def build_repo_file_map(stagedirs):
+    """Return a mapping of repo name → set of filenames found in each staging directory."""
     repo_to_files = {}
     for stagedir in stagedirs:
         if not os.path.isdir(stagedir):
@@ -191,6 +190,7 @@ def build_repo_file_map(stagedirs):
 
 
 def make_ssl_context(cert_file=None, key_file=None):
+    """Create an SSL context, optionally loading a client certificate."""
     ctx = ssl.create_default_context()
     if cert_file and key_file:
         ctx.load_cert_chain(certfile=cert_file, keyfile=key_file)
@@ -200,6 +200,7 @@ def make_ssl_context(cert_file=None, key_file=None):
 
 
 def pulp_request(url, context, payload=None):
+    """Send a JSON request to *url* using *context* and return the decoded response."""
     data = None
     headers = {}
     if payload is not None:
@@ -214,6 +215,7 @@ def pulp_request(url, context, payload=None):
 
 
 def wait_for_task(task_href, context):
+    """Poll *task_href* until the Pulp task finishes, raising on error or timeout."""
     task_url = task_href
     deadline = time.time() + POLL_TIMEOUT_SECONDS
     while time.time() < deadline:
@@ -234,6 +236,7 @@ def wait_for_task(task_href, context):
 
 
 def prune_matching_content_before_push(parsed):
+    """Remove Pulp units that match the staged content before re-pushing."""
     if parsed.no_clean:
         return
 
@@ -310,6 +313,7 @@ def prune_matching_content_before_push(parsed):
 
 
 def settings_to_args(parsed):
+    """Convert parsed arguments to a ``pubtools-pulp-push`` CLI argument list."""
     settings_to_arg_map = {
         "pulp_url": "--pulp-url",
         "pulp_cert": "--pulp-certificate",
@@ -334,11 +338,13 @@ def settings_to_args(parsed):
 
 
 def log_exodus_env():
+    """Log the current values of all exodus-gw environment variables at DEBUG level."""
     for item in EXODUS_ENV_VARS_STRICT + EXODUS_ENV_VARS_OTHERS:
         LOG.debug("%s:%s", item, os.getenv(item, "UNSET"))
 
 
 def validate_args(args):
+    """Assert required exodus-gw env vars are set and convert source list to URL."""
     assert all([os.getenv(item) for item in EXODUS_ENV_VARS_STRICT]), (
         f"Provide all required exodus-gw environment variables: "
         f"{', '.join(EXODUS_ENV_VARS_STRICT)}"
@@ -348,8 +354,9 @@ def validate_args(args):
     return args
 
 
-def main():
-    args = validate_args(parse_args())
+def main(argv=None):
+    """Configure logging, validate arguments, and run ``pubtools-pulp-push``."""
+    args = validate_args(parse_args(argv))
 
     loglevel = logging.DEBUG if args.debug else logging.INFO
 
@@ -389,6 +396,7 @@ def main():
 
 
 def entrypoint():
+    """Entry point for the installed console script."""
     main()
 
 
