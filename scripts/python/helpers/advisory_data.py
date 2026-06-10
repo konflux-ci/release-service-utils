@@ -92,9 +92,9 @@ def decode_advisory_param(advisory_b64gzip: str) -> dict[str, Any]:
 
 
 def content_array_from_decoded(root: dict[str, Any], content_list_path: str) -> list[Any]:
-    """
-    Return the list at *content_list_path* under advisory *root*, or `[]` if
-    missing or not a list.
+    """Return the list at *content_list_path* under advisory *root*.
+
+    Returns `[]` if missing or not a list.
 
     *content_list_path* is a dotted path with an optional leading dot, for
     example `.content.images` or `.content.artifacts`.
@@ -159,12 +159,12 @@ def spec_content_array_from_advisory_yaml(
     doc: dict[str, Any],
     content_list_path: str,
 ) -> list[Any]:
-    """
-    Return the list at *content_list_path* under `doc['spec']` from an advisory
-    YAML document (`metadata` / `spec` layout).
+    """Return the list at *content_list_path* under `doc['spec']`.
 
-    Use the same dotted path as for decoded JSON (e.g. `.content.images`); it
-    is applied under `spec`, not at the document root.
+    Reads from an advisory YAML document that uses the `metadata` / `spec`
+    layout. *content_list_path* is the same dotted path as for decoded JSON
+    (e.g. `.content.images`), but is applied under `spec`, not at the document
+    root.
 
     Walking starts at `doc['spec']`; each segment is the next dict key, same
     rules as `content_array_from_decoded`.
@@ -209,8 +209,7 @@ def template_context_merge(
     advisory_name: str,
     ship_date: str,
 ) -> dict[str, Any]:
-    """
-    Merge *advisory_name* and *ship_date* into *tmpl_data* for Jinja.
+    """Merge *advisory_name* and *ship_date* into *tmpl_data* for Jinja.
 
     Duplicate top-level keys keep the value already in *tmpl_data* (later dict
     in the merge wins).
@@ -237,7 +236,7 @@ def spec_content_json_pointer(content_type: str) -> str:
     """Return the dotted *content_list_path* for *content_type* (under `spec` in YAML)."""
     if content_type == "image":
         return ".content.images"
-    if content_type in ("binary", "generic", "rpm"):
+    if content_type in ("binary", "generic", "rpm", "disk-image"):
         return ".content.artifacts"
     msg = f"Unsupported contentType: {content_type}"
     raise ValueError(msg)
@@ -275,9 +274,9 @@ def filter_content_by_existing(
     *,
     stderr_path: Path | None,
 ) -> str:
-    """
-    Return compact JSON array text: *content_file* rows not already in
-    *existing_file* (idempotency rules for image / rpm / generic / binary).
+    """Return compact JSON array text: *content_file* rows not already in *existing_file*.
+
+    (Idempotency rules for image / rpm / generic / binary / disk-image.)
     """
     try:
         content_rows = json.loads(content_file.read_text(encoding="utf-8"))
@@ -298,7 +297,7 @@ def filter_content_by_existing(
 
     if content_type in ("generic", "binary"):
         filtered = _filter_generic_binary(content_rows, existing_rows)
-    elif content_type == "rpm":
+    elif content_type in ("rpm", "disk-image"):
         filtered = _filter_rpm(content_rows, existing_rows)
     else:
         filtered = _filter_image(content_rows, existing_rows)

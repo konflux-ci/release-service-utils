@@ -23,6 +23,10 @@ def _gzip_b64(obj: dict) -> str:
     return base64.standard_b64encode(gzip.compress(raw)).decode("ascii")
 
 
+def _configmap_signing_key_stdout(signing_key: str = "key1") -> str:
+    return json.dumps({"data": {"SIG_KEY_NAMES": signing_key}})
+
+
 def _write_errata_mount(d: Path) -> None:
     d.mkdir(parents=True, exist_ok=True)
     (d / "name").write_text("svc/test", encoding="utf-8")
@@ -313,21 +317,54 @@ def test_build_merged_advisory_with_signing_key(tmp_path: Path) -> None:
     content.write_text(json.dumps([{"a": 1}]), encoding="utf-8")
     decoded = {"type": "RHSA", "content": {"images": []}}
     with mock.patch("create_advisory.subprocess_cmd.run_cmd") as run:
-        run.return_value = mock.MagicMock(stdout="key-name\n")
+        run.return_value = mock.MagicMock(
+            stdout=json.dumps({"data": {"SIG_KEY_NAMES": "key-name"}}),
+        )
         merged = create_advisory._build_merged_advisory_with_signing_key(
             decoded, content, ".content.images", "cm", stderr_path=tmp_path / "e.log"
         )
     assert merged["content"]["images"][0]["signingKey"] == "key-name"
 
 
+def test_read_signing_key_falls_back_to_sig_key_name(tmp_path: Path) -> None:
+    """Use SIG_KEY_NAME when SIG_KEY_NAMES is absent."""
+    with mock.patch("create_advisory.subprocess_cmd.run_cmd") as run:
+        run.return_value = mock.MagicMock(
+            stdout=json.dumps({"data": {"SIG_KEY_NAME": "legacy-key"}}),
+        )
+        key = create_advisory._read_signing_key_from_config_map(
+            "cm", stderr_path=tmp_path / "e.log"
+        )
+    assert key == "legacy-key"
+
+
+def test_read_signing_key_prefers_sig_key_names(tmp_path: Path) -> None:
+    """Prefer SIG_KEY_NAMES when both configmap keys are set."""
+    with mock.patch("create_advisory.subprocess_cmd.run_cmd") as run:
+        run.return_value = mock.MagicMock(
+            stdout=json.dumps(
+                {
+                    "data": {
+                        "SIG_KEY_NAMES": "names-key",
+                        "SIG_KEY_NAME": "name-key",
+                    }
+                }
+            ),
+        )
+        key = create_advisory._read_signing_key_from_config_map(
+            "cm", stderr_path=tmp_path / "e.log"
+        )
+    assert key == "names-key"
+
+
 def test_build_merged_advisory_with_signing_key_empty_fails(tmp_path: Path) -> None:
-    """Fail when the configmap has no SIG_KEY_NAME value."""
+    """Fail when the configmap has neither signing key field."""
     content = tmp_path / "c.json"
     content.write_text(json.dumps([{"a": 1}]), encoding="utf-8")
     decoded = {"type": "RHSA", "content": {"images": []}}
     with mock.patch("create_advisory.subprocess_cmd.run_cmd") as run:
-        run.return_value = mock.MagicMock(stdout="  \n")
-        with pytest.raises(ValueError, match="SIG_KEY_NAME"):
+        run.return_value = mock.MagicMock(stdout=json.dumps({"data": {}}))
+        with pytest.raises(ValueError, match="SIG_KEY_NAMES nor SIG_KEY_NAME"):
             create_advisory._build_merged_advisory_with_signing_key(
                 decoded, content, ".content.images", "cm", stderr_path=tmp_path / "e.log"
             )
@@ -858,7 +895,7 @@ def test_run_create_advisory_partial_idempotency_creates_new(
         ):
             with mock.patch(
                 "create_advisory.subprocess_cmd.run_cmd",
-                return_value=mock.MagicMock(stdout="key1\n"),
+                return_value=mock.MagicMock(stdout=_configmap_signing_key_stdout()),
             ):
                 with mock.patch("create_advisory._resolve_live_id_number", return_value=1234):
                     with mock.patch("create_advisory._ensure_advisory_number_unused"):
@@ -1268,7 +1305,7 @@ def test_run_create_advisory_happy_path_writes_portal_url(
             ):
                 with mock.patch(
                     "create_advisory.subprocess_cmd.run_cmd",
-                    return_value=mock.MagicMock(stdout="key1\n"),
+                    return_value=mock.MagicMock(stdout=_configmap_signing_key_stdout()),
                 ):
                     with mock.patch(
                         "create_advisory._reserve_errata_live_id", return_value=1234
