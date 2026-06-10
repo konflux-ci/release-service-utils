@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Python script to create a Container Image object in Pyxis
+"""Python script to create a Container Image object in Pyxis.
 
 NOTE: Any change to this file that changes functionality should be posted for review in
 #forum-metadata-guild on slack. No PR changing functionality should be removed without
@@ -64,11 +63,10 @@ MANIFEST_LIST_TYPES = [
 
 
 def setup_argparser() -> Any:  # pragma: no cover
-    """Setup argument parser
+    """Set up argument parser.
 
     :return: Initialized argument parser
     """
-
     parser = argparse.ArgumentParser(description="ContainerImage resource creator.")
 
     parser.add_argument(
@@ -174,11 +172,10 @@ def proxymap(repository: str) -> str:
 
 
 def find_image(pyxis_url, digest: str) -> Any:
-    """Function to find a containerImage with the given digest.
+    """Find a containerImage with the given digest.
 
     :return: the image, if one exists, else None if none found
     """
-
     raw_filter = f'repositories.manifest_schema2_digest=="{digest}";not(deleted==true)'
     # quote is needed to urlparse the quotation marks
     filter_str = quote(raw_filter)
@@ -202,7 +199,7 @@ def find_image(pyxis_url, digest: str) -> Any:
 
 
 def find_repo_in_image(repository_str: str, image: Dict[str, Any]) -> Optional[int]:
-    """Check if a repository already exists in the ContainerImage
+    """Check if a repository already exists in the ContainerImage.
 
     :return: index of repository if repository_str string is found in the ContainerImage
         repositories, None otherwise
@@ -214,16 +211,16 @@ def find_repo_in_image(repository_str: str, image: Dict[str, Any]) -> Optional[i
 
 
 def prepare_parsed_data(args) -> Dict[str, Any]:
-    """Function to extract the data this script needs to create parsed_data.
-       Processes data from:
-        - Architecture from args
-        - ORAS manifest fetch output
-        - Dockerfile content (if provided)
-        - Metadata file with env_variables and labels (if provided)
+    """Extract the data this script needs to create parsed_data.
+
+    Processes data from:
+     - Architecture from args
+     - ORAS manifest fetch output
+     - Dockerfile content (if provided)
+     - Metadata file with env_variables and labels (if provided)
 
     :return: Dict containing processed data from parsed sources
     """
-
     with open(args.oras_manifest_fetch) as json_file:
         oras_manifest_fetch = json.load(json_file)
 
@@ -276,7 +273,7 @@ def prepare_parsed_data(args) -> Dict[str, Any]:
 
 
 def pyxis_tags(tags, date_now):
-    """Return list of tags formatted for pyxis"""
+    """Return list of tags formatted for pyxis."""
     return [
         {
             "added_date": date_now,
@@ -319,7 +316,7 @@ def construct_tags(
 
 
 def repository_digest_values(args):
-    """Return digest values for the repository entry in the image entity"""
+    """Return digest values for the repository entry in the image entity."""
     result = {"manifest_schema2_digest": args.architecture_digest}
     if args.media_type in MANIFEST_LIST_TYPES:
         result["manifest_list_digest"] = args.digest
@@ -327,8 +324,7 @@ def repository_digest_values(args):
 
 
 def create_container_image(args, parsed_data: Dict[str, Any], tags: List[str]):
-    """Function to create a new containerImage entry in a pyxis instance"""
-
+    """Create a new containerImage entry in a pyxis instance."""
     LOGGER.info("Creating new container image")
 
     constructed_tags = construct_tags(tags)
@@ -372,6 +368,7 @@ def create_container_image(args, parsed_data: Dict[str, Any], tags: List[str]):
 def update_container_image_repositories(
     pyxis_url, image_id: str, repositories: List[Dict[str, Any]]
 ):
+    """Update repositories for a container image."""
     LOGGER.info(f"Updating repositories for container image {image_id}")
 
     patch_url = urljoin(pyxis_url, f"v1/images/id/{image_id}")
@@ -444,8 +441,7 @@ def construct_repository(args, tag_dicts):
 
 
 def main():  # pragma: no cover
-    """Main func"""
-
+    """Execute main function."""
     parser = setup_argparser()
     args = parser.parse_args()
     log_level = logging.DEBUG if args.verbose else logging.INFO
