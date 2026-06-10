@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from unittest import mock
 
@@ -250,6 +251,49 @@ def test_run_excludes_sha256sum_from_checksums(
     # sha256sum.txt itself should not appear as a file being checksummed
     lines = [line for line in content.strip().splitlines() if line]
     assert all("sha256sum.txt" not in line.split("  ")[-1] for line in lines)
+
+
+def test_run_cleans_up_remote_dir_on_signing_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Remote directory on checksum host is removed even when signing fails."""
+    monkeypatch.setattr(generate_checksums, "CONTENT_DIR", tmp_path / "artifacts")
+    monkeypatch.setattr(generate_checksums, "SHARED_DIR", tmp_path / "shared")
+    (tmp_path / "shared").mkdir()
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps({"components": [{"name": "prod"}]}))
+    monkeypatch.setenv("AUTHOR", "testuser")
+    monkeypatch.setenv("SIGNING_KEY_NAME", "testkey")
+    _setup_checksum_creds(tmp_path, monkeypatch)
+    _patch_checksum_ssh(monkeypatch)
+    _make_ready_dir(
+        tmp_path / "artifacts",
+        "prod",
+        {"binary-linux-amd64.tar.gz": b"archive content"},
+    )
+
+    cleanup_calls = []
+
+    def fake_check_call(cmd, **kwargs):
+        cmd_str = " ".join(str(c) for c in cmd)
+        if "rpm-sign" in cmd_str and "--clearsign" in cmd_str:
+            raise subprocess.CalledProcessError(1, cmd)
+
+    def fake_subprocess_run(cmd, **kwargs):
+        cleanup_calls.append(cmd)
+        return mock.MagicMock(returncode=0)
+
+    with (
+        mock.patch.object(generate_checksums, "_kinit"),
+        monkeypatch.context() as m,
+    ):
+        m.setattr("subprocess.check_call", fake_check_call)
+        m.setattr("subprocess.run", fake_subprocess_run)
+        with pytest.raises(subprocess.CalledProcessError):
+            generate_checksums.run("IPA.REDHAT.COM", "uid-123")
+
+    assert any(
+        "rm -rf" in " ".join(str(c) for c in cmd) for cmd in cleanup_calls
+    ), "remote cleanup rm -rf should have been called"
 
 
 # ---------------------------------------------------------------------------
