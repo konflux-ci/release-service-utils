@@ -1,1 +1,1 @@
-"""Version-control helpers (`git` and `gitlab` submodules)."""
+"""Version-control helpers: `git`, `gitlab`, and `github` submodules."""
