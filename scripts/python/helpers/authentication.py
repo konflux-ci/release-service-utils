@@ -10,12 +10,16 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Generator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
+import file
 import retry
+from logger import logger
 
 
 def read_mounted_text(mount: Path, filename: str) -> str:
@@ -177,3 +181,79 @@ def setup_docker_config(
             raise ValueError(f"No valid JSON object found in {path}")
         raw = json.dumps(json.loads(raw[first : last + 1]))
     write_docker_config(raw)
+
+
+@contextmanager
+def kerberos_login(
+    principal: str,
+    keytab_bytes: bytes,
+    krb5_config: str,
+    *,
+    kinit_fn: Callable[..., None] = kinit_with_retry,
+) -> Generator[None, None, None]:
+    """Set up Kerberos auth with ephemeral temp files and clean up on exit.
+
+    Create temporary files for the keytab, krb5 config, and credential
+    cache, run ``kinit``, and update ``os.environ`` so that
+    ``requests-kerberos`` can use the credentials.  All temp files are
+    removed when the context exits.
+    """
+    keytab_path = file.make_tempfile_path("keytab-", keytab_bytes)
+    krb5_path = file.make_tempfile_path("krb5-", krb5_config.encode("utf-8"))
+    ccache_fd, ccache_name = tempfile.mkstemp()
+    os.close(ccache_fd)
+    ccache_path = Path(ccache_name)
+
+    try:
+        kenv = {
+            "KRB5_CONFIG": str(krb5_path),
+            "KRB5CCNAME": str(ccache_path),
+            "KRB5_TRACE": "/dev/stderr",
+        }
+        logger.info("Logging in with Kerberos (kinit)...")
+        kinit_fn(principal, keytab_path, kenv, max_attempts=5)
+        os.environ.update(kenv)
+        yield
+    finally:
+        for key in kenv:
+            os.environ.pop(key, None)
+        for p in (keytab_path, krb5_path, ccache_path):
+            p.unlink(missing_ok=True)
+
+
+def create_container_auth_config(
+    from_index: str,
+    publishing_credential: str,
+) -> None:
+    """Create ``~/.config/containers/auth.json`` for skopeo.
+
+    For ``registry-proxy.engineering.redhat.com``, remove any existing auth
+    entry (that registry uses Kerberos, not token auth).  For other
+    registries, write base64-encoded publishing credentials.
+    """
+    auth_dir = Path.home() / ".config" / "containers"
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    auth_file = auth_dir / "auth.json"
+
+    auth_name = from_index.rsplit(":", 1)[0]
+
+    if re.match(r"^registry-proxy(-stage)?\.engineering\.redhat\.com", auth_name):
+        if auth_file.exists():
+            try:
+                data = json.loads(auth_file.read_text(encoding="utf-8"))
+                data.get("auths", {}).pop(auth_name, None)
+                auth_file.write_text(json.dumps(data), encoding="utf-8")
+            except (json.JSONDecodeError, OSError):
+                auth_file.write_text("{}", encoding="utf-8")
+        else:
+            auth_file.write_text("{}", encoding="utf-8")
+        return
+
+    if not publishing_credential:
+        logger.warning("No publishing credentials available for %s", auth_name)
+        auth_file.write_text("{}", encoding="utf-8")
+        return
+
+    token = base64.b64encode(publishing_credential.encode()).decode("ascii")
+    auth_data = {"auths": {auth_name: {"auth": token}}}
+    auth_file.write_text(json.dumps(auth_data), encoding="utf-8")

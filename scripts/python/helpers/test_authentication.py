@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -197,3 +198,116 @@ def test_setup_docker_config_required_missing_raises(tmp_path: Path) -> None:
     missing = tmp_path / ".dockerconfigjson"
     with pytest.raises(FileNotFoundError):
         authentication.setup_docker_config(missing)
+
+
+# ---------------------------------------------------------------------------
+# kerberos_login
+# ---------------------------------------------------------------------------
+
+
+def _no_kinit(*_a: object, **_k: object) -> None:
+    return None
+
+
+def test_kerberos_login_creates_and_cleans_temp_files(
+    tmp_path: Path,
+) -> None:
+    """Temp files exist inside the context and are removed after."""
+    created_files: list[Path] = []
+
+    def _track_kinit(
+        _princ: str,
+        keytab: Path,
+        env: dict[str, str],
+        **_kw: object,
+    ) -> None:
+        created_files.append(keytab)
+        created_files.append(Path(env["KRB5_CONFIG"]))
+        created_files.append(Path(env["KRB5CCNAME"]))
+        for f in created_files:
+            assert f.exists()
+
+    with authentication.kerberos_login(
+        "user@REALM",
+        b"keytab-data",
+        "[libdefaults]\n",
+        kinit_fn=_track_kinit,
+    ):
+        for f in created_files:
+            assert f.exists()
+
+    for f in created_files:
+        assert not f.exists()
+
+
+def test_kerberos_login_updates_and_cleans_environ() -> None:
+    """KRB5 env vars are set inside the context and removed after."""
+    with authentication.kerberos_login(
+        "user@REALM",
+        b"kt",
+        "[libdefaults]\n",
+        kinit_fn=_no_kinit,
+    ):
+        assert "KRB5_CONFIG" in os.environ
+        assert "KRB5CCNAME" in os.environ
+        assert os.environ["KRB5_TRACE"] == "/dev/stderr"
+
+    assert "KRB5_CONFIG" not in os.environ
+    assert "KRB5CCNAME" not in os.environ
+    assert "KRB5_TRACE" not in os.environ
+
+
+def test_kerberos_login_calls_kinit_with_correct_args() -> None:
+    """``kinit_fn`` is called with the principal, keytab path, and env."""
+    calls: list[tuple[str, bytes, dict[str, str]]] = []
+
+    def _spy(
+        princ: str,
+        keytab: Path,
+        env: dict[str, str],
+        **_kw: object,
+    ) -> None:
+        calls.append((princ, keytab.read_bytes(), dict(env)))
+
+    with authentication.kerberos_login(
+        "bot@REALM",
+        b"kt-bytes",
+        "[libdefaults]\n",
+        kinit_fn=_spy,
+    ):
+        pass
+
+    assert len(calls) == 1
+    princ, keytab_data, env = calls[0]
+    assert princ == "bot@REALM"
+    assert keytab_data == b"kt-bytes"
+    assert "KRB5_CONFIG" in env
+    assert "KRB5CCNAME" in env
+
+
+def test_kerberos_login_cleans_up_on_kinit_failure() -> None:
+    """Temp files are removed even when kinit raises."""
+    created_files: list[Path] = []
+
+    def _fail_kinit(
+        _princ: str,
+        keytab: Path,
+        env: dict[str, str],
+        **_kw: object,
+    ) -> None:
+        created_files.append(keytab)
+        created_files.append(Path(env["KRB5_CONFIG"]))
+        created_files.append(Path(env["KRB5CCNAME"]))
+        raise subprocess.CalledProcessError(1, "kinit")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        with authentication.kerberos_login(
+            "user@REALM",
+            b"kt",
+            "[libdefaults]\n",
+            kinit_fn=_fail_kinit,
+        ):
+            pass
+
+    for f in created_files:
+        assert not f.exists()
