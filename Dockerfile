@@ -160,7 +160,7 @@ ENV PATH="$PATH:/home/publish-to-cgw-wrapper"
 # Flat imports: helpers and task scripts must be importable.
 # Tests use the same layout via pyproject [tool.pytest.ini_options] pythonpath.
 # Keep /home for other modules (e.g. pyxis, sbom) that expect it.
-ENV PYTHONPATH="/home:/home/utils:/home/scripts/python/helpers:/home/scripts/python/tasks/internal:/home/pubtools-pulp-wrapper:/home/publish-to-cgw-wrapper"
+ENV PYTHONPATH="/home:/home/utils:/home/scripts/python/helpers:/home/scripts/python/tasks/internal:/home/scripts/python/tasks/managed:/home/pubtools-pulp-wrapper:/home/publish-to-cgw-wrapper"
 
 # uv installs newer requests and certifi which don't use the system CA like the one installed via
 # dnf. So we need to point requests to the system CA bundle explicitly.
