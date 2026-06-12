@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Python script to create a Container Image object in Pyxis
+"""Python script to create a Container Image object in Pyxis.
 
 NOTE: Any change to this file that changes functionality should be posted for review in
 #forum-metadata-guild on slack. No PR changing functionality should be removed without
@@ -64,11 +63,10 @@ MANIFEST_LIST_TYPES = [
 
 
 def setup_argparser() -> Any:  # pragma: no cover
-    """Setup argument parser
+    """Set up argument parser.
 
     :return: Initialized argument parser
     """
-
     parser = argparse.ArgumentParser(description="ContainerImage resource creator.")
 
     parser.add_argument(
@@ -145,6 +143,13 @@ def setup_argparser() -> Any:  # pragma: no cover
         help="Path to the Dockerfile to be included in the ContainerImage.parsed_data field",
         default="",
     )
+    parser.add_argument(
+        "--append-tags",
+        help="If set to true, when an image with the given repository already exists, "
+        "missing tags will be added to the existing tags instead of replacing them. "
+        "This preserves existing tags while adding new ones.",
+        default="false",
+    )
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
     return parser
 
@@ -167,11 +172,10 @@ def proxymap(repository: str) -> str:
 
 
 def find_image(pyxis_url, digest: str) -> Any:
-    """Function to find a containerImage with the given digest.
+    """Find a containerImage with the given digest.
 
     :return: the image, if one exists, else None if none found
     """
-
     raw_filter = f'repositories.manifest_schema2_digest=="{digest}";not(deleted==true)'
     # quote is needed to urlparse the quotation marks
     filter_str = quote(raw_filter)
@@ -195,7 +199,7 @@ def find_image(pyxis_url, digest: str) -> Any:
 
 
 def find_repo_in_image(repository_str: str, image: Dict[str, Any]) -> Optional[int]:
-    """Check if a repository already exists in the ContainerImage
+    """Check if a repository already exists in the ContainerImage.
 
     :return: index of repository if repository_str string is found in the ContainerImage
         repositories, None otherwise
@@ -207,16 +211,16 @@ def find_repo_in_image(repository_str: str, image: Dict[str, Any]) -> Optional[i
 
 
 def prepare_parsed_data(args) -> Dict[str, Any]:
-    """Function to extract the data this script needs to create parsed_data.
-       Processes data from:
-        - Architecture from args
-        - ORAS manifest fetch output
-        - Dockerfile content (if provided)
-        - Metadata file with env_variables and labels (if provided)
+    """Extract the data this script needs to create parsed_data.
+
+    Processes data from:
+     - Architecture from args
+     - ORAS manifest fetch output
+     - Dockerfile content (if provided)
+     - Metadata file with env_variables and labels (if provided)
 
     :return: Dict containing processed data from parsed sources
     """
-
     with open(args.oras_manifest_fetch) as json_file:
         oras_manifest_fetch = json.load(json_file)
 
@@ -269,7 +273,7 @@ def prepare_parsed_data(args) -> Dict[str, Any]:
 
 
 def pyxis_tags(tags, date_now):
-    """Return list of tags formatted for pyxis"""
+    """Return list of tags formatted for pyxis."""
     return [
         {
             "added_date": date_now,
@@ -279,8 +283,40 @@ def pyxis_tags(tags, date_now):
     ]
 
 
+def construct_tags(
+    tag_names: List[str], existing_tags: List[Dict[str, str]] = None
+) -> List[Dict[str, str]]:
+    """Construct tags structure for Pyxis, optionally preserving existing tags.
+
+    :param tag_names: List of tag names to include
+    :param existing_tags: Optional list of existing tag dicts with 'name' and
+                          'added_date'. If provided, dates will be preserved for
+                          tags that were not re-applied.
+    :return: List of tag dicts with 'name' and 'added_date'
+    """
+    date_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+
+    if existing_tags is None:
+        # Normal mode: create all tags with current date
+        return pyxis_tags(tag_names, date_now)
+
+    # Append mode: new/re-applied tags get current date, other existing tags keep their dates
+    new_tag_names_set = set(tag_names)
+    result = []
+
+    # Add all new tags with current date
+    result.extend(pyxis_tags(tag_names, date_now))
+
+    # Add existing tags that aren't in the new tags (preserve their original dates)
+    for tag in existing_tags:
+        if tag["name"] not in new_tag_names_set:
+            result.append(tag)
+
+    return result
+
+
 def repository_digest_values(args):
-    """Return digest values for the repository entry in the image entity"""
+    """Return digest values for the repository entry in the image entity."""
     result = {"manifest_schema2_digest": args.architecture_digest}
     if args.media_type in MANIFEST_LIST_TYPES:
         result["manifest_list_digest"] = args.digest
@@ -288,11 +324,11 @@ def repository_digest_values(args):
 
 
 def create_container_image(args, parsed_data: Dict[str, Any], tags: List[str]):
-    """Function to create a new containerImage entry in a pyxis instance"""
-
+    """Create a new containerImage entry in a pyxis instance."""
     LOGGER.info("Creating new container image")
 
-    repository = construct_repository(args, tags)
+    constructed_tags = construct_tags(tags)
+    repository = construct_repository(args, constructed_tags)
 
     # sum_layer_size_bytes isn't accepted in the parsed_data payload to pyxis
     sum_layer_size_bytes = parsed_data.pop("sum_layer_size_bytes", 0)
@@ -332,6 +368,7 @@ def create_container_image(args, parsed_data: Dict[str, Any], tags: List[str]):
 def update_container_image_repositories(
     pyxis_url, image_id: str, repositories: List[Dict[str, Any]]
 ):
+    """Update repositories for a container image."""
     LOGGER.info(f"Updating repositories for container image {image_id}")
 
     patch_url = urljoin(pyxis_url, f"v1/images/id/{image_id}")
@@ -361,7 +398,7 @@ def _rh_push_registry(image_name: str) -> str:
     return "registry.access.redhat.com"
 
 
-def construct_repository(args, tags):
+def construct_repository(args, tag_dicts):
     """Build the repository dict for the Container Image.
 
     When rh_push is true, the repository entry it adds will be for Red Hat
@@ -370,6 +407,9 @@ def construct_repository(args, tags):
     flatpaks.registry.redhat.io (for flatpak images quay.io/rh-flatpaks-prod/*,
     quay.io/rh-flatpaks-stage/*). The repository path is derived via proxymap
     (e.g. product----image -> product/image).
+
+    :param args: Command line arguments
+    :param tag_dicts: List of tag dicts with 'name' and 'added_date'
     """
     image_name = args.name
     date_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
@@ -382,7 +422,7 @@ def construct_repository(args, tags):
             "registry": registry,
             "repository": proxymap(image_name),
             "push_date": date_now,
-            "tags": pyxis_tags(tags, date_now),
+            "tags": tag_dicts,
         }
     else:
         image_registry = image_name.split("/")[0]
@@ -392,7 +432,7 @@ def construct_repository(args, tags):
             "registry": image_registry,
             "repository": image_repo,
             "push_date": date_now,
-            "tags": pyxis_tags(tags, date_now),
+            "tags": tag_dicts,
         }
 
     repo.update(repository_digest_values(args))
@@ -401,8 +441,7 @@ def construct_repository(args, tags):
 
 
 def main():  # pragma: no cover
-    """Main func"""
-
+    """Execute main function."""
     parser = setup_argparser()
     args = parser.parse_args()
     log_level = logging.DEBUG if args.verbose else logging.INFO
@@ -436,18 +475,25 @@ def main():  # pragma: no cover
             f"Image with given docker_image_digest exists as {identifier}, but "
             f"is not yet associated with repository {args.name}."
         )
-        repositories.append(construct_repository(args, tags))
+        constructed_tags = construct_tags(tags)
+        repositories.append(construct_repository(args, constructed_tags))
         update_container_image_repositories(args.pyxis_url, identifier, repositories)
         return
 
     # Then, check if the tags are different. If they are, update them
-    existing_tags = [tag["name"] for tag in repositories[repo_index].get("tags") or []]
+    existing_tags = [tag["name"] for tag in repositories[repo_index].get("tags", [])]
     if existing_tags != tags:
         LOGGER.info(
             f"Image with given docker_image_digest exists as {identifier} and "
             f"is associated with repository {args.name}, but the tags differ."
         )
-        repositories[repo_index] = construct_repository(args, tags)
+        if args.append_tags == "true":
+            LOGGER.info("--append-tags is true. Merging new tags with existing tags.")
+            existing_tag_dicts = repositories[repo_index].get("tags", [])
+            constructed_tags = construct_tags(tags, existing_tag_dicts)
+        else:
+            constructed_tags = construct_tags(tags)
+        repositories[repo_index] = construct_repository(args, constructed_tags)
         update_container_image_repositories(args.pyxis_url, identifier, repositories)
         return
 

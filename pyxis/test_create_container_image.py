@@ -1,3 +1,5 @@
+"""Tests for create_container_image module."""
+
 import pytest
 from datetime import datetime
 import json
@@ -9,17 +11,20 @@ from create_container_image import (
     find_repo_in_image,
     prepare_parsed_data,
     pyxis_tags,
+    construct_tags,
     repository_digest_values,
     create_container_image,
     update_container_image_repositories,
     construct_repository,
     _rh_push_registry,
+    main,
 )
 
 PYXIS_URL = "https://catalog.redhat.com/api/containers/"
 
 
 def test_proxymap():
+    """Test proxymap function."""
     repository = "quay.io/redhat-pending/foo----bar"
 
     mapped = proxymap(repository)
@@ -29,6 +34,7 @@ def test_proxymap():
 
 @patch("create_container_image.pyxis.get")
 def test_find_image__image_does_exist(mock_get):
+    """Test find image  image does exist."""
     # Arrange
     mock_rsp = MagicMock()
     mock_get.return_value = mock_rsp
@@ -53,6 +59,7 @@ def test_find_image__image_does_exist(mock_get):
 
 @patch("create_container_image.pyxis.get")
 def test_find_image__image_does_not_exist(mock_get):
+    """Test find image  image does not exist."""
     # Arrange
     mock_rsp = MagicMock()
     mock_get.return_value = mock_rsp
@@ -70,6 +77,7 @@ def test_find_image__image_does_not_exist(mock_get):
 
 @patch("create_container_image.pyxis.get")
 def test_find_image__no_id_in_image(mock_get):
+    """Test find image  no id in image."""
     # Arrange
     mock_rsp = MagicMock()
     mock_get.return_value = mock_rsp
@@ -85,6 +93,7 @@ def test_find_image__no_id_in_image(mock_get):
 
 # scenario where repo is present in the image
 def test_find_repo_in_image__found():
+    """Test find repo in image  found."""
     image = {"repositories": [{"repository": "my/repo"}, {"repository": "foo/bar"}]}
 
     result = find_repo_in_image("foo/bar", image)
@@ -94,6 +103,7 @@ def test_find_repo_in_image__found():
 
 # scenario where repo is not present in the image
 def test_find_repo_in_image__not_found():
+    """Test find repo in image  not found."""
     image = {"repositories": [{"repository": "my/repo"}, {"repository": "foo/bar"}]}
 
     result = find_repo_in_image("something/missing", image)
@@ -104,6 +114,7 @@ def test_find_repo_in_image__not_found():
 @patch("create_container_image.pyxis.post")
 @patch("create_container_image.datetime")
 def test_create_container_image(mock_datetime, mock_post):
+    """Test create container image."""
     # Mock an _id in the response for logger check
     mock_post.return_value.json.return_value = {"_id": 0}
 
@@ -159,7 +170,7 @@ def test_create_container_image(mock_datetime, mock_post):
 @patch("create_container_image.pyxis.post")
 @patch("create_container_image.datetime")
 def test_create_container_image__top_layer_id(mock_datetime, mock_post):
-    """Scenario where top_layer_id and uncompressed_top_layer_id are defined in parsed_data"""
+    """Scenario where top_layer_id and uncompressed_top_layer_id are defined in parsed_data."""
     # Mock an _id in the response for logger check
     mock_post.return_value.json.return_value = {"_id": 0}
 
@@ -226,6 +237,7 @@ def test_create_container_image__top_layer_id(mock_datetime, mock_post):
 @patch("create_container_image.pyxis.post")
 @patch("create_container_image.datetime")
 def test_create_container_image__rh_push_multiple_tags(mock_datetime, mock_post):
+    """Test create container image  rh push multiple tags."""
     # Mock an _id in the response for logger check
     mock_post.return_value.json.return_value = {"_id": 0}
 
@@ -286,6 +298,7 @@ def test_create_container_image__rh_push_multiple_tags(mock_datetime, mock_post)
 
 
 def test_create_container_image__no_digest():
+    """Test create container image  no digest."""
     args = MagicMock()
 
     with pytest.raises(Exception):
@@ -300,6 +313,7 @@ def test_create_container_image__no_digest():
 
 
 def test_create_container_image__no_name():
+    """Test create container image  no name."""
     args = MagicMock()
 
     with pytest.raises(Exception):
@@ -315,6 +329,7 @@ def test_create_container_image__no_name():
 
 @patch("create_container_image.pyxis.patch")
 def test_update_container_image_repositories(mock_patch):
+    """Test update container image repositories."""
     image_id = "0000"
     # Mock an _id in the response for logger check
     mock_patch.return_value.json.return_value = {"_id": image_id}
@@ -355,6 +370,7 @@ def test_update_container_image_repositories(mock_patch):
 
 @patch("builtins.open")
 def test_prepare_parsed_data__success(mock_open):
+    """Test prepare parsed data  success."""
     args = MagicMock()
     args.architecture = "test"
     args.dockerfile = "mydockerfile"
@@ -414,6 +430,7 @@ def test_prepare_parsed_data__success(mock_open):
 
 @patch("builtins.open")
 def test_prepare_parsed_data__success_no_dockerfile(mock_open):
+    """Test prepare parsed data  success no dockerfile."""
     args = MagicMock()
     args.architecture = "test"
     args.dockerfile = ""
@@ -441,6 +458,7 @@ def test_prepare_parsed_data__success_no_dockerfile(mock_open):
 
 @patch("builtins.open")
 def test_prepare_parsed_data__with_layer_sizes(mock_open):
+    """Test prepare parsed data  with layer sizes."""
     args = MagicMock()
     args.architecture = "test"
     args.dockerfile = "mydockerfile"
@@ -484,6 +502,7 @@ def test_prepare_parsed_data__with_layer_sizes(mock_open):
 
 @patch("builtins.open")
 def test_prepare_parsed_data__metadata_empty_json(mock_open):
+    """Test prepare parsed data  metadata empty json."""
     args = MagicMock()
     args.architecture = "test"
     args.dockerfile = ""
@@ -504,6 +523,7 @@ def test_prepare_parsed_data__metadata_empty_json(mock_open):
 
 @patch("builtins.open")
 def test_prepare_parsed_data__metadata_empty_object(mock_open):
+    """Test prepare parsed data  metadata empty object."""
     args = MagicMock()
     args.architecture = "test"
     args.dockerfile = ""
@@ -530,6 +550,7 @@ def test_prepare_parsed_data__metadata_empty_object(mock_open):
 
 @patch("builtins.open")
 def test_prepare_parsed_data__metadata_env_only(mock_open):
+    """Test prepare parsed data  metadata env only."""
     args = MagicMock()
     args.architecture = "test"
     args.dockerfile = ""
@@ -553,6 +574,7 @@ def test_prepare_parsed_data__metadata_env_only(mock_open):
 
 @patch("builtins.open")
 def test_prepare_parsed_data__metadata_labels_only(mock_open):
+    """Test prepare parsed data  metadata labels only."""
     args = MagicMock()
     args.architecture = "test"
     args.dockerfile = ""
@@ -575,6 +597,7 @@ def test_prepare_parsed_data__metadata_labels_only(mock_open):
 
 
 def test_pyxis_tags():
+    """Test pyxis tags."""
     tags = ["tag1", "tag2"]
     now = "now"
 
@@ -587,6 +610,7 @@ def test_pyxis_tags():
 
 
 def test_repository_digest_values__single_arch():
+    """Test repository digest values  single arch."""
     args = MagicMock()
     args.media_type = "application/vnd.docker.distribution.manifest.v2+json"
     args.architecture_digest = "mydigest"
@@ -597,6 +621,7 @@ def test_repository_digest_values__single_arch():
 
 
 def test_repository_digest_values__multi_arch():
+    """Test repository digest values  multi arch."""
     args = MagicMock()
     args.media_type = "application/vnd.docker.distribution.manifest.list.v2+json"
     args.architecture_digest = "mydigest"
@@ -611,9 +636,7 @@ def test_repository_digest_values__multi_arch():
 
 
 def test_rh_push_registry():
-    """Flatpak namespaces use flatpaks.registry.redhat.io;
-    others use registry.access.redhat.com.
-    """
+    """Test registry selection for flatpak vs standard namespaces."""
     assert (
         _rh_push_registry("quay.io/rh-flatpaks-prod/foo/bar") == "flatpaks.registry.redhat.io"
     )
@@ -633,6 +656,7 @@ def test_rh_push_registry():
 
 @patch("create_container_image.datetime")
 def test_construct_repository__rh_push_true(mock_datetime):
+    """Test construct repository  rh push true."""
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
     args = MagicMock()
     args.media_type = "application/vnd.docker.distribution.manifest.list.v2+json"
@@ -640,9 +664,10 @@ def test_construct_repository__rh_push_true(mock_datetime):
     args.digest = "some_digest"
     args.rh_push = "true"
     args.name = "quay.io/redhat-pending/some-product----some-image"
-    tags = ["tagprefix", "tagprefix-timestamp"]
+    tag_names = ["tagprefix", "tagprefix-timestamp"]
+    tag_dicts = construct_tags(tag_names)
 
-    repo = construct_repository(args, tags)
+    repo = construct_repository(args, tag_dicts)
 
     assert repo == {
         "published": True,
@@ -666,6 +691,7 @@ def test_construct_repository__rh_push_true(mock_datetime):
 
 @patch("create_container_image.datetime")
 def test_construct_repository__rh_push_true_flatpak_prod(mock_datetime):
+    """Test construct repository  rh push true flatpak prod."""
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
     args = MagicMock()
     args.media_type = "application/vnd.oci.image.manifest.v1+json"
@@ -673,9 +699,10 @@ def test_construct_repository__rh_push_true_flatpak_prod(mock_datetime):
     args.digest = "sha256:top"
     args.rh_push = "true"
     args.name = "quay.io/rh-flatpaks-prod/myapp----myflatpak"
-    tags = ["latest"]
+    tag_names = ["latest"]
+    tag_dicts = construct_tags(tag_names)
 
-    repo = construct_repository(args, tags)
+    repo = construct_repository(args, tag_dicts)
 
     assert repo["registry"] == "flatpaks.registry.redhat.io"
     assert repo["repository"] == "myapp/myflatpak"
@@ -684,6 +711,7 @@ def test_construct_repository__rh_push_true_flatpak_prod(mock_datetime):
 
 @patch("create_container_image.datetime")
 def test_construct_repository__rh_push_true_flatpak_stage(mock_datetime):
+    """Test construct repository  rh push true flatpak stage."""
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
     args = MagicMock()
     args.media_type = "application/vnd.oci.image.manifest.v1+json"
@@ -691,9 +719,10 @@ def test_construct_repository__rh_push_true_flatpak_stage(mock_datetime):
     args.digest = "sha256:top2"
     args.rh_push = "true"
     args.name = "quay.io/rh-flatpaks-stage/namespace----another-flatpak"
-    tags = ["1.0"]
+    tag_names = ["1.0"]
+    tag_dicts = construct_tags(tag_names)
 
-    repo = construct_repository(args, tags)
+    repo = construct_repository(args, tag_dicts)
 
     assert repo["registry"] == "flatpaks.registry.redhat.io"
     assert repo["repository"] == "namespace/another-flatpak"  # proxymap: ---- -> /
@@ -702,6 +731,7 @@ def test_construct_repository__rh_push_true_flatpak_stage(mock_datetime):
 
 @patch("create_container_image.datetime")
 def test_construct_repository__rh_push_false(mock_datetime):
+    """Test construct repository  rh push false."""
     mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
     args = MagicMock()
     args.media_type = "application/vnd.docker.distribution.manifest.list.v2+json"
@@ -709,9 +739,10 @@ def test_construct_repository__rh_push_false(mock_datetime):
     args.digest = "some_digest"
     args.rh_push = "false"
     args.name = "quay.io/some-org/some-image"
-    tags = ["tagprefix", "tagprefix-timestamp", "latest"]
+    tag_names = ["tagprefix", "tagprefix-timestamp", "latest"]
+    tag_dicts = construct_tags(tag_names)
 
-    repo = construct_repository(args, tags)
+    repo = construct_repository(args, tag_dicts)
 
     assert repo == {
         "published": False,
@@ -735,3 +766,307 @@ def test_construct_repository__rh_push_false(mock_datetime):
         "manifest_list_digest": "some_digest",
         "manifest_schema2_digest": "arch specific digest",
     }
+
+
+@patch("create_container_image.datetime")
+def test_construct_tags__normal_mode(mock_datetime):
+    """Test construct_tags without existing tags (normal mode)."""
+    mock_datetime.now = MagicMock(return_value=datetime(2026, 5, 21, 10, 10, 10))
+    tag_names = ["v1.0", "latest"]
+
+    result = construct_tags(tag_names)
+
+    assert result == [
+        {"added_date": "2026-05-21T10:10:10.000000+00:00", "name": "v1.0"},
+        {"added_date": "2026-05-21T10:10:10.000000+00:00", "name": "latest"},
+    ]
+
+
+@patch("create_container_image.datetime")
+def test_construct_tags__append_mode_all_new(mock_datetime):
+    """Test construct_tags with existing tags, but all new tags are different."""
+    mock_datetime.now = MagicMock(return_value=datetime(2026, 5, 21, 12, 0, 0))
+    tag_names = ["v2.0", "v2.1"]
+    existing_tags = [
+        {"added_date": "2026-05-20T10:00:00.000000+00:00", "name": "v1.0"},
+        {"added_date": "2026-05-20T11:00:00.000000+00:00", "name": "v1.1"},
+    ]
+
+    result = construct_tags(tag_names, existing_tags)
+
+    assert result == [
+        {"added_date": "2026-05-21T12:00:00.000000+00:00", "name": "v2.0"},
+        {"added_date": "2026-05-21T12:00:00.000000+00:00", "name": "v2.1"},
+        {"added_date": "2026-05-20T10:00:00.000000+00:00", "name": "v1.0"},
+        {"added_date": "2026-05-20T11:00:00.000000+00:00", "name": "v1.1"},
+    ]
+
+
+@patch("create_container_image.datetime")
+def test_construct_tags__append_mode_overlapping(mock_datetime):
+    """Test construct_tags with existing tags where some tags overlap."""
+    mock_datetime.now = MagicMock(return_value=datetime(2026, 5, 21, 12, 0, 0))
+    tag_names = ["v1.0", "v2.0"]
+    existing_tags = [
+        {"added_date": "2026-05-20T10:00:00.000000+00:00", "name": "v1.0"},
+        {"added_date": "2026-05-20T11:00:00.000000+00:00", "name": "latest"},
+    ]
+
+    result = construct_tags(tag_names, existing_tags)
+
+    # v1.0 gets updated date, v2.0 is new, latest is preserved
+    assert result == [
+        {"added_date": "2026-05-21T12:00:00.000000+00:00", "name": "v1.0"},
+        {"added_date": "2026-05-21T12:00:00.000000+00:00", "name": "v2.0"},
+        {"added_date": "2026-05-20T11:00:00.000000+00:00", "name": "latest"},
+    ]
+
+
+@patch("create_container_image.datetime")
+def test_construct_tags__append_mode_empty_existing(mock_datetime):
+    """Test construct_tags with empty existing tags list."""
+    mock_datetime.now = MagicMock(return_value=datetime(2026, 5, 21, 12, 0, 0))
+    tag_names = ["v1.0"]
+    existing_tags = []
+
+    result = construct_tags(tag_names, existing_tags)
+
+    assert result == [
+        {"added_date": "2026-05-21T12:00:00.000000+00:00", "name": "v1.0"},
+    ]
+
+
+@patch("create_container_image.update_container_image_repositories")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+@patch("create_container_image.pyxis.setup_logger")
+@patch("create_container_image.datetime")
+def test_main__append_tags_false_replaces_tags(
+    mock_datetime,
+    mock_setup_logger,
+    mock_prepare_parsed_data,
+    mock_find_image,
+    mock_update,
+):
+    """Test that without --append-tags, tags are replaced (existing behavior)."""
+    mock_datetime.now = MagicMock(return_value=datetime(2026, 5, 21, 12, 0, 0))
+    mock_prepare_parsed_data.return_value = {"architecture": "amd64"}
+
+    # Existing image with v1.0 and v1.1 tags
+    existing_image = {
+        "_id": "12345",
+        "repositories": [
+            {
+                "registry": "quay.io",
+                "repository": "myorg/myimage",
+                "tags": [
+                    {"added_date": "2026-05-20T10:00:00.000000+00:00", "name": "v1.0"},
+                    {"added_date": "2026-05-20T11:00:00.000000+00:00", "name": "v1.1"},
+                ],
+            }
+        ],
+    }
+    mock_find_image.return_value = existing_image
+
+    # Simulate running with new tags v2.0
+    test_args = [
+        "create_container_image.py",
+        "--pyxis-url",
+        "https://pyxis.test.com",
+        "--certified",
+        "false",
+        "--tags",
+        "v2.0",
+        "--oras-manifest-fetch",
+        "/dev/null",
+        "--is-latest",
+        "false",
+        "--name",
+        "quay.io/myorg/myimage",
+        "--digest",
+        "sha256:abc",
+        "--architecture-digest",
+        "sha256:def",
+        "--architecture",
+        "amd64",
+        "--media-type",
+        "application/vnd.docker.distribution.manifest.v2+json",
+        "--append-tags",
+        "false",
+    ]
+
+    with patch("sys.argv", test_args), patch("builtins.open", create=True):
+        main()
+
+    # Verify update was called with only the new tag (old tags replaced)
+    assert mock_update.called
+    updated_repos = mock_update.call_args[0][2]
+    updated_tags = updated_repos[0]["tags"]
+    tag_names = [tag["name"] for tag in updated_tags]
+
+    assert tag_names == ["v2.0"]
+    assert len(updated_tags) == 1
+
+
+@patch("create_container_image.update_container_image_repositories")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+@patch("create_container_image.pyxis.setup_logger")
+@patch("create_container_image.datetime")
+def test_main__append_tags_true_preserves_tags(
+    mock_datetime,
+    mock_setup_logger,
+    mock_prepare_parsed_data,
+    mock_find_image,
+    mock_update,
+):
+    """Test that with --append-tags true, existing tags are preserved."""
+    mock_datetime.now = MagicMock(return_value=datetime(2026, 5, 21, 12, 0, 0))
+    mock_prepare_parsed_data.return_value = {"architecture": "amd64"}
+
+    # Existing image with v1.0 and v1.1 tags
+    existing_image = {
+        "_id": "12345",
+        "repositories": [
+            {
+                "registry": "quay.io",
+                "repository": "myorg/myimage",
+                "tags": [
+                    {"added_date": "2026-05-20T10:00:00.000000+00:00", "name": "v1.0"},
+                    {"added_date": "2026-05-20T11:00:00.000000+00:00", "name": "v1.1"},
+                ],
+            }
+        ],
+    }
+    mock_find_image.return_value = existing_image
+
+    # Simulate running with new tags v2.0
+    test_args = [
+        "create_container_image.py",
+        "--pyxis-url",
+        "https://pyxis.test.com",
+        "--certified",
+        "false",
+        "--tags",
+        "v2.0",
+        "--oras-manifest-fetch",
+        "/dev/null",
+        "--is-latest",
+        "false",
+        "--name",
+        "quay.io/myorg/myimage",
+        "--digest",
+        "sha256:abc",
+        "--architecture-digest",
+        "sha256:def",
+        "--architecture",
+        "amd64",
+        "--media-type",
+        "application/vnd.docker.distribution.manifest.v2+json",
+        "--append-tags",
+        "true",
+    ]
+
+    with patch("sys.argv", test_args), patch("builtins.open", create=True):
+        main()
+
+    # Verify update was called with all tags (new + existing)
+    assert mock_update.called
+    updated_repos = mock_update.call_args[0][2]
+    updated_tags = updated_repos[0]["tags"]
+    tag_names = [tag["name"] for tag in updated_tags]
+
+    # Should have v2.0 (new) and v1.0, v1.1 (existing preserved)
+    assert set(tag_names) == {"v2.0", "v1.0", "v1.1"}
+    assert len(updated_tags) == 3
+
+    # Check that existing tags kept their original dates
+    for tag in updated_tags:
+        if tag["name"] == "v1.0":
+            assert tag["added_date"] == "2026-05-20T10:00:00.000000+00:00"
+        elif tag["name"] == "v1.1":
+            assert tag["added_date"] == "2026-05-20T11:00:00.000000+00:00"
+        elif tag["name"] == "v2.0":
+            # New tag gets current date
+            assert tag["added_date"] == "2026-05-21T12:00:00.000000+00:00"
+
+
+@patch("create_container_image.update_container_image_repositories")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+@patch("create_container_image.pyxis.setup_logger")
+@patch("create_container_image.datetime")
+def test_main__append_tags_true_updates_reapplied_tag_date(
+    mock_datetime,
+    mock_setup_logger,
+    mock_prepare_parsed_data,
+    mock_find_image,
+    mock_update,
+):
+    """Test that with --append-tags true, re-applied tags get updated dates."""
+    mock_datetime.now = MagicMock(return_value=datetime(2026, 5, 21, 12, 0, 0))
+    mock_prepare_parsed_data.return_value = {"architecture": "amd64"}
+
+    # Existing image with v1.0 and latest tags
+    existing_image = {
+        "_id": "12345",
+        "repositories": [
+            {
+                "registry": "quay.io",
+                "repository": "myorg/myimage",
+                "tags": [
+                    {"added_date": "2026-05-20T10:00:00.000000+00:00", "name": "v1.0"},
+                    {"added_date": "2026-05-20T11:00:00.000000+00:00", "name": "latest"},
+                ],
+            }
+        ],
+    }
+    mock_find_image.return_value = existing_image
+
+    # Simulate running with v1.0 and v2.0 (v1.0 is re-applied)
+    test_args = [
+        "create_container_image.py",
+        "--pyxis-url",
+        "https://pyxis.test.com",
+        "--certified",
+        "false",
+        "--tags",
+        "v1.0 v2.0",
+        "--oras-manifest-fetch",
+        "/dev/null",
+        "--is-latest",
+        "false",
+        "--name",
+        "quay.io/myorg/myimage",
+        "--digest",
+        "sha256:abc",
+        "--architecture-digest",
+        "sha256:def",
+        "--architecture",
+        "amd64",
+        "--media-type",
+        "application/vnd.docker.distribution.manifest.v2+json",
+        "--append-tags",
+        "true",
+    ]
+
+    with patch("sys.argv", test_args), patch("builtins.open", create=True):
+        main()
+
+    # Verify update was called
+    assert mock_update.called
+    updated_repos = mock_update.call_args[0][2]
+    updated_tags = updated_repos[0]["tags"]
+
+    # Should have v1.0 (updated date), v2.0 (new), latest (preserved)
+    assert len(updated_tags) == 3
+    tag_dict = {tag["name"]: tag for tag in updated_tags}
+
+    # v1.0 was re-applied, should have updated date
+    assert tag_dict["v1.0"]["added_date"] == "2026-05-21T12:00:00.000000+00:00"
+
+    # v2.0 is new, should have current date
+    assert tag_dict["v2.0"]["added_date"] == "2026-05-21T12:00:00.000000+00:00"
+
+    # latest was not re-applied, should have original date
+    assert tag_dict["latest"]["added_date"] == "2026-05-20T11:00:00.000000+00:00"
