@@ -422,6 +422,7 @@ def test_fetch_run_test_task_output_json_invalid_json_in_value(
 
 
 def test_require_test_output_success_none_exits() -> None:
+    """Missing TEST_OUTPUT JSON exits with code 1."""
     with pytest.raises(SystemExit) as ei:
         rs._require_test_output_success(None)
     assert ei.value.code == 1
@@ -430,6 +431,7 @@ def test_require_test_output_success_none_exits() -> None:
 def test_require_test_output_success_failure_exits(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """A FAILURE TEST_OUTPUT result exits with code 1."""
     with pytest.raises(SystemExit) as ei:
         rs._require_test_output_success({"result": "FAILURE"})
     assert ei.value.code == 1
@@ -437,12 +439,14 @@ def test_require_test_output_success_failure_exits(
 
 
 def test_require_test_output_success_ok() -> None:
+    """A SUCCESS TEST_OUTPUT result is accepted."""
     rs._require_test_output_success({"result": "SUCCESS"})
 
 
 def test_require_test_output_success_skipped_prints(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """A SKIPPED TEST_OUTPUT result is printed and accepted."""
     rs._require_test_output_success({"result": "SKIPPED"})
     assert "SKIPPED" in capsys.readouterr().out
 
@@ -450,6 +454,7 @@ def test_require_test_output_success_skipped_prints(
 def test_require_test_output_success_unexpected_exits(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """An unexpected TEST_OUTPUT result exits with code 1."""
     with pytest.raises(SystemExit) as ei:
         rs._require_test_output_success({"result": "WAT"})
     assert ei.value.code == 1
@@ -457,6 +462,7 @@ def test_require_test_output_success_unexpected_exits(
 
 
 def test_build_snapshot_shape() -> None:
+    """``_build_snapshot`` returns the expected application and component fields."""
     snap = rs._build_snapshot(
         runner="quay.io/img:v1",
         url="https://github.com/o/r.git",
@@ -470,6 +476,7 @@ def test_build_snapshot_shape() -> None:
 
 
 def test_build_catalog_e2e_pipelinerun_shape() -> None:
+    """``_build_catalog_e2e_pipelinerun`` wires snapshot and parent metadata."""
     snap = rs._build_snapshot(runner="r", url="u", rev="v")
     m = rs._build_catalog_e2e_pipelinerun(
         ns="rhtap-release-2-tenant",
