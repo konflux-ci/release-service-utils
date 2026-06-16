@@ -169,96 +169,104 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
     remote_input = f"{remote_checksum_dir}/sha256sum.txt"
     remote_target = f"{checksum_user}@{checksum_host}"
 
-    subprocess.check_call(
-        [
-            "ssh",
-            *ssh_opts,
-            remote_target,
-            "mkdir -p " + shlex.quote(remote_checksum_dir),
-        ]
-    )
-    subprocess.check_call(
-        [
-            "scp",
-            *ssh_opts,
-            str(sha_sums_path),
-            f"{remote_target}:{remote_checksum_dir}",
-        ]
-    )
+    try:
+        subprocess.check_call(
+            [
+                "ssh",
+                *ssh_opts,
+                remote_target,
+                "mkdir -p " + shlex.quote(remote_checksum_dir),
+            ]
+        )
+        subprocess.check_call(
+            [
+                "scp",
+                *ssh_opts,
+                str(sha_sums_path),
+                f"{remote_target}:{remote_checksum_dir}",
+            ]
+        )
 
-    logger.info("Signing merged sha256sum.txt with --clearsign")
-    subprocess.check_call(
-        [
-            "ssh",
-            *ssh_opts,
-            remote_target,
-            " ".join(
-                [
-                    "rpm-sign",
-                    "--nat",
-                    "--clearsign",
-                    "--key",
-                    shlex.quote(signing_key_name),
-                    f"--onbehalfof={shlex.quote(author)}",
-                    "--output",
-                    shlex.quote(f"{remote_input}.sig"),
-                    shlex.quote(remote_input),
-                ]
-            ),
-        ]
-    )
+        logger.info("Signing merged sha256sum.txt with --clearsign")
+        subprocess.check_call(
+            [
+                "ssh",
+                *ssh_opts,
+                remote_target,
+                " ".join(
+                    [
+                        "rpm-sign",
+                        "--nat",
+                        "--clearsign",
+                        "--key",
+                        shlex.quote(signing_key_name),
+                        f"--onbehalfof={shlex.quote(author)}",
+                        "--output",
+                        shlex.quote(f"{remote_input}.sig"),
+                        shlex.quote(remote_input),
+                    ]
+                ),
+            ]
+        )
 
-    logger.info("Signing merged sha256sum.txt with --gpgsign")
-    subprocess.check_call(
-        [
-            "ssh",
-            *ssh_opts,
-            remote_target,
-            " ".join(
-                [
-                    "rpm-sign",
-                    "--nat",
-                    "--gpgsign",
-                    "--key",
-                    shlex.quote(signing_key_name),
-                    f"--onbehalfof={shlex.quote(author)}",
-                    "--output",
-                    shlex.quote(f"{remote_input}.gpg"),
-                    shlex.quote(remote_input),
-                ]
-            ),
-        ]
-    )
+        logger.info("Signing merged sha256sum.txt with --gpgsign")
+        subprocess.check_call(
+            [
+                "ssh",
+                *ssh_opts,
+                remote_target,
+                " ".join(
+                    [
+                        "rpm-sign",
+                        "--nat",
+                        "--gpgsign",
+                        "--key",
+                        shlex.quote(signing_key_name),
+                        f"--onbehalfof={shlex.quote(author)}",
+                        "--output",
+                        shlex.quote(f"{remote_input}.gpg"),
+                        shlex.quote(remote_input),
+                    ]
+                ),
+            ]
+        )
 
-    first_ready_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(str(sha_sums_path), str(first_ready_dir / "sha256sum.txt"))
+        first_ready_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(sha_sums_path), str(first_ready_dir / "sha256sum.txt"))
 
-    subprocess.check_call(
-        [
-            "scp",
-            *ssh_opts,
-            f"{remote_target}:{remote_checksum_dir}/sha256sum.txt.sig",
-            str(first_ready_dir / "sha256sum.txt.sig"),
-        ]
-    )
+        subprocess.check_call(
+            [
+                "scp",
+                *ssh_opts,
+                f"{remote_target}:{remote_checksum_dir}/sha256sum.txt.sig",
+                str(first_ready_dir / "sha256sum.txt.sig"),
+            ]
+        )
 
-    subprocess.check_call(
-        [
-            "scp",
-            *ssh_opts,
-            f"{remote_target}:{remote_checksum_dir}/sha256sum.txt.gpg",
-            str(first_ready_dir / "sha256sum.txt.gpg"),
-        ]
-    )
-
-    subprocess.check_call(
-        [
-            "ssh",
-            *ssh_opts,
-            remote_target,
-            "rm -rf " + shlex.quote(remote_base),
-        ]
-    )
+        subprocess.check_call(
+            [
+                "scp",
+                *ssh_opts,
+                f"{remote_target}:{remote_checksum_dir}/sha256sum.txt.gpg",
+                str(first_ready_dir / "sha256sum.txt.gpg"),
+            ]
+        )
+    finally:
+        cleanup = subprocess.run(
+            [
+                "ssh",
+                *ssh_opts,
+                remote_target,
+                "rm -rf " + shlex.quote(remote_base),
+            ],
+            check=False,
+        )
+        if cleanup.returncode != 0:
+            logger.warning(
+                "Remote cleanup failed (exit code: %d) — %s may remain on the checksum host",
+                cleanup.returncode,
+                remote_base,
+            )
 
 
 def main(argv: list[str] | None = None) -> int:
