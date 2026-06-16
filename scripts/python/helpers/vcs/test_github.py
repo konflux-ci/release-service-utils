@@ -378,6 +378,33 @@ def test_compare_changelog_without_github_login() -> None:
     assert "@" not in out.split("\n", 1)[1]
 
 
+def test_compare_changelog_rewrites_pr_references() -> None:
+    """Rewrite bare #<num> PR references to full markdown links."""
+    session = _session()
+    payload = {
+        "commits": [
+            {
+                "sha": "c" * 40,
+                "html_url": "https://github.com/org/repo/commit/ccc",
+                "commit": {
+                    "message": "chore(deps): update dependencies (#453)",
+                    "author": {"name": "Bot"},
+                },
+                "author": {"login": "bot"},
+            }
+        ]
+    }
+    with mock.patch.object(github, "_get_json", return_value=payload):
+        out = github.compare_changelog(
+            session,
+            "https://github.com/org/repo",
+            "old",
+            "new",
+        )
+    assert "[#453](https://github.com/org/repo/pull/453)" in out
+    assert "#453)" not in out.replace("[#453]", "")
+
+
 def test_update_pull_request_body() -> None:
     """PATCH the pull request description and return the updated JSON."""
     session = _session()

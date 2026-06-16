@@ -6,6 +6,7 @@ import atexit
 import base64
 import json
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -277,6 +278,11 @@ def compare_changelog(
             sha = commit_info["sha"][:7]
             url = commit_info["html_url"]
             message = commit_info["commit"]["message"].split("\n", 1)[0]
+            message = re.sub(
+                r"#(\d+)",
+                rf"[#\1](https://github.com/{owner_repo}/pull/\1)",
+                message,
+            )
             author = commit_info.get("author")
             login = author.get("login") if isinstance(author, dict) else None
             if login:
