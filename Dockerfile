@@ -132,6 +132,7 @@ COPY pubtools-pulp-wrapper /home/pubtools-pulp-wrapper
 COPY pubtools-marketplacesvm-wrapper /home/pubtools-marketplacesvm-wrapper
 COPY developer-portal-wrapper /home/developer-portal-wrapper
 COPY publish-to-cgw-wrapper /home/publish-to-cgw-wrapper
+COPY schemas /home/schemas
 
 # It is mandatory to set these labels
 LABEL name="Konflux Release Service Utils"
