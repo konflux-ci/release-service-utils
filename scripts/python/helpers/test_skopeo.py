@@ -133,3 +133,67 @@ def test_inspect_image_ref_with_digest() -> None:
 
     cmd = run_mock.call_args[0][0]
     assert cmd[-1] == f"docker://{ref}"
+
+
+# ---------------------------------------------------------------------------
+# copy
+# ---------------------------------------------------------------------------
+
+
+def test_copy_basic_command() -> None:
+    """Default copy builds the correct command."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.copy("docker://registry.example.com/repo:tag", "dir:/tmp/out")
+
+    cmd = run_mock.call_args[0][0]
+    assert cmd == [
+        "skopeo",
+        "copy",
+        "--retry-times",
+        "3",
+        "docker://registry.example.com/repo:tag",
+        "dir:/tmp/out",
+    ]
+    assert run_mock.call_args[1]["capture_output"] is True
+    assert run_mock.call_args[1]["text"] is True
+    assert run_mock.call_args[1]["check"] is False
+
+
+def test_copy_custom_retry_times() -> None:
+    """``retry_times`` overrides the default retry count."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.copy("docker://img:v1", "dir:/tmp/out", retry_times=5)
+
+    cmd = run_mock.call_args[0][0]
+    idx = cmd.index("--retry-times")
+    assert cmd[idx + 1] == "5"
+
+
+def test_copy_returns_completed_process() -> None:
+    """The raw ``CompletedProcess`` is returned to the caller."""
+    expected = _completed(stdout="copied successfully")
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=expected,
+    ):
+        result = skopeo.copy("docker://img:v1", "dir:/tmp/out")
+
+    assert result is expected
+
+
+def test_copy_nonzero_exit_code() -> None:
+    """A non-zero exit code is returned, not raised."""
+    expected = _completed(returncode=1)
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=expected,
+    ):
+        result = skopeo.copy("docker://img:v1", "dir:/tmp/out")
+
+    assert result.returncode == 1
