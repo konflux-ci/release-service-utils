@@ -80,16 +80,16 @@ def test_is_embargoed_flaw_response(payload: dict, exp: bool) -> None:
 
 def test_fetch_flaw_state_empty_bodies() -> None:
     """An empty body from the flaws request is an empty result dict."""
-    with mock.patch("http_client.get_text", return_value="") as m:
+    with mock.patch("osidb.fetch_flaw_response", return_value="") as m:
         d = check_embargoed_cves.fetch_flaw_state("https://u", "t", "CVE-1")
-        m.assert_called()
+        m.assert_called_once()
     assert d == {}
 
 
 def test_fetch_flaw_state_parses_json_body() -> None:
     """A non-empty flaws body is parsed with `json.loads` and returned as a dict."""
     body = '{"results": [{"cve_id": "CVE-1", "embargoed": false}]}'
-    with mock.patch("http_client.get_text", return_value=body):
+    with mock.patch("osidb.fetch_flaw_response", return_value=body):
         out = check_embargoed_cves.fetch_flaw_state("https://u", "tok", "CVE-1")
     assert out == {"results": [{"cve_id": "CVE-1", "embargoed": False}]}
 
@@ -109,7 +109,7 @@ def test_parse_args_missing_cves() -> None:
 
 
 def test_parse_args_rejects_trailing_junk() -> None:
-    """argparse fails extra argv tokens (e.g. stray positionals) with exit 2."""
+    """Argparse fails extra argv tokens (e.g. stray positionals) with exit 2."""
     with pytest.raises(SystemExit) as e:
         check_embargoed_cves.parse_args(["--cves", "CVE-1", "extra"])
     assert e.value.code == 2
@@ -124,9 +124,9 @@ def test_parse_args_ok() -> None:
 def test_main_passes_service_account_mount_resolved_by_environ(
     sa_mount: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """
-    The mount directory passed to ``run_check`` is
-    ``path_from_env_variable("OSIDB_SERVICE_ACCOUNT_MOUNT", ...)`` (set vs default).
+    """``run_check`` receives the mount from ``path_from_env_variable``.
+
+    The env var is ``OSIDB_SERVICE_ACCOUNT_MOUNT`` (set vs default).
     """
     _setup_tekton_env(tmp_path, monkeypatch, sa_mount)
     seen: list[Path] = []
@@ -153,6 +153,7 @@ def test_main_passes_service_account_mount_resolved_by_environ(
 
 @pytest.fixture
 def sa_mount(tmp_path: Path) -> Path:
+    """Provide a temp directory with minimal OSIDB service-account files."""
     p = tmp_path / "m"
     _write_service_account(p)
     return p
@@ -312,10 +313,7 @@ def test_run_check_mixed_list_reports_embargoed_cve(sa_mount: Path, tmp_path: Pa
 def test_main_all_clear(
     sa_mount: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """
-    ``Success`` in ``RESULT_RESULT`` and an empty embargo list when
-    ``run_check`` finds no issues.
-    """
+    """Write ``Success`` when ``run_check`` finds no issues."""
     rpath, epath = _setup_tekton_env(tmp_path, monkeypatch, sa_mount)
     with mock.patch.object(
         check_embargoed_cves,
@@ -350,10 +348,7 @@ def test_main_cve_treated_inaccessible(
 def test_main_mixed_cves_one_reported_embargoed(
     sa_mount: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """
-    Single affected id is written to the embargo result, summary in the
-    other.
-    """
+    """Write one affected id to the embargo result and a summary to the other."""
     rpath, epath = _setup_tekton_env(tmp_path, monkeypatch, sa_mount)
     with mock.patch.object(
         check_embargoed_cves,
@@ -390,9 +385,9 @@ def test_main_kinit_failure_writes_subprocess_error(
 
 
 def test_main_arg_parse_returns_one() -> None:
-    """
-    ``main`` returns the same exit code as ``parse_args``/argparse (1 for
-    help, missing ``--cves``).
+    """``main`` returns the same exit code as ``parse_args``.
+
+    Covers exit 1 for help or missing ``--cves``.
     """
     assert check_embargoed_cves.main(["p"]) == 1
     assert check_embargoed_cves.main(["p", "-h"]) == 1

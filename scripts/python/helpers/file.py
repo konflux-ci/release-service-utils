@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import gzip
+import io
 import os
 import tempfile
 from pathlib import Path
@@ -18,6 +20,9 @@ def load_json_dict(path: Path) -> dict[str, Any]:
         msg = f"JSON root must be an object: {path}"
         raise TypeError(msg)
     return data
+
+
+_GZIP_READ_CHUNK_SIZE = 64 * 1024
 
 
 def sha256(path: Path) -> str:
@@ -73,3 +78,22 @@ def make_tempfile_path(
     finally:
         os.close(fd)
     return Path(name)
+
+
+def decompress_gzip_bounded(data: bytes, *, max_bytes: int) -> bytes:
+    """Decompress gzip *data* in chunks.
+
+    Reads at most *max_bytes* of output; raises `ValueError` if the
+    decompressed size would exceed that limit (gzip bomb protection).
+    """
+    output = bytearray()
+    with gzip.GzipFile(fileobj=io.BytesIO(data)) as gz_file:
+        while True:
+            chunk = gz_file.read(_GZIP_READ_CHUNK_SIZE)
+            if not chunk:
+                break
+            output.extend(chunk)
+            if len(output) > max_bytes:
+                msg = f"decompressed data exceeds {max_bytes} bytes (possible gzip bomb)"
+                raise ValueError(msg)
+    return bytes(output)
