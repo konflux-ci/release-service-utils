@@ -5,6 +5,7 @@ from __future__ import annotations
 import atexit
 import base64
 import json
+import logging
 import os
 import stat
 import subprocess
@@ -19,6 +20,8 @@ import http_client
 import requests
 
 from . import git
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -238,8 +241,12 @@ def find_open_pull_request_by_branch(
     return items[0]
 
 
-def pull_request_url_for_commit_sha(session: GitHubAppSession, sha: str) -> str:
-    """Search for a PR link associated with *sha*."""
+def pull_request_url_for_commit_sha(session: GitHubAppSession, sha: str) -> str | None:
+    """Search for a PR link associated with *sha*.
+
+    Returns ``None`` when no matching pull request is found so that
+    callers can degrade gracefully instead of aborting the entire task.
+    """
     data = _get_json(
         session,
         f"/search/issues?q={sha}",
@@ -247,13 +254,13 @@ def pull_request_url_for_commit_sha(session: GitHubAppSession, sha: str) -> str:
     )
     items = data.get("items") or []
     if not items:
-        msg = f"no pull request found for commit {sha}"
-        raise RuntimeError(msg)
+        logger.warning("no pull request found for commit %s", sha)
+        return None
     pull_request = items[0].get("pull_request") or {}
     url = pull_request.get("html_url")
     if not url:
-        msg = f"search result missing pull_request html_url for {sha}"
-        raise RuntimeError(msg)
+        logger.warning("search result missing pull_request html_url for %s", sha)
+        return None
     return str(url)
 
 

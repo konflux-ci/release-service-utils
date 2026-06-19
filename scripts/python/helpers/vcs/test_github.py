@@ -242,23 +242,21 @@ def test_pull_request_url_for_commit_sha() -> None:
 
 
 def test_pull_request_url_for_commit_sha_no_items() -> None:
-    """Raise when the search API returns no matching issues."""
+    """Return None when the search API returns no matching issues."""
     session = _session()
     with mock.patch.object(github, "_get_json", return_value={"items": []}):
-        with pytest.raises(RuntimeError, match="no pull request found"):
-            github.pull_request_url_for_commit_sha(session, "abc123")
+        assert github.pull_request_url_for_commit_sha(session, "abc123") is None
 
 
 def test_pull_request_url_for_commit_sha_missing_html_url() -> None:
-    """Raise when the search hit has no `pull_request.html_url`."""
+    """Return None when the search hit has no `pull_request.html_url`."""
     session = _session()
     with mock.patch.object(
         github,
         "_get_json",
         return_value={"items": [{"pull_request": {}}]},
     ):
-        with pytest.raises(RuntimeError, match="missing pull_request html_url"):
-            github.pull_request_url_for_commit_sha(session, "abc123")
+        assert github.pull_request_url_for_commit_sha(session, "abc123") is None
 
 
 def test_compare_changelog_non_200() -> None:
