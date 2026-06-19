@@ -9,8 +9,6 @@ from pathlib import Path
 import tekton
 from logger import logger
 
-PROG = "base64_encode_checksum.py"
-
 
 def encode_checksums(binaries_dir: Path) -> str:
     """Concatenate all *SHA256SUMS files in *binaries_dir* and base64-encode.
@@ -39,11 +37,7 @@ def main() -> int:
 
     binaries_dir = Path(data_dir) / binaries_dir_name
 
-    try:
-        blob = encode_checksums(binaries_dir)
-    except Exception as e:
-        logger.error("%s: %s", PROG, e)
-        return 1
+    blob = encode_checksums(binaries_dir)
 
     logger.info("%s", blob)
     rpath.write_text(blob, encoding="utf-8")

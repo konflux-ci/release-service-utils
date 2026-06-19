@@ -60,3 +60,5 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 
 - Some task scripts write results to Tekton result files via `tekton.result_paths_from_env()`.
 - Wrapper scripts call external tools (pubtools-pulp, pubtools-marketplacesvm, etc.) via subprocess or library APIs.
+- Internal task scripts (`scripts/python/tasks/internal/`) must catch all exceptions in `main()` and save errors to Tekton result files (the script itself must succeed).
+- Managed task scripts (`scripts/python/tasks/managed/`) must not catch exceptions in `main()` — let the script fail with traceback.

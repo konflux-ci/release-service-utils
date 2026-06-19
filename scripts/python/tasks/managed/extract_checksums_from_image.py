@@ -22,7 +22,6 @@ import skopeo
 import tekton
 from logger import logger
 
-PROG = "extract_checksums_from_image.py"
 BINARIES_DIR = "binaries"
 
 
@@ -177,16 +176,13 @@ def main() -> int:
     snapshot_path = data_dir / snapshot_rel_path
     data_path = data_dir / data_path_str
 
-    try:
-        relative_binaries = extract_checksums(
-            snapshot_path=snapshot_path,
-            data_path=data_path,
-            data_dir=data_dir,
-            image_binaries_path=image_binaries_path,
-            snapshot_rel_path=snapshot_rel_path,
-        )
-    except Exception as e:
-        raise SystemExit(f"{PROG}: {e}") from e
+    relative_binaries = extract_checksums(
+        snapshot_path=snapshot_path,
+        data_path=data_path,
+        data_dir=data_dir,
+        image_binaries_path=image_binaries_path,
+        snapshot_rel_path=snapshot_rel_path,
+    )
 
     result_path.write_text(relative_binaries, encoding="utf-8")
     return 0

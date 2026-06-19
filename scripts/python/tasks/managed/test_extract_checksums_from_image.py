@@ -583,14 +583,12 @@ def test_main_missing_data_dir_raises(monkeypatch: pytest.MonkeyPatch, tmp_path:
         ecfi.main()
 
 
-def test_main_extract_error_exits_with_message(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Exceptions from extract_checksums become SystemExit with PROG prefix."""
+def test_main_extract_error_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Exceptions from extract_checksums propagate from main."""
     monkeypatch.setenv("RESULT_BINARIES_PATH", str(tmp_path / "r"))
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SNAPSHOT_PATH", "uid/snapshot.json")
 
     with mock.patch.object(ecfi, "extract_checksums", side_effect=ValueError("boom")):
-        with pytest.raises(SystemExit, match="extract_checksums_from_image.py: boom"):
+        with pytest.raises(ValueError, match="boom"):
             ecfi.main()

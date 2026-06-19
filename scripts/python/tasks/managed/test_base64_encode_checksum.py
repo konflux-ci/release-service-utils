@@ -66,16 +66,16 @@ def test_main_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result_file.read_text() == base64.b64encode(content).decode("ascii")
 
 
-def test_main_failure_returns_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Return 1 and skip result file when the directory is missing."""
+def test_main_failure_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Raise FileNotFoundError when the directory is missing."""
     result_file = tmp_path / "blob_result"
     monkeypatch.setenv("RESULT_BLOB", str(result_file))
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("BINARIES_DIR", "nonexistent")
 
-    rc = main()
+    with pytest.raises(FileNotFoundError):
+        main()
 
-    assert rc == 1
     assert not result_file.exists()
 
 
