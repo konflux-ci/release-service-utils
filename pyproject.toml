@@ -48,6 +48,17 @@ dev = [
     "pytest-cov>=6.0",
 ]
 
+[tool.basedpyright]
+extraPaths = [
+  "integration-tests/lib",
+  "scripts/python/helpers",
+  "scripts/python/tasks/internal",
+  "scripts/python/tasks/managed",
+  "utils",
+  "pubtools-pulp-wrapper",
+  "publish-to-cgw-wrapper",
+]
+
 [tool.coverage.run]
 omit = [
     "**/test_*",
