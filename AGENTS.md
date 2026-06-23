@@ -12,7 +12,6 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - `kafka/` — Kafka producer/consumer
 - `scripts/python/helpers/` — Shared helpers (auth, HTTP, retry, tekton results, file I/O, OSIDB)
 - `scripts/python/tasks/` — Python task implementations (e.g., check_embargoed_cves)
-- `scripts/bash/tasks/` — Bash task implementations (e.g., check-embargoed-cves)
 - `templates/` — Jinja2 templates (advisory.yaml.jinja, GraphQL)
 - `utils/` — General utilities (apply_template, get_resource, find_matching_purl)
 - `integration-tests/` — Orchestration harness that detects which catalog E2E suites are affected by utils changes, patches a temporary catalog fork with the new image, and runs the matching tests
