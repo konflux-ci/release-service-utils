@@ -176,6 +176,26 @@ def test_build_pr_description_without_changelog_rev() -> None:
     assert "## Changelog" not in body
 
 
+def test_build_pr_description_missing_pr_link() -> None:
+    """Omit the PR link line when no source PR is found for the revision."""
+    session = github.GitHubAppSession(api_url="https://api.github.com", token="t")
+    with mock.patch(
+        "update_infra_deployments.github.pull_request_url_for_commit_sha",
+        return_value=None,
+    ):
+        body = task._build_pr_description(
+            session,
+            existing_body="Included PRs:\r\n- old-link",
+            origin_repo="https://github.com/org/repo",
+            revision="newrev",
+            old_revision="",
+            container_image="img",
+        )
+    assert "old-link" in body
+    assert "None" not in body
+    assert "newrev" not in body
+
+
 def test_build_pr_description_uses_tag_old_revision() -> None:
     """Pass a non-digest old revision directly to the compare API."""
     session = github.GitHubAppSession(api_url="https://api.github.com", token="t")

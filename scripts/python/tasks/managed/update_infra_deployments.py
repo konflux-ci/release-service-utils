@@ -159,9 +159,10 @@ def _build_pr_description(
     links_part, changelog_part = _split_pr_body(existing_body)
     logger.info("Searching GitHub for pull request linked to commit %s", revision)
     new_pr_link = github.pull_request_url_for_commit_sha(session, revision)
-    pr_line = f"- {new_pr_link}"
-    if pr_line not in links_part:
-        links_part = f"{links_part}\n{pr_line}"
+    if new_pr_link:
+        pr_line = f"- {new_pr_link}"
+        if pr_line not in links_part:
+            links_part = f"{links_part}\n{pr_line}"
     body = links_part + changelog_part
 
     changelog_rev = ""
