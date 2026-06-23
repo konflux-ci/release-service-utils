@@ -65,7 +65,6 @@ omit = [
     "**/tests/*",
     ".github/*",
     "ci/*",
-    "scripts/bash/*",
     "templates/*",
     "data/*",
 ]
