@@ -478,15 +478,16 @@ class TestMain:
         monkeypatch.delenv("SNAPSHOT_FILE", raising=False)
         assert make_repo_public.main() == 1
 
-    def test_runtime_error_returns_1(
+    def test_runtime_error_raises(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """`main` returns 1 when run() raises RuntimeError."""
+        """`main` raises RuntimeError when run() fails."""
         monkeypatch.setenv("DATA_FILE", str(tmp_path / "missing.json"))
         monkeypatch.setenv("SNAPSHOT_FILE", str(tmp_path / "snap.json"))
         monkeypatch.setenv("REGISTRY_SECRET_PATH", str(tmp_path))
         monkeypatch.setenv("CA_CERT_PATH", str(tmp_path / "no-ca.crt"))
-        assert make_repo_public.main() == 1
+        with pytest.raises(RuntimeError):
+            make_repo_public.main()
 
 
 class TestSetupCaBundle:

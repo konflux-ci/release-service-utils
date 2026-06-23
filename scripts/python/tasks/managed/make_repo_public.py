@@ -193,8 +193,7 @@ def run(
 def main() -> int:
     """Read environment variables and call ``run()``.
 
-    Return 0 on success, 1 on missing env vars or ``RuntimeError`` from
-    ``run()``.
+    Return 0 on success, 1 on missing env vars.
     """
     data_file_str = os.environ.get("DATA_FILE", "").strip()
     snapshot_file_str = os.environ.get("SNAPSHOT_FILE", "").strip()
@@ -209,16 +208,12 @@ def main() -> int:
     secret_path = file.path_from_env_variable("REGISTRY_SECRET_PATH", "/etc/secrets")
     ca_cert_path = file.path_from_env_variable("CA_CERT_PATH", "/mnt/trusted-ca/ca-bundle.crt")
 
-    try:
-        run(
-            Path(data_file_str),
-            Path(snapshot_file_str),
-            secret_path,
-            ca_cert_path,
-        )
-    except RuntimeError as e:
-        print(f"{PROG}: {e}", file=sys.stderr)
-        return 1
+    run(
+        Path(data_file_str),
+        Path(snapshot_file_str),
+        secret_path,
+        ca_cert_path,
+    )
 
     logger.info("make-repo-public completed successfully")
     return 0
