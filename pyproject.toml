@@ -34,6 +34,7 @@ line-length = 95
 pythonpath = [
   ".",
   "integration-tests/lib",
+  "pyxis",
   "scripts/python/helpers",
   "scripts/python/tasks/internal",
   "scripts/python/tasks/managed",
@@ -45,6 +46,7 @@ pythonpath = [
 [dependency-groups]
 dev = [
     "black>=25.11.0",
+    "flake8>=7.3.0",
     "pytest>=8.4.2",
     "pytest-cov>=6.0",
 ]

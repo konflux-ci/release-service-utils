@@ -26,7 +26,7 @@ def run_cmd(
     """Run *cmd*; capture stdout as text; optionally append stderr to *stderr_path*."""
     # Child must inherit pod env (PATH, KUBECONFIG, etc.); only overlay *env*.
     merged: dict[str, str] = {**os.environ, **dict(env or {})}
-    err_f: Any = subprocess.DEVNULL
+    err_f: Any = subprocess.PIPE
     fh: Any = None
     try:
         if stderr_path is not None:

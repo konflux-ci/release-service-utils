@@ -4,7 +4,36 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tempfile
 from pathlib import Path
+
+from subprocess_cmd import run_cmd
+
+
+def oras_resolve(reference: str) -> str:
+    """Resolve the digest of an OCI image reference using oras.
+
+    Obtains registry credentials via ``select-oci-auth``, writes them to a
+    temporary auth file, then runs ``oras resolve`` and returns the digest.
+
+    Raises ``RuntimeError`` if oras resolve exits non-zero.
+    """
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as auth_file:
+        select_auth = run_cmd(["select-oci-auth", reference])
+        auth_file.write(select_auth.stdout)
+        auth_file.flush()
+
+        result = run_cmd(
+            ["oras", "resolve", "--registry-config", auth_file.name, reference],
+            check=False,
+        )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"oras resolve failed for {reference!r} (exit {result.returncode}):"
+            f" {result.stderr.strip()}"
+        )
+    return result.stdout.strip()
 
 
 def oras_login(registry: str, username: str, password: str) -> None:
