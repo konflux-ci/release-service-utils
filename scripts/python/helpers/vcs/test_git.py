@@ -42,14 +42,6 @@ def test_append_cmd_stderr_redacts_oauth2_url(tmp_path: Path) -> None:
     assert "oauth2:[REDACTED]@" in text
 
 
-def test_redact_credential_urls() -> None:
-    """Mask oauth2 tokens in arbitrary text (stderr or argv)."""
-    text = "fatal: https://oauth2:secret@gitlab.com/g/r.git"
-    redacted = git._redact_credential_urls(text)
-    assert "secret" not in redacted
-    assert "oauth2:[REDACTED]@" in redacted
-
-
 def test_run_git_cmd_redacts_clone_failure_log(tmp_path: Path) -> None:
     """Failed clone must not write credential-bearing URLs to the stderr log."""
     log = tmp_path / "log.txt"
@@ -360,6 +352,80 @@ def test_index_add_commit(tmp_path: Path) -> None:
         git.index_add_commit(tmp_path, ["a.yaml"], "msg", stderr_path=None)
     assert run_cmd.call_count == 2
     assert run_cmd.call_args_list[1].args[0] == ["git", "commit", "-m", "msg"]
+
+
+def test_index_add_commit_stage_only(tmp_path: Path) -> None:
+    """When ``commit=False``, paths are staged but not committed."""
+    with mock.patch.object(git, "_run_git_cmd") as run_cmd:
+        git.index_add_commit(tmp_path, ["a.yaml"], "", commit=False)
+    run_cmd.assert_called_once_with(
+        ["git", "add", "a.yaml"],
+        cwd=tmp_path,
+        stderr_path=None,
+    )
+
+
+def test_working_tree_diff_cached(tmp_path: Path) -> None:
+    """Return cached diff output from the git CLI."""
+    with mock.patch.object(
+        git,
+        "_run_git_cmd",
+        return_value=mock.MagicMock(stdout="diff\n"),
+    ):
+        assert git.working_tree_diff(tmp_path, cached=True) == "diff\n"
+
+
+def test_working_tree_diff_cached_with_other_ref(tmp_path: Path) -> None:
+    """Compare cached diff against another ref when requested."""
+    with mock.patch.object(
+        git,
+        "_run_git_cmd",
+        return_value=mock.MagicMock(stdout="diff\n"),
+    ) as run_cmd:
+        assert git.working_tree_diff(tmp_path, cached=True, other_ref="mr_1") == "diff\n"
+    assert run_cmd.call_args.args[0] == ["git", "diff", "--cached", "mr_1"]
+
+
+def test_rebase_onto_remote_adds_missing_remote(tmp_path: Path) -> None:
+    """Add remote when missing, fetch, and rebase."""
+    calls: list[list[str]] = []
+
+    def _cmd_side_effect(cmd: list[str], **_kwargs: object) -> mock.MagicMock:
+        calls.append(cmd)
+        if cmd[:2] == ["git", "remote"] and len(cmd) == 2:
+            return mock.MagicMock(stdout="origin\n")
+        return mock.MagicMock(stdout="")
+
+    with mock.patch.object(git, "_run_git_cmd", side_effect=_cmd_side_effect):
+        git.rebase_onto_remote(
+            tmp_path,
+            remote_name="glab-base",
+            remote_repository="https://gitlab.com/g/up.git",
+            revision="main",
+        )
+    assert ["git", "remote", "add", "glab-base", "https://gitlab.com/g/up.git"] in calls
+    assert ["git", "fetch", "glab-base", "main"] in calls
+    assert ["git", "rebase", "glab-base/main"] in calls
+
+
+def test_rebase_onto_remote_skips_existing_remote(tmp_path: Path) -> None:
+    """Skip ``git remote add`` when the remote already exists."""
+    calls: list[list[str]] = []
+
+    def _cmd_side_effect(cmd: list[str], **_kwargs: object) -> mock.MagicMock:
+        calls.append(cmd)
+        if cmd[:2] == ["git", "remote"] and len(cmd) == 2:
+            return mock.MagicMock(stdout="glab-base\n")
+        return mock.MagicMock(stdout="")
+
+    with mock.patch.object(git, "_run_git_cmd", side_effect=_cmd_side_effect):
+        git.rebase_onto_remote(
+            tmp_path,
+            remote_name="glab-base",
+            remote_repository="https://gitlab.com/g/up.git",
+            revision="main",
+        )
+    assert not any(cmd[:3] == ["git", "remote", "add"] for cmd in calls)
 
 
 def test_commit_and_push(tmp_path: Path) -> None:

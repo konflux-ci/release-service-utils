@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
 from pathlib import Path
 from typing import NoReturn, TextIO
+
+from redact import redact_secrets
 
 
 class CheckStepError(Exception):
@@ -51,25 +52,6 @@ def result_text_from_exception(exc: BaseException, *, max_len: int = 500) -> str
     return t
 
 
-def _redact_for_tekton_result(text: str) -> str:
-    """Mask credentials before writing failure text to a Tekton result file."""
-    if not text:
-        return text
-    redacted = re.sub(
-        r"https://([^/@\s:]+):([^@\s]+)@",
-        r"https://\1:[REDACTED]@",
-        text,
-        flags=re.IGNORECASE,
-    )
-    redacted = re.sub(
-        r"(ACCESS_TOKEN=)\S+",
-        r"\1[REDACTED]",
-        redacted,
-        flags=re.IGNORECASE,
-    )
-    return redacted
-
-
 def write_failure_result(
     result_path: Path,
     program_name: str,
@@ -87,20 +69,20 @@ def write_failure_result(
     last *max_log_lines* of subprocess/git output collected during the run.
     """
     if isinstance(exc, CheckStepError):
-        why = _redact_for_tekton_result(result_text_from_exception(exc.cause))
+        why = redact_secrets(result_text_from_exception(exc.cause))
         summary = f"{program_name}: Failed while {exc.action}: {why}."
     else:
-        why = _redact_for_tekton_result(result_text_from_exception(exc))
+        why = redact_secrets(result_text_from_exception(exc))
         summary = f"{program_name}: Failed while {workflow_action}: " f"{why}"
 
     parts = [summary.strip()]
     if command_log_path is not None and command_log_path.is_file():
         lines = command_log_path.read_text(encoding="utf-8", errors="replace").splitlines()
         if lines:
-            tail = _redact_for_tekton_result("\n".join(lines[-max_log_lines:]).strip())
+            tail = redact_secrets("\n".join(lines[-max_log_lines:]).strip())
             parts.append(tail)
 
-    text = _redact_for_tekton_result("\n".join(parts))
+    text = redact_secrets("\n".join(parts))
     if len(text) > max_total_len:
         text = text[: max_total_len - 3] + "..."
     result_path.write_text(text, encoding="utf-8")
