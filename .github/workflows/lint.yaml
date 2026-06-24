@@ -58,3 +58,31 @@ jobs:
       - uses: konflux-ci/renovate-config-validator-action@main
         with:
           config_file: .github/renovate.json
+  check-jsonschema:
+    name: Validate json schema file
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - name: Setup python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
+        with:
+          python-version: '3.12'
+      - run: pip install check-jsonschema
+      - name: Run json meta schema check
+        run: check-jsonschema --check-metaschema schemas/dataKeys.json
+  lint-jsonschema:
+    name: Lint json schema file
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6
+      - name: Run json schema lint
+        run: |
+          FILE="schemas/dataKeys.json"
+          if ! diff -u "$FILE" <(jq . "$FILE"); then
+            echo "Linting issue in $FILE"
+            echo "To fix: jq . $FILE | sponge $FILE"
+            exit 1
+          fi
+          echo "$FILE is formatted correctly"
