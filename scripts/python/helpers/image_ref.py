@@ -7,9 +7,63 @@ import re
 
 import http_client
 import requests
+from logger import logger
 
 _QUAY_SHA_TAG = re.compile(r"^[0-9a-f]{40}$")
 _MAX_QUAY_TAG_PAGES = 50
+
+
+def translate_delivery_repo(repo: str) -> list[dict[str, str]]:
+    """Translate a Quay delivery-repo reference to public registry URLs.
+
+    Return two dicts with `repo` and `url` keys: one for `redhat.io` and
+    one for `access.redhat.com`.
+    """
+    if not repo.strip():
+        msg = "Please pass a repo to translate like 'quay.io/redhat-prod/product----repo'"
+        raise ValueError(msg)
+
+    normalized = repo.replace("----", "/")
+    io_url: str
+    access_url: str
+
+    if normalized.startswith("quay.io/redhat-prod/"):
+        io_url = "registry.redhat.io" + normalized[len("quay.io/redhat-prod") :]
+        access_url = "registry.access.redhat.com" + normalized[len("quay.io/redhat-prod") :]
+    elif normalized.startswith("quay.io/redhat-pending/"):
+        io_url = "registry.stage.redhat.io" + normalized[len("quay.io/redhat-pending") :]
+        access_url = (
+            "registry.access.stage.redhat.com" + normalized[len("quay.io/redhat-pending") :]
+        )
+    elif normalized.startswith("quay.io/rh-flatpaks-prod/"):
+        io_url = "flatpaks.registry.redhat.io" + normalized[len("quay.io/rh-flatpaks-prod") :]
+        access_url = (
+            "registry.access.redhat.com" + normalized[len("quay.io/rh-flatpaks-prod") :]
+        )
+    elif normalized.startswith("quay.io/rh-flatpaks-stage/"):
+        io_url = (
+            "flatpaks.registry.stage.redhat.io"
+            + normalized[len("quay.io/rh-flatpaks-stage") :]
+        )
+        access_url = (
+            "registry.access.stage.redhat.com" + normalized[len("quay.io/rh-flatpaks-stage") :]
+        )
+    elif normalized.startswith("quay.io/redhat/"):
+        io_url = "registry.redhat.io" + normalized[len("quay.io/redhat") :]
+        access_url = "registry.access.redhat.com" + normalized[len("quay.io/redhat") :]
+    else:
+        logger.warning(
+            "Repo to translate is not in expected format. If this is not "
+            "an index image, the expected format is: "
+            "quay.io/redhat-[prod,pending]/product----repo",
+        )
+        io_url = normalized
+        access_url = ""
+
+    return [
+        {"repo": "redhat.io", "url": io_url},
+        {"repo": "access.redhat.com", "url": access_url},
+    ]
 
 
 def resolve_quay_digest_to_git_sha(digest: str, container_image: str) -> str | None:
