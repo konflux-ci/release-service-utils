@@ -1,9 +1,11 @@
-"""HTTP helpers for task code using the third-party ``requests`` library.
+"""HTTP helpers for task code using the requests library.
 
-The catalog often shows shell with ``curl --retry 3`` and Kerberos or bearer
-auth. The equivalent here is ``get_text`` (GET with retries on the session) plus
-either ``HTTPKerberosAuth`` from the ``requests_kerberos`` package (after
-``kinit``) or regular headers, using urllib3's retry support on a ``Session``.
+get_text performs GET with retries (similar to curl --retry 3). Kerberos or
+bearer auth uses HTTPKerberosAuth from requests_kerberos after kinit, or
+headers on a Session with urllib3 retry support.
+
+Use get_retry_session to build a Session with caller-chosen methods and
+status codes. get_text uses it with GET-only retry settings.
 """
 
 from __future__ import annotations
@@ -23,61 +25,75 @@ MAX_404_ATTEMPTS = 3
 BASE_SLEEP_TIME_SECONDS = 1
 
 
-def _retries(*, allowed_methods: frozenset[str]) -> Retry:
-    """Transients similar to common `curl --retry 3` (connection + some HTTP)."""
-    return Retry(
-        total=3,
-        connect=3,
-        read=3,
-        status=2,
-        backoff_factor=0.4,
-        status_forcelist=(500, 502, 503, 504),
+def get_retry_session(
+    *,
+    total: int = 5,
+    connect: int | None = None,
+    read: int | None = None,
+    status: int | None = None,
+    backoff_factor: float = 0.4,
+    status_forcelist: tuple[int, ...] = (500, 502, 503, 504),
+    allowed_methods: frozenset[str] | set[str],
+    raise_on_status: bool = False,
+) -> requests.Session:
+    """Build a requests.Session with urllib3 retries on http and https.
+
+    Callers choose which HTTP methods and status codes are retried.
+    Tests can patch this function to supply a custom session.
+    """
+    connect_attempts = total if connect is None else connect
+    read_attempts = total if read is None else read
+    status_attempts = 2 if status is None else status
+    retry = Retry(
+        total=total,
+        connect=connect_attempts,
+        read=read_attempts,
+        status=status_attempts,
+        backoff_factor=backoff_factor,
+        status_forcelist=status_forcelist,
         allowed_methods=allowed_methods,
-        raise_on_status=False,
+        raise_on_status=raise_on_status,
     )
-
-
-def post_session() -> requests.Session:
-    """`requests.Session` with retries on transient connection/HTTP errors for POST."""
     session = requests.Session()
-    adapter = HTTPAdapter(max_retries=_retries(allowed_methods=frozenset({"POST"})))
+    adapter = HTTPAdapter(max_retries=retry)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
-
-
-def get_session() -> requests.Session:
-    """
-    Build a ``requests.Session`` with the shared retry policy on http and https.
-    ``get_text`` uses this. Tests can patch this function to supply a custom session.
-    """
-    s = requests.Session()
-    a = HTTPAdapter(max_retries=_retries(allowed_methods=frozenset({"GET"})))
-    s.mount("https://", a)
-    s.mount("http://", a)
-    return s
 
 
 def get_text(
     url: str,
     *,
     auth: Any = None,
+    cert: tuple[str, str] | None = None,
     headers: Mapping[str, str] | None = None,
     timeout: float = 60.0,
+    allow_error_status: bool = False,
 ) -> str:
-    """
-    Perform an HTTP(S) GET for the given URL and return the body as a string.
+    """Perform an HTTP(S) GET for the given URL and return the body as a string.
 
-    Non-2xx responses become ``requests.HTTPError`` (similar to ``curl
-    --fail``). You may pass optional ``auth`` (for example
-    ``HTTPKerberosAuth``) and request ``headers`` (bearer token, content type,
-    etc.). ``timeout`` is seconds for the call.
+    Non-2xx responses become requests.HTTPError (similar to curl --fail).
+    Optional auth (for example HTTPKerberosAuth) and headers are supported.
+    timeout is seconds for the call.
+
+    When allow_error_status is true, return the response body for any HTTP
+    status without raising (similar to curl without --fail). Retries for
+    HTTP 429 and optional 404 still run before returning a non-2xx body.
 
     HTTP 429 is retried with exponential backoff plus 0-2s jitter up to
-    ``MAX_429_ATTEMPTS`` total attempts. HTTP 404 is retried similarly only if
-    ``CURL_WITH_RETRY_RETRY_404`` is set to a non-empty value.
+    MAX_429_ATTEMPTS total attempts. HTTP 404 is retried similarly only if
+    CURL_WITH_RETRY_RETRY_404 is set to a non-empty value.
     """
-    session = get_session()
+    session = get_retry_session(
+        total=3,
+        connect=3,
+        read=3,
+        status=2,
+        backoff_factor=0.4,
+        allowed_methods=frozenset({"GET"}),
+    )
+    if cert is not None:
+        session.cert = cert
     retries_429 = 0
     retries_404 = 0
     should_retry_404 = bool(os.environ.get("CURL_WITH_RETRY_RETRY_404"))
@@ -107,6 +123,9 @@ def get_text(
                 delay += random.randint(0, 2)
                 time.sleep(delay)
                 continue
+
+        if allow_error_status:
+            return r.text
 
         r.raise_for_status()
         return r.text

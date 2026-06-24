@@ -90,9 +90,9 @@ def test_reserve_errata_live_id_posts_json(tmp_path: Path) -> None:
         def json(self) -> dict:
             return {"live_id": 42}
 
-    with mock.patch("create_advisory.http_client.post_session") as post_session:
+    with mock.patch("create_advisory.http_client.get_retry_session") as session_factory:
         sess = mock.MagicMock()
-        post_session.return_value = sess
+        session_factory.return_value = sess
         sess.post.return_value = _Resp()
         out = create_advisory._reserve_errata_live_id(
             "https://errata/api/v1",
@@ -127,9 +127,9 @@ def test_reserve_errata_live_id_request_failure_logs_stderr(tmp_path: Path) -> N
     krb5.write_text("[libdefaults]\n", encoding="utf-8")
     log = tmp_path / "log.txt"
 
-    with mock.patch("create_advisory.http_client.post_session") as post_session:
+    with mock.patch("create_advisory.http_client.get_retry_session") as session_factory:
         sess = mock.MagicMock()
-        post_session.return_value = sess
+        session_factory.return_value = sess
         sess.post.side_effect = requests.RequestException("net")
         with pytest.raises(requests.RequestException):
             create_advisory._reserve_errata_live_id(
@@ -156,9 +156,9 @@ def test_reserve_errata_live_id_missing_live_id(tmp_path: Path) -> None:
         def json(self) -> dict:
             return {}
 
-    with mock.patch("create_advisory.http_client.post_session") as post_session:
+    with mock.patch("create_advisory.http_client.get_retry_session") as session_factory:
         sess = mock.MagicMock()
-        post_session.return_value = sess
+        session_factory.return_value = sess
         sess.post.return_value = _Resp()
         with pytest.raises(ValueError, match="no live_id"):
             create_advisory._reserve_errata_live_id(

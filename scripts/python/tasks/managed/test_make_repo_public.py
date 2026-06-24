@@ -166,7 +166,7 @@ class TestRun:
         )
         session = _mock_session(get_status=200, post_ok=True)
         with mock.patch(
-            "make_repo_public.http_client.get_session",
+            "make_repo_public.http_client.get_retry_session",
             return_value=session,
         ):
             make_repo_public.run(
@@ -191,7 +191,7 @@ class TestRun:
         )
         session = _mock_session(get_status=200, post_ok=True)
         with mock.patch(
-            "make_repo_public.http_client.get_session",
+            "make_repo_public.http_client.get_retry_session",
             return_value=session,
         ):
             make_repo_public.run(
@@ -216,7 +216,7 @@ class TestRun:
         )
         session = _mock_session(get_status=200, post_ok=True)
         with mock.patch(
-            "make_repo_public.http_client.get_session",
+            "make_repo_public.http_client.get_retry_session",
             return_value=session,
         ):
             make_repo_public.run(
@@ -243,7 +243,7 @@ class TestRun:
         )
         session = _mock_session(get_status=404, post_ok=True)
         with mock.patch(
-            "make_repo_public.http_client.get_session",
+            "make_repo_public.http_client.get_retry_session",
             return_value=session,
         ):
             make_repo_public.run(
@@ -271,7 +271,7 @@ class TestRun:
         )
         session = _mock_session(get_status=200, post_ok=True)
         with mock.patch(
-            "make_repo_public.http_client.get_session",
+            "make_repo_public.http_client.get_retry_session",
             return_value=session,
         ):
             with pytest.raises(RuntimeError, match="Multiple Quay registries"):
@@ -340,7 +340,7 @@ class TestRun:
         )
         session = _mock_session(get_status=200, post_ok=True)
         with mock.patch(
-            "make_repo_public.http_client.get_session",
+            "make_repo_public.http_client.get_retry_session",
             return_value=session,
         ):
             make_repo_public.run(
@@ -371,7 +371,7 @@ class TestRun:
         )
         session = _mock_session(get_status=200, post_ok=True)
         with mock.patch(
-            "make_repo_public.http_client.get_session",
+            "make_repo_public.http_client.get_retry_session",
             return_value=session,
         ):
             make_repo_public.run(
@@ -397,7 +397,7 @@ class TestRun:
         )
         session = _mock_session(get_status=200, post_ok=True)
         with mock.patch(
-            "make_repo_public.http_client.get_session",
+            "make_repo_public.http_client.get_retry_session",
             return_value=session,
         ):
             with pytest.raises(RuntimeError, match="missing the 'url' field"):

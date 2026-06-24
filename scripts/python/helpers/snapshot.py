@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import file
 
@@ -38,3 +39,29 @@ def first_component(snapshot_path: Path) -> dict[str, str]:
         "origin_repo": origin_repo,
         "container_image": container_image,
     }
+
+
+def default_push_source_container(data: dict[str, Any]) -> bool:
+    """Return the mapping default for `pushSourceContainer`, defaulting to true."""
+    mapping = data.get("mapping")
+    if not isinstance(mapping, dict):
+        return True
+    defaults = mapping.get("defaults")
+    if not isinstance(defaults, dict):
+        return True
+    value = defaults.get("pushSourceContainer")
+    if value is None:
+        return True
+    return bool(value)
+
+
+def component_push_source_container(
+    component: dict[str, Any],
+    default_push_source_container: bool,
+) -> bool:
+    """Return the component level pushSourceContainer value."""
+    if component.get("pushSourceContainer") is True:
+        return True
+    if "pushSourceContainer" not in component and default_push_source_container:
+        return True
+    return False
