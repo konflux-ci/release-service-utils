@@ -230,6 +230,7 @@ COPY pubtools-marketplacesvm-wrapper /home/pubtools-marketplacesvm-wrapper
 COPY developer-portal-wrapper /home/developer-portal-wrapper
 COPY publish-to-cgw-wrapper /home/publish-to-cgw-wrapper
 COPY schemas /home/schemas
+COPY data/config/ud2.ini /home/ud2/config.ini
 
 # It is mandatory to set these labels
 LABEL name="Konflux Release Service Utils"
