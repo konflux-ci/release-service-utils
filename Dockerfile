@@ -231,6 +231,10 @@ COPY pubtools-marketplacesvm-wrapper /home/pubtools-marketplacesvm-wrapper
 COPY developer-portal-wrapper /home/developer-portal-wrapper
 COPY publish-to-cgw-wrapper /home/publish-to-cgw-wrapper
 COPY schemas /home/schemas
+# default config file for ud2 is at ${HOME}/.config/ud2/config.ini,
+# but /tekton/home is overridden at runtime;
+# use "ud2 --config /home/ud2/config.ini" when running
+COPY data/config/ud2.ini /home/ud2/config.ini
 
 # It is mandatory to set these labels
 LABEL name="Konflux Release Service Utils"
