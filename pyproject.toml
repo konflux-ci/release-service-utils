@@ -30,6 +30,7 @@ dependencies = [
     "jq",
     "kubernetes>=28.0",
     "RestrictedPython>=7.0",
+    "ud2",
 ]
 
 [tool.black]
@@ -91,3 +92,6 @@ omit = [
 
 [tool.coverage.report]
 show_missing = true
+
+[tool.uv.sources]
+ud2 = { git = "https://github.com/release-engineering/ud2.git", rev = "6abfa820d5fa4a72edb860b72e7a2798665ac650" }
