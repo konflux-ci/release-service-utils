@@ -96,8 +96,9 @@ def clone(
 ) -> Path:
     """Clone *clone_url* into *parent_dir*.
 
-    When *shallow* is true, perform a blob-filtered shallow clone and optional
-    sparse checkout of *sparse_dirs* at *revision*.
+    When *shallow* is true, perform a shallow clone at *revision*. With
+    *sparse_dirs*, use blob-filtered sparse checkout; otherwise clone the full
+    tree at depth 1 (legacy bash ``git_clone_and_checkout`` without ``--sparse-dir``).
 
     Creates *parent_dir* when it does not exist yet.
     """
@@ -111,35 +112,48 @@ def clone(
         if revision is None:
             msg = "revision is required for a shallow clone"
             raise ValueError(msg)
-        if not sparse_dirs:
-            msg = "sparse_dirs is required for a shallow clone"
-            raise ValueError(msg)
-        _run_git_cmd(
-            [
-                "git",
-                "clone",
-                "--filter=blob:none",
-                "--no-checkout",
-                "--depth",
-                "1",
-                "--branch",
-                revision,
-                clone_url,
-                str(repo_dir),
-            ],
-            cwd=parent_dir,
-            stderr_path=stderr_path,
-        )
-        _run_git_cmd(
-            ["git", "sparse-checkout", "set", *sparse_dirs],
-            cwd=repo_dir,
-            stderr_path=stderr_path,
-        )
-        _run_git_cmd(
-            ["git", "checkout", revision],
-            cwd=repo_dir,
-            stderr_path=stderr_path,
-        )
+        if sparse_dirs:
+            _run_git_cmd(
+                [
+                    "git",
+                    "clone",
+                    "--filter=blob:none",
+                    "--no-checkout",
+                    "--depth",
+                    "1",
+                    "--branch",
+                    revision,
+                    clone_url,
+                    str(repo_dir),
+                ],
+                cwd=parent_dir,
+                stderr_path=stderr_path,
+            )
+            _run_git_cmd(
+                ["git", "sparse-checkout", "set", *sparse_dirs],
+                cwd=repo_dir,
+                stderr_path=stderr_path,
+            )
+            _run_git_cmd(
+                ["git", "checkout", revision],
+                cwd=repo_dir,
+                stderr_path=stderr_path,
+            )
+        else:
+            _run_git_cmd(
+                [
+                    "git",
+                    "clone",
+                    "--depth",
+                    "1",
+                    "--branch",
+                    revision,
+                    clone_url,
+                    str(repo_dir),
+                ],
+                cwd=parent_dir,
+                stderr_path=stderr_path,
+            )
     else:
         _run_git_cmd(
             ["git", "clone", clone_url, str(repo_dir)],
