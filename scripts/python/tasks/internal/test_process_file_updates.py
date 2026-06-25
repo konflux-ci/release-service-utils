@@ -470,27 +470,8 @@ def test_git_functions_init_configures_identity() -> None:
     cfg.assert_called_once_with("Author", "a@example.com")
 
 
-def test_sparse_dirs_from_paths() -> None:
-    """Sparse checkout paths cover parent dirs and root-level files."""
-    paths = [
-        {"path": "deploy/overlays/prod/kustomization.yaml"},
-        {"path": "version.yaml"},
-        {"path": "deploy/base/kustomization.yaml"},
-    ]
-    assert process_file_updates.sparse_dirs_from_paths(paths) == [
-        "deploy/base",
-        "deploy/overlays/prod",
-        "version.yaml",
-    ]
-
-
-def test_sparse_dirs_from_paths_skips_missing_path() -> None:
-    """Entries without a path are ignored."""
-    assert process_file_updates.sparse_dirs_from_paths([{"seed": "x"}]) == []
-
-
 def test_prepare_repository(tmp_path: Path) -> None:
-    """Repository is sparse-cloned and rebased on upstream via ``vcs.git``."""
+    """Repository is shallow-cloned and rebased on upstream via ``vcs.git``."""
     repo_cwd = tmp_path / "cloned"
     repo_cwd.mkdir()
     paths = [{"path": "deploy/image.yaml", "replacements": []}]
@@ -514,7 +495,6 @@ def test_prepare_repository(tmp_path: Path) -> None:
         tmp_path,
         "https://gitlab.com/org/repo.git",
         revision="main",
-        sparse_dirs=["deploy"],
         shallow=True,
     )
     rebase.assert_called_once()
