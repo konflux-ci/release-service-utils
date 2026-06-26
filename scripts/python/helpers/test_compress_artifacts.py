@@ -148,6 +148,145 @@ def test_compress_file_entry_windows(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert result is not None and result.endswith(".zip")
 
 
+def test_compress_file_entry_qcow2_passthrough(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A qcow2 disk image is copied directly to ready_for_distribution without archiving."""
+    monkeypatch.setattr(compress_artifacts, "CONTENT_DIR", tmp_path)
+    comp_dir = tmp_path / "prod"
+    ready_dir = comp_dir / "ready_for_distribution"
+    ready_dir.mkdir(parents=True)
+
+    linux_arch_dir = comp_dir / "linux" / "x86_64"
+    linux_arch_dir.mkdir(parents=True)
+    (linux_arch_dir / "rhel-10.0-x86_64-kvm.qcow2").write_bytes(b"qcow2 content")
+
+    result = compress_artifacts._compress_file_entry(
+        {
+            "source": "/releases/rhel-10.0-x86_64-kvm.qcow2",
+            "os": "linux",
+            "arch": "x86_64",
+        },
+        "files",
+        comp_dir,
+        ready_dir,
+    )
+    out = ready_dir / "rhel-10.0-x86_64-kvm.qcow2"
+    assert out.exists()
+    assert out.read_bytes() == b"qcow2 content"
+    assert not tarfile.is_tarfile(str(out))
+    assert result == "/releases/rhel-10.0-x86_64-kvm.qcow2"
+
+
+def test_compress_file_entry_iso_passthrough(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An iso disk image is copied directly to ready_for_distribution without archiving."""
+    monkeypatch.setattr(compress_artifacts, "CONTENT_DIR", tmp_path)
+    comp_dir = tmp_path / "prod"
+    ready_dir = comp_dir / "ready_for_distribution"
+    ready_dir.mkdir(parents=True)
+
+    linux_arch_dir = comp_dir / "linux" / "x86_64"
+    linux_arch_dir.mkdir(parents=True)
+    (linux_arch_dir / "rhel-10.0-x86_64-boot.iso").write_bytes(b"iso content")
+
+    result = compress_artifacts._compress_file_entry(
+        {
+            "source": "/releases/rhel-10.0-x86_64-boot.iso",
+            "os": "linux",
+            "arch": "x86_64",
+        },
+        "files",
+        comp_dir,
+        ready_dir,
+    )
+    out = ready_dir / "rhel-10.0-x86_64-boot.iso"
+    assert out.exists()
+    assert out.read_bytes() == b"iso content"
+    assert result == "/releases/rhel-10.0-x86_64-boot.iso"
+
+
+def test_compress_file_entry_disk_image_multiple_files_in_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two disk images sharing the same arch dir are each copied correctly by name."""
+    monkeypatch.setattr(compress_artifacts, "CONTENT_DIR", tmp_path)
+    comp_dir = tmp_path / "prod"
+    ready_dir = comp_dir / "ready_for_distribution"
+    ready_dir.mkdir(parents=True)
+
+    linux_arch_dir = comp_dir / "linux" / "x86_64"
+    linux_arch_dir.mkdir(parents=True)
+    (linux_arch_dir / "rhel-10.0-x86_64-kvm.qcow2").write_bytes(b"kvm-content")
+    (linux_arch_dir / "rhel-10.0-x86_64-boot.iso.gz").write_bytes(b"iso-content")
+
+    for source in (
+        "/releases/rhel-10.0-x86_64-kvm.qcow2",
+        "/releases/rhel-10.0-x86_64-boot.iso.gz",
+    ):
+        compress_artifacts._compress_file_entry(
+            {"source": source, "os": "linux", "arch": "x86_64"},
+            "files",
+            comp_dir,
+            ready_dir,
+        )
+
+    assert (ready_dir / "rhel-10.0-x86_64-kvm.qcow2").read_bytes() == b"kvm-content"
+    assert (ready_dir / "rhel-10.0-x86_64-boot.iso.gz").read_bytes() == b"iso-content"
+
+
+def test_compress_file_entry_iso_gz_passthrough(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A .iso.gz disk image is copied directly to ready_for_distribution via extension."""
+    monkeypatch.setattr(compress_artifacts, "CONTENT_DIR", tmp_path)
+    comp_dir = tmp_path / "prod"
+    ready_dir = comp_dir / "ready_for_distribution"
+    ready_dir.mkdir(parents=True)
+
+    linux_arch_dir = comp_dir / "linux" / "x86_64"
+    linux_arch_dir.mkdir(parents=True)
+    (linux_arch_dir / "rhel-ai-3.3-x86_64.iso.gz").write_bytes(b"iso.gz content")
+
+    result = compress_artifacts._compress_file_entry(
+        {"source": "/releases/rhel-ai-3.3-x86_64.iso.gz", "os": "linux", "arch": "x86_64"},
+        "files",
+        comp_dir,
+        ready_dir,
+    )
+    out = ready_dir / "rhel-ai-3.3-x86_64.iso.gz"
+    assert out.exists()
+    assert out.read_bytes() == b"iso.gz content"
+    assert result == "/releases/rhel-ai-3.3-x86_64.iso.gz"
+
+
+def test_compress_file_entry_tar_gz_passthrough_via_content_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A .tar.gz GCP disk image is copied as-is when is_disk_image_component=True."""
+    monkeypatch.setattr(compress_artifacts, "CONTENT_DIR", tmp_path)
+    comp_dir = tmp_path / "prod"
+    ready_dir = comp_dir / "ready_for_distribution"
+    ready_dir.mkdir(parents=True)
+
+    linux_arch_dir = comp_dir / "linux" / "x86_64"
+    linux_arch_dir.mkdir(parents=True)
+    (linux_arch_dir / "image.tar.gz").write_bytes(b"gcp disk image content")
+
+    result = compress_artifacts._compress_file_entry(
+        {"source": "/releases/image.tar.gz", "os": "linux", "arch": "x86_64"},
+        "files",
+        comp_dir,
+        ready_dir,
+        is_disk_image_component=True,
+    )
+    out = ready_dir / "image.tar.gz"
+    assert out.exists()
+    assert out.read_bytes() == b"gcp disk image content"
+    assert result == "/releases/image.tar.gz"
+
+
 def test_compress_file_entry_missing_arch_dir_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -34,6 +34,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import authentication
+import disk_image_utils
 
 PROG = "extract_artifacts.py"
 
@@ -121,6 +122,47 @@ def _safe_extract_layer(
     return found
 
 
+def _extract_from_oras(
+    manifest: dict,
+    tmp_dir: Path,
+    wanted_files: list[str],
+    destination: Path,
+    component_name: str,
+) -> None:
+    """Copy raw ORAS blob layers to destination, matching by filename.
+
+    ORAS artifacts store raw file blobs as layers with an
+    ``org.opencontainers.image.title`` annotation containing the filename.
+    We match each wanted file (by basename) to its blob and copy it directly.
+    """
+    title_to_blob: dict[str, Path] = {}
+    for layer in manifest.get("layers", []):
+        title = (layer.get("annotations") or {}).get("org.opencontainers.image.title")
+        digest = layer.get("digest", "")
+        if title and digest:
+            blob_path = tmp_dir / digest.removeprefix("sha256:")
+            title_to_blob[title] = blob_path
+
+    logger.info(
+        "ORAS artifact detected for '%s'; available blobs: %s",
+        component_name,
+        list(title_to_blob),
+    )
+
+    for wanted in wanted_files:
+        basename = Path(wanted).name
+        blob = title_to_blob.get(basename)
+        if blob is None or not blob.is_file():
+            available = sorted(title_to_blob)
+            raise RuntimeError(
+                f"ORAS layer with title '{basename}' not found in component "
+                f"'{component_name}'. Available titles: {available}"
+            )
+        out = destination / basename
+        shutil.copy2(str(blob), str(out))
+        logger.info("Copied ORAS blob '%s' -> %s", basename, out)
+
+
 def process_component(component: dict) -> None:
     """Pull and extract one component's artifacts into CONTENT_DIR/<name>/."""
     name = component.get("name")
@@ -174,32 +216,42 @@ def process_component(component: dict) -> None:
         logger.info("Files to extract from RPA: %s", wanted_files)
 
         manifest = json.loads((tmp_dir / "manifest.json").read_text())
-        layer_digests = [layer["digest"] for layer in manifest.get("layers", [])]
 
-        for digest in layer_digests:
-            layer_file = tmp_dir / digest.removeprefix("sha256:")
-            if not layer_file.exists():
-                continue
-            with tarfile.open(str(layer_file)) as tf:
-                for image_path in extract_dirs:
-                    if _safe_extract_layer(tf, image_path, tmp_dir, layer_file.name):
-                        logger.info("Extracting %s/ from %s...", image_path, layer_file.name)
-                    else:
-                        logger.info(
-                            "skipping %s. It doesn't contain the %s dir",
-                            layer_file.name,
-                            image_path,
-                        )
+        config_media_type = manifest.get("config", {}).get("mediaType", "")
+        if config_media_type == "application/vnd.oci.empty.v1+json":
+            # ORAS artifact: layers are raw file blobs, not tar archives.
+            # Each layer carries an org.opencontainers.image.title annotation
+            # that holds the original filename.  Copy blobs directly to destination.
+            _extract_from_oras(manifest, tmp_dir, wanted_files, destination, name)
+        else:
+            layer_digests = [layer["digest"] for layer in manifest.get("layers", [])]
 
-        for wanted in wanted_files:
-            src = tmp_dir / wanted
-            if src.is_file():
-                shutil.copy2(str(src), str(destination / src.name))
-            else:
-                logger.error("Expected file not found in container: %s", wanted)
-                raise RuntimeError(
-                    f"File '{wanted}' declared in RPA was not found in any container layer"
-                )
+            for digest in layer_digests:
+                layer_file = tmp_dir / digest.removeprefix("sha256:")
+                if not layer_file.exists():
+                    continue
+                with tarfile.open(str(layer_file)) as tf:
+                    for image_path in extract_dirs:
+                        if _safe_extract_layer(tf, image_path, tmp_dir, layer_file.name):
+                            logger.info(
+                                "Extracting %s/ from %s...", image_path, layer_file.name
+                            )
+                        else:
+                            logger.info(
+                                "skipping %s. It doesn't contain the %s dir",
+                                layer_file.name,
+                                image_path,
+                            )
+
+            for wanted in wanted_files:
+                src = tmp_dir / wanted
+                if src.is_file():
+                    shutil.copy2(str(src), str(destination / src.name))
+                else:
+                    logger.error("Expected file not found in container: %s", wanted)
+                    raise RuntimeError(
+                        f"File '{wanted}' declared in RPA was not found in any container layer"
+                    )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -240,14 +292,41 @@ def _create_os_flag_files(snapshot: dict) -> None:
             logger.info("  - Linux content detected")
 
 
+def _validate_disk_image_components(components: list[dict]) -> None:
+    """Fail fast if any disk-image component has non-linux file entries.
+
+    Disk images must always target os: linux. Detecting this before pulling
+    images avoids wasting time on downloads only to fail deep in the pipeline.
+    """
+    for component in components:
+        if not disk_image_utils.is_disk_image_component(component):
+            continue
+        name = component.get("name", "<unknown>")
+        all_file_entries = list(component.get("files") or []) + list(
+            (component.get("staged") or {}).get("files") or []
+        )
+        for entry in all_file_entries:
+            entry_os = entry.get("os", "")
+            if entry_os in ("darwin", "windows"):
+                raise RuntimeError(
+                    f"Component '{name}' has contentType: disk-image but entry "
+                    f"'{entry.get('source', '<unknown>')}' has os: {entry_os}. "
+                    f"Disk images must be os: linux. Fix the RPA before releasing."
+                )
+
+
 def run(concurrent_limit: int) -> None:
     """Extract artifacts from all snapshot components and write OS flag files."""
     snapshot = json.loads(os.environ["SNAPSHOT_JSON"])
 
+    components = snapshot.get("components", [])
+
+    # Validate disk-image component constraints before doing any image pulls.
+    _validate_disk_image_components(components)
+
     _setup_docker_config()
     CONTENT_DIR.mkdir(parents=True, exist_ok=True)
 
-    components = snapshot.get("components", [])
     errors: list[str] = []
 
     with ThreadPoolExecutor(max_workers=concurrent_limit) as executor:

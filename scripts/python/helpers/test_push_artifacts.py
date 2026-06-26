@@ -71,6 +71,38 @@ SNAPSHOT_BOTH = {
     ]
 }
 
+SNAPSHOT_DISK_IMAGE = {
+    "components": [
+        {
+            "name": "diskimage-product",
+            "staged": {
+                "destination": "diskimage-amd64",
+                "version": "1.0",
+                "files": [
+                    {
+                        "source": "/releases/install.iso.gz",
+                        "filename": "product-1.0-x86_64-boot.iso.gz",
+                        "os": "linux",
+                        "arch": "amd64",
+                    },
+                    {
+                        "source": "/releases/disk.qcow2",
+                        "filename": "product-1.0-x86_64-kvm.qcow2",
+                        "os": "linux",
+                        "arch": "amd64",
+                    },
+                ],
+            },
+            "contentGateway": {
+                "contentType": "disk-image",
+                "productCode": "DiskProduct",
+                "productName": "Disk Product",
+                "productVersionName": "1.0",
+            },
+        }
+    ]
+}
+
 
 def _setup_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for secret, files in {
@@ -483,6 +515,54 @@ def test_run_preprod_sets_squid_proxy(tmp_path: Path, monkeypatch: pytest.Monkey
         push_artifacts.run("pre", "https://developers.qa.redhat.com", 7)
 
     assert "squid" in env_captured.get("HTTP_PROXY", "")
+
+
+def test_run_disk_image_injects_staged_files_into_cgw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run() injects staged.files into files[] for disk-image components before calling CGW."""
+    monkeypatch.setattr(push_artifacts, "CONTENT_DIR", tmp_path / "artifacts")
+    monkeypatch.setattr(push_artifacts, "SHARED_DIR", tmp_path / "shared")
+    (tmp_path / "shared").mkdir()
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps(SNAPSHOT_DISK_IMAGE))
+    _setup_secrets(tmp_path, monkeypatch)
+    _setup_published_files_env(tmp_path, monkeypatch)
+
+    comp_dir = tmp_path / "artifacts" / "diskimage-product" / "ready_for_distribution"
+    comp_dir.mkdir(parents=True)
+    (comp_dir / "install.iso.gz").write_bytes(b"fakeisodata")
+    (comp_dir / "disk.qcow2").write_bytes(b"fakeqcowdata")
+
+    captured_snapshot: list[dict] = []
+
+    def fake_cgw_main(argv):
+        for arg in argv:
+            try:
+                data = json.loads(arg)
+                captured_snapshot.append(data)
+            except (ValueError, TypeError):
+                pass
+
+    def fake_check_cert(_path, _days):
+        pass
+
+    with (
+        mock.patch.object(
+            push_artifacts, "_check_cert_expiration", side_effect=fake_check_cert
+        ),
+        mock.patch("pulp_push_wrapper.main"),
+        mock.patch("subprocess.check_call"),
+        mock.patch("publish_to_cgw_wrapper.main", side_effect=fake_cgw_main),
+    ):
+        push_artifacts.run("pre", "https://cgw.example.com", 7)
+
+    assert captured_snapshot, "publish_to_cgw_wrapper.main was not called"
+    cgw_components = captured_snapshot[0].get("components", [])
+    disk_comp = next(c for c in cgw_components if c["name"] == "diskimage-product")
+    assert disk_comp.get("files"), "staged.files were not injected into files[] for disk-image"
+    file_sources = [f["source"] for f in disk_comp["files"]]
+    assert "/releases/install.iso.gz" in file_sources
+    assert "/releases/disk.qcow2" in file_sources
 
 
 # ---------------------------------------------------------------------------
