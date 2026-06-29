@@ -8,6 +8,11 @@ from typing import Any
 import file
 
 
+def _is_truthy(value: Any) -> bool:
+    """Return True for boolean ``True`` or the case-insensitive string ``"true"``."""
+    return value is True or str(value).lower() == "true"
+
+
 def first_component(snapshot_path: Path) -> dict[str, str]:
     """Return fields from the first snapshot `components` entry.
 
@@ -65,3 +70,19 @@ def component_push_source_container(
     if "pushSourceContainer" not in component and default_push_source_container:
         return True
     return False
+
+
+def component_public(data: dict[str, Any], component: dict[str, Any]) -> bool:
+    """Return whether a component should be made public.
+
+    A component is public when its own `public` field is truthy, or when
+    `public` is absent and the mapping-level default (`mapping.defaults.public`)
+    is true.
+    """
+    mapping = data.get("mapping")
+    default = False
+    if isinstance(mapping, dict):
+        defaults = mapping.get("defaults")
+        if isinstance(defaults, dict):
+            default = _is_truthy(defaults.get("public", False))
+    return _is_truthy(component.get("public", default))

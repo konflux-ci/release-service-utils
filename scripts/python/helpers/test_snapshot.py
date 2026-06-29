@@ -9,6 +9,25 @@ import pytest
 import snapshot
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (True, True),
+        ("true", True),
+        ("True", True),
+        ("TRUE", True),
+        (False, False),
+        ("false", False),
+        (None, False),
+        (1, False),
+        ("yes", False),
+    ],
+)
+def test_is_truthy(value: object, expected: bool) -> None:
+    """Only boolean `True` or a case-insensitive `"true"` string is truthy."""
+    assert snapshot._is_truthy(value) is expected
+
+
 def test_first_component_missing_components(tmp_path: Path) -> None:
     """Reject snapshots with no `components` list."""
     path = tmp_path / "snapshot.json"
@@ -107,3 +126,28 @@ def test_component_push_source_container_explicit_false() -> None:
         {"pushSourceContainer": False},
         True,
     )
+
+
+def test_component_public_own_flag_true() -> None:
+    """A component's own public=true takes effect regardless of the default."""
+    assert snapshot.component_public({}, {"public": True}) is True
+    assert snapshot.component_public({}, {"public": "true"}) is True
+
+
+def test_component_public_falls_back_to_default() -> None:
+    """A component without its own public field falls back to the mapping default."""
+    data = {"mapping": {"defaults": {"public": True}}}
+    assert snapshot.component_public(data, {}) is True
+    assert snapshot.component_public({}, {}) is False
+
+
+def test_component_public_own_false_overrides_default() -> None:
+    """A component's own public=false overrides a true default."""
+    data = {"mapping": {"defaults": {"public": True}}}
+    assert snapshot.component_public(data, {"public": False}) is False
+
+
+def test_component_public_without_defaults_mapping() -> None:
+    """Default to false when mapping.defaults is missing or invalid."""
+    assert snapshot.component_public({"mapping": {"defaults": "not-a-mapping"}}, {}) is False
+    assert snapshot.component_public({"mapping": "not-a-mapping"}, {}) is False
