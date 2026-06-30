@@ -33,6 +33,8 @@ RUN ARCH=$(uname -m) && \
     curl -L https://github.com/kubearchive/kubearchive/releases/download/v${KUBEARCHIVE_VERSION}/kubectl-ka-linux-${GO_ARCH} -o /usr/bin/kubectl-ka &&\
     chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft,kubectl-ka}
 
+RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+
 COPY --from=oras /usr/bin/oras /usr/bin/oras
 COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
 COPY --from=oras /usr/local/bin/get-reference-base /usr/local/bin/get-reference-base
@@ -82,10 +84,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
 RUN dnf install -y 'dnf-command(config-manager)' && \
     dnf config-manager --set-enabled codeready-builder-for-ubi-10-$(arch)-rpms
 
-RUN dnf -y --exclude='epel-release*' update && \
-    dnf -y install https://dl.fedoraproject.org/pub/epel/10/Everything/x86_64/Packages/e/epel-release-10-8.el10_3.noarch.rpm && \
-    dnf -y --setopt=tsflags=nodocs install glibc-devel && \
-    dnf -y --setopt=tsflags=nodocs install \
+RUN dnf -y --setopt=tsflags=nodocs install \
     git \
     git-lfs \
     jq \
