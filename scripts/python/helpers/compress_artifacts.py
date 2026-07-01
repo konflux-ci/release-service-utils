@@ -5,7 +5,8 @@ For each component:
 * Pulls signed macOS and Windows OCI artifacts from Quay into a ``signed/`` directory.
 * Restores supplementary files (readme, license, changelog) that were held during signing.
 * Compresses each file entry into the final deliverable format:
-  - macOS / Linux → ``.tar.gz`` (from ``os/arch/`` directory)
+  - macOS / Linux (non-disk-image) → ``.tar.gz`` (from ``os/arch/`` directory)
+  - Linux disk images (``.qcow2``, ``.iso``) → copied as-is to ``ready_for_distribution/``
   - Windows → ``.zip`` (from ``os/arch/`` directory, extension corrected from
     ``.tar.gz``/``.tar``)
 * Updates ``SNAPSHOT_JSON`` to reflect corrected Windows filenames in ``files[]``.
@@ -35,9 +36,11 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+import disk_image_utils
 import oras_utils
 
 PROG = "compress_artifacts.py"
+
 
 QUAY_SECRET_MOUNT = Path(os.environ.get("QUAY_SECRET_MOUNT", "/mnt/quaySecret"))
 CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
@@ -103,7 +106,12 @@ def _windows_filename(source_filename: str) -> str:
 
 
 def _compress_file_entry(
-    entry: dict, array_name: str, component_dir: Path, ready_dir: Path
+    entry: dict,
+    array_name: str,
+    component_dir: Path,
+    ready_dir: Path,
+    *,
+    is_disk_image_component: bool = False,
 ) -> str:
     """Compress one file entry into ready_dir and return the (possibly normalized) source path.
 
@@ -111,11 +119,12 @@ def _compress_file_entry(
     the archive is created as a ``.zip`` instead of ``.tar.gz``/``.tar``, and the returned
     source path reflects the corrected filename so the snapshot can be updated accordingly.
 
-    Raises RuntimeError on failure (missing source, unknown OS, or empty arch directory).
+    Files are copied directly to ``ready_dir`` (without archiving) when either:
+    - *is_disk_image_component* is True (set when contentType: disk-image), or
+    - the filename has an unambiguous disk-image suffix (.qcow2, .iso, .iso.gz,
+      .raw.gz, .vhd.gz).
 
-    Note: all files are currently compressed regardless of type. ISOs should be
-    passed through as-is rather than wrapped in a tarball — this will need to be
-    addressed before ISO delivery is supported.
+    Raises RuntimeError on failure (missing source, unknown OS, or empty arch directory).
     """
     source = entry.get("source")
     if not source:
@@ -139,12 +148,23 @@ def _compress_file_entry(
 
     # macOS and Linux follow the Unix convention of tar.gz archives; Windows uses zip
     # because that is the standard expected by Windows users and Developer Portal tooling.
+    # Disk images are an exception: they are delivered as-is without any archiving.
     if os_name in ("darwin", "linux"):
         out_path = ready_dir / source_filename
-        with tarfile.open(str(out_path), "w:gz") as tf:
-            for item in sorted(arch_dir.rglob("*")):
-                if item.is_file():
-                    tf.add(str(item), arcname=str(item.relative_to(arch_dir)))
+        if is_disk_image_component or disk_image_utils.is_disk_image_file(source_filename):
+            # Use the known filename directly — multiple disk images may share
+            # the same arch directory, so scanning the whole dir is incorrect.
+            src_file = arch_dir / source_filename
+            if not src_file.is_file():
+                raise RuntimeError(
+                    f"Disk image file '{source_filename}' not found in {arch_dir}"
+                )
+            shutil.copy2(str(src_file), str(out_path))
+        else:
+            with tarfile.open(str(out_path), "w:gz") as tf:
+                for item in sorted(arch_dir.rglob("*")):
+                    if item.is_file():
+                        tf.add(str(item), arcname=str(item.relative_to(arch_dir)))
         logger.info("  Created (%s): %s", array_name, source_filename)
         return source
 
@@ -174,13 +194,17 @@ def compress_component(component: dict, snapshot: dict) -> dict:
     files_entries = list(component.get("files") or [])
     staged_entries = list((component.get("staged") or {}).get("files") or [])
 
+    is_disk_image = disk_image_utils.is_disk_image_component(component)
+
     normalized_files = []
     if files_entries:
         logger.info(
             "  Processing %d files from files[] (Developer Portal):", len(files_entries)
         )
         for entry in files_entries:
-            normalized_source = _compress_file_entry(entry, "files", component_dir, ready_dir)
+            normalized_source = _compress_file_entry(
+                entry, "files", component_dir, ready_dir, is_disk_image_component=is_disk_image
+            )
             normalized_entry = dict(entry)
             # no-op for mac/linux, .zip correction for windows
             normalized_entry["source"] = normalized_source
@@ -191,7 +215,13 @@ def compress_component(component: dict, snapshot: dict) -> dict:
             "  Processing %d files from staged.files[] (Customer Portal):", len(staged_entries)
         )
         for entry in staged_entries:
-            _compress_file_entry(entry, "staged.files", component_dir, ready_dir)
+            _compress_file_entry(
+                entry,
+                "staged.files",
+                component_dir,
+                ready_dir,
+                is_disk_image_component=is_disk_image,
+            )
 
     updated_component = dict(component)
     if files_entries:
