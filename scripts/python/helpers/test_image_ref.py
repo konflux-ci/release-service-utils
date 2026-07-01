@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import json
+import logging
 from unittest import mock
 
 import image_ref
 import pytest
 import requests
+
+
+@pytest.fixture(autouse=True)
+def _propagate_release_logger() -> None:
+    """Allow caplog to capture records from the 'release' logger."""
+    release_logger = logging.getLogger("release")
+    release_logger.propagate = True
+    yield
+    release_logger.propagate = False
 
 
 def test_pyxis_url_for_pull_spec_with_tag_and_registry_rewrite() -> None:
@@ -132,3 +142,90 @@ def test_resolve_quay_digest_handles_exception() -> None:
             "quay.io/org/repo@sha256:abc",
         )
     assert out is None
+
+
+def test_translate_delivery_repo_rejects_empty_repo() -> None:
+    """Empty repo input raises `ValueError`."""
+    with pytest.raises(ValueError, match="Please pass a repo"):
+        image_ref.translate_delivery_repo("")
+
+
+def test_translate_delivery_repo_redhat_prod() -> None:
+    """Translate quay.io/redhat-prod delivery repos to public registries."""
+    out = image_ref.translate_delivery_repo("quay.io/redhat-prod/product----repo:v1.0")
+    assert out == [
+        {"repo": "redhat.io", "url": "registry.redhat.io/product/repo:v1.0"},
+        {
+            "repo": "access.redhat.com",
+            "url": "registry.access.redhat.com/product/repo:v1.0",
+        },
+    ]
+
+
+def test_translate_delivery_repo_redhat_pending() -> None:
+    """Translate quay.io/redhat-pending delivery repos to stage registries."""
+    out = image_ref.translate_delivery_repo("quay.io/redhat-pending/product----repo:v1.0")
+    assert out == [
+        {"repo": "redhat.io", "url": "registry.stage.redhat.io/product/repo:v1.0"},
+        {
+            "repo": "access.redhat.com",
+            "url": "registry.access.stage.redhat.com/product/repo:v1.0",
+        },
+    ]
+
+
+def test_translate_delivery_repo_flatpaks_prod() -> None:
+    """Translate quay.io/rh-flatpaks-prod delivery repos."""
+    out = image_ref.translate_delivery_repo("quay.io/rh-flatpaks-prod/product----repo:v1")
+    assert out == [
+        {"repo": "redhat.io", "url": "flatpaks.registry.redhat.io/product/repo:v1"},
+        {
+            "repo": "access.redhat.com",
+            "url": "registry.access.redhat.com/product/repo:v1",
+        },
+    ]
+
+
+def test_translate_delivery_repo_flatpaks_stage() -> None:
+    """Translate quay.io/rh-flatpaks-stage delivery repos."""
+    out = image_ref.translate_delivery_repo("quay.io/rh-flatpaks-stage/product----repo:v1")
+    assert out == [
+        {
+            "repo": "redhat.io",
+            "url": "flatpaks.registry.stage.redhat.io/product/repo:v1",
+        },
+        {
+            "repo": "access.redhat.com",
+            "url": "registry.access.stage.redhat.com/product/repo:v1",
+        },
+    ]
+
+
+def test_translate_delivery_repo_index_image() -> None:
+    """Translate quay.io/redhat index image repos."""
+    out = image_ref.translate_delivery_repo(
+        "quay.io/redhat/redhat----fbc-target-index:v4.12",
+    )
+    assert out == [
+        {
+            "repo": "redhat.io",
+            "url": "registry.redhat.io/redhat/fbc-target-index:v4.12",
+        },
+        {
+            "repo": "access.redhat.com",
+            "url": "registry.access.redhat.com/redhat/fbc-target-index:v4.12",
+        },
+    ]
+
+
+def test_translate_delivery_repo_unknown_format_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Unknown formats pass through the repo and emit a warning."""
+    with caplog.at_level(logging.WARNING, logger="release"):
+        out = image_ref.translate_delivery_repo("registry.example.com/org/repo:tag")
+    assert out == [
+        {"repo": "redhat.io", "url": "registry.example.com/org/repo:tag"},
+        {"repo": "access.redhat.com", "url": ""},
+    ]
+    assert "Repo to translate is not in expected format" in caplog.text
