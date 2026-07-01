@@ -1,0 +1,85 @@
+---
+# Example mock configuration for FakeSkopeoClient
+#
+# This file demonstrates the YAML structure for defining mock responses
+# for skopeo operations (inspect and copy).
+#
+# Usage:
+#   export RELEASE_SERVICE_UTILS_FAKE_SKOPEO_SETUP=/path/to/this/file.yaml
+#   python -c "from fake import patch_skopeo_client; patch_skopeo_client(); ..."
+
+# Inspect operation rules
+inspect:
+  # Example 1: Return formatted string when format parameter is specified
+  - match:
+      image: "docker://quay.io/source/image@sha256:abc123def456"
+      format: "{{.Digest}}"
+    return: "sha256:abc123def456"
+
+  # Example 2: Return full manifest dict when no format specified
+  - match:
+      image: "docker://quay.io/target/image:v1.0"
+    return:
+      Digest: "sha256:def456abc123"
+      Name: "quay.io/target/image"
+      RepoTags:
+        - "v1.0"
+        - "latest"
+      Labels:
+        version: "1.0.0"
+        maintainer: "team@example.com"
+
+  # Example 3: Regex matching for dynamic image names
+  - match:
+      image:
+        regex: "docker://quay.io/.*@sha256:[a-f0-9]{64}"
+      format: "{{.Digest}}"
+    return: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+  # Example 4: Regex matching without format (returns dict)
+  - match:
+      image:
+        regex: "docker://registry-proxy\\.engineering\\.redhat\\.com/.*"
+    return:
+      Digest: "sha256:fedcba987654"
+      Name: "registry-proxy.engineering.redhat.com/rh-osbs/openshift-golang-builder"
+
+# Copy operation rules
+copy:
+  # Example 1: Successful copy (no return section = success)
+  - match:
+      source: "docker://quay.io/source/image@sha256:abc123"
+      destination: "docker://quay.io/dest/image:tag"
+
+  # Example 2: Successful copy with explicit return
+  - match:
+      source: "docker://quay.io/another/image:v1"
+      destination: "docker://quay.io/target/image:v1"
+    return:
+      success: true
+
+  # Example 3: Failed copy with custom error
+  - match:
+      source: "docker://quay.io/nonexistent/image:tag"
+      destination: "docker://quay.io/dest/image:tag"
+    return:
+      success: false
+      stderr: "Error: manifest unknown: manifest unknown"
+      returncode: 1
+
+  # Example 4: Authentication failure
+  - match:
+      source: "docker://quay.io/private/image:tag"
+      destination: "docker://quay.io/dest/image:tag"
+    return:
+      success: false
+      stderr: "Error: authentication required"
+      returncode: 1
+
+  # Example 5: Regex matching for source with digest
+  - match:
+      source:
+        regex: "docker://quay.io/source/.*@sha256:[a-f0-9]{64}"
+      destination:
+        regex: "docker://quay.io/dest/.*:.*"
+    # Omit return = success
