@@ -23,6 +23,9 @@ def opt_env(name: str, default: str) -> str:
     return os.environ.get(name, default).strip()
 
 
+# Bump to re-run all catalog integration suites (find-affected global trigger).
+E2E_SUITE_PROBE_REVISION = 1
+
 # Any registry/repo path ending in /release-service-utils with :tag or @digest.
 _UTILS_IMAGE_REF = re.compile(
     r"(?:[\w.-]+/)+release-service-utils(?::[^\s\n\"'#]+|@[^\s\n\"'#]+)"
