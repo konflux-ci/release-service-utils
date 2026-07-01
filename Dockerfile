@@ -1,12 +1,12 @@
 FROM quay.io/konflux-ci/oras:latest@sha256:6cea0b9e142c2e18429f5cd30d716715d932047cbf1631334c5c31f7e47c3a19 as oras
 
-FROM registry.redhat.io/rhtas/ec-rhel9:0.7@sha256:1fc7c6171d5a6058fa4df1c791906fdbd94df06df048b8230a4d11d1cf9da489 as conforma-cli
+FROM --platform=linux/amd64 registry.redhat.io/rhtas/ec-rhel9:0.7@sha256:1fc7c6171d5a6058fa4df1c791906fdbd94df06df048b8230a4d11d1cf9da489 as conforma-cli
 
-FROM registry.redhat.io/rhtas/cosign-rhel9:1.3.3-1773309431 as cosign
+FROM --platform=linux/amd64 registry.redhat.io/rhtas/cosign-rhel9:1.3.3-1773309431 as cosign
 
-FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.4-1 as roxctl
+FROM --platform=linux/amd64 registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.4-1 as roxctl
 
-FROM registry.access.redhat.com/ubi10/ubi:10.2-1780550529
+FROM registry.access.redhat.com/ubi10/ubi:10.2-1782277716
 
 ARG COSIGN_VERSION=2.4.1
 ARG COSIGN3_VERSION=3.0.4
@@ -33,7 +33,7 @@ RUN ARCH=$(uname -m) && \
     curl -L https://github.com/kubearchive/kubearchive/releases/download/v${KUBEARCHIVE_VERSION}/kubectl-ka-linux-${GO_ARCH} -o /usr/bin/kubectl-ka &&\
     chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft,kubectl-ka}
 
-RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+RUN dnf install -y https://dl.fedoraproject.org/pub/epel/10/Everything/x86_64/Packages/e/epel-release-10-8.el10_3.noarch.rpm
 
 COPY --from=oras /usr/bin/oras /usr/bin/oras
 COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
