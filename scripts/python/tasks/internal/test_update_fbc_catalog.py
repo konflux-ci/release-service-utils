@@ -731,6 +731,9 @@ def test_poll_and_collect_complete_success() -> None:
         "internal_index_image_copy": "internal/img:v1",
         "index_image": "registry/idx:v4.12",
         "from_index": "registry/idx:v4.12",
+    }
+    full_build: iib.IIBBuild = {
+        **build,
         "logs": {"url": "https://logs/1"},
     }
     manifest = {
@@ -741,9 +744,12 @@ def test_poll_and_collect_complete_success() -> None:
             }
         ],
     }
-    with mock.patch(
-        "skopeo.subprocess.run",
-        return_value=_skopeo_result(json.dumps(manifest)),
+    with (
+        mock.patch("iib.get_build", return_value=full_build),
+        mock.patch(
+            "skopeo.subprocess.run",
+            return_value=_skopeo_result(json.dumps(manifest)),
+        ),
     ):
         result = update_fbc_catalog._poll_and_collect(
             "https://iib",
@@ -765,13 +771,14 @@ def test_poll_and_collect_failed_build() -> None:
         "state": "failed",
         "state_reason": "something broke",
     }
-    result = update_fbc_catalog._poll_and_collect(
-        "https://iib",
-        build,
-        3600,
-        False,
-        False,
-    )
+    with mock.patch("iib.get_build", return_value=build):
+        result = update_fbc_catalog._poll_and_collect(
+            "https://iib",
+            build,
+            3600,
+            False,
+            False,
+        )
     assert result.exit_code == 1
     assert result.state == "failed"
 
@@ -830,6 +837,12 @@ def _setup_result_env(
     return paths
 
 
+def _assert_all_results_exist(paths: dict[str, Path]) -> None:
+    """Assert that all five Tekton result files exist."""
+    for name, path in paths.items():
+        assert path.exists(), f"{name} result file was not created"
+
+
 def test_main_invalid_fbc_fragments(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -848,6 +861,7 @@ def test_main_invalid_fbc_fragments(
     state = json.loads(paths["RESULT_BUILD_STATE"].read_text(encoding="utf-8"))
     assert state["state"] == "failed"
     assert paths["RESULT_EXIT_CODE"].read_text(encoding="utf-8") == "1"
+    _assert_all_results_exist(paths)
 
 
 def test_main_empty_fbc_fragments(
@@ -866,6 +880,7 @@ def test_main_empty_fbc_fragments(
             ]
         )
     assert paths["RESULT_EXIT_CODE"].read_text(encoding="utf-8") == "1"
+    _assert_all_results_exist(paths)
 
 
 def test_main_writes_results_on_success(
@@ -924,6 +939,30 @@ def test_main_writes_results_on_success(
     )
 
 
+def test_main_writes_iib_log_when_url_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """All result files are written even when iib_log_url is empty."""
+    paths = _setup_result_env(monkeypatch, tmp_path)
+    _setup_mount_env(monkeypatch, tmp_path)
+
+    fake_result = update_fbc_catalog.RunResult(
+        build_info={"id": 1, "state": "complete"},
+        state="complete",
+        state_reason="ok",
+        index_image_digests="sha256:abc",
+        iib_log_url="",
+        exit_code=0,
+    )
+    with mock.patch("update_fbc_catalog.run", return_value=fake_result):
+        rc = update_fbc_catalog.main(["--fbc-fragments", '["frag"]', "--from-index", "idx:v1"])
+
+    assert rc == 0
+    _assert_all_results_exist(paths)
+    assert paths["RESULT_IIB_LOG"].read_text(encoding="utf-8") == ""
+
+
 def test_main_check_step_error_writes_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -961,6 +1000,7 @@ def test_main_check_step_error_writes_failure(
     assert paths["RESULT_EXIT_CODE"].read_text(encoding="utf-8") == "1"
     state = json.loads(paths["RESULT_BUILD_STATE"].read_text(encoding="utf-8"))
     assert state["state"] == "failed"
+    _assert_all_results_exist(paths)
 
 
 def test_main_missing_result_env_exits() -> None:
@@ -994,6 +1034,7 @@ def test_main_invalid_build_tags_json(
             ]
         )
     assert paths["RESULT_EXIT_CODE"].read_text(encoding="utf-8") == "1"
+    _assert_all_results_exist(paths)
 
 
 def test_main_returns_nonzero_on_failed_build(
@@ -1030,6 +1071,7 @@ def test_main_returns_nonzero_on_failed_build(
     state = json.loads(paths["RESULT_BUILD_STATE"].read_text(encoding="utf-8"))
     assert state["state"] == "failed"
     assert state["state_reason"] == "Build failed with exit code 1"
+    _assert_all_results_exist(paths)
 
 
 def test_main_timeout_returns_124(
@@ -1063,6 +1105,7 @@ def test_main_timeout_returns_124(
 
     assert rc == 124
     assert paths["RESULT_EXIT_CODE"].read_text(encoding="utf-8") == "124"
+    _assert_all_results_exist(paths)
 
 
 def _setup_mount_env(
@@ -1144,13 +1187,14 @@ def test_poll_and_collect_validation_error() -> None:
         "index_image": "registry/idx:wrong",
         "from_index": "registry/idx:v4.12",
     }
-    result = update_fbc_catalog._poll_and_collect(
-        "https://iib",
-        build,
-        3600,
-        True,
-        True,
-    )
+    with mock.patch("iib.get_build", return_value=build):
+        result = update_fbc_catalog._poll_and_collect(
+            "https://iib",
+            build,
+            3600,
+            True,
+            True,
+        )
     assert result.exit_code == 1
     assert result.state == "failed"
     assert "Index image mismatch" in result.state_reason
@@ -1164,13 +1208,14 @@ def test_poll_and_collect_missing_internal_copy() -> None:
         "index_image": "registry/idx:v4.12",
         "from_index": "registry/idx:v4.12",
     }
-    result = update_fbc_catalog._poll_and_collect(
-        "https://iib",
-        build,
-        3600,
-        True,
-        True,
-    )
+    with mock.patch("iib.get_build", return_value=build):
+        result = update_fbc_catalog._poll_and_collect(
+            "https://iib",
+            build,
+            3600,
+            True,
+            True,
+        )
     assert result.exit_code == 1
     assert "Missing internal_index_image_copy" in result.state_reason
 
@@ -1182,9 +1227,12 @@ def test_poll_and_collect_digest_extraction_fails() -> None:
         "state": "complete",
         "internal_index_image_copy": "internal/img:v1",
     }
-    with mock.patch(
-        "skopeo.subprocess.run",
-        return_value=_skopeo_result(returncode=1),
+    with (
+        mock.patch("iib.get_build", return_value=build),
+        mock.patch(
+            "skopeo.subprocess.run",
+            return_value=_skopeo_result(returncode=1),
+        ),
     ):
         result = update_fbc_catalog._poll_and_collect(
             "https://iib",
@@ -1241,26 +1289,28 @@ def test_poll_and_collect_failed_state_reason() -> None:
         "state": "failed",
         "state_reason": "IIB internal error",
     }
-    result = update_fbc_catalog._poll_and_collect(
-        "https://iib",
-        build_with_reason,
-        3600,
-        False,
-        False,
-    )
+    with mock.patch("iib.get_build", return_value=build_with_reason):
+        result = update_fbc_catalog._poll_and_collect(
+            "https://iib",
+            build_with_reason,
+            3600,
+            False,
+            False,
+        )
     assert result.state_reason == "IIB internal error"
 
     build_no_reason: iib.IIBBuild = {
         "id": 2,
         "state": "failed",
     }
-    result2 = update_fbc_catalog._poll_and_collect(
-        "https://iib",
-        build_no_reason,
-        3600,
-        False,
-        False,
-    )
+    with mock.patch("iib.get_build", return_value=build_no_reason):
+        result2 = update_fbc_catalog._poll_and_collect(
+            "https://iib",
+            build_no_reason,
+            3600,
+            False,
+            False,
+        )
     assert result2.state_reason == "Build failed with exit code 1"
 
 
@@ -1627,6 +1677,7 @@ def test_main_empty_from_index(
             ]
         )
     assert paths["RESULT_EXIT_CODE"].read_text(encoding="utf-8") == "1"
+    _assert_all_results_exist(paths)
 
 
 def test_poll_and_collect_removes_state_history_without_polling() -> None:
@@ -1637,6 +1688,13 @@ def test_poll_and_collect_removes_state_history_without_polling() -> None:
         "internal_index_image_copy": "internal/img:v1",
         "state_history": [{"state": "in_progress"}],
     }
+    full_build: iib.IIBBuild = {
+        "id": 1,
+        "state": "complete",
+        "internal_index_image_copy": "internal/img:v1",
+        "state_history": [{"state": "in_progress"}],
+        "logs": {"url": "https://logs/1"},
+    }
     manifest = {
         "manifests": [
             {
@@ -1645,9 +1703,12 @@ def test_poll_and_collect_removes_state_history_without_polling() -> None:
             }
         ],
     }
-    with mock.patch(
-        "skopeo.subprocess.run",
-        return_value=_skopeo_result(json.dumps(manifest)),
+    with (
+        mock.patch("iib.get_build", return_value=full_build),
+        mock.patch(
+            "skopeo.subprocess.run",
+            return_value=_skopeo_result(json.dumps(manifest)),
+        ),
     ):
         result = update_fbc_catalog._poll_and_collect(
             "https://iib",
@@ -1658,3 +1719,79 @@ def test_poll_and_collect_removes_state_history_without_polling() -> None:
         )
     assert result.exit_code == 0
     assert "state_history" not in result.build_info
+
+
+def test_poll_and_collect_fetches_full_details_for_reused_build() -> None:
+    """Reused completed build is re-fetched via the detail endpoint."""
+    list_build: iib.IIBBuild = {
+        "id": 42,
+        "state": "complete",
+        "internal_index_image_copy": "internal/img:v1",
+    }
+    detail_build: iib.IIBBuild = {
+        "id": 42,
+        "state": "complete",
+        "internal_index_image_copy": "internal/img:v1",
+        "logs": {"url": "https://logs/42"},
+    }
+    manifest = {
+        "manifests": [
+            {
+                "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+                "digest": "sha256:abc",
+            }
+        ],
+    }
+    with (
+        mock.patch("iib.get_build", return_value=detail_build) as get_mock,
+        mock.patch(
+            "skopeo.subprocess.run",
+            return_value=_skopeo_result(json.dumps(manifest)),
+        ),
+    ):
+        result = update_fbc_catalog._poll_and_collect(
+            "https://iib",
+            list_build,
+            3600,
+            False,
+            False,
+        )
+    get_mock.assert_called_once_with("https://iib", 42)
+    assert result.iib_log_url == "https://logs/42"
+    assert result.exit_code == 0
+
+
+def test_poll_and_collect_detail_fetch_failure_is_non_fatal() -> None:
+    """Failure to fetch full details does not break the flow."""
+    list_build: iib.IIBBuild = {
+        "id": 42,
+        "state": "complete",
+        "internal_index_image_copy": "internal/img:v1",
+    }
+    manifest = {
+        "manifests": [
+            {
+                "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+                "digest": "sha256:abc",
+            }
+        ],
+    }
+    with (
+        mock.patch(
+            "iib.get_build",
+            side_effect=requests.ConnectionError("timeout"),
+        ),
+        mock.patch(
+            "skopeo.subprocess.run",
+            return_value=_skopeo_result(json.dumps(manifest)),
+        ),
+    ):
+        result = update_fbc_catalog._poll_and_collect(
+            "https://iib",
+            list_build,
+            3600,
+            False,
+            False,
+        )
+    assert result.exit_code == 0
+    assert result.iib_log_url == ""
