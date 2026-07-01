@@ -54,6 +54,7 @@ dev = [
 [tool.basedpyright]
 extraPaths = [
   "integration-tests/lib",
+  "pyxis",
   "scripts/python/helpers",
   "scripts/python/tasks/internal",
   "scripts/python/tasks/managed",
