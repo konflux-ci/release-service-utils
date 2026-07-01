@@ -300,21 +300,6 @@ def write_paths_manifest(paths_json: str, temp_dir: Path) -> tuple[Path, list[di
     return update_paths_file, json.loads(paths_json)
 
 
-def sparse_dirs_from_paths(paths_data: list[dict[str, Any]]) -> list[str]:
-    """Return sparse-checkout paths covering every ``path`` entry in *paths_data*."""
-    sparse_dirs: set[str] = set()
-    for entry in paths_data:
-        entry_path = entry.get("path")
-        if not entry_path:
-            continue
-        path = Path(str(entry_path))
-        if path.parent == Path("."):
-            sparse_dirs.add(path.as_posix())
-        else:
-            sparse_dirs.add(path.parent.as_posix())
-    return sorted(sparse_dirs)
-
-
 def prepare_repository(
     repo: str,
     revision: str,
@@ -324,8 +309,7 @@ def prepare_repository(
 ) -> Path:
     """Clone *repo* at *revision*, rebase on *upstream_repo*, and return the repo cwd."""
     logger.info("=== UPDATING %s ON BRANCH %s ===", repo, revision)
-    sparse_dirs = sparse_dirs_from_paths(paths_data)
-    if not sparse_dirs:
+    if not any(entry.get("path") for entry in paths_data):
         raise tekton.CheckStepError(
             "cloning repository",
             ValueError("paths JSON must include at least one path entry"),
@@ -334,7 +318,6 @@ def prepare_repository(
         temp_dir,
         repo,
         revision=revision,
-        sparse_dirs=sparse_dirs,
         shallow=True,
     )
     vcs_git.rebase_onto_remote(
