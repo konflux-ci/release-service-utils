@@ -17,16 +17,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import requests
-from requests_kerberos import HTTPKerberosAuth, OPTIONAL
-
 import authentication
 import file
 import http_client
 import iib
+import requests
 import skopeo
 import tekton
 from logger import logger
+from requests_kerberos import OPTIONAL, HTTPKerberosAuth
 
 PROG = "update_fbc_catalog.py"
 POLL_INTERVAL_SECONDS = 30
@@ -168,7 +167,7 @@ def is_build_newer_than_index(
         try:
             upstream_ts = iib.parse_date_to_epoch(from_index_created)
             if new_catalog_ts < upstream_ts:
-                logger.warning("Completed build is older than from_index, " "skipping reuse")
+                logger.warning("Completed build is older than from_index, skipping reuse")
                 return False
             return True
         except (ValueError, OSError) as e:
@@ -382,7 +381,7 @@ def poll_build_status(
         elapsed = clock_fn() - start
         if elapsed >= timeout_seconds:
             raise TimeoutError(
-                f"Timeout after {timeout_seconds}s waiting for " f"build {build_id}"
+                f"Timeout after {timeout_seconds}s waiting for build {build_id}"
             )
 
         now = clock_fn()
@@ -473,12 +472,12 @@ def get_manifest_digests(image_ref: str) -> str:
     """
     result = skopeo.inspect(image_ref, raw=True)
     if result.returncode != 0:
-        raise RuntimeError(f"skopeo inspect --raw failed for {image_ref}: " f"{result.stderr}")
+        raise RuntimeError(f"skopeo inspect --raw failed for {image_ref}: {result.stderr}")
     raw = json.loads(result.stdout)
     media = "application/vnd.docker.distribution.manifest.v2+json"
     digests = [m["digest"] for m in raw.get("manifests", []) if m.get("mediaType") == media]
     if not digests:
-        raise RuntimeError("Index image produced is not multi-arch with a manifest " "list")
+        raise RuntimeError("Index image produced is not multi-arch with a manifest list")
     return " ".join(digests)
 
 
@@ -652,6 +651,12 @@ def _poll_and_collect(
                 exit_code=124,
             )
         state = build_info.get("state", "")
+    else:
+        try:
+            build_info = iib.get_build(iib_url, build_id)
+            build_info.pop("state_history", None)  # type: ignore[misc]
+        except (requests.RequestException, OSError, json.JSONDecodeError) as e:
+            logger.warning("Failed to fetch full build details: %s", e)
 
     log_url = iib.extract_log_url(build_info)
     state_reason = build_info.get("state_reason", "")
@@ -730,20 +735,41 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if not args.from_index.strip():
-        _write_failure(build_state_path, exit_code_path, "from-index is required")
+        _write_failure(
+            build_state_path,
+            exit_code_path,
+            "from-index is required",
+            json_build_info_path,
+            index_image_digests_path,
+            iib_log_path,
+        )
         raise SystemExit(f"{PROG}: from-index is required")
 
     try:
         fbc_fragments = parse_fbc_fragments(args.fbc_fragments)
     except (json.JSONDecodeError, ValueError) as e:
-        _write_failure(build_state_path, exit_code_path, str(e))
+        _write_failure(
+            build_state_path,
+            exit_code_path,
+            str(e),
+            json_build_info_path,
+            index_image_digests_path,
+            iib_log_path,
+        )
         raise SystemExit(f"{PROG}: {e}") from e
 
     try:
         build_tags: list[str] = json.loads(args.build_tags)
         add_arches: list[str] = json.loads(args.add_arches)
     except json.JSONDecodeError as e:
-        _write_failure(build_state_path, exit_code_path, str(e))
+        _write_failure(
+            build_state_path,
+            exit_code_path,
+            str(e),
+            json_build_info_path,
+            index_image_digests_path,
+            iib_log_path,
+        )
         raise SystemExit(f"{PROG}: Invalid JSON: {e}") from e
 
     input = FBCCatalogInput(
@@ -781,7 +807,14 @@ def main(argv: list[str] | None = None) -> int:
             iib_log_path=iib_log_path,
         )
     except tekton.CheckStepError as e:
-        _write_failure(build_state_path, exit_code_path, str(e))
+        _write_failure(
+            build_state_path,
+            exit_code_path,
+            str(e),
+            json_build_info_path,
+            index_image_digests_path,
+            iib_log_path,
+        )
         raise SystemExit(f"{PROG}: {e}") from e
 
     json_build_info_path.write_text(
@@ -797,8 +830,10 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
     )
     index_image_digests_path.write_text(result.index_image_digests, encoding="utf-8")
-    if result.iib_log_url:
-        iib_log_path.write_text(f"IIB log url is: {result.iib_log_url}", encoding="utf-8")
+    iib_log_path.write_text(
+        f"IIB log url is: {result.iib_log_url}" if result.iib_log_url else "",
+        encoding="utf-8",
+    )
     exit_code_path.write_text(str(result.exit_code), encoding="utf-8")
 
     if result.iib_log_url:
@@ -815,13 +850,24 @@ def _write_failure(
     build_state_path: Path,
     exit_code_path: Path,
     reason: str,
+    json_build_info_path: Path,
+    index_image_digests_path: Path,
+    iib_log_path: Path,
 ) -> None:
-    """Write failure state to Tekton result files."""
+    """Write failure state to Tekton result files.
+
+    All declared Tekton result files must exist by the time the Task
+    finishes or the TaskRun fails. Results that have no data on early
+    failure paths are written empty.
+    """
     build_state_path.write_text(
         json.dumps({"state": "failed", "state_reason": reason}),
         encoding="utf-8",
     )
     exit_code_path.write_text("1", encoding="utf-8")
+    json_build_info_path.write_text("", encoding="utf-8")
+    index_image_digests_path.write_text("", encoding="utf-8")
+    iib_log_path.write_text("", encoding="utf-8")
 
 
 if __name__ == "__main__":
