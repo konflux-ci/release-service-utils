@@ -19,6 +19,18 @@ def _gzip_b64(obj: dict) -> str:
     return base64.standard_b64encode(gz).decode("ascii")
 
 
+def test_advisory_secret_name_stage() -> None:
+    """Return the stage secret name for the 'stage' environment."""
+    assert advisory_data.advisory_secret_name("stage") == advisory_data.ADVISORY_SECRET_STAGE
+
+
+def test_advisory_secret_name_production() -> None:
+    """Return the prod secret name for the 'production' environment."""
+    assert (
+        advisory_data.advisory_secret_name("production") == advisory_data.ADVISORY_SECRET_PROD
+    )
+
+
 def test_spec_content_json_pointer_image() -> None:
     """Map `image` content type to `.content.images`."""
     assert advisory_data.spec_content_json_pointer("image") == ".content.images"

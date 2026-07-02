@@ -11,6 +11,16 @@ from typing import Any
 
 import yaml
 
+ADVISORY_SECRET_STAGE = "create-advisory-stage-secret"
+ADVISORY_SECRET_PROD = "create-advisory-prod-secret"
+
+
+def advisory_secret_name(environment: str) -> str:
+    """Return the advisory secret name for *environment* (``"stage"`` or ``"production"``)."""
+    if environment == "stage":
+        return ADVISORY_SECRET_STAGE
+    return ADVISORY_SECRET_PROD
+
 
 def _strip_checksum_from_purl(purl: str) -> str:
     """Strip `checksum` query/fragment parts from a package URL for comparison."""
