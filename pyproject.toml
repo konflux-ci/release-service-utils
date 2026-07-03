@@ -45,6 +45,7 @@ pythonpath = [
 
 [dependency-groups]
 dev = [
+    "basedpyright>=1.39.9",
     "black>=25.11.0",
     "flake8>=7.3.0",
     "pytest>=8.4.2",
