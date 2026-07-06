@@ -1,4 +1,4 @@
-"""Tests for `kubect`."""
+"""Tests for `kubectl`."""
 
 from __future__ import annotations
 
@@ -19,6 +19,19 @@ def test_get_configmap_runs_kubectl_and_returns_parsed_json() -> None:
         ["kubectl", "get", "cm/signing-config-map", "-ojson"], check=False
     )
     assert result == {"data": {"SIG_KEY_NAME": "some-key"}}
+
+
+def test_get_configmap_with_namespace() -> None:
+    """Kubectl is called with namespace flag when namespace is provided."""
+    cm_json = json.dumps({"data": {"key": "value"}})
+    with patch("kubectl.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(stdout=cm_json, returncode=0)
+        result = get_configmap("cluster-config", namespace="konflux-info")
+
+    mock_run.assert_called_once_with(
+        ["kubectl", "get", "cm/cluster-config", "-ojson", "-n", "konflux-info"], check=False
+    )
+    assert result == {"data": {"key": "value"}}
 
 
 def test_get_configmap_raises_on_kubectl_failure() -> None:
