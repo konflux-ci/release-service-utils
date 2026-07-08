@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import gzip
+import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 import file
@@ -63,6 +65,31 @@ def test_load_json_dict_rejects_non_object(tmp_path: Path) -> None:
         file.load_json_dict(path)
 
 
+def test_resolve_path_under_base_relative_file(tmp_path: Path) -> None:
+    """A normal relative path resolves under *base*."""
+    target = tmp_path / "uid" / "charon.env"
+    target.parent.mkdir(parents=True)
+    assert file.resolve_path_under_base(tmp_path, "uid/charon.env") == target.resolve()
+
+
+def test_resolve_path_under_base_rejects_absolute(tmp_path: Path) -> None:
+    """Absolute paths are rejected even if they exist."""
+    with pytest.raises(ValueError, match="must be relative"):
+        file.resolve_path_under_base(tmp_path, "/etc/passwd")
+
+
+def test_resolve_path_under_base_rejects_traversal(tmp_path: Path) -> None:
+    """``..`` segments that escape *base* are rejected."""
+    with pytest.raises(ValueError, match="must stay under"):
+        file.resolve_path_under_base(tmp_path, "../outside")
+
+
+def test_resolve_path_under_base_rejects_blank(tmp_path: Path) -> None:
+    """Blank relative paths are rejected."""
+    with pytest.raises(ValueError, match="must be relative"):
+        file.resolve_path_under_base(tmp_path, "   ")
+
+
 def test_make_tempfile_path_empty_file() -> None:
     """A `None` payload leaves the created file with zero length."""
     p = file.make_tempfile_path("t-", None)
@@ -94,3 +121,35 @@ def test_decompress_gzip_bounded_rejects_oversized_output() -> None:
     compressed = gzip.compress(raw)
     with pytest.raises(ValueError, match="gzip bomb"):
         file.decompress_gzip_bounded(compressed, max_bytes=1000)
+
+
+def test_is_gzip_or_tar_archive_posix_tar() -> None:
+    """POSIX tar archives are recognized."""
+
+    def fake_file_cmd(
+        cmd: Sequence[str | Path],
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            [str(x) for x in cmd],
+            0,
+            stdout="POSIX tar archive\n",
+            stderr="",
+        )
+
+    assert file.is_gzip_or_tar_archive(Path("/tmp/archive.tar"), file_cmd=fake_file_cmd)
+
+
+def test_is_gzip_or_tar_archive_rejects_other_types() -> None:
+    """Non-archive ``file -b`` output returns False."""
+
+    def fake_file_cmd(
+        cmd: Sequence[str | Path],
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            [str(x) for x in cmd],
+            0,
+            stdout="ASCII text\n",
+            stderr="",
+        )
+
+    assert not file.is_gzip_or_tar_archive(Path("/tmp/readme.txt"), file_cmd=fake_file_cmd)

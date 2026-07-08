@@ -7,7 +7,10 @@ import json
 import gzip
 import io
 import os
+import re
+import subprocess
 import tempfile
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +26,7 @@ def load_json_dict(path: Path) -> dict[str, Any]:
 
 
 _GZIP_READ_CHUNK_SIZE = 64 * 1024
+_ARCHIVE_TYPE = re.compile(r"(gzip compressed data|POSIX tar archive)")
 
 
 def sha256(path: Path) -> str:
@@ -55,6 +59,25 @@ def path_from_env_variable(
     if raw is not None and str(raw).strip() != "":
         return Path(str(raw).strip())
     return default if isinstance(default, Path) else Path(default)
+
+
+def resolve_path_under_base(base: Path, relative: str | Path) -> Path:
+    """Resolve *relative* under *base* and ensure the result stays inside *base*.
+
+    Rejects absolute paths and ``..`` traversal after resolution. Typical use:
+    Tekton passes a path relative to a data directory (e.g. charon env/config files).
+    """
+    text = str(relative).strip()
+    if not text:
+        raise ValueError(f"path must be relative to {base}: {relative!r}")
+    rel = Path(text)
+    if rel.is_absolute():
+        raise ValueError(f"path must be relative to {base}: {relative!r}")
+    root = base.resolve()
+    candidate = (root / rel).resolve()
+    if not candidate.is_relative_to(root):
+        raise ValueError(f"path must stay under {base}: {relative!r}")
+    return candidate
 
 
 def make_tempfile_path(
@@ -97,3 +120,13 @@ def decompress_gzip_bounded(data: bytes, *, max_bytes: int) -> bytes:
                 msg = f"decompressed data exceeds {max_bytes} bytes (possible gzip bomb)"
                 raise ValueError(msg)
     return bytes(output)
+
+
+def is_gzip_or_tar_archive(
+    path: Path,
+    *,
+    file_cmd: Callable[[Sequence[str | Path]], subprocess.CompletedProcess[str]],
+) -> bool:
+    """Return True when ``file -b`` reports gzip or tar content for *path*."""
+    result = file_cmd(["file", "-b", str(path)])
+    return _ARCHIVE_TYPE.search(result.stdout) is not None

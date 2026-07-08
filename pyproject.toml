@@ -25,6 +25,7 @@ dependencies = [
     "diffused-lib==0.3.0",
     "confluent-kafka",
     "python-gitlab>=4.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [tool.black]
