@@ -1,4 +1,4 @@
-"""Helpers for interacting with InternalRequests."""
+"""Write Tekton result files for internal-request orchestration."""
 
 from __future__ import annotations
 
@@ -12,8 +12,7 @@ def write_result_paths(
     pipeline_run_name: str,
     task_run_name: str,
 ) -> None:
-    """
-    Write pipeline and task run names to the internal-request Tekton results.
+    """Write pipeline and task run names to the internal-request Tekton results.
 
     *result_paths* must include ``internal_pr_name`` and ``internal_task_run_name``
     keys mapping to the result file paths from the task step.
