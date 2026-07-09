@@ -114,3 +114,36 @@ def test_is_disk_image_component_non_disk_image_content_types(content_type: str)
     """Non-disk-image contentType values return False."""
     component = {"contentType": content_type}
     assert disk_image_utils.is_disk_image_component(component) is False
+
+
+# ---------------------------------------------------------------------------
+# architecture_from_filename
+# ---------------------------------------------------------------------------
+
+
+def test_architecture_from_filename_x86_64() -> None:
+    """Return x86_64 when that token appears in the basename."""
+    assert disk_image_utils.architecture_from_filename("product-1.0-x86_64.iso.gz") == "x86_64"
+
+
+def test_architecture_from_filename_aarch64() -> None:
+    """Return aarch64 when that token appears in the basename."""
+    assert (
+        disk_image_utils.architecture_from_filename("product-1.0-aarch64.qcow2") == "aarch64"
+    )
+
+
+def test_architecture_from_filename_prefers_aarch64() -> None:
+    """Prefer aarch64 when both arch tokens appear in the name."""
+    assert disk_image_utils.architecture_from_filename("weird-aarch64-x86_64.iso") == "aarch64"
+
+
+def test_architecture_from_filename_unknown() -> None:
+    """Return unknown when no recognised arch token is present."""
+    assert disk_image_utils.architecture_from_filename("product.iso") == "unknown"
+
+
+def test_architecture_from_filename_uses_basename() -> None:
+    """Ignore directory path segments when sniffing architecture."""
+    path = "/build/x86_64/product-aarch64.iso.gz"
+    assert disk_image_utils.architecture_from_filename(path) == "aarch64"
