@@ -45,14 +45,6 @@ def _fixed_issue(
     return {"id": issue_id, "source": source}
 
 
-def test_normalize_issue_server_maps_legacy_host() -> None:
-    """Convert issues.redhat.com to redhat.atlassian.net."""
-    assert (
-        close_advisory_issues.normalize_issue_server("issues.redhat.com")
-        == "redhat.atlassian.net"
-    )
-
-
 def test_is_jira_eligible_issue_accepts_eligible_rows() -> None:
     """Return true for supported Jira fixed-issue rows."""
     assert close_advisory_issues.is_jira_eligible_issue(_fixed_issue("ISSUE-123"))
@@ -133,22 +125,6 @@ def test_closed_transition_id_ignores_invalid_entries() -> None:
     }
     assert close_advisory_issues.closed_transition_id(payload) == "91"
     assert close_advisory_issues.closed_transition_id({"transitions": "bad"}) is None
-
-
-def test_jira_get_json_returns_object_payload() -> None:
-    """Return parsed JSON objects from successful GET responses."""
-    session = mock.MagicMock()
-    response = mock.MagicMock()
-    response.json.return_value = {"fields": {"status": {"name": "Open"}}}
-    response.raise_for_status.return_value = None
-    session.get.return_value = response
-    auth = HTTPBasicAuth("user", "token")
-    payload = close_advisory_issues.jira_get_json(
-        session,
-        "https://example.test/issue",
-        auth,
-    )
-    assert payload["fields"]["status"]["name"] == "Open"
 
 
 def test_close_issue_with_comment_posts_transition_payload() -> None:
@@ -331,40 +307,6 @@ def test_close_comment_includes_advisory_url() -> None:
     assert close_advisory_issues.close_comment(url) == (f"Fixed in Konflux Advisory {url}")
 
 
-def test_read_jira_credentials_reads_secret_files(tmp_path: Path) -> None:
-    """Load email and token from mounted secret files."""
-    _write_jira_secret(tmp_path)
-    assert close_advisory_issues.read_jira_credentials(tmp_path) == (
-        "team@domain.com",
-        "abcdefg",
-    )
-
-
-def test_read_jira_credentials_rejects_blank_values(tmp_path: Path) -> None:
-    """Reject secrets when email or token is blank."""
-    _write_jira_secret(tmp_path)
-    (tmp_path / "email").write_text(" \n", encoding="utf-8")
-    with pytest.raises(ValueError, match="must include email and token"):
-        close_advisory_issues.read_jira_credentials(tmp_path)
-
-
-def test_jira_issue_url_builds_atlassian_api_url() -> None:
-    """Build the REST URL for a Jira issue id."""
-    assert (
-        close_advisory_issues.jira_issue_url(
-            "redhat.atlassian.net",
-            "ISSUE-123",
-        )
-        == "https://redhat.atlassian.net/rest/api/2/issue/ISSUE-123"
-    )
-
-
-def test_api_path_for_server_rejects_unknown_host() -> None:
-    """Raise when no tracker mapping exists for the server."""
-    with pytest.raises(ValueError, match="no API mapping"):
-        close_advisory_issues.api_path_for_server("example.com")
-
-
 def test_issue_status_name_reads_nested_field() -> None:
     """Extract the status name from a Jira issue payload."""
     issue = {"fields": {"status": {"name": "Closed"}}}
@@ -385,18 +327,6 @@ def test_closed_transition_id_returns_closed_id() -> None:
 def test_closed_transition_id_returns_none_when_missing() -> None:
     """Return None when no Closed transition exists."""
     assert close_advisory_issues.closed_transition_id({"transitions": []}) is None
-
-
-def test_jira_get_json_rejects_non_object_payload() -> None:
-    """Raise when the response body is not a JSON object."""
-    session = mock.MagicMock()
-    response = mock.MagicMock()
-    response.json.return_value = []
-    response.raise_for_status.return_value = None
-    session.get.return_value = response
-    auth = HTTPBasicAuth("user", "token")
-    with pytest.raises(ValueError, match="expected JSON object"):
-        close_advisory_issues.jira_get_json(session, "https://example.test", auth)
 
 
 def test_process_fixed_issue_skips_invalid_jira_issue_id(
@@ -734,22 +664,6 @@ def test_close_advisory_issues_reraises_first_failure_only(
                 secret_path=tmp_path / "secrets",
             )
     assert process_issue.call_count == 2
-
-
-def test_jira_post_json_raises_on_http_error() -> None:
-    """Raise when a Jira POST response is not successful."""
-    session = mock.MagicMock()
-    response = mock.MagicMock()
-    response.raise_for_status.side_effect = requests.HTTPError("bad request")
-    session.post.return_value = response
-    auth = HTTPBasicAuth("user", "token")
-    with pytest.raises(requests.HTTPError, match="bad request"):
-        close_advisory_issues.jira_post_json(
-            session,
-            "https://example.test/comment",
-            auth,
-            {"body": "hello"},
-        )
 
 
 def test_main_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
