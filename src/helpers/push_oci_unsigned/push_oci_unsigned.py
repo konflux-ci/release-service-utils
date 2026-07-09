@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Organise extracted binaries by OS/arch and push unsigned Mac/Windows content to Quay.
+"""Push unsigned OCI artifact content to Quay for the sign-and-push-to-internal-oci pipeline.
 
-For each component that has ``files`` or ``staged.files``:
-* Unpacks each archive into an ``unsigned/<os>/<arch>/`` directory tree.
-* Moves supplementary files (readme, license, changelog) out of signing directories so
-  signing tools don't attempt to process them.
-* Pushes the unsigned macOS and Windows content to Quay as OCI artifacts with a 1-day
-  expiry tag so the signing steps can pull them.
+This module is specific to the OCI artifact signing pipeline where macOS and Windows
+archives are stored as ORAS OCI artifacts (not traditional container image layers).
+Unlike push_unsigned.py, archives are moved as-is rather than extracted, so that
+symlinks in macOS .app bundles survive the ORAS round-trip. The signing orchestrator
+on each signing host is responsible for extraction.
 
 CLI arguments:
   ``--quay-url``
@@ -27,20 +26,18 @@ import json
 import logging
 import os
 import shutil
-import tarfile
 from pathlib import Path
 
-from release_service_utils.helpers import disk_image_utils
+import tarfile
+
 from release_service_utils.helpers import oras_utils
+from release_service_utils.helpers.push_unsigned import (
+    CONTENT_DIR,
+    QUAY_SECRET_MOUNT,
+    move_supplementary_out,
+)
 
-PROG = "push_unsigned.py"
-
-QUAY_SECRET_MOUNT = Path(os.environ.get("QUAY_SECRET_MOUNT", "/mnt/quaySecret"))
-CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
-
-SUPPLEMENTARY_NAMES = {"readme", "license", "changelog"}
-SUPPLEMENTARY_EXTS = {".md", ".txt"}
-
+PROG = "push_oci_unsigned.py"
 
 logger = logging.getLogger(__name__)
 
@@ -53,49 +50,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def is_supplementary_file(path: Path) -> bool:
-    """Return True if a file is a supplementary (readme/license/changelog) file."""
-    lower = path.name.lower()
-    if "." in lower:
-        base, ext = lower.rsplit(".", 1)
-        ext = f".{ext}"
-    else:
-        base, ext = lower, ""
-    if base in SUPPLEMENTARY_NAMES:
-        if not ext:
-            return True
-        if ext in SUPPLEMENTARY_EXTS:
-            return True
-    return False
+def _stage_file_entries(entries: list[dict], component_dir: Path, unsigned_dir: Path) -> None:
+    """Stage archives into OS/arch subdirectories under unsigned_dir.
 
+    macOS and Windows archives are moved as-is to preserve symlinks through
+    the ORAS round-trip. The signing orchestrator on each host extracts them
+    natively where symlinks are supported. Linux archives are extracted here.
 
-def move_supplementary_out(src_root: Path, hold_root: Path) -> None:
-    """Move supplementary files from src_root to hold_root, preserving relative paths."""
-    if not src_root.is_dir():
-        return
-    for file in src_root.rglob("*"):
-        if file.is_file() and is_supplementary_file(file):
-            rel = file.relative_to(src_root)
-            dest = hold_root / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(file), str(dest))
-            logger.info("  Held supplementary file: %s", rel)
-
-
-def _unpack_file_entries(
-    entries: list[dict],
-    component_dir: Path,
-    unsigned_dir: Path,
-    *,
-    is_disk_image_component: bool = False,
-) -> None:
-    """Extract each archive from entries into its OS/arch subdirectory under unsigned_dir.
-
-    Files are moved directly (without unpacking) when either:
-    - *is_disk_image_component* is True (set when contentType: disk-image), or
-    - the filename has an unambiguous disk-image suffix (.qcow2, .iso, .iso.gz,
-      .raw.gz, .vhd.gz).
-    All other files are treated as tar archives and extracted.
+    Unlike push_unsigned._stage_file_entries(), darwin and windows archives
+    are NOT extracted — they are transferred intact so framework bundle symlinks
+    survive the ORAS push/pull cycle.
     """
     for entry in entries:
         source = entry.get("source", "")
@@ -118,7 +82,8 @@ def _unpack_file_entries(
             continue
 
         target_dir.mkdir(parents=True, exist_ok=True)
-        if is_disk_image_component or disk_image_utils.is_disk_image_file(archive_name):
+
+        if os_name in ("darwin", "windows"):
             shutil.move(str(archive_path), str(target_dir / archive_name))
         else:
             with tarfile.open(str(archive_path)) as tf:
@@ -126,22 +91,8 @@ def _unpack_file_entries(
             archive_path.unlink()
 
 
-def _verify_unpacked_content(directory: Path, os_label: str, component_name: str) -> None:
-    """Raise ``RuntimeError`` if *directory* is missing or has no files.
-
-    Guards against pushing an OCI artifact built from content that a prior
-    extraction step silently failed to produce (missing directory, or one left
-    empty by a truncated/incomplete unpack).
-    """
-    if not directory.is_dir() or not any(p.is_file() for p in directory.rglob("*")):
-        raise RuntimeError(
-            f"No unpacked {os_label} content found in {directory} for component "
-            f"{component_name}; refusing to push an empty or missing artifact"
-        )
-
-
 def run(quay_url: str, pipeline_run_uid: str) -> None:
-    """Organise extracted binaries and push unsigned Mac/Windows content to Quay."""
+    """Organise OCI artifact binaries and push unsigned Mac/Windows content to Quay."""
     snapshot = json.loads(os.environ["SNAPSHOT_JSON"])
 
     quay_user = (QUAY_SECRET_MOUNT / "username").read_text().strip()
@@ -165,27 +116,15 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
 
         has_mac = (component_dir / "has_mac").exists()
         has_windows = (component_dir / "has_windows").exists()
-        has_linux = (component_dir / "has_linux").exists()
 
         if has_mac:
             (unsigned_dir / "macos").mkdir(parents=True, exist_ok=True)
         if has_windows:
             (unsigned_dir / "windows").mkdir(parents=True, exist_ok=True)
-        if has_linux:
-            (component_dir / "linux").mkdir(parents=True, exist_ok=True)
 
-        is_disk_image = disk_image_utils.is_disk_image_component(component)
-        _unpack_file_entries(
-            component.get("files") or [],
-            component_dir,
-            unsigned_dir,
-            is_disk_image_component=is_disk_image,
-        )
-        _unpack_file_entries(
-            (component.get("staged") or {}).get("files") or [],
-            component_dir,
-            unsigned_dir,
-            is_disk_image_component=is_disk_image,
+        _stage_file_entries(component.get("files") or [], component_dir, unsigned_dir)
+        _stage_file_entries(
+            (component.get("staged") or {}).get("files") or [], component_dir, unsigned_dir
         )
 
         supp_hold = component_dir / "supplementary"
@@ -195,7 +134,6 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
 
         if has_mac:
             logger.info("Pushing unsigned macOS content for %s to %s...", name, quay_url)
-            _verify_unpacked_content(unsigned_dir / "macos", "macOS", name)
             tag = f"{quay_url}/unsigned/{name}:{pipeline_run_uid}-mac"
             mac_digest = oras_utils.oras_push(tag, unsigned_dir, "macos", name)
             logger.info("Digest for %s mac content: %s", name, mac_digest)
@@ -205,7 +143,6 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
 
         if has_windows:
             logger.info("Pushing unsigned Windows content for %s to %s...", name, quay_url)
-            _verify_unpacked_content(unsigned_dir / "windows", "Windows", name)
             tag = f"{quay_url}/unsigned/{name}:{pipeline_run_uid}-windows"
             win_digest = oras_utils.oras_push(tag, unsigned_dir, "windows", name)
             logger.info("Digest for %s windows content: %s", name, win_digest)
@@ -215,7 +152,7 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Parse arguments and run unsigned artifact push; return exit code."""
+    """Parse arguments and run unsigned OCI artifact push; return exit code."""
     logging.basicConfig(level=logging.INFO)
     args = parse_args(argv[1:] if argv is not None else None)
     try:
@@ -226,5 +163,5 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())

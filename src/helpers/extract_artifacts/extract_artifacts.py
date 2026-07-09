@@ -27,7 +27,6 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 import tarfile
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -35,6 +34,7 @@ from pathlib import Path
 
 from release_service_utils.helpers import authentication
 from release_service_utils.helpers import disk_image_utils
+from release_service_utils.helpers import skopeo
 
 PROG = "extract_artifacts.py"
 
@@ -46,9 +46,9 @@ CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 logger = logging.getLogger(__name__)
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None, prog: str = PROG) -> argparse.Namespace:
     """Parse and return CLI arguments."""
-    p = argparse.ArgumentParser(prog=PROG)
+    p = argparse.ArgumentParser(prog=prog)
     p.add_argument(
         "--concurrent-limit",
         type=int,
@@ -58,7 +58,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _setup_docker_config() -> None:
+def setup_docker_config() -> None:
     """Write ~/.docker/config.json from the mounted dockerconfig secret."""
     authentication.setup_docker_config(
         REDHAT_WORKLOADS_TOKEN_MOUNT / ".dockerconfigjson",
@@ -280,30 +280,7 @@ def process_component(component: dict) -> None:
     # Keep the skopeo copy and layer extract on CONTENT_DIR (the task PVC), not node /tmp.
     tmp_dir = Path(tempfile.mkdtemp(dir=str(CONTENT_DIR)))
     try:
-        auth_file: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(mode="wb", delete=False) as auth_fp:
-                auth_file = Path(auth_fp.name)
-                auth_data = subprocess.check_output(
-                    ["select-oci-auth", pullspec], stderr=subprocess.PIPE
-                )
-                auth_fp.write(auth_data)
-
-            subprocess.check_call(
-                [
-                    "skopeo",
-                    "copy",
-                    "--retry-times",
-                    "3",
-                    "--authfile",
-                    str(auth_file),
-                    f"docker://{pullspec}",
-                    f"dir:{tmp_dir}",
-                ]
-            )
-        finally:
-            if auth_file is not None:
-                auth_file.unlink(missing_ok=True)
+        skopeo.copy(pullspec, tmp_dir, check=True, authenticated=True)
 
         wanted_files, extract_dirs, extract_files = _get_source_paths(component)
         logger.info("Files to extract from RPA: %s", wanted_files)
@@ -374,7 +351,7 @@ def process_component(component: dict) -> None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def _create_os_flag_files(snapshot: dict) -> None:
+def create_os_flag_files(snapshot: dict) -> None:
     """Create has_mac / has_windows / has_linux flag files based on RPA entries."""
     for component in snapshot.get("components", []):
         name = component.get("name", "")
@@ -442,7 +419,7 @@ def run(concurrent_limit: int) -> None:
     # Validate disk-image component constraints before doing any image pulls.
     _validate_disk_image_components(components)
 
-    _setup_docker_config()
+    setup_docker_config()
     CONTENT_DIR.mkdir(parents=True, exist_ok=True)
 
     errors: list[str] = []
@@ -462,7 +439,7 @@ def run(concurrent_limit: int) -> None:
     if errors:
         raise RuntimeError("\n".join(errors))
 
-    _create_os_flag_files(snapshot)
+    create_os_flag_files(snapshot)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -477,5 +454,5 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())

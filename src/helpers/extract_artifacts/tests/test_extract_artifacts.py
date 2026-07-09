@@ -187,7 +187,7 @@ def test_get_source_paths_no_source_skipped() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _create_os_flag_files
+# create_os_flag_files
 # ---------------------------------------------------------------------------
 
 
@@ -209,7 +209,7 @@ def test_create_os_flag_files_darwin(tmp_path: Path, monkeypatch: pytest.MonkeyP
             }
         ]
     }
-    extract_artifacts._create_os_flag_files(snapshot)
+    extract_artifacts.create_os_flag_files(snapshot)
     assert (tmp_path / "prod" / "has_mac").exists()
     assert not (tmp_path / "prod" / "has_windows").exists()
     assert not (tmp_path / "prod" / "has_linux").exists()
@@ -229,7 +229,7 @@ def test_create_os_flag_files_windows_by_source_name(
             }
         ]
     }
-    extract_artifacts._create_os_flag_files(snapshot)
+    extract_artifacts.create_os_flag_files(snapshot)
     assert (tmp_path / "prod" / "has_windows").exists()
 
 
@@ -245,7 +245,7 @@ def test_create_os_flag_files_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             }
         ]
     }
-    extract_artifacts._create_os_flag_files(snapshot)
+    extract_artifacts.create_os_flag_files(snapshot)
     assert (tmp_path / "prod" / "has_linux").exists()
 
 
@@ -265,7 +265,7 @@ def test_create_os_flag_files_from_staged(
             }
         ]
     }
-    extract_artifacts._create_os_flag_files(snapshot)
+    extract_artifacts.create_os_flag_files(snapshot)
     assert (tmp_path / "prod" / "has_mac").exists()
 
 
@@ -276,7 +276,7 @@ def test_create_os_flag_files_skips_missing_component_dir(
     monkeypatch.setattr(extract_artifacts, "CONTENT_DIR", tmp_path)
     # No directory created for "missing"
     snapshot = {"components": [{"name": "missing", "files": [{"os": "linux"}]}]}
-    extract_artifacts._create_os_flag_files(snapshot)  # should not raise
+    extract_artifacts.create_os_flag_files(snapshot)  # should not raise
 
 
 def test_validate_disk_image_components_non_linux_raises() -> None:
@@ -624,30 +624,17 @@ def test_process_component_happy_path(tmp_path: Path, monkeypatch: pytest.Monkey
             "layers": [{"digest": "sha256:abc123"}],
         }
 
-        def fake_subprocess_check_call(cmd, **kwargs):
-            if cmd[0] == "skopeo":
-                # Populate the temp dir with layer + manifest
-                dest_dir_flag = cmd.index(next(a for a in cmd if a.startswith("dir:")))
-                dest_path = cmd[dest_dir_flag].removeprefix("dir:")
-                dest = Path(dest_path)
-                shutil.copy2(str(layer_file), str(dest / "abc123"))
-                (dest / "manifest.json").write_text(json.dumps(manifest))
-                return
-            if cmd[0] == "tar" and "-xzvf" in cmd:
-                # Simulate extraction by creating the expected file in cwd
-                cwd = Path(kwargs.get("cwd", "."))
-                (cwd / "releases").mkdir(parents=True, exist_ok=True)
-                (cwd / "releases" / "binary.tar.gz").write_bytes(b"fake-binary")
-                return
-            if cmd[0] == "tar":
-                return
-            raise ValueError(f"unexpected command: {cmd}")
+        def fake_skopeo_copy(source, dest_ref, **kwargs):
+            """Populate the destination with a fake layer and manifest."""
+            dest = Path(dest_ref)
+            shutil.copy2(str(layer_file), str(dest / "abc123"))
+            (dest / "manifest.json").write_text(json.dumps(manifest))
 
         with (
             mock.patch(
                 "subprocess.check_output", side_effect=_fake_select_oci_auth_check_output
             ),
-            mock.patch("subprocess.check_call", side_effect=fake_subprocess_check_call),
+            mock.patch.object(extract_artifacts.skopeo, "copy", side_effect=fake_skopeo_copy),
             mock.patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = mock.Mock(stdout="releases/binary.tar.gz\n", returncode=0)
@@ -682,22 +669,12 @@ def test_process_component_extracts_absolute_root_level_file(
 
         manifest = {"layers": [{"digest": "sha256:abc123"}]}
 
-        def fake_subprocess_check_call(cmd: list[str], **kwargs: object) -> None:
-            if cmd[0] == "skopeo":
-                dest_dir_flag = cmd.index(next(a for a in cmd if a.startswith("dir:")))
-                dest_path = cmd[dest_dir_flag].removeprefix("dir:")
-                dest = Path(dest_path)
-                shutil.copy2(str(layer_file), str(dest / "abc123"))
-                (dest / "manifest.json").write_text(json.dumps(manifest))
-                return
-            raise ValueError(f"unexpected command: {cmd}")
+        def fake_skopeo_copy(source: str, dest_ref: Path, **kwargs: object) -> None:
+            """Populate the destination with a fake layer and manifest."""
+            shutil.copy2(str(layer_file), str(dest_ref / "abc123"))
+            (dest_ref / "manifest.json").write_text(json.dumps(manifest))
 
-        with (
-            mock.patch(
-                "subprocess.check_output", side_effect=_fake_select_oci_auth_check_output
-            ),
-            mock.patch("subprocess.check_call", side_effect=fake_subprocess_check_call),
-        ):
+        with mock.patch.object(extract_artifacts.skopeo, "copy", side_effect=fake_skopeo_copy):
             extract_artifacts.process_component(component)
 
         assert (tmp_path / "prod" / "agent-ove.x86_64.iso").read_bytes() == iso_payload
@@ -738,23 +715,13 @@ def test_process_component_root_file_replaces_lower_layer_directory(
             ]
         }
 
-        def fake_subprocess_check_call(cmd: list[str], **kwargs: object) -> None:
-            if cmd[0] == "skopeo":
-                dest_dir_flag = cmd.index(next(a for a in cmd if a.startswith("dir:")))
-                dest_path = cmd[dest_dir_flag].removeprefix("dir:")
-                dest = Path(dest_path)
-                shutil.copy2(str(layer1), str(dest / "layer1"))
-                shutil.copy2(str(layer2), str(dest / "layer2"))
-                (dest / "manifest.json").write_text(json.dumps(manifest))
-                return
-            raise ValueError(f"unexpected command: {cmd}")
+        def fake_skopeo_copy(source: str, dest_ref: Path, **kwargs: object) -> None:
+            """Populate the destination with both fake layers and a manifest."""
+            shutil.copy2(str(layer1), str(dest_ref / "layer1"))
+            shutil.copy2(str(layer2), str(dest_ref / "layer2"))
+            (dest_ref / "manifest.json").write_text(json.dumps(manifest))
 
-        with (
-            mock.patch(
-                "subprocess.check_output", side_effect=_fake_select_oci_auth_check_output
-            ),
-            mock.patch("subprocess.check_call", side_effect=fake_subprocess_check_call),
-        ):
+        with mock.patch.object(extract_artifacts.skopeo, "copy", side_effect=fake_skopeo_copy):
             extract_artifacts.process_component(component)
 
         out = tmp_path / "prod" / "agent-ove.x86_64.iso"
@@ -778,30 +745,82 @@ def test_process_component_skopeo_copy_lands_on_content_dir(
 
     seen_dest: list[str] = []
 
-    def fake_subprocess_check_call(cmd: list[str], **kwargs: object) -> None:
-        if cmd[0] == "skopeo":
-            dest_dir_flag = cmd.index(next(a for a in cmd if a.startswith("dir:")))
-            dest_path = cmd[dest_dir_flag].removeprefix("dir:")
-            seen_dest.append(dest_path)
-            dest = Path(dest_path)
-            dest.mkdir(parents=True, exist_ok=True)
-            layer_file = dest / "abc123"
-            with tarfile.open(str(layer_file), "w") as tf:
-                _add_regular_file(tf, "releases/binary.tar.gz", b"fake-binary")
-            (dest / "manifest.json").write_text(
-                json.dumps({"layers": [{"digest": "sha256:abc123"}]})
-            )
-            return
-        raise ValueError(f"unexpected command: {cmd}")
+    def fake_skopeo_copy(source: str, dest_ref: Path, **kwargs: object) -> None:
+        """Populate the destination and record that it is under CONTENT_DIR."""
+        seen_dest.append(str(dest_ref))
+        layer_file = dest_ref / "abc123"
+        with tarfile.open(str(layer_file), "w") as tf:
+            _add_regular_file(tf, "releases/binary.tar.gz", b"fake-binary")
+        (dest_ref / "manifest.json").write_text(
+            json.dumps({"layers": [{"digest": "sha256:abc123"}]})
+        )
 
-    with (
-        mock.patch("subprocess.check_output", side_effect=_fake_select_oci_auth_check_output),
-        mock.patch("subprocess.check_call", side_effect=fake_subprocess_check_call),
-    ):
+    with mock.patch.object(extract_artifacts.skopeo, "copy", side_effect=fake_skopeo_copy):
         extract_artifacts.process_component(component)
 
     assert seen_dest
     assert Path(seen_dest[0]).is_relative_to(tmp_path)
+
+
+def test_process_component_logs_missing_root_level_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A root-level file absent from every layer raises after an exact-match skip."""
+    monkeypatch.setattr(extract_artifacts, "CONTENT_DIR", tmp_path)
+    component = {
+        "name": "prod",
+        "containerImage": "quay.io/org/prod@sha256:abc",
+        "files": [{"source": "/missing.iso"}],
+    }
+
+    def fake_skopeo_copy(source: str, dest_ref: Path, **kwargs: object) -> None:
+        """Populate the destination with a layer lacking the requested root file."""
+        layer_file = dest_ref / "abc123"
+        with tarfile.open(str(layer_file), "w") as tf:
+            _add_regular_file(tf, "releases/other-file", b"not-the-requested-file")
+        (dest_ref / "manifest.json").write_text(
+            json.dumps({"layers": [{"digest": "sha256:abc123"}]})
+        )
+
+    with mock.patch.object(extract_artifacts.skopeo, "copy", side_effect=fake_skopeo_copy):
+        with pytest.raises(RuntimeError, match="missing.iso"):
+            extract_artifacts.process_component(component)
+
+
+def test_process_component_extracts_oras_blob(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ORAS components copy annotated raw blobs into the component directory."""
+    monkeypatch.setattr(extract_artifacts, "CONTENT_DIR", tmp_path)
+
+    component = {
+        "name": "prod",
+        "containerImage": "quay.io/org/prod@sha256:abc",
+        "files": [{"source": "/releases/binary.tar.gz"}],
+    }
+
+    def fake_skopeo_copy(source: str, dest_ref: str, **kwargs: object) -> None:
+        """Populate a directory transport with an ORAS manifest and blob."""
+        dest = Path(dest_ref)
+        (dest / "abc123").write_bytes(b"oras-binary")
+        (dest / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "config": {"mediaType": "application/vnd.oci.empty.v1+json"},
+                    "layers": [
+                        {
+                            "digest": "sha256:abc123",
+                            "annotations": {"org.opencontainers.image.title": "binary.tar.gz"},
+                        }
+                    ],
+                }
+            )
+        )
+
+    with mock.patch.object(extract_artifacts.skopeo, "copy", side_effect=fake_skopeo_copy):
+        extract_artifacts.process_component(component)
+
+    assert (tmp_path / "prod" / "binary.tar.gz").read_bytes() == b"oras-binary"
 
 
 def test_process_component_raises_when_file_missing_from_container(
@@ -827,23 +846,17 @@ def test_process_component_raises_when_file_missing_from_container(
 
         manifest = {"layers": [{"digest": "sha256:abc123"}]}
 
-        def fake_subprocess_check_call(cmd, **kwargs):
-            if cmd[0] == "skopeo":
-                dest_dir_flag = cmd.index(next(a for a in cmd if a.startswith("dir:")))
-                dest_path = cmd[dest_dir_flag].removeprefix("dir:")
-                dest = Path(dest_path)
-                shutil.copy2(str(layer_file), str(dest / "abc123"))
-                (dest / "manifest.json").write_text(json.dumps(manifest))
-                return
-            if cmd[0] == "tar":
-                return
-            raise ValueError(f"unexpected command: {cmd}")
+        def fake_skopeo_copy(source, dest_ref, **kwargs):
+            """Populate the destination with a fake layer and manifest."""
+            dest = Path(dest_ref)
+            shutil.copy2(str(layer_file), str(dest / "abc123"))
+            (dest / "manifest.json").write_text(json.dumps(manifest))
 
         with (
             mock.patch(
                 "subprocess.check_output", side_effect=_fake_select_oci_auth_check_output
             ),
-            mock.patch("subprocess.check_call", side_effect=fake_subprocess_check_call),
+            mock.patch.object(extract_artifacts.skopeo, "copy", side_effect=fake_skopeo_copy),
             mock.patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = mock.Mock(stdout="", returncode=0)
@@ -882,21 +895,17 @@ def test_process_component_skips_missing_layer_blob(
             ]
         }
 
-        def fake_subprocess_check_call(cmd, **kwargs):
-            if cmd[0] == "skopeo":
-                dest_dir_flag = cmd.index(next(a for a in cmd if a.startswith("dir:")))
-                dest_path = cmd[dest_dir_flag].removeprefix("dir:")
-                dest = Path(dest_path)
-                shutil.copy2(str(layer_file), str(dest / "present"))
-                (dest / "manifest.json").write_text(json.dumps(manifest))
-                return
-            raise ValueError(f"unexpected command: {cmd}")
+        def fake_skopeo_copy(source, dest_ref, **kwargs):
+            """Populate the destination with a fake layer and manifest."""
+            dest = Path(dest_ref)
+            shutil.copy2(str(layer_file), str(dest / "present"))
+            (dest / "manifest.json").write_text(json.dumps(manifest))
 
         with (
             mock.patch(
                 "subprocess.check_output", side_effect=_fake_select_oci_auth_check_output
             ),
-            mock.patch("subprocess.check_call", side_effect=fake_subprocess_check_call),
+            mock.patch.object(extract_artifacts.skopeo, "copy", side_effect=fake_skopeo_copy),
         ):
             extract_artifacts.process_component(component)
 
@@ -928,15 +937,11 @@ def test_process_component_rejects_symlink_at_wanted_path(
 
         manifest = {"layers": [{"digest": "sha256:abc123"}]}
 
-        def fake_subprocess_check_call(cmd, **kwargs):
-            if cmd[0] == "skopeo":
-                dest_dir_flag = cmd.index(next(a for a in cmd if a.startswith("dir:")))
-                dest_path = cmd[dest_dir_flag].removeprefix("dir:")
-                dest = Path(dest_path)
-                shutil.copy2(str(layer_file), str(dest / "abc123"))
-                (dest / "manifest.json").write_text(json.dumps(manifest))
-                return
-            raise ValueError(f"unexpected command: {cmd}")
+        def fake_skopeo_copy(source, dest_ref, **kwargs):
+            """Populate the destination with a fake layer and manifest."""
+            dest = Path(dest_ref)
+            shutil.copy2(str(layer_file), str(dest / "abc123"))
+            (dest / "manifest.json").write_text(json.dumps(manifest))
 
         def plant_wanted_symlink(tf, image_path, target_dir, layer_name):
             """Simulate extract leaving a symlink at the wanted path."""
@@ -949,7 +954,7 @@ def test_process_component_rejects_symlink_at_wanted_path(
             mock.patch(
                 "subprocess.check_output", side_effect=_fake_select_oci_auth_check_output
             ),
-            mock.patch("subprocess.check_call", side_effect=fake_subprocess_check_call),
+            mock.patch.object(extract_artifacts.skopeo, "copy", side_effect=fake_skopeo_copy),
             mock.patch.object(
                 extract_artifacts, "_safe_extract_layer", side_effect=plant_wanted_symlink
             ),
@@ -1022,7 +1027,7 @@ def test_extract_from_oras_raises_when_title_missing(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _setup_docker_config
+# setup_docker_config
 # ---------------------------------------------------------------------------
 
 
@@ -1037,7 +1042,7 @@ def test_setup_docker_config_strips_noise(
     home = tmp_path / "home"
     home.mkdir()
     with mock.patch("pathlib.Path.home", return_value=home):
-        extract_artifacts._setup_docker_config()
+        extract_artifacts.setup_docker_config()
     assert (home / ".docker" / "config.json").exists()
 
 
