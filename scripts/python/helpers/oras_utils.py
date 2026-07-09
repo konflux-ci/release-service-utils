@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import subprocess
 import tempfile
+import tarfile
 from pathlib import Path
 
 import file
@@ -36,6 +37,21 @@ def oras_resolve(reference: str) -> str:
             f" {result.stderr.strip()}"
         )
     return result.stdout.strip()
+
+
+def safe_extract_archive(tf: tarfile.TarFile, target_dir: Path, archive_name: str) -> None:
+    """Extract tar entries while preventing traversal and unsafe links/devices."""
+    target_real = target_dir.resolve()
+    for member in tf.getmembers():
+        member_path = target_dir / member.name
+        member_real = member_path.resolve()
+        if member_real != target_real and target_real not in member_real.parents:
+            raise RuntimeError(f"Archive {archive_name} contains unsafe path: {member.name}")
+        if member.issym() or member.islnk() or member.isdev():
+            raise RuntimeError(
+                f"Archive {archive_name} contains unsupported entry type: {member.name}"
+            )
+        tf.extract(member, path=str(target_dir), filter="data")
 
 
 def oras_login(registry: str, username: str, password: str) -> None:

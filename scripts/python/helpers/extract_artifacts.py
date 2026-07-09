@@ -204,7 +204,7 @@ def process_component(component: dict) -> None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def _create_os_flag_files(snapshot: dict) -> None:
+def create_os_flag_files(snapshot: dict) -> None:
     """Create has_mac / has_windows / has_linux flag files based on RPA entries."""
     for component in snapshot.get("components", []):
         name = component.get("name", "")
@@ -265,7 +265,7 @@ def run(concurrent_limit: int) -> None:
     if errors:
         raise RuntimeError("\n".join(errors))
 
-    _create_os_flag_files(snapshot)
+    create_os_flag_files(snapshot)
 
 
 def main(argv: list[str] | None = None) -> int:

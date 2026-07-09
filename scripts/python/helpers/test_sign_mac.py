@@ -197,6 +197,248 @@ def test_run_raises_on_ssh_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 # ---------------------------------------------------------------------------
+# _run_custom_script (custom signing script path)
+# ---------------------------------------------------------------------------
+
+
+def test_run_custom_script_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Custom script is invoked via SSH with env vars and digest is SCP'd back."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps({"components": [{"name": "prod"}]}),
+    )
+    monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    (comp_dir / "has_mac").touch()
+    (comp_dir / "unsigned_mac_digest.txt").write_text("sha256:unsigned")
+
+    signed_digest_content = "sha256:custom-signed"
+    calls: list[list[str]] = []
+
+    def fake_subprocess_run(cmd, **kwargs):
+        calls.append((list(cmd), kwargs))
+        if cmd[0] == "scp" and "signed_digest_" in " ".join(cmd):
+            (comp_dir / "signed_mac_digest.txt").write_text(signed_digest_content)
+        return mock.Mock(returncode=0)
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch("subprocess.run", side_effect=fake_subprocess_run),
+    ):
+        sign_mac.run(
+            "quay.io/org",
+            "uid-123",
+            signing_script="/opt/sign.sh",
+            signing_args=["--profile", "internal"],
+        )
+
+    assert (comp_dir / "signed_mac_digest.txt").read_text() == signed_digest_content
+
+    ssh_calls = [(c, kw) for c, kw in calls if c[0] == "ssh"]
+    assert len(ssh_calls) >= 1
+    ssh_cmd, ssh_kwargs = ssh_calls[0]
+    assert ssh_cmd[-1] == "-s"
+    assert ssh_cmd[-2] == "bash"
+    stdin_script = ssh_kwargs.get("input", "")
+    assert "export QUAY_USER=" in stdin_script
+    assert "export QUAY_PASS=" in stdin_script
+    assert "export CSC_KEY_PASSWORD=" in stdin_script
+    assert "export CSC_NAME=" in stdin_script
+    assert "export UNSIGNED_REF=" in stdin_script
+    assert "export SIGNED_REF=" in stdin_script
+    assert "export OUTPUT_DIGEST=" in stdin_script
+    assert "/opt/sign.sh" in stdin_script
+    assert "--profile" in stdin_script
+    assert "internal" in stdin_script
+
+    scp_calls = [c for c, _ in calls if c[0] == "scp"]
+    assert any("signed_digest_" in " ".join(c) for c in scp_calls)
+
+
+def test_run_custom_script_ssh_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RuntimeError is raised when the custom script SSH command fails."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps({"components": [{"name": "prod"}]}),
+    )
+    monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    (comp_dir / "has_mac").touch()
+    (comp_dir / "unsigned_mac_digest.txt").write_text("sha256:unsigned")
+
+    call_count = 0
+
+    def fake_subprocess_run(cmd, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if cmd[0] == "ssh" and call_count == 1:
+            return mock.Mock(returncode=1)
+        return mock.Mock(returncode=0)
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch("subprocess.run", side_effect=fake_subprocess_run),
+    ):
+        with pytest.raises(RuntimeError, match="Mac signing failed"):
+            sign_mac.run(
+                "quay.io/org",
+                "uid-123",
+                signing_script="/opt/sign.sh",
+            )
+
+
+def test_run_custom_script_with_dest_quay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Separate dest quay creds are used for QUAY_DEST_USER/PASS and SIGNED_REF."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps(
+            {"components": [{"name": "prod", "source": {"git": {"revision": "abc123def456"}}}]}
+        ),
+    )
+    monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    dest_quay = tmp_path / "dest_quay"
+    dest_quay.mkdir()
+    (dest_quay / "username").write_text("dest-user")
+    (dest_quay / "password").write_text("dest-pass")
+    monkeypatch.setattr(sign_mac, "DEST_QUAY_SECRET_MOUNT", dest_quay)
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    (comp_dir / "has_mac").touch()
+    (comp_dir / "unsigned_mac_digest.txt").write_text("sha256:unsigned")
+
+    calls: list[list[str]] = []
+
+    def fake_subprocess_run(cmd, **kwargs):
+        calls.append((list(cmd), kwargs))
+        if cmd[0] == "scp" and "signed_digest_" in " ".join(cmd):
+            (comp_dir / "signed_mac_digest.txt").write_text("sha256:signed")
+        return mock.Mock(returncode=0)
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch("subprocess.run", side_effect=fake_subprocess_run),
+    ):
+        sign_mac.run(
+            "quay.io/org",
+            "uid-123",
+            signing_script="/opt/sign.sh",
+            dest_quay_url="quay.io/internal",
+            origin="my-tenant",
+        )
+
+    ssh_calls = [(c, kw) for c, kw in calls if c[0] == "ssh"]
+    assert len(ssh_calls) >= 1
+    ssh_cmd, ssh_kwargs = ssh_calls[0]
+    stdin_script = ssh_kwargs.get("input", "")
+    assert "QUAY_DEST_USER=dest-user" in stdin_script
+    assert "QUAY_DEST_PASS=dest-pass" in stdin_script
+    assert "SIGNED_REF=quay.io/internal/my-tenant/prod:" in stdin_script
+    assert "UNSIGNED_REF=quay.io/org/unsigned/" in stdin_script
+
+
+def test_run_custom_script_dest_quay_falls_back_to_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When DEST_QUAY_SECRET_MOUNT is absent, dest creds fall back to source creds."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps({"components": [{"name": "prod"}]}),
+    )
+    monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    # Point DEST_QUAY_SECRET_MOUNT at a non-existent directory
+    monkeypatch.setattr(sign_mac, "DEST_QUAY_SECRET_MOUNT", tmp_path / "no_such_mount")
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    (comp_dir / "has_mac").touch()
+    (comp_dir / "unsigned_mac_digest.txt").write_text("sha256:unsigned")
+
+    calls: list[list[str]] = []
+
+    def fake_subprocess_run(cmd, **kwargs):
+        calls.append((list(cmd), kwargs))
+        if cmd[0] == "scp" and "signed_digest_" in " ".join(cmd):
+            (comp_dir / "signed_mac_digest.txt").write_text("sha256:signed")
+        return mock.Mock(returncode=0)
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch("subprocess.run", side_effect=fake_subprocess_run),
+    ):
+        sign_mac.run(
+            "quay.io/org",
+            "uid-123",
+            signing_script="/opt/sign.sh",
+            dest_quay_url="quay.io/internal",
+        )
+
+    ssh_calls = [(c, kw) for c, kw in calls if c[0] == "ssh"]
+    assert len(ssh_calls) >= 1
+    ssh_cmd, ssh_kwargs = ssh_calls[0]
+    stdin_script = ssh_kwargs.get("input", "")
+    # Falls back to source credentials (quser / qpass from _setup_mounts)
+    assert "QUAY_DEST_USER=quser" in stdin_script
+    assert "QUAY_DEST_PASS=qpass" in stdin_script
+
+
+def test_run_custom_script_does_not_scp_script(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Custom script path does not SCP a script to the remote (it is already there)."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps({"components": [{"name": "prod"}]}),
+    )
+    monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    (comp_dir / "has_mac").touch()
+    (comp_dir / "unsigned_mac_digest.txt").write_text("sha256:unsigned")
+
+    check_call_mock = mock.MagicMock()
+
+    def fake_subprocess_run(cmd, **kwargs):
+        if cmd[0] == "scp" and "signed_digest_" in " ".join(cmd):
+            (comp_dir / "signed_mac_digest.txt").write_text("sha256:signed")
+        return mock.Mock(returncode=0)
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch("subprocess.check_call", check_call_mock),
+        mock.patch("subprocess.run", side_effect=fake_subprocess_run),
+    ):
+        sign_mac.run(
+            "quay.io/org",
+            "uid-123",
+            signing_script="/opt/sign.sh",
+        )
+
+    check_call_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
