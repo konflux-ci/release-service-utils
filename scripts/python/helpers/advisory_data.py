@@ -11,8 +11,14 @@ from typing import Any
 
 import yaml
 
+DEFAULT_ADVISORY_TYPE = "RHBA"
+VALID_ADVISORY_TYPES = frozenset({"RHSA", "RHBA", "RHEA"})
+ARTIFACT_CONTENT_TYPES = frozenset({"binary", "generic", "disk-image", "rpm"})
+# Advisory GitLab instances (prod and staging) each have matching secrets.
 ADVISORY_SECRET_STAGE = "create-advisory-stage-secret"
 ADVISORY_SECRET_PROD = "create-advisory-prod-secret"
+ERRATA_SECRET_STAGE = "errata-stage-service-account"
+ERRATA_SECRET_PROD = "errata-prod-service-account"
 
 
 def advisory_secret_name(environment: str) -> str:
@@ -99,6 +105,32 @@ def decode_advisory_param(advisory_b64gzip: str) -> dict[str, Any]:
     b64_decoded = base64.standard_b64decode(advisory_b64gzip.strip())
     gzip_decoded = gzip.decompress(b64_decoded)
     return json.loads(gzip_decoded.decode("utf-8"))
+
+
+def encode_advisory_param(advisory: dict[str, Any]) -> str:
+    """Gzip and base64-encode advisory JSON for InternalRequest parameters."""
+    raw = json.dumps(advisory, separators=(",", ":")).encode("utf-8")
+    compressed = gzip.compress(raw)
+    return base64.standard_b64encode(compressed).decode("ascii")
+
+
+def first_mapping_content_type(data: dict[str, Any]) -> str:
+    """Return the first component content type from mapping.components."""
+    components = data.get("mapping", {}).get("components")
+    if not isinstance(components, list):
+        return ""
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        content_gateway = component.get("contentGateway")
+        if isinstance(content_gateway, dict):
+            content_type = content_gateway.get("contentType")
+            if content_type:
+                return str(content_type)
+        content_type = component.get("contentType")
+        if content_type:
+            return str(content_type)
+    return ""
 
 
 def content_array_from_decoded(root: dict[str, Any], content_list_path: str) -> list[Any]:
@@ -246,7 +278,7 @@ def spec_content_json_pointer(content_type: str) -> str:
     """Return the dotted *content_list_path* for *content_type* (under `spec` in YAML)."""
     if content_type == "image":
         return ".content.images"
-    if content_type in ("binary", "generic", "rpm", "disk-image"):
+    if content_type in ARTIFACT_CONTENT_TYPES:
         return ".content.artifacts"
     msg = f"Unsupported contentType: {content_type}"
     raise ValueError(msg)

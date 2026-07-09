@@ -440,6 +440,25 @@ def create_internal_request(payload: dict[str, Any]) -> str:
     return name
 
 
+def fetch_results(internal_request_name: str) -> dict[str, Any]:
+    """Read InternalRequest ``status.results`` via kubectl."""
+    result = run_cmd(
+        [
+            "kubectl",
+            "get",
+            "internalrequest",
+            internal_request_name,
+            "-o=jsonpath={.status.results}",
+        ],
+        check=True,
+    )
+    raw = (result.stdout or "").strip()
+    if not raw:
+        return {}
+    parsed = json.loads(raw)
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def create(
     pipeline: str,
     *,

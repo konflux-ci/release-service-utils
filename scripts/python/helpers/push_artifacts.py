@@ -47,6 +47,7 @@ import tempfile
 from pathlib import Path
 
 import disk_image_utils
+import content_gateway
 import publish_to_cgw_wrapper
 import pulp_push_wrapper
 import yaml  # type: ignore
@@ -188,16 +189,16 @@ def _push_component_to_pulp(
                 continue
 
             source_filename = Path(source_path).name
-            # Handle windows .tar.gz/.tar → .zip conversion
             if "windows" in source_filename:
-                for old_ext, new_ext in [(".tar.gz", ".zip"), (".tar", ".zip")]:
-                    if source_filename.endswith(old_ext):
-                        candidate = source_filename[: -len(old_ext)] + new_ext
-                        if (component_dir / candidate).exists():
-                            source_filename = candidate
-                            if dest_filename.endswith(old_ext):
-                                dest_filename = dest_filename[: -len(old_ext)] + new_ext
-                        break
+                zip_filename = content_gateway.windows_zip_filename(source_filename)
+                zip_on_disk = component_dir / zip_filename
+                if zip_filename != source_filename and zip_on_disk.is_file():
+                    source_filename = zip_filename
+                    if dest_filename:
+                        dest_name = Path(dest_filename).name
+                        dest_zip = content_gateway.windows_zip_filename(dest_name)
+                        if dest_zip != dest_name:
+                            dest_filename = dest_zip
 
             if not dest_filename:
                 dest_filename = source_filename

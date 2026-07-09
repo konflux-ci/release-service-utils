@@ -54,31 +54,6 @@ def _make_arch_dir(base: Path, os_name: str, arch: str, binary_name: str = "mybi
 
 
 # ---------------------------------------------------------------------------
-# _windows_filename
-# ---------------------------------------------------------------------------
-
-
-def test_windows_filename_tar_gz() -> None:
-    """A .tar.gz filename is converted to the equivalent .zip name."""
-    assert compress_artifacts._windows_filename("binary-amd64.tar.gz") == "binary-amd64.zip"
-
-
-def test_windows_filename_tar() -> None:
-    """A .tar filename is converted to the equivalent .zip name."""
-    assert compress_artifacts._windows_filename("binary-amd64.tar") == "binary-amd64.zip"
-
-
-def test_windows_filename_already_zip() -> None:
-    """A filename already ending in .zip is returned unchanged."""
-    assert compress_artifacts._windows_filename("binary-amd64.zip") == "binary-amd64.zip"
-
-
-def test_windows_filename_exe() -> None:
-    """A .exe filename that is not a tar archive is returned unchanged."""
-    assert compress_artifacts._windows_filename("binary.exe") == "binary.exe"
-
-
-# ---------------------------------------------------------------------------
 # _compress_file_entry
 # ---------------------------------------------------------------------------
 
