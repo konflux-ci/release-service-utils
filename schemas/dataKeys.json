@@ -737,6 +737,16 @@
               "public": {
                 "type": "boolean",
                 "description": "Indicates if the target repository should be made public"
+              },
+              "contentType": {
+                "type": "string",
+                "enum": [
+                  "disk-image",
+                  "binary",
+                  "generic",
+                  "rpm"
+                ],
+                "description": "Specifies the type of content being published"
               }
             }
           }
