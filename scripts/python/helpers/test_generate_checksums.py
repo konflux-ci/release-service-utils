@@ -103,10 +103,10 @@ def test_kinit_cleans_up_keytab(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
 
 def _mock_subprocess_for_run(monkeypatch, first_ready_dir: Path) -> list:
-    """Patch subprocess.check_call to simulate SSH/SCP by writing the .sig/.gpg files."""
+    """Patch subprocess.run to simulate SSH/SCP by writing the .sig/.gpg files."""
     calls = []
 
-    def fake_check_call(cmd, **kwargs):
+    def fake_run(cmd, **kwargs):
         calls.append(cmd)
         cmd_list = cmd if isinstance(cmd, list) else [str(cmd)]
         cmd_str = " ".join(str(c) for c in cmd_list)
@@ -115,8 +115,9 @@ def _mock_subprocess_for_run(monkeypatch, first_ready_dir: Path) -> list:
             (first_ready_dir / "sha256sum.txt.sig").write_bytes(b"SIG")
         if "sha256sum.txt.gpg" in cmd_str and cmd_list and cmd_list[0] == "scp":
             (first_ready_dir / "sha256sum.txt.gpg").write_bytes(b"GPG")
+        return mock.MagicMock(returncode=0)
 
-    monkeypatch.setattr("subprocess.check_call", fake_check_call)
+    monkeypatch.setattr("subprocess.run", fake_run)
     return calls
 
 
@@ -193,7 +194,7 @@ def test_run_raises_on_no_components(tmp_path: Path, monkeypatch: pytest.MonkeyP
     with (
         mock.patch.object(generate_checksums, "_kinit"),
         mock.patch("shutil.copy2"),
-        mock.patch("subprocess.check_call"),
+        mock.patch("subprocess.run", return_value=mock.MagicMock(returncode=0)),
     ):
         with pytest.raises(RuntimeError, match="No archives"):
             generate_checksums.run("IPA.REDHAT.COM", "uid-123")
@@ -217,7 +218,7 @@ def test_run_raises_on_no_archives(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     with (
         mock.patch.object(generate_checksums, "_kinit"),
         mock.patch("shutil.copy2"),
-        mock.patch("subprocess.check_call"),
+        mock.patch("subprocess.run", return_value=mock.MagicMock(returncode=0)),
     ):
         with pytest.raises(RuntimeError, match="No archives"):
             generate_checksums.run("IPA.REDHAT.COM", "uid-123")
@@ -273,27 +274,68 @@ def test_run_cleans_up_remote_dir_on_signing_failure(
 
     cleanup_calls = []
 
-    def fake_check_call(cmd, **kwargs):
+    def fake_run(cmd, **kwargs):
         cmd_str = " ".join(str(c) for c in cmd)
+        if "rm -rf" in cmd_str:
+            cleanup_calls.append(cmd)
+            return mock.MagicMock(returncode=0)
         if "rpm-sign" in cmd_str and "--clearsign" in cmd_str:
-            raise subprocess.CalledProcessError(1, cmd)
-
-    def fake_subprocess_run(cmd, **kwargs):
-        cleanup_calls.append(cmd)
+            return mock.MagicMock(returncode=1)
         return mock.MagicMock(returncode=0)
 
     with (
         mock.patch.object(generate_checksums, "_kinit"),
-        monkeypatch.context() as m,
+        mock.patch("subprocess.run", side_effect=fake_run),
     ):
-        m.setattr("subprocess.check_call", fake_check_call)
-        m.setattr("subprocess.run", fake_subprocess_run)
         with pytest.raises(subprocess.CalledProcessError):
             generate_checksums.run("IPA.REDHAT.COM", "uid-123")
 
     assert any(
         "rm -rf" in " ".join(str(c) for c in cmd) for cmd in cleanup_calls
     ), "remote cleanup rm -rf should have been called"
+
+
+# ---------------------------------------------------------------------------
+# _run_ssh_command
+# ---------------------------------------------------------------------------
+
+
+def test_run_ssh_command_succeeds_on_first_attempt() -> None:
+    """Command succeeds immediately when exit code is 0."""
+    with mock.patch("subprocess.run", return_value=mock.MagicMock(returncode=0)) as m:
+        generate_checksums._run_ssh_command(["ssh", "host", "ls"])
+    m.assert_called_once()
+
+
+def test_run_ssh_command_retries_on_exit_255() -> None:
+    """RC 255 triggers a retry; success on second attempt passes."""
+    results = iter([mock.MagicMock(returncode=255), mock.MagicMock(returncode=0)])
+    with (
+        mock.patch("subprocess.run", side_effect=results) as m,
+        mock.patch("time.sleep"),
+    ):
+        generate_checksums._run_ssh_command(["ssh", "host", "ls"])
+    assert m.call_count == 2
+
+
+def test_run_ssh_command_raises_after_max_retries_on_255() -> None:
+    """RC 255 on all attempts raises _SSHConnectionError."""
+    with (
+        mock.patch("subprocess.run", return_value=mock.MagicMock(returncode=255)),
+        mock.patch("time.sleep"),
+        pytest.raises(generate_checksums._SSHConnectionError),
+    ):
+        generate_checksums._run_ssh_command(["ssh", "host", "ls"], max_attempts=3)
+
+
+def test_run_ssh_command_does_not_retry_on_other_rc() -> None:
+    """Non-255 non-zero RC raises CalledProcessError immediately, no retry."""
+    with (
+        mock.patch("subprocess.run", return_value=mock.MagicMock(returncode=1)) as m,
+        pytest.raises(subprocess.CalledProcessError),
+    ):
+        generate_checksums._run_ssh_command(["ssh", "host", "false"])
+    m.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

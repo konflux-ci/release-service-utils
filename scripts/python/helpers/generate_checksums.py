@@ -43,6 +43,7 @@ from pathlib import Path
 
 import authentication
 import file as file_utils
+import retry
 
 PROG = "generate_checksums.py"
 
@@ -53,6 +54,28 @@ CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 SHARED_DIR = Path(os.environ.get("SHARED_DIR", "/shared"))
 
 logger = logging.getLogger(__name__)
+
+
+class _SSHConnectionError(Exception):
+    """Transient SSH connection failure (exit code 255)."""
+
+
+def _run_ssh_command(cmd: list[str], *, max_attempts: int = 3) -> None:
+    """Run an SSH/SCP command, retrying on transient connection errors (RC 255)."""
+
+    def _attempt() -> None:
+        result = subprocess.run(cmd, check=False)
+        if result.returncode == 255:
+            logger.warning("SSH connection failed (exit 255), will retry: %s", shlex.join(cmd))
+            raise _SSHConnectionError(f"SSH connection failed (exit 255): {shlex.join(cmd)}")
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, cmd)
+
+    retry.retry_with_exponential_backoff(
+        _attempt,
+        max_attempts=max_attempts,
+        retry_on=_SSHConnectionError,
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -170,7 +193,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
     remote_target = f"{checksum_user}@{checksum_host}"
 
     try:
-        subprocess.check_call(
+        _run_ssh_command(
             [
                 "ssh",
                 *ssh_opts,
@@ -178,7 +201,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
                 "mkdir -p " + shlex.quote(remote_checksum_dir),
             ]
         )
-        subprocess.check_call(
+        _run_ssh_command(
             [
                 "scp",
                 *ssh_opts,
@@ -188,7 +211,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
         )
 
         logger.info("Signing merged sha256sum.txt with --clearsign")
-        subprocess.check_call(
+        _run_ssh_command(
             [
                 "ssh",
                 *ssh_opts,
@@ -210,7 +233,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
         )
 
         logger.info("Signing merged sha256sum.txt with --gpgsign")
-        subprocess.check_call(
+        _run_ssh_command(
             [
                 "ssh",
                 *ssh_opts,
@@ -234,7 +257,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
         first_ready_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(sha_sums_path), str(first_ready_dir / "sha256sum.txt"))
 
-        subprocess.check_call(
+        _run_ssh_command(
             [
                 "scp",
                 *ssh_opts,
@@ -243,7 +266,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
             ]
         )
 
-        subprocess.check_call(
+        _run_ssh_command(
             [
                 "scp",
                 *ssh_opts,
