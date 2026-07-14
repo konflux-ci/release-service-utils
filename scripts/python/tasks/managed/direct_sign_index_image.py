@@ -55,8 +55,9 @@ def collect_fbc_signing_items(
 ) -> list[SigningItem]:
     """Build signing items from FBC results.
 
-    For each component, translates the target_index to a public reference
-    and creates a SigningItem for every (digest, key) combination.
+    For each component, translates the target_index (and target_index_with_timestamp
+    when present and different) to public references and creates a SigningItem for
+    every (reference, digest, key) combination.
 
     Args:
         fbc_results: Parsed FBC results JSON containing components.
@@ -70,17 +71,23 @@ def collect_fbc_signing_items(
 
     for component in fbc_results.get("components", []):
         target_index = component["target_index"]
-        reference = translate_reference(target_index)
-        LOGGER.info("Translated %s -> %s", target_index, reference)
 
         rh_registry_repo = component.get("rh-registry-repo", "")
         repository = (
             rh_registry_repo.split("/", 1)[1] if "/" in rh_registry_repo else rh_registry_repo
         )
 
-        for digest in component.get("image_digests", []):
-            for key in signing_keys:
-                items.append(SigningItem(reference, digest, repository, key))
+        target_indexes = [target_index]
+        ts_index = component.get("target_index_with_timestamp", "")
+        if ts_index and ts_index != target_index:
+            target_indexes.append(ts_index)
+
+        for idx in target_indexes:
+            reference = translate_reference(idx)
+            LOGGER.info("Translated %s -> %s", idx, reference)
+            for digest in component.get("image_digests", []):
+                for key in signing_keys:
+                    items.append(SigningItem(reference, digest, repository, key))
 
     return items
 

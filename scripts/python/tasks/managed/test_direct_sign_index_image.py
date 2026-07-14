@@ -227,6 +227,77 @@ def test_collect_fbc_signing_items_missing_rh_registry_repo(mock_translate) -> N
     assert items[0].repository == ""
 
 
+@patch("direct_sign_index_image.translate_reference")
+def test_collect_fbc_signing_items_with_timestamp(mock_translate) -> None:
+    """Items are created for both target_index and target_index_with_timestamp."""
+    mock_translate.side_effect = [
+        "registry.redhat.io/redhat/fbc-target-index:v4.23",
+        "registry.redhat.io/redhat/fbc-target-index:v4.23-1783502029",
+    ]
+    fbc = {
+        "components": [
+            {
+                "target_index": "quay.io/redhat/redhat----fbc-target-index:v4.23",
+                "target_index_with_timestamp": (
+                    "quay.io/redhat/redhat----fbc-target-index:v4.23-1783502029"
+                ),
+                "rh-registry-repo": "registry.redhat.io/redhat/fbc-target-index",
+                "image_digests": ["sha256:aaa"],
+            }
+        ]
+    }
+    items = collect_fbc_signing_items(fbc, ["key-a"])
+
+    assert len(items) == 2
+    assert items[0].reference == "registry.redhat.io/redhat/fbc-target-index:v4.23"
+    assert items[1].reference == "registry.redhat.io/redhat/fbc-target-index:v4.23-1783502029"
+    assert mock_translate.call_count == 2
+
+
+@patch("direct_sign_index_image.translate_reference")
+def test_collect_fbc_signing_items_timestamp_empty(mock_translate) -> None:
+    """Empty target_index_with_timestamp is skipped."""
+    mock_translate.return_value = "registry.redhat.io/redhat/fbc-target-index:v4.23"
+    fbc = {
+        "components": [
+            {
+                "target_index": "quay.io/redhat/redhat----fbc-target-index:v4.23",
+                "target_index_with_timestamp": "",
+                "rh-registry-repo": "registry.redhat.io/redhat/fbc-target-index",
+                "image_digests": ["sha256:aaa"],
+            }
+        ]
+    }
+    items = collect_fbc_signing_items(fbc, ["key-a"])
+
+    assert len(items) == 1
+    assert items[0].reference == "registry.redhat.io/redhat/fbc-target-index:v4.23"
+    mock_translate.assert_called_once()
+
+
+@patch("direct_sign_index_image.translate_reference")
+def test_collect_fbc_signing_items_timestamp_equals_target(mock_translate) -> None:
+    """target_index_with_timestamp equal to target_index does not create duplicates."""
+    mock_translate.return_value = "registry.redhat.io/redhat/fbc-target-index:v4.23"
+    fbc = {
+        "components": [
+            {
+                "target_index": "quay.io/redhat/redhat----fbc-target-index:v4.23",
+                "target_index_with_timestamp": (
+                    "quay.io/redhat/redhat----fbc-target-index:v4.23"
+                ),
+                "rh-registry-repo": "registry.redhat.io/redhat/fbc-target-index",
+                "image_digests": ["sha256:aaa"],
+            }
+        ]
+    }
+    items = collect_fbc_signing_items(fbc, ["key-a"])
+
+    assert len(items) == 1
+    assert items[0].reference == "registry.redhat.io/redhat/fbc-target-index:v4.23"
+    mock_translate.assert_called_once()
+
+
 # --- setup_argparser ---
 
 
