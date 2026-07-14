@@ -13,6 +13,7 @@ dependencies = [
     "check-jsonschema",
     "jsonschema>=4.23",
     "jinja2-ansible-filters",
+    "kubernetes",
     "packaging",
     "packageurl-python",
     "pubtools-content-gateway==0.5.4",
@@ -26,6 +27,7 @@ dependencies = [
     "confluent-kafka",
     "python-gitlab>=4.0",
     "python-dotenv>=1.0.0",
+    "pydantic",
 ]
 
 [tool.black]
@@ -42,6 +44,7 @@ pythonpath = [
   "utils",
   "pubtools-pulp-wrapper",
   "publish-to-cgw-wrapper",
+  "scripts/python/tasks/managed",
 ]
 
 [dependency-groups]
