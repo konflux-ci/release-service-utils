@@ -29,6 +29,20 @@ def test_branch_name_from_origin_repo() -> None:
     assert github.branch_name_from_origin_repo("https://github.com/org/my-app") == "my-app"
 
 
+def test_run_gh_command_sets_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run gh CLI command with GH_TOKEN in the environment."""
+    captured_env = {}
+
+    def fake_run(cmd, **kwargs):
+        captured_env.update(kwargs.get("env", {}))
+        return mock.MagicMock(stdout="output", returncode=0)
+
+    monkeypatch.setattr("vcs.github.subprocess.run", fake_run)
+    result = github.run_gh_command(["gh", "api", "/repos/org/repo"], gh_token="test-token")
+    assert captured_env.get("GH_TOKEN") == "test-token"
+    assert result.stdout == "output"
+
+
 def test_app_jwt_builds_token(tmp_path: Path) -> None:
     """Build a three-part JWT signed with the app private key."""
     key = tmp_path / "key.pem"

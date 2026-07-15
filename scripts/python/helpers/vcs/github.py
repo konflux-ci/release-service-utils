@@ -158,6 +158,26 @@ def owner_repo_from_url(repo_url: str) -> str:
     return "/".join(repo_url.rstrip("/").split("/")[-2:])
 
 
+def run_gh_command(
+    cmd: list[str],
+    *,
+    gh_token: str,
+    check: bool = True,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a gh CLI command with the token in the environment."""
+    env = os.environ.copy()
+    env["GH_TOKEN"] = gh_token
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=check,
+        env=env,
+        cwd=cwd,
+    )
+
+
 def branch_name_from_origin_repo(origin_repo: str) -> str:
     """Derive a branch name from the last path segment of a repository URL."""
     return origin_repo.rstrip("/").split("/")[-1]
