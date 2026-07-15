@@ -122,6 +122,46 @@ def _safe_extract_layer(
     return found
 
 
+def extract_binaries_from_layers(
+    image_dir: Path,
+    image_binaries_path: str,
+) -> None:
+    """Extract files from image layers that contain *image_binaries_path*.
+
+    Read the manifest.json from *image_dir*, iterate through each layer,
+    and extract any files under the *image_binaries_path* directory.
+    """
+    manifest_path = image_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    for layer in manifest.get("layers", []):
+        digest: str = layer["digest"]
+        filename = digest.removeprefix("sha256:")
+        tar_path = image_dir / filename
+
+        with tarfile.open(tar_path) as tf:
+            matching_entries = [
+                m for m in tf.getmembers() if m.name.startswith(f"{image_binaries_path}/")
+            ]
+            if matching_entries:
+                logger.info(
+                    "Extracting %s/ from %s...",
+                    image_binaries_path,
+                    filename,
+                )
+                tf.extractall(
+                    path=image_dir,
+                    members=matching_entries,
+                    filter="data",
+                )
+            else:
+                logger.info(
+                    "skipping %s. It doesn't contain the %s dir",
+                    filename,
+                    image_binaries_path,
+                )
+
+
 def _extract_from_oras(
     manifest: dict,
     tmp_dir: Path,
