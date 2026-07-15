@@ -9,6 +9,7 @@ import tarfile
 from pathlib import Path
 from unittest import mock
 
+import extract_artifacts
 import extract_checksums_from_image as ecfi
 import pytest
 
@@ -100,35 +101,6 @@ def _stub_copy(source: str, dest: str) -> subprocess.CompletedProcess[str]:
 
 
 # ---------------------------------------------------------------------------
-# load_snapshot
-# ---------------------------------------------------------------------------
-
-
-def test_load_snapshot_valid(tmp_path: Path) -> None:
-    """Valid JSON file is parsed and returned."""
-    p = tmp_path / "snapshot.json"
-    expected = {"components": [{"name": "c1"}]}
-    p.write_text(json.dumps(expected), encoding="utf-8")
-
-    assert ecfi.load_snapshot(p) == expected
-
-
-def test_load_snapshot_missing_file(tmp_path: Path) -> None:
-    """Missing file raises ValueError."""
-    with pytest.raises(ValueError, match="No valid snapshot file"):
-        ecfi.load_snapshot(tmp_path / "nope.json")
-
-
-def test_load_snapshot_invalid_json(tmp_path: Path) -> None:
-    """Malformed JSON raises ValueError (JSONDecodeError is a subclass)."""
-    p = tmp_path / "bad.json"
-    p.write_text("{not json", encoding="utf-8")
-
-    with pytest.raises(ValueError):
-        ecfi.load_snapshot(p)
-
-
-# ---------------------------------------------------------------------------
 # load_components
 # ---------------------------------------------------------------------------
 
@@ -175,7 +147,7 @@ def test_load_components_missing_name_raises(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# extract_binaries_from_layers
+# extract_binaries_from_layers (uses container_image helper)
 # ---------------------------------------------------------------------------
 
 
@@ -186,7 +158,7 @@ def test_extract_binaries_from_layers_matching(tmp_path: Path) -> None:
     )
     _write_manifest(tmp_path, [digest])
 
-    ecfi.extract_binaries_from_layers(tmp_path, "releases")
+    extract_artifacts.extract_binaries_from_layers(tmp_path, "releases")
 
     assert (tmp_path / "releases" / "binary.zip").exists()
     assert (tmp_path / "releases" / "SHA256SUMS").exists()
@@ -199,7 +171,7 @@ def test_extract_binaries_from_layers_skips_non_matching(
     digest = _make_empty_layer_tar(tmp_path)
     _write_manifest(tmp_path, [digest])
 
-    ecfi.extract_binaries_from_layers(tmp_path, "releases")
+    extract_artifacts.extract_binaries_from_layers(tmp_path, "releases")
 
     assert not (tmp_path / "releases").exists()
 
@@ -210,7 +182,7 @@ def test_extract_binaries_from_layers_mixed(tmp_path: Path) -> None:
     d2 = _make_empty_layer_tar(tmp_path)
     _write_manifest(tmp_path, [d1, d2])
 
-    ecfi.extract_binaries_from_layers(tmp_path, "releases")
+    extract_artifacts.extract_binaries_from_layers(tmp_path, "releases")
 
     assert (tmp_path / "releases" / "file.bin").exists()
     assert not (tmp_path / "unrelated").exists()
@@ -418,11 +390,11 @@ def test_extract_checksums_null_components(tmp_path: Path) -> None:
 
 
 def test_extract_checksums_missing_snapshot_raises(tmp_path: Path) -> None:
-    """Missing snapshot file raises ValueError."""
+    """Missing snapshot file raises FileNotFoundError."""
     data_dir = tmp_path / "workdir"
     data_dir.mkdir()
 
-    with pytest.raises(ValueError, match="No valid snapshot file"):
+    with pytest.raises(FileNotFoundError):
         ecfi.extract_checksums(
             data_dir / "nope.json",
             data_dir / "data.json",
