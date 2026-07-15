@@ -41,7 +41,7 @@ jobs:
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           export PATH="$HOME/.local/bin:$PATH"
-          uv sync --dev
+          uv sync --dev --no-editable
           uv run pytest --cov=. --cov-report=xml:coverage.xml
       - name: Get changed Python files
         id: changed-files

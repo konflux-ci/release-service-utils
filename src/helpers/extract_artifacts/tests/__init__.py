@@ -1,0 +1,1 @@
+"""Extract artifacts tests."""

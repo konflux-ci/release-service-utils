@@ -1884,7 +1884,7 @@ wheels = [
 [[package]]
 name = "release-service-utils"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "check-jsonschema" },
     { name = "confluent-kafka" },
