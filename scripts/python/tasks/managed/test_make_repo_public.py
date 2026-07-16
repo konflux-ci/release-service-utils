@@ -284,7 +284,7 @@ class TestRun:
 
     def test_missing_data_file(self, tmp_path: Path) -> None:
         """Error when data file does not exist."""
-        with pytest.raises(RuntimeError, match="No valid data file"):
+        with pytest.raises(FileNotFoundError):
             make_repo_public.run(
                 tmp_path / "missing.json",
                 tmp_path / "snapshot.json",
@@ -297,7 +297,7 @@ class TestRun:
         data_file = tmp_path / "data.json"
         _write_data(data_file, _default_data())
 
-        with pytest.raises(RuntimeError, match="No valid snapshot file"):
+        with pytest.raises(FileNotFoundError):
             make_repo_public.run(
                 data_file,
                 tmp_path / "missing.json",
@@ -315,7 +315,7 @@ class TestRun:
         _write_data(data_file, _default_data())
         _write_data(snapshot_file, _snapshot_with_components([]))
 
-        with pytest.raises(RuntimeError, match="token file not found"):
+        with pytest.raises(FileNotFoundError):
             make_repo_public.run(
                 data_file,
                 snapshot_file,
@@ -481,12 +481,12 @@ class TestMain:
     def test_runtime_error_raises(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """`main` raises RuntimeError when run() fails."""
+        """`main` raises FileNotFoundError when run() fails."""
         monkeypatch.setenv("DATA_FILE", str(tmp_path / "missing.json"))
         monkeypatch.setenv("SNAPSHOT_FILE", str(tmp_path / "snap.json"))
         monkeypatch.setenv("REGISTRY_SECRET_PATH", str(tmp_path))
         monkeypatch.setenv("CA_CERT_PATH", str(tmp_path / "no-ca.crt"))
-        with pytest.raises(RuntimeError):
+        with pytest.raises(FileNotFoundError):
             make_repo_public.main()
 
 
