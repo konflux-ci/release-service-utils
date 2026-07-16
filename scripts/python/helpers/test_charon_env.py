@@ -159,5 +159,5 @@ def test_install_charon_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 def test_install_charon_config_missing_source(tmp_path: Path) -> None:
     """Missing config sources raise FileNotFoundError."""
-    with pytest.raises(FileNotFoundError, match="charon config file not found"):
+    with pytest.raises(FileNotFoundError):
         charon_env.install_charon_config(tmp_path / "missing.yaml")

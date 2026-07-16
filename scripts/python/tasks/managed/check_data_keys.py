@@ -22,14 +22,6 @@ from logger import logger
 DEFAULT_SCHEMA_PATH = Path("/home/schemas/dataKeys.json")
 
 
-def resolve_schema_path(schema_path: Path) -> Path:
-    """Return *schema_path* when the file exists."""
-    if not schema_path.is_file():
-        msg = f"schema file not found: {schema_path}"
-        raise FileNotFoundError(msg)
-    return schema_path
-
-
 def parse_systems_param(systems_json: str) -> list[dict[str, Any]]:
     """Parse the Tekton `systems` param as a JSON array of system objects."""
     text = systems_json.strip()
@@ -84,10 +76,6 @@ def run_check_data_keys(
 ) -> None:
     """Load data, merge systems, and validate against the schema."""
     data_file = data_dir / data_path
-    if not data_file.is_file():
-        msg = "No data JSON was provided."
-        raise FileNotFoundError(msg)
-
     logger.info("Loading data from %s", data_file)
     data = file.load_json_dict(data_file)
     systems = parse_systems_param(systems_json)
@@ -96,9 +84,8 @@ def run_check_data_keys(
     data = merge_systems_into_data(data, systems)
     data_file.write_text(json.dumps(data) + "\n", encoding="utf-8")
 
-    schema = resolve_schema_path(schema_path)
-    logger.info("Validating %s against schema %s", data_file, schema)
-    validate_data_against_schema(schema, data_file)
+    logger.info("Validating %s against schema %s", data_file, schema_path)
+    validate_data_against_schema(schema_path, data_file)
     logger.info("Schema validation succeeded")
 
 

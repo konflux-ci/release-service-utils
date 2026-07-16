@@ -125,24 +125,17 @@ def run(
     Quay registry is supported per invocation; encountering repos on two
     different Quay registries raises ``RuntimeError``.
     """
-    if not data_file.is_file():
-        raise RuntimeError("No valid data file was provided.")
-    if not snapshot_file.is_file():
-        raise RuntimeError("No valid snapshot file was provided.")
-
     setup_ca_bundle(ca_cert_path)
 
     token_path = secret_path / "token"
-    if not token_path.is_file():
-        raise RuntimeError(f"Registry secret token file not found at {token_path}")
     token = token_path.read_text(encoding="utf-8").strip()
 
     try:
-        data: dict[str, Any] = json.loads(data_file.read_text(encoding="utf-8"))
+        data: dict[str, Any] = file.load_json_dict(data_file)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Invalid JSON in data file {data_file}: {exc}") from exc
     try:
-        snapshot: dict[str, Any] = json.loads(snapshot_file.read_text(encoding="utf-8"))
+        snapshot: dict[str, Any] = file.load_json_dict(snapshot_file)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Invalid JSON in snapshot file {snapshot_file}: {exc}") from exc
 

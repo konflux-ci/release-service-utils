@@ -657,7 +657,7 @@ def test_close_advisory_issues_no_issues(tmp_path: Path) -> None:
 def test_close_advisory_issues_missing_data_file(tmp_path: Path) -> None:
     """Fail when the release data file is missing."""
     _write_jira_secret(tmp_path / "secrets")
-    with pytest.raises(FileNotFoundError, match="No data JSON was provided"):
+    with pytest.raises(FileNotFoundError):
         close_advisory_issues.close_advisory_issues(
             data_dir=tmp_path,
             data_path=Path("missing.json"),
@@ -778,5 +778,5 @@ def test_module_main_guard_propagates_failure(
         "https://access.redhat.com/errata/RHBA-2025:1111",
     )
     monkeypatch.setenv("JIRA_SECRET_PATH", str(tmp_path / "secrets"))
-    with pytest.raises(FileNotFoundError, match="No data JSON was provided"):
+    with pytest.raises(FileNotFoundError):
         runpy.run_module("close_advisory_issues", run_name="__main__")

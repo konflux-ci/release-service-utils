@@ -114,8 +114,8 @@ def test_load_snapshot_valid(tmp_path: Path) -> None:
 
 
 def test_load_snapshot_missing_file(tmp_path: Path) -> None:
-    """Missing file raises ValueError."""
-    with pytest.raises(ValueError, match="No valid snapshot file"):
+    """Missing file raises FileNotFoundError."""
+    with pytest.raises(FileNotFoundError):
         ecfi.load_snapshot(tmp_path / "nope.json")
 
 
@@ -418,11 +418,11 @@ def test_extract_checksums_null_components(tmp_path: Path) -> None:
 
 
 def test_extract_checksums_missing_snapshot_raises(tmp_path: Path) -> None:
-    """Missing snapshot file raises ValueError."""
+    """Missing snapshot file raises FileNotFoundError."""
     data_dir = tmp_path / "workdir"
     data_dir.mkdir()
 
-    with pytest.raises(ValueError, match="No valid snapshot file"):
+    with pytest.raises(FileNotFoundError):
         ecfi.extract_checksums(
             data_dir / "nope.json",
             data_dir / "data.json",

@@ -59,37 +59,6 @@ def _setup_happy_path(
     }
 
 
-# --- validate_input_files ---
-
-
-def test_validate_input_files_both_exist(tmp_path: Path) -> None:
-    """No error when both files exist."""
-    data_file = tmp_path / "data.json"
-    snapshot_file = tmp_path / "snapshot.json"
-    data_file.touch()
-    snapshot_file.touch()
-
-    collect_gh_params.validate_input_files(data_file, snapshot_file)
-
-
-def test_validate_input_files_missing_data(tmp_path: Path) -> None:
-    """RuntimeError when data file is missing."""
-    snapshot_file = tmp_path / "snapshot.json"
-    snapshot_file.touch()
-
-    with pytest.raises(RuntimeError, match="No valid data file"):
-        collect_gh_params.validate_input_files(tmp_path / "missing.json", snapshot_file)
-
-
-def test_validate_input_files_missing_snapshot(tmp_path: Path) -> None:
-    """RuntimeError when snapshot file is missing."""
-    data_file = tmp_path / "data.json"
-    data_file.touch()
-
-    with pytest.raises(RuntimeError, match="No valid snapshot file"):
-        collect_gh_params.validate_input_files(data_file, tmp_path / "missing.json")
-
-
 # --- collect_params happy path ---
 
 

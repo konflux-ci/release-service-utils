@@ -49,10 +49,6 @@ def extract_index_image(
 ) -> Path:
     """Load InternalRequest results and write extract-index-image output."""
     input_path = data_dir / internal_request_results_file
-    if not input_path.is_file():
-        msg = f"InternalRequest results file not found: {input_path}"
-        raise FileNotFoundError(msg)
-
     logger.info("Loading InternalRequest results from %s", input_path)
     internal_request_results = file.load_json_dict(input_path)
     payload = extract_index_image_results(internal_request_results)

@@ -270,10 +270,6 @@ def close_advisory_issues(
 ) -> None:
     """Close fixed Jira issues referenced in the release data file."""
     data_file = data_dir / data_path
-    if not data_file.is_file():
-        msg = "No data JSON was provided."
-        raise FileNotFoundError(msg)
-
     logger.info("Loading release data from %s", data_file)
     data = file.load_json_dict(data_file)
     fixed_issues = load_fixed_issues(data)
