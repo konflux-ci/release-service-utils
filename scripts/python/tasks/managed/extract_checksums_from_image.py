@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import file
 import skopeo
 import tekton
 from logger import logger
@@ -27,9 +28,7 @@ BINARIES_DIR = "binaries"
 
 def load_snapshot(snapshot_path: Path) -> dict[str, Any]:
     """Load and return the snapshot JSON from *snapshot_path*."""
-    if not snapshot_path.is_file():
-        raise ValueError(f"No valid snapshot file was provided: {snapshot_path}")
-    return json.loads(snapshot_path.read_text(encoding="utf-8"))
+    return file.load_json_dict(snapshot_path)
 
 
 def load_components(data_path: Path) -> list[str]:

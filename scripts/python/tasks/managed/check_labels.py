@@ -149,12 +149,6 @@ def check_labels(snapshot_path: Path, data_path: Path, enforce: bool) -> None:
     Raise ``LabelValidationError`` on validation failure (enforce mode) or
     on hard data errors.
     """
-    if not snapshot_path.is_file():
-        raise LabelValidationError(f"No valid snapshot file was provided: {snapshot_path}")
-
-    if not data_path.is_file():
-        raise LabelValidationError(f"No valid data file was provided: {data_path}")
-
     snapshot = load_json_dict(snapshot_path)
     data = load_json_dict(data_path)
 
