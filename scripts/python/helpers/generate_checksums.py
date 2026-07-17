@@ -95,6 +95,7 @@ def _kinit(checksum_user: str, kerberos_realm: str, keytab_b64: bytes) -> None:
     """Obtain a Kerberos ticket-granting ticket using the supplied base64-encoded keytab."""
     krb5cc = Path(f"/tmp/krb5cc_{os.getuid()}")
     os.environ["KRB5CCNAME"] = f"FILE:{krb5cc}"
+    os.environ["KRB5_TRACE"] = "/dev/stderr"
 
     fd, keytab_path = tempfile.mkstemp(suffix=".keytab")
     keytab = Path(keytab_path)
@@ -104,7 +105,7 @@ def _kinit(checksum_user: str, kerberos_realm: str, keytab_b64: bytes) -> None:
         authentication.kinit_with_retry(
             f"{checksum_user}@{kerberos_realm}",
             keytab,
-            {"KRB5CCNAME": f"FILE:{krb5cc}"},
+            {"KRB5CCNAME": f"FILE:{krb5cc}", "KRB5_TRACE": "/dev/stderr"},
         )
     finally:
         keytab.unlink(missing_ok=True)
@@ -134,6 +135,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
     known_hosts.chmod(0o600)
 
     ssh_opts = [
+        "-v",
         "-o",
         "UserKnownHostsFile=/tmp/.ssh/known_hosts",
         "-o",
