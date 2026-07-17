@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from inspect_target_index import inspect_image, main, read_credential
+from inspect_target_index import inspect_image, main
 
 SKOPEO_INSPECT_OUTPUT = json.dumps(
     {
@@ -25,34 +27,20 @@ SKOPEO_RAW_OUTPUT = json.dumps(
 )
 
 
-# --- read_credential ---
-
-
-def test_read_credential(tmp_path) -> None:
-    """Reads and strips the credential file."""
-    cred_file = tmp_path / "cred"
-    cred_file.write_text("user:pass\n")
-    assert read_credential(cred_file) == "user:pass"
-
-
-def test_read_credential_missing_file(tmp_path) -> None:
-    """Raises when credential file does not exist."""
-    with pytest.raises(FileNotFoundError):
-        read_credential(tmp_path / "nonexistent")
-
-
 # --- inspect_image ---
 
 
 @patch("inspect_target_index.run_cmd")
-def test_inspect_image_happy_path(mock_run) -> None:
-    """Returns sha and digests from skopeo output."""
+def test_inspect_image_happy_path(mock_run, tmp_path) -> None:
+    """Return sha and digests from skopeo output."""
     mock_run.side_effect = [
         MagicMock(stdout=SKOPEO_INSPECT_OUTPUT),
         MagicMock(stdout=SKOPEO_RAW_OUTPUT),
     ]
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text("{}")
 
-    result = inspect_image("quay.io/redhat/index:v4.13", "user:pass")
+    result = inspect_image("quay.io/redhat/index:v4.13", auth_file)
 
     assert result["sha"] == (
         "sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -63,14 +51,16 @@ def test_inspect_image_happy_path(mock_run) -> None:
 
 
 @patch("inspect_target_index.run_cmd")
-def test_inspect_image_calls_skopeo_with_correct_args(mock_run) -> None:
-    """Verifies the exact skopeo commands issued."""
+def test_inspect_image_calls_skopeo_with_authfile(mock_run, tmp_path) -> None:
+    """Verify skopeo is called with --authfile instead of --creds."""
     mock_run.side_effect = [
         MagicMock(stdout=SKOPEO_INSPECT_OUTPUT),
         MagicMock(stdout=SKOPEO_RAW_OUTPUT),
     ]
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text("{}")
 
-    inspect_image("quay.io/redhat/index:v4.13", "user:pass")
+    inspect_image("quay.io/redhat/index:v4.13", auth_file)
 
     calls = mock_run.call_args_list
     assert calls[0].args[0] == [
@@ -78,8 +68,8 @@ def test_inspect_image_calls_skopeo_with_correct_args(mock_run) -> None:
         "inspect",
         "--retry-times",
         "3",
-        "--creds",
-        "user:pass",
+        "--authfile",
+        str(auth_file),
         "docker://quay.io/redhat/index:v4.13",
     ]
     assert calls[1].args[0] == [
@@ -88,38 +78,38 @@ def test_inspect_image_calls_skopeo_with_correct_args(mock_run) -> None:
         "--retry-times",
         "3",
         "--raw",
-        "--creds",
-        "user:pass",
+        "--authfile",
+        str(auth_file),
         "docker://quay.io/redhat/index:v4.13",
     ]
 
 
 @patch("inspect_target_index.run_cmd")
-def test_inspect_image_skopeo_failure_raises(mock_run) -> None:
-    """Propagates exceptions from skopeo."""
+def test_inspect_image_skopeo_failure_raises(mock_run, tmp_path) -> None:
+    """Propagate exceptions from skopeo."""
     mock_run.side_effect = RuntimeError("skopeo failed")
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text("{}")
 
     with pytest.raises(RuntimeError, match="skopeo failed"):
-        inspect_image("quay.io/redhat/index:v4.13", "user:pass")
+        inspect_image("quay.io/redhat/index:v4.13", auth_file)
 
 
 # --- main ---
 
 
+@patch("inspect_target_index.subprocess.check_output", return_value=b'{"auths":{}}')
 @patch("inspect_target_index.run_cmd")
-def test_main_happy_path(mock_run, tmp_path, monkeypatch) -> None:
-    """Writes JSON result on success."""
+def test_main_happy_path(mock_run, mock_check_output, tmp_path, monkeypatch) -> None:
+    """Write JSON result on success."""
     mock_run.side_effect = [
         MagicMock(stdout=SKOPEO_INSPECT_OUTPUT),
         MagicMock(stdout=SKOPEO_RAW_OUTPUT),
     ]
 
-    cred_file = tmp_path / "cred"
-    cred_file.write_text("user:pass")
     result_file = tmp_path / "result"
 
     monkeypatch.setenv("PARAM_SOURCE_INDEX", "quay.io/redhat/index:v4.13")
-    monkeypatch.setenv("PARAM_INSPECT_CREDENTIALS_PATH", str(cred_file))
     monkeypatch.setenv("RESULT_REQUEST_MESSAGE_PATH", str(result_file))
 
     exit_code = main()
@@ -128,19 +118,40 @@ def test_main_happy_path(mock_run, tmp_path, monkeypatch) -> None:
     result = json.loads(result_file.read_text())
     assert result["sha"].startswith("sha256:")
     assert len(result["digests"]) == 2
+    mock_check_output.assert_called_once_with(
+        ["select-oci-auth", "quay.io/redhat/index:v4.13"],
+        stderr=mock_check_output.call_args.kwargs["stderr"],
+    )
 
 
+@patch(
+    "inspect_target_index.subprocess.check_output",
+    side_effect=RuntimeError("select-oci-auth failed"),
+)
+def test_main_auth_error_writes_error_string(mock_check_output, tmp_path, monkeypatch) -> None:
+    """Write error message and exit 0 when select-oci-auth fails."""
+    result_file = tmp_path / "result"
+
+    monkeypatch.setenv("PARAM_SOURCE_INDEX", "quay.io/redhat/index:v4.13")
+    monkeypatch.setenv("RESULT_REQUEST_MESSAGE_PATH", str(result_file))
+
+    exit_code = main()
+
+    assert exit_code == 0
+    assert result_file.read_text() == "Error: Failed to inspect target index"
+
+
+@patch("inspect_target_index.subprocess.check_output", return_value=b'{"auths":{}}')
 @patch("inspect_target_index.run_cmd")
-def test_main_error_writes_error_string(mock_run, tmp_path, monkeypatch) -> None:
-    """Writes error message and exits 0 on failure."""
+def test_main_skopeo_error_writes_error_string(
+    mock_run, mock_check_output, tmp_path, monkeypatch
+) -> None:
+    """Write error message and exit 0 on skopeo failure."""
     mock_run.side_effect = RuntimeError("connection refused")
 
-    cred_file = tmp_path / "cred"
-    cred_file.write_text("user:pass")
     result_file = tmp_path / "result"
 
     monkeypatch.setenv("PARAM_SOURCE_INDEX", "quay.io/redhat/index:v4.13")
-    monkeypatch.setenv("PARAM_INSPECT_CREDENTIALS_PATH", str(cred_file))
     monkeypatch.setenv("RESULT_REQUEST_MESSAGE_PATH", str(result_file))
 
     exit_code = main()
@@ -149,15 +160,34 @@ def test_main_error_writes_error_string(mock_run, tmp_path, monkeypatch) -> None
     assert result_file.read_text() == "Error: Failed to inspect target index"
 
 
-def test_main_missing_credential_writes_error(tmp_path, monkeypatch) -> None:
-    """Writes error when credential file is missing."""
+@patch("inspect_target_index.subprocess.check_output", return_value=b'{"auths":{}}')
+@patch("inspect_target_index.run_cmd")
+def test_main_cleans_up_auth_file(mock_run, mock_check_output, tmp_path, monkeypatch) -> None:
+    """Verify the temporary auth file is removed after main completes."""
+    mock_run.side_effect = [
+        MagicMock(stdout=SKOPEO_INSPECT_OUTPUT),
+        MagicMock(stdout=SKOPEO_RAW_OUTPUT),
+    ]
+
     result_file = tmp_path / "result"
 
     monkeypatch.setenv("PARAM_SOURCE_INDEX", "quay.io/redhat/index:v4.13")
-    monkeypatch.setenv("PARAM_INSPECT_CREDENTIALS_PATH", str(tmp_path / "nonexistent"))
     monkeypatch.setenv("RESULT_REQUEST_MESSAGE_PATH", str(result_file))
 
-    exit_code = main()
+    created_paths: list[Path] = []
+    original_named = tempfile.NamedTemporaryFile
 
-    assert exit_code == 0
-    assert result_file.read_text() == "Error: Failed to inspect target index"
+    def tracking_named(*args, **kwargs):
+        kwargs["delete"] = False
+        f = original_named(*args, **kwargs)
+        created_paths.append(Path(f.name))
+        return f
+
+    with patch(
+        "inspect_target_index.tempfile.NamedTemporaryFile",
+        side_effect=tracking_named,
+    ):
+        main()
+
+    for p in created_paths:
+        assert not p.exists(), f"Auth file was not cleaned up: {p}"

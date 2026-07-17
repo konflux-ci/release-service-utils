@@ -174,7 +174,8 @@ def update_index_images(
         if not repos:
             continue
 
-        tag = repos[0].get("tags", [""])[0]
+        tags = repos[0].get("tags") or []
+        tag = tags[0] if tags else ""
         repository = repos[0].get("url", "")
 
         if not is_floating_tag(tag):

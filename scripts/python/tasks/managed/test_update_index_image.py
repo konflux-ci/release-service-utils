@@ -321,6 +321,24 @@ def test_update_index_images_no_repositories(mock_inspect) -> None:
 
 
 @patch("update_index_image.run_inspect_internal_request")
+def test_update_index_images_empty_tags_list(mock_inspect) -> None:
+    """Component with empty tags list is skipped without IndexError."""
+    snapshot = {
+        "components": [
+            {
+                "name": "empty-tags",
+                "containerImage": "quay.io/redhat/index@sha256:old",
+                "repositories": [{"url": "quay.io/redhat/preview-operator-index", "tags": []}],
+            }
+        ]
+    }
+    result = update_index_images(snapshot, "creds", "git-url", "main", "task-1", "pr-1")
+
+    assert result["components"][0]["containerImage"] == ("quay.io/redhat/index@sha256:old")
+    mock_inspect.assert_not_called()
+
+
+@patch("update_index_image.run_inspect_internal_request")
 def test_update_index_images_empty_components(mock_inspect) -> None:
     """Empty components list produces no changes."""
     snapshot = {"components": []}
