@@ -118,3 +118,28 @@ metadata:
     ]
     assert subprocess_cmd.run_yq_json(path, ".spec.type") == "RHBA"
     assert subprocess_cmd.run_yq_json(path, ".metadata.name") == "2025:1"
+
+
+def test_run_cmd_timeout_handling(tmp_path: Path) -> None:
+    """``run_cmd`` handles TimeoutExpired, logs to stderr_path, and raises."""
+    log = tmp_path / "timeout_log.txt"
+    with mock.patch("subprocess_cmd.subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["sleep", "10"], timeout=1.0)
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            subprocess_cmd.run_cmd(["sleep", "10"], stderr_path=log, timeout=1.0)
+    log_text = log.read_text(encoding="utf-8")
+    assert "command timed out after 1.0s" in log_text
+    assert "sleep 10" in log_text
+
+
+def test_run_cmd_text_timeout_handling() -> None:
+    """``run_cmd_text`` transforms TimeoutExpired into a CalledProcessError."""
+    with mock.patch("subprocess_cmd.subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["sleep", "10"], timeout=1.0)
+
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            subprocess_cmd.run_cmd_text(["sleep", "10"], timeout=1.0)
+
+    assert exc_info.value.returncode == 124
+    assert "Command timed out after 1.0 seconds" in exc_info.value.output
