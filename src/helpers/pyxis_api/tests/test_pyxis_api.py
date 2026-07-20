@@ -23,6 +23,26 @@ def test_pyxis_api_url_for_invalid_server_raises() -> None:
         pyxis_api.pyxis_api_url_for_server("invalid")
 
 
+def test_pyxis_graphql_url_for_production_server() -> None:
+    """Map the production server param to the public Pyxis GraphQL URL."""
+    assert pyxis_api.pyxis_graphql_url_for_server("production") == (
+        "https://graphql-pyxis.api.redhat.com/graphql/"
+    )
+
+
+def test_pyxis_graphql_url_for_stage_server() -> None:
+    """Map the stage server param to the preprod Pyxis GraphQL URL."""
+    assert pyxis_api.pyxis_graphql_url_for_server("stage") == (
+        "https://graphql-pyxis.preprod.api.redhat.com/graphql/"
+    )
+
+
+def test_pyxis_graphql_url_for_invalid_server_raises() -> None:
+    """Reject unknown server param values for GraphQL."""
+    with pytest.raises(ValueError, match="Invalid server parameter"):
+        pyxis_api.pyxis_graphql_url_for_server("invalid")
+
+
 def test_pyxis_registry_for_flatpak_quay_url() -> None:
     """Flatpak Quay repos use the flatpaks Pyxis registry."""
     url = "quay.io/rh-flatpaks-stage/my-product----my-image1"

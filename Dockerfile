@@ -197,6 +197,7 @@ RUN ln -s /home/src/tasks/managed/cleanup_workspace/cleanup_workspace.py /home/s
     ln -s /home/src/tasks/managed/reduce_snapshot/reduce_snapshot.py /home/scripts/python/tasks/managed/reduce_snapshot.py && \
     ln -s /home/src/tasks/managed/send_slack_notification/send_slack_notification.py /home/scripts/python/tasks/managed/send_slack_notification.py && \
     ln -s /home/src/tasks/managed/apply_mapping/apply_mapping.py /home/scripts/python/tasks/managed/apply_mapping.py && \
+    ln -s /home/src/tasks/managed/create_pyxis_image/create_pyxis_image.py /home/scripts/python/tasks/managed/create_pyxis_image.py && \
     ln -s /home/src/tasks/internal/filter_already_released_advisory_images/filter_already_released_advisory_images.py /home/scripts/python/tasks/internal/filter_already_released_advisory_images.py && \
     ln -s /home/src/tasks/internal/check_embargoed_cves/check_embargoed_cves.py /home/scripts/python/tasks/internal/check_embargoed_cves.py && \
     ln -s /home/src/tasks/internal/check_fbc_opt_in/check_fbc_opt_in.py /home/scripts/python/tasks/internal/check_fbc_opt_in.py && \

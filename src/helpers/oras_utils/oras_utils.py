@@ -102,6 +102,53 @@ def oras_pull(
         auth_file.unlink(missing_ok=True)
 
 
+def oras_manifest_fetch(
+    pullspec: str,
+    auth_file: Path,
+    *,
+    platform: str | None = None,
+) -> str:
+    """Fetch an OCI manifest and return the raw JSON string.
+
+    Runs ``oras manifest fetch`` with the given auth config.  When
+    *platform* is provided (e.g. ``"linux/amd64"``), ``--platform`` is
+    passed to select a specific architecture from a manifest list.
+    """
+    cmd: list[str | Path] = [
+        "oras",
+        "manifest",
+        "fetch",
+        "--registry-config",
+        str(auth_file),
+    ]
+    if platform:
+        cmd += ["--platform", platform]
+    cmd.append(pullspec)
+    result = run_cmd(cmd, check=True)
+    return result.stdout
+
+
+def oras_blob_fetch(
+    pullspec: str,
+    output_path: Path,
+    auth_file: Path,
+) -> None:
+    """Download a single OCI blob to *output_path* using ``oras blob fetch``."""
+    run_cmd(
+        [
+            "oras",
+            "blob",
+            "fetch",
+            "--registry-config",
+            str(auth_file),
+            "--output",
+            str(output_path),
+            pullspec,
+        ],
+        check=True,
+    )
+
+
 def oras_push(tag: str, directory: Path, subdirectory: str, component_name: str) -> str:
     """Push *subdirectory* inside *directory* to an OCI registry via oras.
 
