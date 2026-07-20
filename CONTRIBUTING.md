@@ -134,6 +134,12 @@ This project follows specific Python coding standards:
 - **Utilities**: General utilities go in `utils/`
 - **Templates**: Jinja2 templates go in `templates/`
 
+### Data Keys Schema
+
+This repository maintains a json schema for the data struct used in various scripts in this repo. It is stored [here](schemas/dataKeys.json).
+
+If your change adds or removes a key to the data struct, the schema must be updated accordingly as part of your pull request.
+
 ## Testing
 
 ### Running Tests Locally

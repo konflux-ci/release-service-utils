@@ -15,6 +15,7 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - `templates/` — Jinja2 templates (advisory.yaml.jinja, GraphQL)
 - `utils/` — General utilities (apply_template, get_resource, find_matching_purl)
 - `integration-tests/` — Orchestration harness that detects which catalog E2E suites are affected by utils changes, patches a temporary catalog fork with the new image, and runs the matching tests
+- `schemas/` - Schema files to describe structs such as the `data` one used in various python scripts
 
 ## Python
 
