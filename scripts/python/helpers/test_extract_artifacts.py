@@ -375,7 +375,7 @@ def test_process_component_raises_when_file_missing_from_container(
 
 
 # ---------------------------------------------------------------------------
-# _setup_docker_config
+# setup_docker_config
 # ---------------------------------------------------------------------------
 
 
@@ -390,7 +390,7 @@ def test_setup_docker_config_strips_noise(
     home = tmp_path / "home"
     home.mkdir()
     with mock.patch("pathlib.Path.home", return_value=home):
-        extract_artifacts._setup_docker_config()
+        extract_artifacts.setup_docker_config()
     assert (home / ".docker" / "config.json").exists()
 
 

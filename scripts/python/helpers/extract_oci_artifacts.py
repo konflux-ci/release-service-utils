@@ -22,7 +22,6 @@ Other env vars:
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import os
@@ -32,37 +31,13 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-import authentication
-from extract_artifacts import create_os_flag_files
+from extract_artifacts import create_os_flag_files, setup_docker_config, parse_args
 
 PROG = "extract_oci_artifacts.py"
 
-REDHAT_WORKLOADS_TOKEN_MOUNT = Path(
-    os.environ.get("REDHAT_WORKLOADS_TOKEN_MOUNT", "/mnt/redhat-workloads-token")
-)
 CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 
 logger = logging.getLogger(__name__)
-
-
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse and return CLI arguments."""
-    p = argparse.ArgumentParser(prog=PROG)
-    p.add_argument(
-        "--concurrent-limit",
-        type=int,
-        default=3,
-        help="Maximum number of components to process in parallel",
-    )
-    return p.parse_args(argv)
-
-
-def _setup_docker_config() -> None:
-    """Write ~/.docker/config.json from the mounted dockerconfig secret."""
-    authentication.setup_docker_config(
-        REDHAT_WORKLOADS_TOKEN_MOUNT / ".dockerconfigjson",
-        strip_noise=True,
-    )
 
 
 def _get_platform_overrides(component: dict) -> list[str]:
@@ -190,7 +165,7 @@ def run(concurrent_limit: int) -> None:
     """Extract OCI artifact components from all snapshot components and write OS flag files."""
     snapshot = json.loads(os.environ["SNAPSHOT_JSON"])
 
-    _setup_docker_config()
+    setup_docker_config()
     CONTENT_DIR.mkdir(parents=True, exist_ok=True)
 
     components = snapshot.get("components", [])
@@ -217,7 +192,7 @@ def run(concurrent_limit: int) -> None:
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments and run OCI artifact extraction; return exit code."""
     logging.basicConfig(level=logging.INFO)
-    args = parse_args(argv[1:] if argv is not None else None)
+    args = parse_args(argv[1:] if argv is not None else None, PROG)
     try:
         run(args.concurrent_limit)
     except Exception as exc:

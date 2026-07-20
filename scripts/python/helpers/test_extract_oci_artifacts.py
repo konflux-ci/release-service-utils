@@ -9,6 +9,7 @@ from unittest import mock
 
 import pytest
 
+import extract_artifacts
 import extract_oci_artifacts
 
 # ---------------------------------------------------------------------------
@@ -249,7 +250,7 @@ def test_run_skips_no_files_component(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setenv("SNAPSHOT_JSON", json.dumps(SNAPSHOT_NO_FILES))
     monkeypatch.setattr(extract_oci_artifacts, "CONTENT_DIR", tmp_path / "artifacts")
     monkeypatch.setattr(
-        extract_oci_artifacts, "REDHAT_WORKLOADS_TOKEN_MOUNT", tmp_path / "tok"
+        extract_artifacts, "REDHAT_WORKLOADS_TOKEN_MOUNT", tmp_path / "tok"
     )
     (tmp_path / "tok").mkdir()
     (tmp_path / "tok" / ".dockerconfigjson").write_text('{"auths":{}}')
@@ -264,7 +265,7 @@ def test_run_propagates_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("SNAPSHOT_JSON", json.dumps(SNAPSHOT_ONE))
     monkeypatch.setattr(extract_oci_artifacts, "CONTENT_DIR", tmp_path / "artifacts")
     monkeypatch.setattr(
-        extract_oci_artifacts, "REDHAT_WORKLOADS_TOKEN_MOUNT", tmp_path / "tok"
+        extract_artifacts, "REDHAT_WORKLOADS_TOKEN_MOUNT", tmp_path / "tok"
     )
     (tmp_path / "tok").mkdir()
     (tmp_path / "tok" / ".dockerconfigjson").write_text('{"auths":{}}')

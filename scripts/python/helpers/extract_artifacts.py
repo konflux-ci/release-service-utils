@@ -45,9 +45,9 @@ CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 logger = logging.getLogger(__name__)
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None, prog: str = PROG) -> argparse.Namespace:
     """Parse and return CLI arguments."""
-    p = argparse.ArgumentParser(prog=PROG)
+    p = argparse.ArgumentParser(prog=prog)
     p.add_argument(
         "--concurrent-limit",
         type=int,
@@ -57,7 +57,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _setup_docker_config() -> None:
+def setup_docker_config() -> None:
     """Write ~/.docker/config.json from the mounted dockerconfig secret."""
     authentication.setup_docker_config(
         REDHAT_WORKLOADS_TOKEN_MOUNT / ".dockerconfigjson",
@@ -244,7 +244,7 @@ def run(concurrent_limit: int) -> None:
     """Extract artifacts from all snapshot components and write OS flag files."""
     snapshot = json.loads(os.environ["SNAPSHOT_JSON"])
 
-    _setup_docker_config()
+    setup_docker_config()
     CONTENT_DIR.mkdir(parents=True, exist_ok=True)
 
     components = snapshot.get("components", [])
