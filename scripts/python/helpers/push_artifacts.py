@@ -46,6 +46,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import disk_image_utils
 import publish_to_cgw_wrapper
 import pulp_push_wrapper
 import yaml  # type: ignore
@@ -365,6 +366,18 @@ def run(exodus_gw_env: str, cgw_hostname: str, cert_expiration_warn_days: int) -
             cg = component.get("contentGateway") or {}
             cg["contentDir"] = str(component_dir)
             component["contentGateway"] = cg
+            # Disk-image components that target both CDN and CGW describe their
+            # deliverables in staged.files[] (consumed by the CDN/Customer Portal
+            # flow) but also need those files listed in files[] for CGW registration.
+            # If files[] is already populated the team provided it directly (e.g. a
+            # CGW-only release), so we leave it untouched.
+            # NOTE: this intentionally mutates the component dict in-place. It is safe
+            # because the Pulp push and CDN exclusion logic for this component have already
+            # completed above, and the only remaining consumer is publish_to_cgw_wrapper
+            # called below via json.dumps(snapshot).
+            is_disk_image = disk_image_utils.is_disk_image_component(component)
+            if is_disk_image and not component.get("files"):
+                component["files"] = (component.get("staged") or {}).get("files", [])
 
     cgw_push = any(bool(c.get("contentGateway")) for c in snapshot.get("components", []))
     if cgw_push:

@@ -22,6 +22,14 @@ import retry
 from logger import logger
 
 
+def setup_ca_cert() -> None:
+    """Set SSL_CERT_FILE from CA_CERT_PATH if the file exists."""
+    ca_cert = os.environ.get("CA_CERT_PATH", "")
+    if ca_cert and Path(ca_cert).is_file():
+        os.environ["SSL_CERT_FILE"] = ca_cert
+        logger.info("Using CA certificate: %s", ca_cert)
+
+
 def read_mounted_text(mount: Path, filename: str) -> str:
     """Read a UTF-8 file (``mount / filename``) and return stripped text.
 

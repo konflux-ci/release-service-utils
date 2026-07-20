@@ -229,6 +229,23 @@ def test_create_os_flag_files_skips_missing_component_dir(
     extract_artifacts.create_os_flag_files(snapshot)  # should not raise
 
 
+def test_validate_disk_image_components_non_linux_raises() -> None:
+    """A disk-image component with a non-linux OS entry raises RuntimeError."""
+    components = [
+        {
+            "name": "diskimg",
+            "contentGateway": {"contentType": "disk-image"},
+            "files": [
+                {"source": "/releases/disk.qcow2", "os": "darwin", "arch": "amd64"},
+            ],
+        }
+    ]
+    with pytest.raises(RuntimeError) as exc_info:
+        extract_artifacts._validate_disk_image_components(components)
+    assert "disk-image" in str(exc_info.value)
+    assert "darwin" in str(exc_info.value)
+
+
 # ---------------------------------------------------------------------------
 # process_component
 # ---------------------------------------------------------------------------
@@ -372,6 +389,67 @@ def test_process_component_raises_when_file_missing_from_container(
                 extract_artifacts.process_component(component)
     finally:
         shutil.rmtree(str(tmp_layer_dir), ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# _extract_from_oras
+# ---------------------------------------------------------------------------
+
+
+def test_extract_from_oras_copies_blobs(tmp_path: Path) -> None:
+    """Blobs matching wanted filenames are copied directly to destination."""
+    blob1 = tmp_path / "aabbcc"
+    blob1.write_bytes(b"qcow2-content")
+    blob2 = tmp_path / "ddeeff"
+    blob2.write_bytes(b"iso-content")
+
+    manifest = {
+        "layers": [
+            {
+                "digest": "sha256:aabbcc",
+                "annotations": {"org.opencontainers.image.title": "disk.qcow2"},
+            },
+            {
+                "digest": "sha256:ddeeff",
+                "annotations": {"org.opencontainers.image.title": "install.iso.gz"},
+            },
+        ]
+    }
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+    extract_artifacts._extract_from_oras(
+        manifest,
+        tmp_path,
+        ["releases/disk.qcow2", "releases/install.iso.gz"],
+        dest,
+        "mycomp",
+    )
+
+    assert (dest / "disk.qcow2").read_bytes() == b"qcow2-content"
+    assert (dest / "install.iso.gz").read_bytes() == b"iso-content"
+
+
+def test_extract_from_oras_raises_when_title_missing(tmp_path: Path) -> None:
+    """RuntimeError is raised when a wanted file has no matching ORAS blob."""
+    manifest = {
+        "layers": [
+            {
+                "digest": "sha256:aabbcc",
+                "annotations": {"org.opencontainers.image.title": "disk.qcow2"},
+            },
+        ]
+    }
+
+    blob = tmp_path / "aabbcc"
+    blob.write_bytes(b"data")
+    dest = tmp_path / "out"
+    dest.mkdir()
+
+    with pytest.raises(RuntimeError, match="install.iso.gz"):
+        extract_artifacts._extract_from_oras(
+            manifest, tmp_path, ["releases/install.iso.gz"], dest, "mycomp"
+        )
 
 
 # ---------------------------------------------------------------------------

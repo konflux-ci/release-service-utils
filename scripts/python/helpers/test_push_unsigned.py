@@ -283,6 +283,79 @@ def test_unpack_file_entries_skips_missing_fields(tmp_path: Path) -> None:
     # no crash
 
 
+def test_unpack_file_entries_qcow2_passthrough(tmp_path: Path) -> None:
+    """A qcow2 disk image is moved directly to the OS/arch dir without tar extraction."""
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    disk_image = comp_dir / "rhel-10.0-x86_64-kvm.qcow2"
+    disk_image.write_bytes(b"qcow2 raw content")
+
+    push_unsigned._unpack_file_entries(
+        [{"source": "/releases/rhel-10.0-x86_64-kvm.qcow2", "os": "linux", "arch": "x86_64"}],
+        comp_dir,
+        comp_dir / "unsigned",
+    )
+    dest = comp_dir / "linux" / "x86_64" / "rhel-10.0-x86_64-kvm.qcow2"
+    assert dest.exists()
+    assert dest.read_bytes() == b"qcow2 raw content"
+    assert not disk_image.exists()
+
+
+def test_unpack_file_entries_iso_passthrough(tmp_path: Path) -> None:
+    """An iso disk image is moved directly to the OS/arch dir without tar extraction."""
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    disk_image = comp_dir / "rhel-10.0-x86_64-boot.iso"
+    disk_image.write_bytes(b"iso raw content")
+
+    push_unsigned._unpack_file_entries(
+        [{"source": "/releases/rhel-10.0-x86_64-boot.iso", "os": "linux", "arch": "x86_64"}],
+        comp_dir,
+        comp_dir / "unsigned",
+    )
+    dest = comp_dir / "linux" / "x86_64" / "rhel-10.0-x86_64-boot.iso"
+    assert dest.exists()
+    assert dest.read_bytes() == b"iso raw content"
+    assert not disk_image.exists()
+
+
+def test_unpack_file_entries_iso_gz_passthrough(tmp_path: Path) -> None:
+    """A .iso.gz disk image is moved directly via extension without tar extraction."""
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    disk_image = comp_dir / "install.iso.gz"
+    disk_image.write_bytes(b"iso.gz content")
+
+    push_unsigned._unpack_file_entries(
+        [{"source": "/releases/install.iso.gz", "os": "linux", "arch": "x86_64"}],
+        comp_dir,
+        comp_dir / "unsigned",
+    )
+    dest = comp_dir / "linux" / "x86_64" / "install.iso.gz"
+    assert dest.exists()
+    assert dest.read_bytes() == b"iso.gz content"
+    assert not disk_image.exists()
+
+
+def test_unpack_file_entries_tar_gz_passthrough_via_content_type(tmp_path: Path) -> None:
+    """A .tar.gz GCP disk image is moved directly when is_disk_image_component=True."""
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    disk_image = comp_dir / "image.tar.gz"
+    disk_image.write_bytes(b"gcp disk image content")
+
+    push_unsigned._unpack_file_entries(
+        [{"source": "/releases/image.tar.gz", "os": "linux", "arch": "x86_64"}],
+        comp_dir,
+        comp_dir / "unsigned",
+        is_disk_image_component=True,
+    )
+    dest = comp_dir / "linux" / "x86_64" / "image.tar.gz"
+    assert dest.exists()
+    assert dest.read_bytes() == b"gcp disk image content"
+    assert not disk_image.exists()
+
+
 def test_unpack_file_entries_rejects_path_traversal(tmp_path: Path) -> None:
     """RuntimeError is raised when a tar entry contains an unsafe path traversal sequence."""
     comp_dir = tmp_path / "prod"

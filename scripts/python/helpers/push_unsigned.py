@@ -30,6 +30,7 @@ import shutil
 import tarfile
 from pathlib import Path
 
+import disk_image_utils
 import oras_utils
 
 PROG = "push_unsigned.py"
@@ -39,6 +40,7 @@ CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 
 SUPPLEMENTARY_NAMES = {"readme", "license", "changelog"}
 SUPPLEMENTARY_EXTS = {".md", ".txt"}
+
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +82,21 @@ def move_supplementary_out(src_root: Path, hold_root: Path) -> None:
             logger.info("  Held supplementary file: %s", rel)
 
 
-def _unpack_file_entries(entries: list[dict], component_dir: Path, unsigned_dir: Path) -> None:
-    """Extract each archive from entries into its OS/arch subdirectory under unsigned_dir."""
+def _unpack_file_entries(
+    entries: list[dict],
+    component_dir: Path,
+    unsigned_dir: Path,
+    *,
+    is_disk_image_component: bool = False,
+) -> None:
+    """Extract each archive from entries into its OS/arch subdirectory under unsigned_dir.
+
+    Files are moved directly (without unpacking) when either:
+    - *is_disk_image_component* is True (set when contentType: disk-image), or
+    - the filename has an unambiguous disk-image suffix (.qcow2, .iso, .iso.gz,
+      .raw.gz, .vhd.gz).
+    All other files are treated as tar archives and extracted.
+    """
     for entry in entries:
         source = entry.get("source", "")
         os_name = entry.get("os", "")
@@ -103,9 +118,12 @@ def _unpack_file_entries(entries: list[dict], component_dir: Path, unsigned_dir:
             continue
 
         target_dir.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(str(archive_path)) as tf:
-            oras_utils.safe_extract_archive(tf, target_dir, archive_name)
-        archive_path.unlink()
+        if is_disk_image_component or disk_image_utils.is_disk_image_file(archive_name):
+            shutil.move(str(archive_path), str(target_dir / archive_name))
+        else:
+            with tarfile.open(str(archive_path)) as tf:
+                oras_utils.safe_extract_archive(tf, target_dir, archive_name)
+            archive_path.unlink()
 
 
 def run(quay_url: str, pipeline_run_uid: str) -> None:
@@ -142,9 +160,18 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
         if has_linux:
             (component_dir / "linux").mkdir(parents=True, exist_ok=True)
 
-        _unpack_file_entries(component.get("files") or [], component_dir, unsigned_dir)
+        is_disk_image = disk_image_utils.is_disk_image_component(component)
         _unpack_file_entries(
-            (component.get("staged") or {}).get("files") or [], component_dir, unsigned_dir
+            component.get("files") or [],
+            component_dir,
+            unsigned_dir,
+            is_disk_image_component=is_disk_image,
+        )
+        _unpack_file_entries(
+            (component.get("staged") or {}).get("files") or [],
+            component_dir,
+            unsigned_dir,
+            is_disk_image_component=is_disk_image,
         )
 
         supp_hold = component_dir / "supplementary"
