@@ -30,6 +30,7 @@ import re
 import subprocess
 import sys
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -146,21 +147,37 @@ def gitlab_create_mr(
     )
 
 
-def list_konflux_open_mrs(upstream_repo: str, gitlab_client: gitlab.Gitlab) -> list[Any]:
-    """List open MRs in *upstream_repo* matching ``Konflux release`` (paginated)."""
+def iter_konflux_open_mrs(
+    upstream_repo: str,
+    gitlab_client: gitlab.Gitlab,
+    component_group: str,
+) -> Iterator[Any]:
+    """Yield open MRs in *upstream_repo* matching the component group.
+
+    Searches for ``[Konflux release] <component_group>:`` and yields only MRs whose
+    title starts with that prefix. The trailing ``:`` matches titles created by
+    ``commit_and_create_mr`` and avoids prefix collisions (e.g. group ``foo`` must
+    not match ``[Konflux release] foobar: ...``). This two-level filter (API search
+    + title check) also skips unrelated MRs that only mention the search term in
+    other fields, avoiding expensive git fetch operations.
+
+    Yields lazily so callers can stop early when a match is found.
+    """
     project_path = vcs_gitlab.gitlab_project_path(upstream_repo)
     try:
         project = gitlab_client.projects.get(project_path)
     except GitlabError as e:
         raise tekton.CheckStepError("getting GitLab project", e) from e
 
+    # Include the colon delimiter used in created MR titles so a shorter group
+    # name cannot match a longer one that shares the same prefix.
+    title_prefix = f"[Konflux release] {component_group}:"
     page = 1
-    found: list[Any] = []
     while True:
         try:
             batch = project.mergerequests.list(
                 state="opened",
-                search="Konflux release",
+                search=title_prefix,
                 per_page=100,
                 page=page,
             )
@@ -168,9 +185,11 @@ def list_konflux_open_mrs(upstream_repo: str, gitlab_client: gitlab.Gitlab) -> l
             raise tekton.CheckStepError("listing GitLab merge requests", e) from e
         if not batch:
             break
-        found.extend(batch)
+        for mr in batch:
+            mr_title = getattr(mr, "title", "") or ""
+            if mr_title.startswith(title_prefix):
+                yield mr
         page += 1
-    return found
 
 
 def blank_lines_before_yaml(target_file: Path) -> int:
@@ -549,9 +568,14 @@ def find_existing_mr_with_same_diff(
     repo_cwd: Path,
     temp_dir: Path,
     gitlab_client: gitlab.Gitlab,
+    component_group: str,
 ) -> str | None:
-    """Return result info when an open MR already has the same staged diff."""
-    for mr in list_konflux_open_mrs(upstream_repo, gitlab_client):
+    """Return result info when an open MR already has the same staged diff.
+
+    Uses lazy iteration to stop as soon as a matching MR is found, avoiding
+    unnecessary git fetch operations for remaining MRs.
+    """
+    for mr in iter_konflux_open_mrs(upstream_repo, gitlab_client, component_group):
         mr_num = mr.iid
         local_ref = _fetch_merge_request_head(repo_cwd, mr_num)
         final_diff = vcs_git.working_tree_diff(repo_cwd, cached=True, other_ref=local_ref)
@@ -634,7 +658,7 @@ def run_file_updates(
         return "nothing needs change\n", "Success", 0
 
     existing_mr = find_existing_mr_with_same_diff(
-        upstream_repo, repo_cwd, temp_dir, gitlab_client
+        upstream_repo, repo_cwd, temp_dir, gitlab_client, component_group
     )
     if existing_mr is not None:
         return existing_mr, "Success", 0
