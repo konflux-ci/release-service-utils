@@ -20,6 +20,19 @@ def _propagate_release_logger() -> None:
     release_logger.propagate = False
 
 
+def test_split_image_ref_valid() -> None:
+    """Standard digest reference is split into repo and digest."""
+    repo, digest = image_ref.split_image_ref("quay.io/org/img@sha256:abc123")
+    assert repo == "quay.io/org/img"
+    assert digest == "sha256:abc123"
+
+
+def test_split_image_ref_no_digest() -> None:
+    """Missing '@' separator raises ValueError."""
+    with pytest.raises(ValueError, match="missing digest separator"):
+        image_ref.split_image_ref("quay.io/org/img:latest")
+
+
 def test_pyxis_url_for_pull_spec_with_tag_and_registry_rewrite() -> None:
     """Tagged refs map to `.../tag/<tag>` and rewrite registry.redhat.io host."""
     out = image_ref.pyxis_url_for_pull_spec(

@@ -16,6 +16,7 @@ from create_container_image import (
     create_container_image,
     update_container_image_repositories,
     construct_repository,
+    create_or_update,
     _rh_push_registry,
     main,
 )
@@ -834,6 +835,141 @@ def test_construct_tags__append_mode_empty_existing(mock_datetime):
     assert result == [
         {"added_date": "2026-05-21T12:00:00.000000+00:00", "name": "v1.0"},
     ]
+
+
+@patch("create_container_image.create_container_image")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+def test_create_or_update__new_image(mock_prepare, mock_find, mock_create):
+    """Test create_or_update creates a new image when none exists."""
+    mock_prepare.return_value = {"architecture": "amd64"}
+    mock_find.return_value = None
+    mock_create.return_value = "new123"
+
+    args = MagicMock()
+    args.rh_push = "false"
+    args.name = "quay.io/org/img"
+    args.tags = "v1.0"
+    args.is_latest = "false"
+    args.architecture_digest = "sha256:abc"
+    args.pyxis_url = PYXIS_URL
+    args.append_tags = "false"
+
+    result = create_or_update(args)
+
+    assert result == "new123"
+    mock_create.assert_called_once()
+
+
+@patch("create_container_image.create_container_image")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+def test_create_or_update__is_latest_appends_tag(mock_prepare, mock_find, mock_create):
+    """Test create_or_update appends 'latest' tag when is_latest is true."""
+    mock_prepare.return_value = {"architecture": "amd64"}
+    mock_find.return_value = None
+    mock_create.return_value = "lat123"
+
+    args = MagicMock()
+    args.rh_push = "false"
+    args.name = "quay.io/org/img"
+    args.tags = "v1.0"
+    args.is_latest = "true"
+    args.architecture_digest = "sha256:abc"
+    args.pyxis_url = PYXIS_URL
+    args.append_tags = "false"
+
+    result = create_or_update(args)
+
+    assert result == "lat123"
+    tags_arg = mock_create.call_args.args[2]
+    assert "latest" in tags_arg
+
+
+@patch("create_container_image.update_container_image_repositories")
+@patch("create_container_image.construct_repository")
+@patch("create_container_image.construct_tags")
+@patch("create_container_image.find_repo_in_image")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+def test_create_or_update__adds_repo(
+    mock_prepare, mock_find, mock_find_repo, mock_ctags, mock_crepo, mock_update
+):
+    """Test create_or_update adds repo to existing image."""
+    mock_prepare.return_value = {"architecture": "amd64"}
+    mock_find.return_value = {"_id": "exist123", "repositories": []}
+    mock_find_repo.return_value = None
+    mock_ctags.return_value = [{"name": "v1.0"}]
+    mock_crepo.return_value = {"repository": "org/img"}
+
+    args = MagicMock()
+    args.rh_push = "false"
+    args.name = "quay.io/org/img"
+    args.tags = "v1.0"
+    args.is_latest = "false"
+    args.architecture_digest = "sha256:abc"
+    args.pyxis_url = PYXIS_URL
+    args.append_tags = "false"
+
+    result = create_or_update(args)
+
+    assert result == "exist123"
+    mock_update.assert_called_once()
+
+
+@patch("create_container_image.find_repo_in_image")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+def test_create_or_update__skips_matching(mock_prepare, mock_find, mock_find_repo):
+    """Test create_or_update skips when image and tags match."""
+    mock_prepare.return_value = {"architecture": "amd64"}
+    mock_find.return_value = {
+        "_id": "exist123",
+        "repositories": [{"repository": "org/img", "tags": [{"name": "v1.0"}]}],
+    }
+    mock_find_repo.return_value = 0
+
+    args = MagicMock()
+    args.rh_push = "false"
+    args.name = "quay.io/org/img"
+    args.tags = "v1.0"
+    args.is_latest = "false"
+    args.architecture_digest = "sha256:abc"
+    args.pyxis_url = PYXIS_URL
+    args.append_tags = "false"
+
+    result = create_or_update(args)
+
+    assert result == "exist123"
+
+
+@patch("create_container_image.find_repo_in_image")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+def test_create_or_update__rh_push_uses_proxymap(mock_prepare, mock_find, mock_find_repo):
+    """Test create_or_update uses proxymap for rh_push repo derivation."""
+    mock_prepare.return_value = {"architecture": "amd64"}
+    mock_find.return_value = {
+        "_id": "exist123",
+        "repositories": [
+            {"repository": "product/image", "tags": [{"name": "v1.0"}]},
+        ],
+    }
+    mock_find_repo.return_value = 0
+
+    args = MagicMock()
+    args.rh_push = "true"
+    args.name = "quay.io/redhat-prod/product----image"
+    args.tags = "v1.0"
+    args.is_latest = "false"
+    args.architecture_digest = "sha256:abc"
+    args.pyxis_url = PYXIS_URL
+    args.append_tags = "false"
+
+    result = create_or_update(args)
+
+    assert result == "exist123"
+    mock_find_repo.assert_called_once_with("product/image", mock_find.return_value)
 
 
 @patch("create_container_image.update_container_image_repositories")

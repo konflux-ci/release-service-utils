@@ -30,6 +30,13 @@ PYXIS_BASE_URL_BY_SERVER: dict[str, str] = {
     "stage-internal": "https://pyxis.stage.engineering.redhat.com",
 }
 
+PYXIS_GRAPHQL_URL_BY_SERVER: dict[str, str] = {
+    "production": "https://graphql-pyxis.api.redhat.com/graphql/",
+    "stage": "https://graphql-pyxis.preprod.api.redhat.com/graphql/",
+    "production-internal": "https://graphql.pyxis.engineering.redhat.com/graphql/",
+    "stage-internal": "https://graphql.pyxis.stage.engineering.redhat.com/graphql/",
+}
+
 INVALID_SERVER_MESSAGE = (
     "Invalid server parameter. Only 'production','production-internal',"
     "'stage-internal' and 'stage' allowed."
@@ -42,6 +49,14 @@ def pyxis_api_url_for_server(server: str) -> str:
     if base is None:
         raise ValueError(INVALID_SERVER_MESSAGE)
     return f"{base.rstrip('/')}/v1"
+
+
+def pyxis_graphql_url_for_server(server: str) -> str:
+    """Return the Pyxis GraphQL API URL for a Tekton `server` param value."""
+    url = PYXIS_GRAPHQL_URL_BY_SERVER.get(server)
+    if url is None:
+        raise ValueError(INVALID_SERVER_MESSAGE)
+    return url
 
 
 def pyxis_registry_for_quay_url(repository_url: str) -> str:

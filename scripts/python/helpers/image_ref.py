@@ -13,6 +13,21 @@ _QUAY_SHA_TAG = re.compile(r"^[0-9a-f]{40}$")
 _MAX_QUAY_TAG_PAGES = 50
 
 
+def split_image_ref(image: str) -> tuple[str, str]:
+    """Split a container image reference into ``(repository, digest)``.
+
+    Expects the format ``repository@algo:hex`` (e.g.
+    ``quay.io/org/img@sha256:abc123``).  Returns ``(repository, digest)``
+    where *digest* includes the algorithm prefix (``sha256:abc123``).
+
+    Raises ``ValueError`` when the reference contains no ``@`` separator.
+    """
+    if "@" not in image:
+        raise ValueError(f"image reference missing digest separator '@': {image!r}")
+    repo, digest = image.split("@", 1)
+    return repo, digest
+
+
 def translate_delivery_repo(repo: str) -> list[dict[str, str]]:
     """Translate a Quay delivery-repo reference to public registry URLs.
 
