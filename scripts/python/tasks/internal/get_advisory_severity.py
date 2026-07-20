@@ -26,7 +26,7 @@ from typing import Any
 
 import authentication
 import file
-import internal_request
+import internal_request_results
 import osidb
 import requests
 import tekton
@@ -293,7 +293,7 @@ def run_get_advisory_severity(
     krb5_template: Path = Path("/etc/krb5.conf"),
 ) -> None:
     """Query OSIDB and write the highest advisory severity to *result_paths*."""
-    internal_request.write_result_paths(
+    internal_request_results.write_result_paths(
         result_paths,
         pipeline_run_name=pipeline_run_name,
         task_run_name=task_run_name,

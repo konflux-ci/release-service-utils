@@ -25,7 +25,7 @@ from typing import Any
 from git.exc import GitCommandError
 
 import file
-import internal_request
+import internal_request_results
 import subprocess_cmd
 import tekton
 from logger import logger
@@ -320,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
         ADVISORY_SECRET_MOUNT_DEFAULT,
     )
     try:
-        internal_request.write_result_paths(
+        internal_request_results.write_result_paths(
             result_paths,
             pipeline_run_name=args.internal_request_pipeline_run_name,
             task_run_name=args.internal_request_task_run_name,

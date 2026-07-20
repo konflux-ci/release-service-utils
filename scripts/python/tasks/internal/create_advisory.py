@@ -31,7 +31,7 @@ import apply_template
 import authentication
 import file
 import http_client
-import internal_request
+import internal_request_results
 import requests
 import subprocess_cmd
 import tekton
@@ -470,7 +470,7 @@ def run_create_advisory(
     credentials = gitlab.read_credentials_from_mount(advisory_secret)
     # Internal-request child results are written before work begins so partial runs
     # still expose pipeline/task run names to the parent.
-    internal_request.write_result_paths(
+    internal_request_results.write_result_paths(
         result_paths,
         pipeline_run_name=params["internal_request_pr_name"],
         task_run_name=params["task_run_name"],
