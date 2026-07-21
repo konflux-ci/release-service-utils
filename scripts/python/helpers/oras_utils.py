@@ -12,17 +12,31 @@ import subprocess_cmd
 from subprocess_cmd import run_cmd
 
 
-def oras_resolve(reference: str) -> str:
+def oras_resolve(
+    reference: str,
+    *,
+    auth_ref: str | None = None,
+    check: bool = True,
+) -> str | None:
     """Resolve the digest of an OCI image reference using oras.
 
-    Obtains registry credentials via ``select-oci-auth``, writes them to a
-    temporary auth file, then runs ``oras resolve`` and returns the digest.
+    Obtains registry credentials via ``select-oci-auth`` and runs
+    ``oras resolve``.
 
-    Raises ``RuntimeError`` if oras resolve exits non-zero.
+    *auth_ref* overrides the reference passed to ``select-oci-auth`` —
+    useful when resolving a tagged reference (``repo:tag``) but the
+    auth credentials should be obtained for the bare repository URL.
+    Defaults to *reference* when not given.
+
+    When *check* is ``True`` (the default), ``RuntimeError`` is raised on
+    a non-zero exit code.  When ``False``, ``None`` is returned instead,
+    which is convenient for "try to resolve, treat failure as not-found"
+    callers.
     """
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as auth_file:
-        select_auth = run_cmd(["select-oci-auth", reference])
-        auth_file.write(select_auth.stdout)
+        select_auth = run_cmd(["select-oci-auth", auth_ref or reference], check=False)
+        auth_content = select_auth.stdout.strip()
+        auth_file.write(auth_content if auth_content else "{}")
         auth_file.flush()
 
         result = run_cmd(
@@ -31,11 +45,14 @@ def oras_resolve(reference: str) -> str:
         )
 
     if result.returncode != 0:
-        raise RuntimeError(
-            f"oras resolve failed for {reference!r} (exit {result.returncode}):"
-            f" {result.stderr.strip()}"
-        )
-    return result.stdout.strip()
+        if check:
+            raise RuntimeError(
+                f"oras resolve failed for {reference!r}"
+                f" (exit {result.returncode}): {result.stderr.strip()}"
+            )
+        return None
+    digest = result.stdout.strip()
+    return digest or None
 
 
 def oras_login(registry: str, username: str, password: str) -> None:

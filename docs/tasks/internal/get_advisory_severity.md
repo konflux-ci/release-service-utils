@@ -67,7 +67,7 @@ When the catalog step runs this script (same contract as [`get-advisory-severity
 | `PARAM_TASK_RUN_NAME` | `$(context.taskRun.name)` |
 | OSIDB mount | `/mnt/osidb-service-account` (secret `osidb-service-account`) |
 
-[`internal_request.write_result_paths`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/helpers/internal_request.py#L9-L22) writes the pipeline and task run names at the start of [`run_get_advisory_severity`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/tasks/internal/get_advisory_severity.py#L310-L314).
+[`internal_request_results.write_result_paths`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/helpers/internal_request_results.py#L9-L21) writes the pipeline and task run names at the start of [`run_get_advisory_severity`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/tasks/internal/get_advisory_severity.py#L310-L314).
 
 ---
 
@@ -217,4 +217,4 @@ If `internal-request` fails before the pipeline finishes, `set-severity` may fai
 |------|------|
 | Unit tests | [`test_get_advisory_severity.py`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/tasks/internal/test_get_advisory_severity.py) |
 | Purl matching | [`find_matching_purl.py`](https://github.com/konflux-ci/release-service-utils/blob/main/utils/find_matching_purl.py) |
-| Helpers | [`authentication`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/helpers/authentication.py), [`osidb`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/helpers/osidb.py), [`http_client`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/helpers/http_client.py), [`tekton`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/helpers/tekton.py), [`internal_request`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/helpers/internal_request.py) |
+| Helpers | [`authentication`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/helpers/authentication.py), [`osidb`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/helpers/osidb.py), [`http_client`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/helpers/http_client.py), [`tekton`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/helpers/tekton.py), [`internal_request_results`](https://github.com/konflux-ci/release-service-utils/blob/main/scripts/python/helpers/internal_request_results.py) |

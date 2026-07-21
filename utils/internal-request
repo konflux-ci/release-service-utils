@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# DEPRECATED - Use the python implementation in scripts/python/helpers/internal_request
+# when creating InternalRequests in python task scripts.
+#
 # This script creates an InternalRequest resource in a Kubernetes cluster
 # using the 'kubectl' command line tool. The resource is created with
 # parameters passed to the script.

@@ -311,3 +311,54 @@ def test_kerberos_login_cleans_up_on_kinit_failure() -> None:
 
     for f in created_files:
         assert not f.exists()
+
+
+# ---------------------------------------------------------------------------
+# setup_ca_cert
+# ---------------------------------------------------------------------------
+
+
+def test_setup_ca_cert_sets_ssl_cert_file_when_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SSL_CERT_FILE is set when CA cert file exists."""
+    ca_file = tmp_path / "ca-bundle.crt"
+    ca_file.write_text("CERT", encoding="utf-8")
+    monkeypatch.setenv("CA_CERT_PATH", str(ca_file))
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+
+    authentication.setup_ca_cert()
+    assert os.environ["SSL_CERT_FILE"] == str(ca_file)
+
+
+def test_setup_ca_cert_noop_when_file_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No action when CA cert file does not exist."""
+    monkeypatch.setenv("CA_CERT_PATH", str(tmp_path / "missing.crt"))
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+
+    authentication.setup_ca_cert()
+    assert "SSL_CERT_FILE" not in os.environ
+
+
+def test_setup_ca_cert_noop_when_env_not_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No action when CA_CERT_PATH is not set."""
+    monkeypatch.delenv("CA_CERT_PATH", raising=False)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+
+    authentication.setup_ca_cert()
+    assert "SSL_CERT_FILE" not in os.environ
+
+
+def test_setup_ca_cert_noop_when_env_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No action when CA_CERT_PATH is empty string."""
+    monkeypatch.setenv("CA_CERT_PATH", "")
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+
+    authentication.setup_ca_cert()
+    assert "SSL_CERT_FILE" not in os.environ
