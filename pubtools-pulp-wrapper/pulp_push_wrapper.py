@@ -217,7 +217,8 @@ def pulp_request(url, context, payload=None):
 def wait_for_task(task_href, context):
     """Poll *task_href* until the Pulp task finishes, raising on error or timeout."""
     task_url = task_href
-    deadline = time.time() + POLL_TIMEOUT_SECONDS
+    start = time.time()
+    deadline = start + POLL_TIMEOUT_SECONDS
     while time.time() < deadline:
         task = pulp_request(task_url, context=context)
         if task is None:
@@ -232,7 +233,10 @@ def wait_for_task(task_href, context):
         if state in ("error", "canceled"):
             raise RuntimeError(f"Pulp task {state}: {task_url}: {task}")
         time.sleep(POLL_INTERVAL_SECONDS)
-    raise TimeoutError(f"Timed out waiting for Pulp task: {task_url}")
+    elapsed = int(time.time() - start)
+    raise TimeoutError(
+        f"Timed out waiting for Pulp task after {elapsed}s: {task_url}"
+    )
 
 
 def prune_matching_content_before_push(parsed):

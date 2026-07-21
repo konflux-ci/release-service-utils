@@ -199,10 +199,11 @@ def test_wait_for_task_success(mock_pulp_request, mock_time, _mock_sleep):
 @patch("pulp_push_wrapper.time.time")
 @patch("pulp_push_wrapper.pulp_request")
 def test_wait_for_task_timeout(mock_pulp_request, mock_time, _mock_sleep):
-    mock_time.side_effect = [0, 200]
+    # start time, deadline check (exceeds timeout), elapsed calculation
+    mock_time.side_effect = [0, 200, 200]
     mock_pulp_request.return_value = {"state": "running"}
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(TimeoutError, match="after 200s"):
         pulp_push_wrapper.wait_for_task("https://example.com/task", context="ctx")
 
 
