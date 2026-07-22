@@ -1,29 +1,36 @@
+"""Pyxis API client for container image metadata and signature operations."""
+
+from __future__ import annotations
+
 import logging
 import os
 import sys
 from typing import Any, Dict, Optional, Tuple
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 LOGGER = logging.getLogger("pyxis")
 
 session = None
 
 
-def _get_session(auth_required: bool = True) -> requests.Session:
+def _get_session(
+    auth_required: bool = True, retry_allowed_methods: Any = Retry.DEFAULT_ALLOWED_METHODS
+) -> requests.Session:
     """Create a Pyxis http session with auth based on env variables.
 
     Auth is optional and can be set to use either API key or certificate + key.
 
     Args:
         auth_required (bool): Whether authentication should be required for the session
+        retry_allowed_methods: HTTP methods to retry on. Defaults to
+            Retry.DEFAULT_ALLOWED_METHODS (excludes POST). Pass None to retry all.
 
     Raises:
         Exception: Exception is raised when auth ENV variables are missing.
 
-    :return: Pyxis session
     """
     cert_string = "PYXIS_CERT_PATH"
     key_string = "PYXIS_KEY_PATH"
@@ -31,7 +38,7 @@ def _get_session(auth_required: bool = True) -> requests.Session:
     key = os.environ.get(key_string)
 
     session = requests.Session()
-    add_session_retries(session)
+    add_session_retries(session, allowed_methods=retry_allowed_methods)
 
     if not auth_required:
         LOGGER.debug("Pyxis session without authentication is created")
@@ -55,13 +62,14 @@ def _get_session(auth_required: bool = True) -> requests.Session:
 
 
 def post(url: str, body: Dict[str, Any]) -> requests.Response:
-    """POST pyxis API request to given URL with given payload
+    """POST pyxis API request to given URL with given payload.
 
     Args:
         url (str): Pyxis API URL
         body (Dict[str, Any]): Request payload
 
     :return: Pyxis response
+
     """
     global session
     if session is None:
@@ -83,13 +91,14 @@ def post(url: str, body: Dict[str, Any]) -> requests.Response:
 
 
 def patch(url: str, body: Dict[str, Any]) -> requests.Response:
-    """PATCH pyxis API request to given URL with given payload
+    """PATCH pyxis API request to given URL with given payload.
 
     Args:
         url (str): Pyxis API URL
         body (Dict[str, Any]): Request payload
 
     :return: Pyxis response
+
     """
     global session
     if session is None:
@@ -113,7 +122,7 @@ def patch(url: str, body: Dict[str, Any]) -> requests.Response:
 def graphql_query(
     graphql_api: str, body: Dict[str, Any], allow_not_found: bool = False
 ) -> Dict[str, Any]:
-    """Make a request to Pyxis GraphQL API
+    """Make a request to Pyxis GraphQL API.
 
     This will make a POST request and then check the result
     for errors and return the data json if no errors found.
@@ -125,6 +134,7 @@ def graphql_query(
             data is returned as-is (with None values). Defaults to False.
 
     :return: Pyxis response
+
     """
     resp = post(graphql_api, body)
     resp_json = resp.json()
@@ -152,13 +162,14 @@ def graphql_query(
 
 
 def put(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    """PUT pyxis API request to given URL with given payload
+    """PUT pyxis API request to given URL with given payload.
 
     Args:
         url (str): Pyxis API URL
         body (Dict[str, Any]): Request payload
 
     :return: Pyxis response
+
     """
     global session
     if session is None:
@@ -178,7 +189,7 @@ def put(url: str, body: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get(url: str, params: Optional[Dict[str, str]] = None, auth_required: bool = True) -> Any:
-    """Pyxis GET request
+    """Pyxis GET request.
 
     Args:
         url (str): Pyxis URL
@@ -186,6 +197,7 @@ def get(url: str, params: Optional[Dict[str, str]] = None, auth_required: bool =
         auth_required (bool): Whether authentication should be required for the session
 
     :return: Pyxis GET request response
+
     """
     global session
     if session is None:
@@ -205,10 +217,11 @@ def add_session_retries(
     total: int = 10,
     backoff_factor: float = 1.0,
     status_forcelist: Optional[Tuple[int, ...]] = (408, 500, 502, 503, 504),
+    allowed_methods: Any = Retry.DEFAULT_ALLOWED_METHODS,
 ) -> None:
-    """Adds retries to a requests HTTP/HTTPS session.
-    The default values provide exponential backoff for a max wait of ~8.5 mins
+    """Add retries to a requests HTTP/HTTPS session.
 
+    The default values provide exponential backoff for a max wait of ~8.5 mins.
     Reference the urllib3 documentation for more details about the kwargs.
 
     Args:
@@ -216,11 +229,15 @@ def add_session_retries(
         total (int): See urllib3 docs
         backoff_factor (int): See urllib3 docs
         status_forcelist (tuple[int]|None): See urllib3 docs
+        allowed_methods: See urllib3 docs. Defaults to Retry.DEFAULT_ALLOWED_METHODS
+            (excludes POST). Pass None to retry all HTTP methods.
+
     """
     retries = Retry(
         total=total,
         backoff_factor=backoff_factor,
         status_forcelist=status_forcelist,
+        allowed_methods=allowed_methods,
         # Don't raise a MaxRetryError for codes in status_forcelist.
         # This allows for more graceful exception handling using
         # Response.raise_for_status.
@@ -233,10 +250,13 @@ def add_session_retries(
 
 def setup_logger(level: int = logging.INFO, log_format: Any = None):
     """Set up and configure 'pyxis' logger.
+
     Args:
         level (str, optional): Logging level. Defaults to logging.INFO.
         log_format (Any, optional): Logging message format. Defaults to None.
+
     :return: Logger object
+
     """
     if log_format is None:
         log_format = "%(asctime)s [%(name)s] %(levelname)s %(message)s"
