@@ -48,6 +48,14 @@ EXODUS_ENV_VARS_STRICT = (
 EXODUS_ENV_VARS_OTHERS = ("EXODUS_GW_TIMEOUT",)
 
 
+def _positive_int(value: str) -> int:
+    """Parse *value* as an argparse type, rejecting non-positive integers."""
+    ivalue = int(value)
+    if ivalue <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value!r}")
+    return ivalue
+
+
 def parse_args(argv=None):
     """Parse and return command-line arguments for the Pulp push wrapper."""
     parser = argparse.ArgumentParser(
@@ -82,6 +90,13 @@ def parse_args(argv=None):
         "--pulp-key",
         help="Pulp certificate key",
         default=None,
+    )
+    pulp.add_argument(
+        "--pulp-task-timeout-seconds",
+        type=_positive_int,
+        default=7200,
+        help="Maximum time in seconds to wait for a Pulp task to reach a "
+        "terminal state during pre-push cleanup (default 7200 = 2 hours)",
     )
 
     ud = parser.add_argument_group(
@@ -214,15 +229,28 @@ def pulp_request(url, context, payload=None):
     return json.loads(body.decode("utf-8"))
 
 
-def wait_for_task(task_href, context):
+def wait_for_task(
+    task_href: str, context: ssl.SSLContext, timeout: int = POLL_TIMEOUT_SECONDS
+) -> None:
     """Poll *task_href* until the Pulp task finishes, raising on error or timeout."""
     task_url = task_href
-    deadline = time.time() + POLL_TIMEOUT_SECONDS
-    while time.time() < deadline:
+    start = time.time()
+    deadline = start + timeout
+    last_state = None
+    now = start
+    while now < deadline:
         task = pulp_request(task_url, context=context)
         if task is None:
             raise RuntimeError(f"Empty response while polling Pulp task status: {task_url}")
         state = task.get("state")
+        if state != last_state:
+            LOG.info(
+                "Pulp task %s state: %s (%.0fs elapsed)",
+                task_url,
+                state,
+                now - start,
+            )
+            last_state = state
         if state == "finished":
             if task.get("error") or task.get("exception") or task.get("traceback"):
                 raise RuntimeError(f"Pulp task failed: {task_url}: {task}")
@@ -232,7 +260,11 @@ def wait_for_task(task_href, context):
         if state in ("error", "canceled"):
             raise RuntimeError(f"Pulp task {state}: {task_url}: {task}")
         time.sleep(POLL_INTERVAL_SECONDS)
-    raise TimeoutError(f"Timed out waiting for Pulp task: {task_url}")
+        now = time.time()
+    elapsed = now - start
+    raise TimeoutError(
+        f"Timed out after {elapsed:.1f}s (limit {timeout}s) waiting for Pulp task: {task_url}"
+    )
 
 
 def prune_matching_content_before_push(parsed):
@@ -309,7 +341,11 @@ def prune_matching_content_before_push(parsed):
         for task in response.get("spawned_tasks", []):
             href = task.get("_href")
             if href:
-                wait_for_task(parse.urljoin(pulp_base, href), context=context)
+                wait_for_task(
+                    parse.urljoin(pulp_base, href),
+                    context=context,
+                    timeout=parsed.pulp_task_timeout_seconds,
+                )
 
 
 def settings_to_args(parsed):
