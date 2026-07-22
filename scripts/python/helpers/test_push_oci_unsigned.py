@@ -58,7 +58,7 @@ def _make_quay_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_stage_file_entries_darwin_moves_as_is(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """macOS archives are moved intact (not extracted) to preserve .app symlinks."""
+    """Move macOS archives intact (not extracted) to preserve .app symlinks."""
     monkeypatch.setattr(push_oci_unsigned, "CONTENT_DIR", tmp_path)
     comp_dir = tmp_path / "prod"
     comp_dir.mkdir()

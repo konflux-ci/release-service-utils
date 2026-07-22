@@ -265,6 +265,7 @@ def test_safe_extract_archive_rejects_symlinks(tmp_path: Path) -> None:
 
 
 def test_os_arch_dir_darwin(tmp_path: Path) -> None:
+    """Return the macOS subdirectory under mac_windows_base."""
     result = oras_utils.os_arch_dir(
         "darwin",
         "arm64",
@@ -275,6 +276,7 @@ def test_os_arch_dir_darwin(tmp_path: Path) -> None:
 
 
 def test_os_arch_dir_windows(tmp_path: Path) -> None:
+    """Return the windows subdirectory under mac_windows_base."""
     result = oras_utils.os_arch_dir(
         "windows",
         "amd64",
@@ -285,6 +287,7 @@ def test_os_arch_dir_windows(tmp_path: Path) -> None:
 
 
 def test_os_arch_dir_linux(tmp_path: Path) -> None:
+    """Return the linux subdirectory under linux_base."""
     result = oras_utils.os_arch_dir(
         "linux", "amd64", mac_windows_base=tmp_path / "unsigned", linux_base=tmp_path / "linux"
     )
@@ -292,6 +295,7 @@ def test_os_arch_dir_linux(tmp_path: Path) -> None:
 
 
 def test_os_arch_dir_unknown_returns_none(tmp_path: Path) -> None:
+    """Return None for an unrecognised OS."""
     result = oras_utils.os_arch_dir(
         "freebsd",
         "amd64",
