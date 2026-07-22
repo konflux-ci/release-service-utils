@@ -249,9 +249,7 @@ def test_run_skips_no_files_component(tmp_path: Path, monkeypatch: pytest.Monkey
     """run() skips components with no files."""
     monkeypatch.setenv("SNAPSHOT_JSON", json.dumps(SNAPSHOT_NO_FILES))
     monkeypatch.setattr(extract_oci_artifacts, "CONTENT_DIR", tmp_path / "artifacts")
-    monkeypatch.setattr(
-        extract_artifacts, "REDHAT_WORKLOADS_TOKEN_MOUNT", tmp_path / "tok"
-    )
+    monkeypatch.setattr(extract_artifacts, "REDHAT_WORKLOADS_TOKEN_MOUNT", tmp_path / "tok")
     (tmp_path / "tok").mkdir()
     (tmp_path / "tok" / ".dockerconfigjson").write_text('{"auths":{}}')
     with mock.patch("pathlib.Path.home", return_value=tmp_path / "home"):
@@ -264,9 +262,7 @@ def test_run_propagates_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     """Exceptions from process_component propagate out of run()."""
     monkeypatch.setenv("SNAPSHOT_JSON", json.dumps(SNAPSHOT_ONE))
     monkeypatch.setattr(extract_oci_artifacts, "CONTENT_DIR", tmp_path / "artifacts")
-    monkeypatch.setattr(
-        extract_artifacts, "REDHAT_WORKLOADS_TOKEN_MOUNT", tmp_path / "tok"
-    )
+    monkeypatch.setattr(extract_artifacts, "REDHAT_WORKLOADS_TOKEN_MOUNT", tmp_path / "tok")
     (tmp_path / "tok").mkdir()
     (tmp_path / "tok" / ".dockerconfigjson").write_text('{"auths":{}}')
     with (
