@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import logging
 import tarfile
@@ -11,6 +13,36 @@ from unittest import mock
 import pytest
 
 import extract_artifacts
+
+# ---------------------------------------------------------------------------
+# extract_binaries_from_layers helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_layer_tar(dest: Path, base_dir: str, files: dict[str, bytes | str]) -> str:
+    """Create a gzip tar at *dest* containing files under *base_dir*.
+
+    Return the sha256 digest string (``sha256:<hex>``).
+    """
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name, content in files.items():
+            info = tarfile.TarInfo(name=f"{base_dir}/{name}")
+            data = content if isinstance(content, bytes) else content.encode("utf-8")
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    raw = buf.getvalue()
+    digest = hashlib.sha256(raw).hexdigest()
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / digest).write_bytes(raw)
+    return f"sha256:{digest}"
+
+
+def _write_layer_manifest(image_dir: Path, digests: list[str]) -> None:
+    """Write a manifest.json with the given layer digests."""
+    manifest = {"layers": [{"digest": d} for d in digests]}
+    (image_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -529,3 +561,73 @@ def test_main_exception_returns_error() -> None:
     with mock.patch.object(extract_artifacts, "run", side_effect=RuntimeError("boom")):
         rc = extract_artifacts.main(["extract_artifacts.py"])
     assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# extract_binaries_from_layers
+# ---------------------------------------------------------------------------
+
+
+class TestExtractBinariesFromLayers:
+    """Tests for extract_binaries_from_layers."""
+
+    def test_extracts_matching_files(self, tmp_path: Path) -> None:
+        """Files in the target directory are extracted."""
+        digest = _make_layer_tar(
+            tmp_path,
+            "releases",
+            {"binary.zip": b"data", "SHA256SUMS": "abc 123"},
+        )
+        _write_layer_manifest(tmp_path, [digest])
+
+        extract_artifacts.extract_binaries_from_layers(tmp_path, "releases")
+
+        assert (tmp_path / "releases" / "binary.zip").exists()
+        assert (tmp_path / "releases" / "SHA256SUMS").exists()
+
+    def test_skips_non_matching_layers(self, tmp_path: Path) -> None:
+        """Layers without target directory are skipped."""
+        digest = _make_layer_tar(tmp_path, "other", {"file.txt": "content"})
+        _write_layer_manifest(tmp_path, [digest])
+
+        extract_artifacts.extract_binaries_from_layers(tmp_path, "releases")
+
+        assert not (tmp_path / "releases").exists()
+
+    def test_multiple_layers(self, tmp_path: Path) -> None:
+        """Multiple layers are processed and matching ones extracted."""
+        digest1 = _make_layer_tar(
+            tmp_path,
+            "releases",
+            {"file1.zip": b"content1"},
+        )
+        digest2 = _make_layer_tar(
+            tmp_path,
+            "releases",
+            {"file2.zip": b"content2"},
+        )
+        _write_layer_manifest(tmp_path, [digest1, digest2])
+
+        extract_artifacts.extract_binaries_from_layers(tmp_path, "releases")
+
+        assert (tmp_path / "releases" / "file1.zip").exists()
+        assert (tmp_path / "releases" / "file2.zip").exists()
+
+    def test_custom_binaries_path(self, tmp_path: Path) -> None:
+        """Custom image_binaries_path is supported."""
+        digest = _make_layer_tar(
+            tmp_path,
+            "custom/path",
+            {"binary.zip": b"data"},
+        )
+        _write_layer_manifest(tmp_path, [digest])
+
+        extract_artifacts.extract_binaries_from_layers(tmp_path, "custom/path")
+
+        assert (tmp_path / "custom" / "path" / "binary.zip").exists()
+
+    def test_empty_manifest_layers(self, tmp_path: Path) -> None:
+        """Empty layers list is handled gracefully."""
+        _write_layer_manifest(tmp_path, [])
+
+        extract_artifacts.extract_binaries_from_layers(tmp_path, "releases")
