@@ -32,7 +32,7 @@ jobs:
       - name: Black Lint
         uses: psf/black@87928e6d6761a4a6d22250e1fee5601b3998086e  # stable
       - name: Setup python environment for flake8 check
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
         with:
           python-version: "3.12"  # Same as in Dockerfile
       - name: flake8 Lint
