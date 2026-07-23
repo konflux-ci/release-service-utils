@@ -37,6 +37,7 @@ import zipfile
 from pathlib import Path
 
 import disk_image_utils
+import content_gateway
 import oras_utils
 
 PROG = "compress_artifacts.py"
@@ -94,15 +95,6 @@ def _restore_supplementary(component_dir: Path) -> None:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(file), str(dest))
                 logger.info("  Restored supplementary file: %s/%s", os_name, rel)
-
-
-def _windows_filename(source_filename: str) -> str:
-    """Replace .tar.gz or .tar extension with .zip for Windows archives."""
-    if source_filename.endswith(".tar.gz"):
-        return source_filename[: -len(".tar.gz")] + ".zip"
-    if source_filename.endswith(".tar"):
-        return source_filename[: -len(".tar")] + ".zip"
-    return source_filename
 
 
 def _compress_file_entry(
@@ -168,7 +160,7 @@ def _compress_file_entry(
         logger.info("  Created (%s): %s", array_name, source_filename)
         return source
 
-    win_filename = _windows_filename(source_filename)
+    win_filename = content_gateway.windows_zip_filename(source_filename)
     out_path = ready_dir / win_filename
     with zipfile.ZipFile(str(out_path), "w", zipfile.ZIP_DEFLATED) as zf:
         for item in sorted(arch_dir.rglob("*")):

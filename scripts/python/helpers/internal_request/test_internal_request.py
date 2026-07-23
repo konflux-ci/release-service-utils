@@ -442,3 +442,34 @@ def test_wait_for_completion_keeps_polling_when_label_selector_matches_nothing()
         wait_for_completion(label_selector="foo=bar", timeout=600)
 
     assert exc_info.value.exit_code == EXIT_TIMEOUT
+
+
+def test_fetch_results_handles_empty_stdout() -> None:
+    """Return an empty dict when kubectl prints no results."""
+    with mock.patch.object(
+        ir_module,
+        "run_cmd",
+        return_value=_completed_process(""),
+    ):
+        assert ir_module.fetch_results("ir-1") == {}
+
+
+def test_fetch_results_parses_json() -> None:
+    """Parse InternalRequest status.results JSON from kubectl."""
+    payload = {"result": "Success", "advisory_url": "url"}
+    with mock.patch.object(
+        ir_module,
+        "run_cmd",
+        return_value=_completed_process(json.dumps(payload)),
+    ):
+        assert ir_module.fetch_results("ir-1") == payload
+
+
+def test_fetch_results_ignores_non_dict_json() -> None:
+    """Return an empty dict when kubectl output is not a JSON object."""
+    with mock.patch.object(
+        ir_module,
+        "run_cmd",
+        return_value=_completed_process('["not","dict"]'),
+    ):
+        assert ir_module.fetch_results("ir-1") == {}
