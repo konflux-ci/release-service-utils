@@ -144,10 +144,38 @@ def test_clone_shallow_sparse(tmp_path: Path) -> None:
     assert run_cmd.call_count == 3
 
 
+def test_clone_shallow_full(tmp_path: Path) -> None:
+    """Shallow clone without sparse dirs checks out the full tree at depth 1."""
+    repo_dir = tmp_path / "proj"
+    with mock.patch.object(git, "_run_git_cmd") as run_cmd:
+        out = git.clone(
+            tmp_path,
+            "https://x/proj.git",
+            directory_name="proj",
+            revision="main",
+            shallow=True,
+        )
+    assert out == repo_dir
+    run_cmd.assert_called_once_with(
+        [
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            "main",
+            "https://x/proj.git",
+            str(repo_dir),
+        ],
+        cwd=tmp_path,
+        stderr_path=None,
+    )
+
+
 def test_clone_shallow_requires_revision(tmp_path: Path) -> None:
     """Shallow clones require a revision."""
     with pytest.raises(ValueError, match="revision"):
-        git.clone(tmp_path, "https://x/p.git", shallow=True, sparse_dirs=["a"])
+        git.clone(tmp_path, "https://x/p.git", shallow=True)
 
 
 def test_clone_appends_stderr(tmp_path: Path) -> None:
