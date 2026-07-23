@@ -141,6 +141,18 @@ def test_nrrc_work_dir_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert charon_env.nrrc_work_dir() == custom
 
 
+def test_mrrc_work_dir_default() -> None:
+    """Default MRRC work directory uses the volume mount root."""
+    assert charon_env.mrrc_work_dir() == Path("/var/workdir/mrrc")
+
+
+def test_mrrc_work_dir_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """``WORK_DIR`` overrides the default MRRC staging directory."""
+    custom = tmp_path / "staging"
+    monkeypatch.setenv("WORK_DIR", str(custom))
+    assert charon_env.mrrc_work_dir() == custom
+
+
 def test_charon_config_path_uses_explicit_home(tmp_path: Path) -> None:
     """An explicit *home* overrides ``Path.home()``."""
     assert charon_env.charon_config_path(home=tmp_path) == tmp_path / ".charon" / "charon.yaml"

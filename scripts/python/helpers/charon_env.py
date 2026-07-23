@@ -80,3 +80,11 @@ NRRC_WORK_DIR_DEFAULT = Path("/var/workdir/nrrc")
 def nrrc_work_dir() -> Path:
     """Return the NRRC staging directory from ``WORK_DIR`` or ``/var/workdir/nrrc``."""
     return file.path_from_env_variable("WORK_DIR", NRRC_WORK_DIR_DEFAULT)
+
+
+MRRC_WORK_DIR_DEFAULT = Path("/var/workdir/mrrc")
+
+
+def mrrc_work_dir() -> Path:
+    """Return the MRRC staging directory from ``WORK_DIR`` or ``/var/workdir/mrrc``."""
+    return file.path_from_env_variable("WORK_DIR", MRRC_WORK_DIR_DEFAULT)
