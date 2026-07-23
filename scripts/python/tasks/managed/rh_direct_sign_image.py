@@ -9,16 +9,18 @@ import json
 import logging
 import re
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import pyxis
 from kubectl import get_configmap
 from logger import logger as LOGGER
 from oras_utils import oras_resolve
 from subprocess_cmd import run_cmd
+
+import pyxis
 
 PYXIS_INSTANCE_MAP = {
     "production": "https://graphql-pyxis.api.redhat.com/graphql/",
@@ -714,14 +716,16 @@ def submit_batch(batch_file: Path, config: SubmitConfig) -> None:
     ]
 
     LOGGER.debug("Submitting batch with command: %s", " ".join(cmd))
+    start = time.monotonic()
     result = run_cmd(
         cmd,
         check=False,
     )
+    duration = time.monotonic() - start
     if result.returncode != 0:
         LOGGER.error("Failed to submit batch '%s': %s", batch_file, result.stderr.strip())
         raise RuntimeError(f"Failed to submit batch '{batch_file}': {result.stderr.strip()}")
-    LOGGER.info("Submitted batch '%s' successfully", batch_file)
+    LOGGER.info("Batch '%s' completed successfully in %.1fs", batch_file, duration)
 
 
 def submit_batches(batch_dir: Path, config: SubmitConfig) -> None:
@@ -769,6 +773,9 @@ def main() -> int:
         LOGGER.setLevel(logging.DEBUG if args.verbose else logging.INFO)
         pyxis_url = PYXIS_INSTANCE_MAP[args.pyxis_server]
         LOGGER.info("Using Pyxis instance URL: %s", pyxis_url)
+        # Retry all HTTP methods including POST — needed for GraphQL queries.
+        # Default retry excludes POST, which misses 503s from the GraphQL endpoint.
+        pyxis.session = pyxis._get_session(retry_allowed_methods=None)
         sign_registry_access_repos = set(
             args.sign_registry_access_file.read_text().splitlines()
         )
