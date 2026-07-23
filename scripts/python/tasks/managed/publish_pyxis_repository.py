@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+import file
 import pyxis_api
 import tekton
 from logger import logger
@@ -212,15 +213,8 @@ def run_publish_pyxis_repository(
     task_name: str,
 ) -> None:
     """Load inputs, publish repositories in Pyxis, and write workspace outputs."""
-    if not snapshot_path.is_file():
-        msg = "No valid snapshot file was provided."
-        raise FileNotFoundError(msg)
-    if not data_path.is_file():
-        msg = "No data JSON was provided."
-        raise FileNotFoundError(msg)
-
-    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
-    data = json.loads(data_path.read_text(encoding="utf-8"))
+    snapshot = file.load_json_dict(snapshot_path)
+    data = file.load_json_dict(data_path)
 
     sign_registry_relative = (data_path.parent / SIGN_REGISTRY_ACCESS_FILENAME).relative_to(
         data_dir

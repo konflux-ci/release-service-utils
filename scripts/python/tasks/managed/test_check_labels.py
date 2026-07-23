@@ -513,7 +513,7 @@ def test_missing_snapshot_file(tmp_path: Path) -> None:
     """Raise when the snapshot file does not exist."""
     data = tmp_path / "data.json"
     _write_data(data)
-    with pytest.raises(check_labels.LabelValidationError, match="missing.json"):
+    with pytest.raises(FileNotFoundError):
         check_labels.check_labels(tmp_path / "missing.json", data, enforce=True)
 
 
@@ -521,7 +521,7 @@ def test_missing_data_file(tmp_path: Path) -> None:
     """Raise when the data file does not exist."""
     snap = tmp_path / "snapshot.json"
     _write_snapshot(snap, [])
-    with pytest.raises(check_labels.LabelValidationError, match="missing.json"):
+    with pytest.raises(FileNotFoundError):
         check_labels.check_labels(snap, tmp_path / "missing.json", enforce=True)
 
 

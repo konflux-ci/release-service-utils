@@ -14,16 +14,6 @@ import tekton
 from file import load_json_dict
 
 
-def validate_input_files(
-    data_file: Path,
-    snapshot_file: Path,
-) -> None:
-    """Raise RuntimeError when any required input file is missing."""
-    for label, path in [("data", data_file), ("snapshot", snapshot_file)]:
-        if not path.is_file():
-            raise RuntimeError(f"No valid {label} file was provided.")
-
-
 def collect_params(
     *,
     data_file: Path,
@@ -34,8 +24,6 @@ def collect_params(
     result_github_secret: Path,
 ) -> int:
     """Collect github parameters and write to results."""
-    validate_input_files(data_file, snapshot_file)
-
     data = load_json_dict(data_file)
     snapshot = load_json_dict(snapshot_file)
 

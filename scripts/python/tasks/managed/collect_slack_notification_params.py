@@ -21,21 +21,6 @@ class ReleaseMetadata(NamedTuple):
     release_pipeline_name: str
 
 
-def validate_input_files(
-    data_file: Path,
-    snapshot_file: Path,
-    release_file: Path,
-) -> None:
-    """Raise RuntimeError when any required input file is missing."""
-    for label, path in [
-        ("data", data_file),
-        ("snapshot", snapshot_file),
-        ("release", release_file),
-    ]:
-        if not path.is_file():
-            raise RuntimeError(f"No valid {label} file was provided.")
-
-
 def _get_slack_field(data: dict[str, Any], key: str) -> str | None:
     """Return a string value from data['slack'][key], or None if absent."""
     slack = data.get("slack")
@@ -193,8 +178,6 @@ def collect_params(
     result_keyname: Path,
 ) -> int:
     """Collect Slack notification parameters and write result files."""
-    validate_input_files(data_file, snapshot_file, release_file)
-
     data = load_json_dict(data_file)
 
     secret = extract_slack_secret(data)

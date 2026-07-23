@@ -76,20 +76,6 @@ def test_default_schema_path_is_image_location() -> None:
     assert check_data_keys.DEFAULT_SCHEMA_PATH == Path("/home/schemas/dataKeys.json")
 
 
-def test_resolve_schema_path_returns_existing_file(tmp_path: Path) -> None:
-    """Return the path when the schema file exists."""
-    schema = tmp_path / "schema.json"
-    schema.write_text("{}", encoding="utf-8")
-    assert check_data_keys.resolve_schema_path(schema) == schema
-
-
-def test_resolve_schema_path_missing_file(tmp_path: Path) -> None:
-    """Fail when the schema file does not exist."""
-    missing = tmp_path / "missing-schema.json"
-    with pytest.raises(FileNotFoundError, match="schema file not found"):
-        check_data_keys.resolve_schema_path(missing)
-
-
 def test_parse_systems_param_empty_string() -> None:
     """Treat a blank systems param as an empty array."""
     assert check_data_keys.parse_systems_param("") == []
@@ -148,7 +134,7 @@ def test_module_main_guard(monkeypatch: pytest.MonkeyPatch, schema_path: Path) -
     monkeypatch.setenv("PARAM_DATA_DIR", "/tmp")
     monkeypatch.setenv("PARAM_DATA_PATH", "missing.json")
     monkeypatch.setenv("SCHEMA_FILE", str(schema_path))
-    with pytest.raises(FileNotFoundError, match="No data JSON was provided"):
+    with pytest.raises(FileNotFoundError):
         runpy.run_module("check_data_keys", run_name="__main__")
 
 
@@ -186,7 +172,7 @@ def test_run_check_data_keys_missing_data_file(
     schema_path: Path,
 ) -> None:
     """Fail when the data JSON path does not exist."""
-    with pytest.raises(FileNotFoundError, match="No data JSON was provided"):
+    with pytest.raises(FileNotFoundError):
         check_data_keys.run_check_data_keys(
             data_dir=tmp_path,
             data_path=Path("missing.json"),
@@ -318,7 +304,7 @@ def test_main_failure_propagates_exception(
     monkeypatch.setenv("PARAM_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("PARAM_DATA_PATH", "missing.json")
     monkeypatch.setenv("SCHEMA_FILE", str(schema_path))
-    with pytest.raises(FileNotFoundError, match="No data JSON was provided"):
+    with pytest.raises(FileNotFoundError):
         check_data_keys.main()
 
 

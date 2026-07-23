@@ -17,7 +17,6 @@ from collect_slack_notification_params import (
     extract_slack_keyname,
     extract_slack_secret,
     main,
-    validate_input_files,
 )
 
 
@@ -56,53 +55,6 @@ def _sample_release() -> dict:
 def _sample_snapshot() -> dict:
     """Return a snapshot dict with componentGroup."""
     return {"componentGroup": "my-app"}
-
-
-# -- validate_input_files --
-
-
-def test_validate_input_files_all_exist(tmp_path: Path) -> None:
-    """No exception when all three files exist."""
-    data = tmp_path / "data.json"
-    snapshot = tmp_path / "snapshot.json"
-    release = tmp_path / "release.json"
-    for f in (data, snapshot, release):
-        f.write_text("{}")
-
-    validate_input_files(data, snapshot, release)
-
-
-def test_validate_input_files_data_missing(tmp_path: Path) -> None:
-    """Raise RuntimeError when data file is missing."""
-    snapshot = tmp_path / "snapshot.json"
-    release = tmp_path / "release.json"
-    for f in (snapshot, release):
-        f.write_text("{}")
-
-    with pytest.raises(RuntimeError, match="No valid data file"):
-        validate_input_files(tmp_path / "missing.json", snapshot, release)
-
-
-def test_validate_input_files_snapshot_missing(tmp_path: Path) -> None:
-    """Raise RuntimeError when snapshot file is missing."""
-    data = tmp_path / "data.json"
-    release = tmp_path / "release.json"
-    for f in (data, release):
-        f.write_text("{}")
-
-    with pytest.raises(RuntimeError, match="No valid snapshot file"):
-        validate_input_files(data, tmp_path / "missing.json", release)
-
-
-def test_validate_input_files_release_missing(tmp_path: Path) -> None:
-    """Raise RuntimeError when release file is missing."""
-    data = tmp_path / "data.json"
-    snapshot = tmp_path / "snapshot.json"
-    for f in (data, snapshot):
-        f.write_text("{}")
-
-    with pytest.raises(RuntimeError, match="No valid release file"):
-        validate_input_files(data, snapshot, tmp_path / "missing.json")
 
 
 # -- extract_slack_secret --
@@ -341,12 +293,12 @@ def test_collect_params_no_slack_keyname(tmp_path: Path) -> None:
 
 
 def test_collect_params_missing_input_file(tmp_path: Path) -> None:
-    """Raise RuntimeError when an input file is missing."""
+    """Raise FileNotFoundError when an input file is missing."""
     r_msg = tmp_path / "r_msg"
     r_secret = tmp_path / "r_secret"
     r_keyname = tmp_path / "r_keyname"
 
-    with pytest.raises(RuntimeError, match="No valid data file"):
+    with pytest.raises(FileNotFoundError):
         collect_params(
             data_file=tmp_path / "missing.json",
             snapshot_file=tmp_path / "snapshot.json",
