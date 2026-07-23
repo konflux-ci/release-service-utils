@@ -6,7 +6,7 @@ FROM --platform=linux/amd64 registry.redhat.io/rhtas/cosign-rhel9:1.3.3-17733094
 
 FROM --platform=linux/amd64 registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.4-1 as roxctl
 
-FROM registry.access.redhat.com/ubi10/ubi:10.2-1782277716
+FROM registry.access.redhat.com/ubi10/ubi:10.2-1784668814
 
 ARG COSIGN_VERSION=2.4.1
 ARG COSIGN3_VERSION=3.0.4
