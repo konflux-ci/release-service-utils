@@ -8,40 +8,22 @@ from pathlib import Path
 from typing import Any
 
 import advisory_data
-import authentication
 import file
 import http_client
 import requests
 import tekton
+from jira import (
+    SUPPORTED_JIRA_SERVER,
+    jira_get_json,
+    jira_issue_url,
+    jira_post_json,
+    normalize_issue_server,
+    read_jira_credentials,
+)
 from logger import logger
 from requests.auth import HTTPBasicAuth
 
-SUPPORTED_JIRA_SERVER = "redhat.atlassian.net"
-LEGACY_JIRA_SERVER = "issues.redhat.com"
-
-ISSUE_TRACKERS: dict[str, dict[str, Any]] = {
-    "Jira": {
-        "api": "rest/api/2/issue",
-        "servers": [
-            LEGACY_JIRA_SERVER,
-            "jira.atlassian.com",
-            SUPPORTED_JIRA_SERVER,
-        ],
-    },
-    "bugzilla": {
-        "api": "rest/bug",
-        "servers": ["bugzilla.redhat.com"],
-    },
-}
-
 _VALID_JIRA_ISSUE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_]+-\d+$|^\d+$")
-
-
-def normalize_issue_server(source: str) -> str:
-    """Map legacy issue tracker hostnames to the current Jira server."""
-    if source == LEGACY_JIRA_SERVER:
-        return SUPPORTED_JIRA_SERVER
-    return source
 
 
 def is_jira_eligible_issue(issue: dict[str, Any]) -> bool:
@@ -58,16 +40,6 @@ def is_jira_eligible_issue(issue: dict[str, Any]) -> bool:
     return _VALID_JIRA_ISSUE_ID.fullmatch(issue_id.strip()) is not None
 
 
-def api_path_for_server(server: str) -> str:
-    """Return the REST API prefix for *server*."""
-    for tracker in ISSUE_TRACKERS.values():
-        servers = tracker.get("servers")
-        if isinstance(servers, list) and server in servers:
-            return str(tracker["api"])
-    msg = f"no API mapping for server: {server}"
-    raise ValueError(msg)
-
-
 def load_fixed_issues(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Return fixed issues from releaseNotes, or an empty list when absent."""
     fixed = advisory_data.content_array_from_decoded(
@@ -80,54 +52,6 @@ def load_fixed_issues(data: dict[str, Any]) -> list[dict[str, Any]]:
 def close_comment(advisory_url: str) -> str:
     """Build the Jira comment posted when an issue is closed."""
     return f"Fixed in Konflux Advisory {advisory_url}"
-
-
-def read_jira_credentials(secret_path: Path) -> tuple[str, str]:
-    """Read Jira basic-auth credentials from mounted secret files."""
-    email = authentication.read_mounted_text(secret_path, "email")
-    token = authentication.read_mounted_text(secret_path, "token")
-    if not email or not token:
-        msg = f"Jira secret at {secret_path} must include email and token"
-        raise ValueError(msg)
-    return email, token
-
-
-def jira_issue_url(server: str, issue_id: str) -> str:
-    """Build the Jira issue API URL for *issue_id* on *server*."""
-    api_path = api_path_for_server(server)
-    return f"https://{server}/{api_path}/{issue_id}"
-
-
-def jira_get_json(
-    session: requests.Session,
-    url: str,
-    auth: HTTPBasicAuth,
-) -> dict[str, Any]:
-    """Perform a GET request and return the parsed JSON object."""
-    response = session.get(url, auth=auth, timeout=60.0)
-    response.raise_for_status()
-    data = response.json()
-    if not isinstance(data, dict):
-        msg = f"expected JSON object from {url}"
-        raise ValueError(msg)
-    return data
-
-
-def jira_post_json(
-    session: requests.Session,
-    url: str,
-    auth: HTTPBasicAuth,
-    payload: dict[str, Any],
-) -> None:
-    """Perform a POST request and raise when the response is not successful."""
-    response = session.post(
-        url,
-        auth=auth,
-        json=payload,
-        headers={"Content-Type": "application/json"},
-        timeout=60.0,
-    )
-    response.raise_for_status()
 
 
 def issue_status_name(issue: dict[str, Any]) -> str:
