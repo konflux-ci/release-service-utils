@@ -4,7 +4,7 @@ FROM --platform=linux/amd64 registry.redhat.io/rhtas/ec-rhel9:0.7@sha256:1fc7c61
 
 FROM --platform=linux/amd64 registry.redhat.io/rhtas/cosign-rhel9:1.3.3-1773309431 as cosign
 
-FROM --platform=linux/amd64 registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.4-1 as roxctl
+FROM --platform=linux/amd64 registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.5-1 as roxctl
 
 FROM registry.access.redhat.com/ubi10/ubi:10.2-1782277716
 
