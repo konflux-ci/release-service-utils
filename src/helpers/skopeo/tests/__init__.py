@@ -1,0 +1,1 @@
+"""Skopeo helper tests."""

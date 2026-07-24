@@ -1,0 +1,1 @@
+"""Sign windows helper tests."""

@@ -109,11 +109,8 @@ RUN curl -LO https://github.com/release-engineering/exodus-rsync/releases/latest
     chmod +x exodus-rsync && mv exodus-rsync /usr/local/bin/rsync
 
 # Install Python dependencies using uv
-COPY pyproject.toml uv.lock ./
-RUN uv pip install -r pyproject.toml --system && \
-    # Remove PyPI's python-qpid-proton so the system RPM (python3-qpid-proton) takes precedence.
-    # The PyPI wheel bundles its own OpenSSL which doesn't use the system CA trust store.
-    # The system RPM is properly linked to the distro's OpenSSL and respects /etc/pki/ca-trust.
+COPY . ./
+RUN pip install . && \
     pip uninstall -y python-qpid-proton
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
@@ -125,7 +122,14 @@ RUN update-ca-trust
 COPY pyxis /home/pyxis
 COPY utils /home/utils
 COPY integration-tests /home/integration-tests
-COPY scripts /home/scripts
+COPY src /home/src
+
+# TODO: remove when fixed in release-service-catalog
+RUN mkdir -p /home/scripts/python/tasks/
+RUN ln -s /home/src/tasks/managed /home/scripts/python/tasks/managed
+RUN ln -s /home/src/tasks/internal /home/scripts/python/tasks/internal
+##############################################################
+
 COPY templates /home/templates
 COPY kafka /home/kafka
 COPY pubtools-pulp-wrapper /home/pubtools-pulp-wrapper
@@ -173,11 +177,11 @@ ENV PATH="$PATH:/home/pubtools-pulp-wrapper"
 ENV PATH="$PATH:/home/pubtools-marketplacesvm-wrapper"
 ENV PATH="$PATH:/home/developer-portal-wrapper"
 ENV PATH="$PATH:/home/publish-to-cgw-wrapper"
-ENV PATH="$PATH:/home/scripts/python/tasks/managed"
+ENV PATH="$PATH:/home/src/tasks/managed"
 # Flat imports: helpers and task scripts must be importable.
 # Tests use the same layout via pyproject [tool.pytest.ini_options] pythonpath.
 # Keep /home for other modules (e.g. pyxis, sbom) that expect it.
-ENV PYTHONPATH="/home:/home/pyxis:/home/utils:/home/scripts/python/helpers:/home/scripts/python/tasks/internal:/home/scripts/python/tasks/managed:/home/pubtools-pulp-wrapper:/home/publish-to-cgw-wrapper"
+ENV PYTHONPATH="/home:/home/pyxis:/home/utils:/home/src/helpers:/home/src/tasks/internal:/home/src/tasks/managed:/home/pubtools-pulp-wrapper:/home/publish-to-cgw-wrapper"
 
 # uv installs newer requests and certifi which don't use the system CA like the one installed via
 # dnf. So we need to point requests to the system CA bundle explicitly.
