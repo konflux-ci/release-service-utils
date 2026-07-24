@@ -44,6 +44,7 @@ so these images are available from both registries
 """
 
 import argparse
+from dataclasses import dataclass
 from urllib.parse import quote
 from datetime import datetime
 import json
@@ -60,6 +61,31 @@ MANIFEST_LIST_TYPES = [
     "application/vnd.oci.image.index.v1+json",
     "application/vnd.docker.distribution.manifest.list.v2+json",
 ]
+
+
+@dataclass(frozen=True)
+class ContainerImageArgs:
+    """Typed argument bundle for create_or_update and its helpers.
+
+    All fields mirror the CLI flags accepted by ``setup_argparser``.
+    The class is frozen so it can be safely shared across threads.
+    """
+
+    pyxis_url: str
+    certified: str
+    tags: str
+    is_latest: str
+    oras_manifest_fetch: str
+    name: str
+    media_type: str
+    digest: str
+    architecture_digest: str
+    architecture: str
+    rh_push: str = "false"
+    append_tags: str = "false"
+    dockerfile: str = ""
+    metadata: str = ""
+    verbose: bool = False
 
 
 def setup_argparser() -> Any:  # pragma: no cover
@@ -323,8 +349,11 @@ def repository_digest_values(args):
     return result
 
 
-def create_container_image(args, parsed_data: Dict[str, Any], tags: List[str]):
-    """Create a new containerImage entry in a pyxis instance."""
+def create_container_image(args, parsed_data: Dict[str, Any], tags: List[str]) -> str:
+    """Create a new containerImage entry in a pyxis instance.
+
+    :return: The ``_id`` of the newly created ContainerImage.
+    """
     LOGGER.info("Creating new container image")
 
     constructed_tags = construct_tags(tags)
@@ -361,6 +390,7 @@ def create_container_image(args, parsed_data: Dict[str, Any], tags: List[str]):
     # Make sure container metadata was successfully added to Pyxis
     if "_id" in rsp:
         emit_id(rsp["_id"])
+        return rsp["_id"]
     else:
         raise Exception("Image metadata was not successfully added to Pyxis.")
 
@@ -440,13 +470,11 @@ def construct_repository(args, tag_dicts):
     return repo
 
 
-def main():  # pragma: no cover
-    """Execute main function."""
-    parser = setup_argparser()
-    args = parser.parse_args()
-    log_level = logging.DEBUG if args.verbose else logging.INFO
-    pyxis.setup_logger(level=log_level)
+def create_or_update(args) -> str:
+    """Find, create, or update a container image in Pyxis.
 
+    :return: The ``_id`` of the container image.
+    """
     parsed_data = prepare_parsed_data(args)
 
     if args.rh_push == "true":
@@ -458,16 +486,13 @@ def main():  # pragma: no cover
     if args.is_latest == "true":
         tags.append("latest")
 
-    # First check if it exists at all. If not, create it
     LOGGER.info(f"Checking to see if digest {args.architecture_digest} exists in pyxis")
     image = find_image(args.pyxis_url, args.architecture_digest)
     if image is None:
         LOGGER.info("Image with given docker_image_digest doesn't exist yet.")
-        create_container_image(args, parsed_data, tags)
-        return
+        return str(create_container_image(args, parsed_data, tags))
 
-    identifier = image["_id"]
-    # Then, check if it already references the given repository. If not, add the repo
+    identifier = str(image["_id"])
     repo_index = find_repo_in_image(image_repo, image)
     repositories = image["repositories"]
     if repo_index is None:
@@ -478,9 +503,8 @@ def main():  # pragma: no cover
         constructed_tags = construct_tags(tags)
         repositories.append(construct_repository(args, constructed_tags))
         update_container_image_repositories(args.pyxis_url, identifier, repositories)
-        return
+        return identifier
 
-    # Then, check if the tags are different. If they are, update them
     existing_tags = [tag["name"] for tag in repositories[repo_index].get("tags", [])]
     if existing_tags != tags:
         LOGGER.info(
@@ -495,13 +519,23 @@ def main():  # pragma: no cover
             constructed_tags = construct_tags(tags)
         repositories[repo_index] = construct_repository(args, constructed_tags)
         update_container_image_repositories(args.pyxis_url, identifier, repositories)
-        return
+        return identifier
 
     LOGGER.info(
         f"Image with given docker_image_digest already exists as {identifier} "
         f"and is associated with repository {args.name} and tags {args.tags}. "
         "Skipping the image creation."
     )
+    return identifier
+
+
+def main():  # pragma: no cover
+    """Execute main function."""
+    parser = setup_argparser()
+    args = parser.parse_args()
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    pyxis.setup_logger(level=log_level)
+    create_or_update(args)
 
 
 if __name__ == "__main__":  # pragma: no cover
