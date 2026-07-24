@@ -46,9 +46,9 @@ CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 logger = logging.getLogger(__name__)
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None, prog: str = PROG) -> argparse.Namespace:
     """Parse and return CLI arguments."""
-    p = argparse.ArgumentParser(prog=PROG)
+    p = argparse.ArgumentParser(prog=prog)
     p.add_argument(
         "--concurrent-limit",
         type=int,
@@ -58,7 +58,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _setup_docker_config() -> None:
+def setup_docker_config() -> None:
     """Write ~/.docker/config.json from the mounted dockerconfig secret."""
     authentication.setup_docker_config(
         REDHAT_WORKLOADS_TOKEN_MOUNT / ".dockerconfigjson",
@@ -256,7 +256,7 @@ def process_component(component: dict) -> None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def _create_os_flag_files(snapshot: dict) -> None:
+def create_os_flag_files(snapshot: dict) -> None:
     """Create has_mac / has_windows / has_linux flag files based on RPA entries."""
     for component in snapshot.get("components", []):
         name = component.get("name", "")
@@ -324,7 +324,7 @@ def run(concurrent_limit: int) -> None:
     # Validate disk-image component constraints before doing any image pulls.
     _validate_disk_image_components(components)
 
-    _setup_docker_config()
+    setup_docker_config()
     CONTENT_DIR.mkdir(parents=True, exist_ok=True)
 
     errors: list[str] = []
@@ -344,7 +344,7 @@ def run(concurrent_limit: int) -> None:
     if errors:
         raise RuntimeError("\n".join(errors))
 
-    _create_os_flag_files(snapshot)
+    create_os_flag_files(snapshot)
 
 
 def main(argv: list[str] | None = None) -> int:
