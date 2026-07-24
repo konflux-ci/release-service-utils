@@ -86,5 +86,18 @@ elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.docker.distribu
 else
     # Multi arch
     manifests=$(jq '.manifests[] += {multiarch: true}' <<< "$RAW_OUTPUT")
-    jq -cr '.manifests[]' <<< "$manifests"
+    # Deduplicate: when an image index contains both gzip and zstd:chunked
+    # manifests per architecture (dual-compression), keep only the non-zstd
+    # entry per (architecture, os). If all entries for a platform are zstd,
+    # keep the first one so the error surfaces downstream rather than
+    # silently returning nothing.
+    # Ref: ADR 0070 (konflux-ci/architecture)
+    jq -cr '.manifests[]' <<< "$manifests" | jq -cs '
+        group_by(.platform.architecture + "/" + .platform.os)
+        | map(
+            (map(select(.annotations["io.github.containers.compression.zstd"] == null)) | .[0])
+            // .[0]
+        )
+        | .[]
+    '
 fi
