@@ -12,6 +12,18 @@ from logger import logger
 _QUAY_SHA_TAG = re.compile(r"^[0-9a-f]{40}$")
 _MAX_QUAY_TAG_PAGES = 50
 
+# (registry host prefix, quay.io temp-namespace prefix) pairs used by
+# convert_to_quay/convert_to_registry to bridge the migration from quay.io
+# temp namespaces to registry.redhat.io-style repository paths. This is a
+# temporary mapping that should be removed once all repositories are
+# migrated to registry.redhat.io.
+_REGISTRY_QUAY_PAIRS: tuple[tuple[str, str], ...] = (
+    ("registry.redhat.io", "quay.io/redhat-prod"),
+    ("registry.stage.redhat.io", "quay.io/redhat-pending"),
+    ("flatpaks.registry.redhat.io", "quay.io/rh-flatpaks-prod"),
+    ("flatpaks.registry.stage.redhat.io", "quay.io/rh-flatpaks-stage"),
+)
+
 
 def translate_delivery_repo(repo: str) -> list[dict[str, str]]:
     """Translate a Quay delivery-repo reference to public registry URLs.
@@ -102,6 +114,58 @@ def resolve_quay_digest_to_git_sha(digest: str, container_image: str) -> str | N
     except Exception as exc:
         print(f"Failed to resolve digest to git SHA: {exc}")
         return None
+
+
+def convert_to_quay(repository: str) -> str:
+    """Convert a Red Hat registry repository path to its quay.io temp-namespace form.
+
+    The registry host prefix is swapped for the matching quay.io temp
+    namespace, and remaining ``/`` path separators are dash-encoded
+    (``----``) since the temp namespaces are single-segment repos.
+    Repositories that don't match a known Red Hat registry prefix are
+    returned unchanged.
+    """
+    for registry_prefix, quay_prefix in _REGISTRY_QUAY_PAIRS:
+        prefix = registry_prefix + "/"
+        if repository.startswith(prefix):
+            rest = repository[len(prefix) :]
+            return f"{quay_prefix}/{rest.replace('/', '----')}"
+    return repository
+
+
+def convert_to_registry(repository: str) -> str:
+    """Convert a quay.io temp-namespace repository path to its registry.redhat.io form.
+
+    This is the inverse of :func:`convert_to_quay`. Repositories already in
+    ``registry.redhat.io`` or ``registry.stage.redhat.io`` format are
+    returned unchanged; any other unrecognized format returns an empty
+    string.
+    """
+    for registry_prefix, quay_prefix in _REGISTRY_QUAY_PAIRS:
+        prefix = quay_prefix + "/"
+        if repository.startswith(prefix):
+            rest = repository[len(prefix) :]
+            return f"{registry_prefix}/{rest.replace('----', '/')}"
+    if repository.startswith("registry.redhat.io/") or repository.startswith(
+        "registry.stage.redhat.io/"
+    ):
+        return repository
+    return ""
+
+
+def convert_to_registry_access(repository: str) -> str:
+    """Convert a ``registry(.stage).redhat.io`` repository to its ``registry.access`` form.
+
+    Only the two plain Red Hat registry prefixes are handled (not the
+    ``flatpaks.*`` prefixes); anything else returns an empty string.
+    """
+    if repository.startswith("registry.redhat.io/"):
+        return "registry.access.redhat.com" + repository[len("registry.redhat.io") :]
+    if repository.startswith("registry.stage.redhat.io/"):
+        return (
+            "registry.access.stage.redhat.com" + repository[len("registry.stage.redhat.io") :]
+        )
+    return ""
 
 
 def pyxis_url_for_pull_spec(pyxis_url: str, pull_spec: str) -> str:
