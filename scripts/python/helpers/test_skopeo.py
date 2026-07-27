@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import unittest.mock as mock
 
+import pytest
 import skopeo
 
 
@@ -133,6 +134,27 @@ def test_inspect_image_ref_with_digest() -> None:
 
     cmd = run_mock.call_args[0][0]
     assert cmd[-1] == f"docker://{ref}"
+
+
+def test_inspect_check_true_passes_check() -> None:
+    """``check=True`` is forwarded to subprocess.run."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.inspect("img:v1", check=True)
+
+    assert run_mock.call_args[1]["check"] is True
+
+
+def test_inspect_check_true_raises_on_failure() -> None:
+    """``check=True`` raises CalledProcessError on non-zero exit."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        side_effect=subprocess.CalledProcessError(1, "skopeo"),
+    ):
+        with pytest.raises(subprocess.CalledProcessError):
+            skopeo.inspect("img:v1", check=True)
 
 
 # ---------------------------------------------------------------------------
