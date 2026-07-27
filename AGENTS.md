@@ -35,6 +35,7 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - HTTP requests: use `http_client.get_text()` from helpers (retries, 429/404 backoff built in).
 - Tekton result files: use `tekton.result_paths_from_env()` to read env var paths, `tekton.CheckStepError` for step failures.
 - Cross-cutting helpers go in `scripts/python/helpers/`; task scripts go in `scripts/python/tasks/`.
+- Flag any function that is not called elsewhere; the unit tests for it do not count as being called elsewhere.
 
 ## Testing
 
