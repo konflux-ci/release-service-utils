@@ -398,7 +398,7 @@ class TestCheckIssues:
                 "fields": {
                     "security": {"name": "public"},
                     "issuetype": {"name": "Vulnerability"},
-                    "customfield_10667": "CVE-2024-001",
+                    embargo_check.JIRA_CVE_CUSTOM_FIELD_ID: "CVE-2024-001",
                 },
             }
         )
@@ -421,7 +421,7 @@ class TestCheckIssues:
                 "fields": {
                     "security": {"name": "public"},
                     "issuetype": {"name": "Vulnerability"},
-                    "customfield_10667": "CVE-2024-001",
+                    embargo_check.JIRA_CVE_CUSTOM_FIELD_ID: "CVE-2024-001",
                 },
             }
         )
@@ -443,7 +443,7 @@ class TestCheckIssues:
                 "fields": {
                     "security": {"name": "public"},
                     "issuetype": {"name": "Vulnerability"},
-                    "customfield_10667": "CVE-2024-001",
+                    embargo_check.JIRA_CVE_CUSTOM_FIELD_ID: "CVE-2024-001",
                 },
             }
         )

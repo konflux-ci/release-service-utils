@@ -347,3 +347,22 @@ def filter_content_by_existing(
 
     # Compact JSON (no extra spaces) for small temp files in the idempotency loop.
     return json.dumps(filtered, separators=(",", ":"))
+
+
+def generate_purl_rpm(
+    name: str,
+    version: str,
+    release: str,
+    arch: str,
+    distro: str,
+    repository_id: str,
+    vendor: str = "redhat",
+) -> str:
+    """Generate an RPM Package URL."""
+    purl = f"pkg:rpm/{vendor}/{name}@{version}-{release}?arch={arch}"
+    # Distro and repository_id are only added when non empty.
+    if distro:
+        purl += f"&distro={distro}"
+    if repository_id:
+        purl += f"&repository_id={repository_id}"
+    return purl

@@ -151,3 +151,32 @@ def test_component_public_without_defaults_mapping() -> None:
     """Default to false when mapping.defaults is missing or invalid."""
     assert snapshot.component_public({"mapping": {"defaults": "not-a-mapping"}}, {}) is False
     assert snapshot.component_public({"mapping": "not-a-mapping"}, {}) is False
+
+
+def test_component_label_value_returns_matching_label() -> None:
+    """Returns the value of the named label."""
+    component = {
+        "metadata": {
+            "labels": [
+                {"name": "org.opencontainers.image.created", "value": "2025-01-01T00:00:00Z"},
+                {"name": "other", "value": "x"},
+            ]
+        }
+    }
+    assert (
+        snapshot.component_label_value(component, "org.opencontainers.image.created")
+        == "2025-01-01T00:00:00Z"
+    )
+
+
+def test_component_label_value_returns_none_when_label_missing() -> None:
+    """Returns None when the label name is not present."""
+    component = {"metadata": {"labels": [{"name": "other", "value": "x"}]}}
+    assert (
+        snapshot.component_label_value(component, "org.opencontainers.image.created") is None
+    )
+
+
+def test_component_label_value_returns_none_when_no_metadata() -> None:
+    """Returns None when metadata is absent."""
+    assert snapshot.component_label_value({}, "org.opencontainers.image.created") is None
