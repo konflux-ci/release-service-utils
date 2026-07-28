@@ -69,10 +69,11 @@ RUN ARCH=$(uname -m) && \
     rm -f /tmp/ec_linux_*.gz
 
 RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" == "x86_64" ]; then ARCH=amd64; fi && \
-    if [ "$ARCH" == "aarch64" ]; then ARCH=arm64; fi && \
+    if [ "$ARCH" = "x86_64" ]; then ARCH=amd64; fi && \
+    if [ "$ARCH" = "aarch64" ]; then ARCH=arm64; fi && \
     curl -LsSf https://github.com/sigstore/cosign/releases/download/v${COSIGN3_VERSION}/cosign-linux-${ARCH} -o /usr/local/bin/cosign3 && \
-    chmod +x /usr/local/bin/cosign3
+    chmod +x /usr/local/bin/cosign3 && \
+    /usr/local/bin/cosign3 version
 
 
 COPY --from=roxctl /usr/bin/roxctl /usr/bin/roxctl
