@@ -605,13 +605,13 @@ class TestMain:
         from unittest.mock import patch
 
         result_paths = _make_result_paths(tmp_path)
-        monkeypatch.setenv("RESULT_ATLASAPIURL", str(result_paths["atlasApiUrl"]))
-        monkeypatch.setenv("RESULT_SSOTOKENURL", str(result_paths["ssoTokenUrl"]))
-        monkeypatch.setenv("RESULT_SECRETNAME", str(result_paths["secretName"]))
+        monkeypatch.setenv("RESULT_ATLAS_API_URL", str(result_paths["atlasApiUrl"]))
+        monkeypatch.setenv("RESULT_SSO_TOKEN_URL", str(result_paths["ssoTokenUrl"]))
+        monkeypatch.setenv("RESULT_SECRET_NAME", str(result_paths["secretName"]))
         monkeypatch.setenv(
-            "RESULT_RETRYAWSSECRETNAME", str(result_paths["retryAWSSecretName"])
+            "RESULT_RETRY_AWS_SECRET_NAME", str(result_paths["retryAWSSecretName"])
         )
-        monkeypatch.setenv("RESULT_RETRYS3BUCKET", str(result_paths["retryS3Bucket"]))
+        monkeypatch.setenv("RESULT_RETRY_S3_BUCKET", str(result_paths["retryS3Bucket"]))
 
         mock_cm = _mock_configmap(
             {
@@ -637,13 +637,13 @@ class TestMain:
         _write_data(data_file, {"atlas": {"server": "stage"}})
 
         result_paths = _make_result_paths(tmp_path)
-        monkeypatch.setenv("RESULT_ATLASAPIURL", str(result_paths["atlasApiUrl"]))
-        monkeypatch.setenv("RESULT_SSOTOKENURL", str(result_paths["ssoTokenUrl"]))
-        monkeypatch.setenv("RESULT_SECRETNAME", str(result_paths["secretName"]))
+        monkeypatch.setenv("RESULT_ATLAS_API_URL", str(result_paths["atlasApiUrl"]))
+        monkeypatch.setenv("RESULT_SSO_TOKEN_URL", str(result_paths["ssoTokenUrl"]))
+        monkeypatch.setenv("RESULT_SECRET_NAME", str(result_paths["secretName"]))
         monkeypatch.setenv(
-            "RESULT_RETRYAWSSECRETNAME", str(result_paths["retryAWSSecretName"])
+            "RESULT_RETRY_AWS_SECRET_NAME", str(result_paths["retryAWSSecretName"])
         )
-        monkeypatch.setenv("RESULT_RETRYS3BUCKET", str(result_paths["retryS3Bucket"]))
+        monkeypatch.setenv("RESULT_RETRY_S3_BUCKET", str(result_paths["retryS3Bucket"]))
 
         with patch("collect_tpa_params.kubectl.get_configmap", _mock_configmap_failure()):
             result = collect_tpa_params.main(
@@ -664,7 +664,7 @@ class TestMain:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Main exits 1 when result env vars are missing."""
-        monkeypatch.delenv("RESULT_ATLASAPIURL", raising=False)
+        monkeypatch.delenv("RESULT_ATLAS_API_URL", raising=False)
 
         with pytest.raises(SystemExit) as exc_info:
             collect_tpa_params.main(["--data-dir", str(tmp_path)])
@@ -682,13 +682,13 @@ class TestMain:
         _write_data(data_file, {"atlas": {"server": "invalid"}})
 
         result_paths = _make_result_paths(tmp_path)
-        monkeypatch.setenv("RESULT_ATLASAPIURL", str(result_paths["atlasApiUrl"]))
-        monkeypatch.setenv("RESULT_SSOTOKENURL", str(result_paths["ssoTokenUrl"]))
-        monkeypatch.setenv("RESULT_SECRETNAME", str(result_paths["secretName"]))
+        monkeypatch.setenv("RESULT_ATLAS_API_URL", str(result_paths["atlasApiUrl"]))
+        monkeypatch.setenv("RESULT_SSO_TOKEN_URL", str(result_paths["ssoTokenUrl"]))
+        monkeypatch.setenv("RESULT_SECRET_NAME", str(result_paths["secretName"]))
         monkeypatch.setenv(
-            "RESULT_RETRYAWSSECRETNAME", str(result_paths["retryAWSSecretName"])
+            "RESULT_RETRY_AWS_SECRET_NAME", str(result_paths["retryAWSSecretName"])
         )
-        monkeypatch.setenv("RESULT_RETRYS3BUCKET", str(result_paths["retryS3Bucket"]))
+        monkeypatch.setenv("RESULT_RETRY_S3_BUCKET", str(result_paths["retryS3Bucket"]))
 
         with patch("collect_tpa_params.kubectl.get_configmap", _mock_configmap_failure()):
             with pytest.raises(ValueError, match="Unknown.*server value"):
@@ -709,7 +709,7 @@ class TestModuleMain:
         """Executing the module as `__main__` propagates failures from main()."""
         import runpy
 
-        monkeypatch.delenv("RESULT_ATLASAPIURL", raising=False)
+        monkeypatch.delenv("RESULT_ATLAS_API_URL", raising=False)
         monkeypatch.setattr("sys.argv", ["collect_tpa_params", "--data-dir", str(tmp_path)])
 
         with pytest.raises(SystemExit) as exc_info:
