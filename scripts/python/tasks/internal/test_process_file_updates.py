@@ -459,20 +459,28 @@ def test_gitlab_create_mr_raises_on_gitlab_error() -> None:
     assert "creating GitLab merge request" in str(exc.value)
 
 
-def test_list_konflux_open_mrs_raises_on_project_lookup_error() -> None:
+def test_iter_konflux_open_mrs_raises_on_project_lookup_error() -> None:
     """Project lookup failures raise ``CheckStepError``."""
     with pytest.raises(tekton.CheckStepError) as exc:
-        process_file_updates.list_konflux_open_mrs(
-            "org/up", _mock_gitlab_client(get_error=GitlabError("project not found"))
+        list(
+            process_file_updates.iter_konflux_open_mrs(
+                "org/up",
+                _mock_gitlab_client(get_error=GitlabError("project not found")),
+                "test-group",
+            )
         )
     assert "getting GitLab project" in str(exc.value)
 
 
-def test_list_konflux_open_mrs_raises_on_list_error() -> None:
+def test_iter_konflux_open_mrs_raises_on_list_error() -> None:
     """MR list failures raise ``CheckStepError``."""
     with pytest.raises(tekton.CheckStepError) as exc:
-        process_file_updates.list_konflux_open_mrs(
-            "org/up", _mock_gitlab_client(list_error=GitlabError("list failed"))
+        list(
+            process_file_updates.iter_konflux_open_mrs(
+                "org/up",
+                _mock_gitlab_client(list_error=GitlabError("list failed")),
+                "test-group",
+            )
         )
     assert "listing GitLab merge requests" in str(exc.value)
 
@@ -796,6 +804,23 @@ def test_resolve_target_file_rejects_unsafe_paths(tmp_path: Path, entry_path: st
         process_file_updates.resolve_target_file(repo, entry_path)
 
 
+def test_resolve_target_file_rejects_symlink_escape(tmp_path: Path) -> None:
+    """Symlink pointing outside repo is rejected after resolution."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.yaml"
+    secret.write_text("sensitive: data\n", encoding="utf-8")
+    symlink = repo / "link"
+    try:
+        symlink.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks not supported")
+    with pytest.raises(ValueError, match="escapes repository root"):
+        process_file_updates.resolve_target_file(repo, "link/secret.yaml")
+
+
 def test_process_all_paths_rejects_unsafe_path_entry(tmp_path: Path) -> None:
     """Unsafe path entries fail before seed or replacement side effects."""
     repo = tmp_path / "repo"
@@ -1078,16 +1103,63 @@ def test_get_cached_diff(tmp_path: Path) -> None:
     assert (tmp_path / "tempMRFile-cached.diff").read_text(encoding="utf-8") == "diff\n"
 
 
-def test_list_konflux_open_mrs_paginates() -> None:
-    """Open MR listing paginates until an empty page."""
-    page1_mr = mock.Mock()
-    page1_mr.iid = 1
-    items = process_file_updates.list_konflux_open_mrs(
-        "org/up",
-        _mock_gitlab_client(list_pages=[[page1_mr], []]),
+def test_fetch_merge_request_head(tmp_path: Path) -> None:
+    """MR head is fetched into a local ref named ``mr_<iid>``."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    with mock.patch.object(process_file_updates.vcs_git, "fetch") as fetch:
+        ref = process_file_updates._fetch_merge_request_head(repo, 42)
+    assert ref == "mr_42"
+    fetch.assert_called_once_with(repo, "origin", "merge-requests/42/head:mr_42")
+
+
+def test_iter_konflux_open_mrs_paginates_and_filters_by_title() -> None:
+    """Open MR listing paginates and filters by delimiter-aware title prefix."""
+    matching_mr = mock.Mock()
+    matching_mr.iid = 1
+    matching_mr.title = "[Konflux release] test-group: fileUpdates changes abc123"
+
+    unrelated_mr = mock.Mock()
+    unrelated_mr.iid = 2
+    unrelated_mr.title = "Some other MR mentioning test-group"
+
+    client = _mock_gitlab_client(list_pages=[[matching_mr, unrelated_mr], []])
+    items = list(
+        process_file_updates.iter_konflux_open_mrs(
+            "org/up",
+            client,
+            "test-group",
+        )
     )
     assert len(items) == 1
     assert items[0].iid == 1
+    client.projects.get.return_value.mergerequests.list.assert_any_call(
+        state="opened",
+        search="[Konflux release] test-group:",
+        per_page=100,
+        page=1,
+    )
+
+
+def test_iter_konflux_open_mrs_rejects_component_group_prefix_collision() -> None:
+    """Shorter component groups must not match longer groups sharing a prefix."""
+    collision_mr = mock.Mock()
+    collision_mr.iid = 3
+    collision_mr.title = "[Konflux release] foobar: fileUpdates changes abc123"
+
+    exact_mr = mock.Mock()
+    exact_mr.iid = 4
+    exact_mr.title = "[Konflux release] foo: fileUpdates changes def456"
+
+    items = list(
+        process_file_updates.iter_konflux_open_mrs(
+            "org/up",
+            _mock_gitlab_client(list_pages=[[collision_mr, exact_mr], []]),
+            "foo",
+        )
+    )
+    assert len(items) == 1
+    assert items[0].iid == 4
 
 
 def test_find_existing_mr_with_same_diff(tmp_path: Path) -> None:
@@ -1100,8 +1172,8 @@ def test_find_existing_mr_with_same_diff(tmp_path: Path) -> None:
     with (
         mock.patch.object(
             process_file_updates,
-            "list_konflux_open_mrs",
-            return_value=[existing_mr],
+            "iter_konflux_open_mrs",
+            return_value=iter([existing_mr]),
         ),
         mock.patch.object(
             process_file_updates,
@@ -1111,7 +1183,7 @@ def test_find_existing_mr_with_same_diff(tmp_path: Path) -> None:
         mock.patch.object(process_file_updates.vcs_git, "working_tree_diff", return_value=""),
     ):
         info = process_file_updates.find_existing_mr_with_same_diff(
-            "org/up", repo, tmp_path, _mock_gitlab_client()
+            "org/up", repo, tmp_path, _mock_gitlab_client(), "test-group"
         )
     assert info is not None
     assert "merge_requests/99" in info
@@ -1429,8 +1501,8 @@ def test_find_existing_mr_returns_none_when_diff_differs(tmp_path: Path) -> None
     with (
         mock.patch.object(
             process_file_updates,
-            "list_konflux_open_mrs",
-            return_value=[existing_mr],
+            "iter_konflux_open_mrs",
+            return_value=iter([existing_mr]),
         ),
         mock.patch.object(
             process_file_updates,
@@ -1445,7 +1517,7 @@ def test_find_existing_mr_returns_none_when_diff_differs(tmp_path: Path) -> None
     ):
         assert (
             process_file_updates.find_existing_mr_with_same_diff(
-                "org/up", repo, tmp_path, mock.Mock()
+                "org/up", repo, tmp_path, mock.Mock(), "test-group"
             )
             is None
         )
