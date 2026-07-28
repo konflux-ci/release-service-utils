@@ -201,6 +201,36 @@ def test_run_cleans_up_even_on_failure(
     assert len(cleanup_calls) > 0
 
 
+def test_run_default_cleanup_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Warning logged when remote cleanup fails in default script path."""
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps({"components": [{"name": "prod"}]}))
+    monkeypatch.setattr(sign_windows, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    (comp_dir / "has_windows").touch()
+    (comp_dir / "unsigned_windows_digest.txt").write_text("sha256:unsigned")
+
+    def fake_subprocess_run(cmd, **kwargs):
+        if cmd[0] == "ssh" and "Remove-Item" in " ".join(str(a) for a in cmd):
+            return mock.Mock(returncode=1)
+        return mock.Mock(returncode=0, stdout="Digest: sha256:signed\n")
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch("subprocess.check_call"),
+        mock.patch("subprocess.run", side_effect=fake_subprocess_run),
+        caplog.at_level("WARNING"),
+    ):
+        sign_windows.run("quay.io/org", "uid-123")
+
+    assert "Remote cleanup failed" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # _run_custom_script (custom signing script path)
 # ---------------------------------------------------------------------------
@@ -391,6 +421,125 @@ def test_run_custom_script_ssh_failure(
                 "uid-123",
                 signing_script="C:/Scripts/sign.bat",
             )
+
+
+def test_run_custom_script_scp_failure_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RuntimeError raised when SCP of signed digest fails."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps(
+            {
+                "components": [
+                    {"name": "prod", "source": {"git": {"revision": "abc123"}}}
+                ]
+            }
+        ),
+    )
+    monkeypatch.setattr(sign_windows, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    (comp_dir / "has_windows").touch()
+    (comp_dir / "unsigned_windows_digest.txt").write_text("sha256:unsigned")
+
+    def fake_subprocess_run(cmd, **kwargs):
+        if cmd[0] == "scp" and "signed_digest_" in " ".join(cmd):
+            return mock.Mock(returncode=1)
+        return mock.Mock(returncode=0)
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch("subprocess.run", side_effect=fake_subprocess_run),
+        pytest.raises(RuntimeError, match="scp of signed digest"),
+    ):
+        sign_windows.run(
+            "quay.io/org",
+            "uid-123",
+            signing_script="C:/Scripts/sign.bat",
+            origin="my-tenant",
+        )
+
+
+def test_run_custom_script_cleanup_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Warning logged when remote cleanup of digest file fails."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps(
+            {
+                "components": [
+                    {"name": "prod", "source": {"git": {"revision": "abc123"}}}
+                ]
+            }
+        ),
+    )
+    monkeypatch.setattr(sign_windows, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    (comp_dir / "has_windows").touch()
+    (comp_dir / "unsigned_windows_digest.txt").write_text("sha256:unsigned")
+
+    def fake_subprocess_run(cmd, **kwargs):
+        if cmd[0] == "scp" and "signed_digest_" in " ".join(cmd):
+            (comp_dir / "signed_windows_digest.txt").write_text("sha256:signed")
+            return mock.Mock(returncode=0)
+        if cmd[0] == "ssh" and "Remove-Item" in " ".join(cmd):
+            return mock.Mock(returncode=1)
+        return mock.Mock(returncode=0)
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch("subprocess.run", side_effect=fake_subprocess_run),
+        caplog.at_level("WARNING"),
+    ):
+        sign_windows.run(
+            "quay.io/org",
+            "uid-123",
+            signing_script="C:/Scripts/sign.bat",
+            origin="my-tenant",
+        )
+
+    assert "Remote cleanup" in caplog.text
+
+
+# Also check the default script path's parsing failure branch
+def test_run_default_script_oras_digest_parse_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RuntimeError raised when oras push output doesn't contain a Digest line."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps({"components": [{"name": "prod"}]}),
+    )
+    monkeypatch.setattr(sign_windows, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    (comp_dir / "has_windows").touch()
+    (comp_dir / "unsigned_windows_digest.txt").write_text("sha256:unsigned")
+
+    def fake_subprocess_run(cmd, **kwargs):
+        if cmd[0] == "ssh" and "batch" not in " ".join(cmd):
+            return mock.Mock(returncode=0, stdout="no digest here\n")
+        return mock.Mock(returncode=0)
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch("subprocess.check_call"),
+        mock.patch("subprocess.run", side_effect=fake_subprocess_run),
+        pytest.raises(RuntimeError, match="parsing Digest"),
+    ):
+        sign_windows.run("quay.io/org", "uid-123")
 
 
 # ---------------------------------------------------------------------------

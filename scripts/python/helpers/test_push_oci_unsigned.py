@@ -213,6 +213,59 @@ def test_run_moves_and_pushes_mac_and_windows(
     assert (comp_dir / "unsigned" / "windows" / "amd64" / "unpacked-app.tar.gz").exists()
 
 
+def test_run_linux_only_creates_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Linux components create the linux dir and skip mac/windows pushes."""
+    snapshot = {
+        "components": [
+            {
+                "name": "testproduct",
+                "staged": {
+                    "files": [
+                        {"source": "bin.tar.gz", "os": "linux", "arch": "amd64"},
+                    ]
+                },
+            }
+        ]
+    }
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps(snapshot))
+    content_dir = tmp_path / "artifacts"
+    monkeypatch.setattr(push_oci_unsigned, "CONTENT_DIR", content_dir)
+    _make_quay_secret(tmp_path, monkeypatch)
+
+    comp_dir = content_dir / "testproduct"
+    comp_dir.mkdir(parents=True)
+    (comp_dir / "has_linux").touch()
+    _make_tar(comp_dir / "bin.tar.gz", {"mybinary": b"data"})
+
+    with mock.patch("oras_utils.oras_login"), mock.patch("oras_utils.oras_push") as mock_push:
+        push_oci_unsigned.run("quay.io/org", "uid-123")
+
+    mock_push.assert_not_called()
+    assert (comp_dir / "linux" / "amd64" / "mybinary").exists()
+
+
+def test_run_no_mac_no_windows_skips_pushes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Components with files but no has_mac/has_windows skip both pushes."""
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps(SNAPSHOT))
+    content_dir = tmp_path / "artifacts"
+    monkeypatch.setattr(push_oci_unsigned, "CONTENT_DIR", content_dir)
+    _make_quay_secret(tmp_path, monkeypatch)
+
+    comp_dir = content_dir / "testproduct"
+    comp_dir.mkdir(parents=True)
+    _make_tar(comp_dir / "app-bundle.tar.gz", {"binary": b"mac"})
+    _make_tar(comp_dir / "unpacked-app.tar.gz", {"app.exe": b"win"})
+
+    with mock.patch("oras_utils.oras_login"), mock.patch("oras_utils.oras_push") as mock_push:
+        push_oci_unsigned.run("quay.io/org", "uid-123")
+
+    mock_push.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
