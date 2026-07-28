@@ -29,6 +29,7 @@ dependencies = [
     "pulp-tool @ git+https://github.com/konflux-ci/pulp-tool.git",
     "jq",
     "kubernetes>=28.0",
+    "RestrictedPython>=7.0",
 ]
 
 [tool.black]
