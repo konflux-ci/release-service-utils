@@ -511,7 +511,9 @@ def test_run_custom_script_scp_failure_raises(
     """RuntimeError raised when SCP of signed digest fails."""
     monkeypatch.setenv(
         "SNAPSHOT_JSON",
-        json.dumps({"components": [{"name": "prod", "source": {"git": {"revision": "abc123"}}}]}),
+        json.dumps(
+            {"components": [{"name": "prod", "source": {"git": {"revision": "abc123"}}}]}
+        ),
     )
     monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
     _setup_mounts(tmp_path, monkeypatch)
@@ -549,7 +551,9 @@ def test_run_custom_script_cleanup_warning(
     """Warning logged when remote cleanup of digest file fails."""
     monkeypatch.setenv(
         "SNAPSHOT_JSON",
-        json.dumps({"components": [{"name": "prod", "source": {"git": {"revision": "abc123"}}}]}),
+        json.dumps(
+            {"components": [{"name": "prod", "source": {"git": {"revision": "abc123"}}}]}
+        ),
     )
     monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
     _setup_mounts(tmp_path, monkeypatch)

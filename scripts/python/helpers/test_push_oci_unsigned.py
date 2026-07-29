@@ -213,9 +213,7 @@ def test_run_moves_and_pushes_mac_and_windows(
     assert (comp_dir / "unsigned" / "windows" / "amd64" / "unpacked-app.tar.gz").exists()
 
 
-def test_run_linux_only_creates_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_linux_only_creates_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux components create the linux dir and skip mac/windows pushes."""
     snapshot = {
         "components": [

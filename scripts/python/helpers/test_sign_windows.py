@@ -430,11 +430,7 @@ def test_run_custom_script_scp_failure_raises(
     monkeypatch.setenv(
         "SNAPSHOT_JSON",
         json.dumps(
-            {
-                "components": [
-                    {"name": "prod", "source": {"git": {"revision": "abc123"}}}
-                ]
-            }
+            {"components": [{"name": "prod", "source": {"git": {"revision": "abc123"}}}]}
         ),
     )
     monkeypatch.setattr(sign_windows, "CONTENT_DIR", tmp_path)
@@ -471,11 +467,7 @@ def test_run_custom_script_cleanup_warning(
     monkeypatch.setenv(
         "SNAPSHOT_JSON",
         json.dumps(
-            {
-                "components": [
-                    {"name": "prod", "source": {"git": {"revision": "abc123"}}}
-                ]
-            }
+            {"components": [{"name": "prod", "source": {"git": {"revision": "abc123"}}}]}
         ),
     )
     monkeypatch.setattr(sign_windows, "CONTENT_DIR", tmp_path)
