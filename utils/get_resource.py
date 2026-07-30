@@ -19,7 +19,7 @@ import logging
 import os
 import sys
 
-import subprocess_cmd
+from release_service_utils.helpers import subprocess_cmd
 
 LOGGER = logging.getLogger("get_resource")
 

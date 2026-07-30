@@ -1,0 +1,1 @@
+"""Test reduce snapshot functionality."""

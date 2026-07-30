@@ -1,0 +1,1 @@
+"""Sign mac helper tests."""

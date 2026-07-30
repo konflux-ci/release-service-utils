@@ -1,0 +1,1 @@
+"""Compress artifacts tests."""
