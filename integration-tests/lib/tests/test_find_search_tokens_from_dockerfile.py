@@ -114,3 +114,88 @@ def test_search_tokens_for_changed_paths_unions() -> None:
     )
     assert "/home/pyxis/a.py" in n
     assert "/home/scripts/b.sh" in n
+
+
+# --- module-path token tests ---
+
+_PKG_MAPPING = {"src": "release_service_utils"}
+
+
+def test_parse_pyproject_package_dirs_extracts_mapping(tmp_path: Path) -> None:
+    """Read ``[tool.setuptools] package-dir`` and invert to source→package."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[tool.setuptools]\npackage-dir = {"release_service_utils" = "src"}\n',
+        encoding="utf-8",
+    )
+    assert fts.parse_pyproject_package_dirs(pyproject) == {"src": "release_service_utils"}
+
+
+def test_parse_pyproject_package_dirs_missing_key(tmp_path: Path) -> None:
+    """Return empty mapping when ``[tool.setuptools]`` has no ``package-dir``."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    assert fts.parse_pyproject_package_dirs(pyproject) == {}
+
+
+def test_module_tokens_task_py_file() -> None:
+    """Generate parent-package module token for a task ``.py`` file."""
+    tokens = fts.module_tokens_for_repo_path(
+        "src/tasks/managed/check_labels/check_labels.py", _PKG_MAPPING
+    )
+    assert tokens == frozenset({"release_service_utils.tasks.managed.check_labels"})
+
+
+def test_module_tokens_init_py() -> None:
+    """Generate package module token for ``__init__.py``."""
+    tokens = fts.module_tokens_for_repo_path(
+        "src/tasks/managed/check_labels/__init__.py", _PKG_MAPPING
+    )
+    assert tokens == frozenset({"release_service_utils.tasks.managed.check_labels"})
+
+
+def test_module_tokens_main_py() -> None:
+    """Generate package module token for ``__main__.py``."""
+    tokens = fts.module_tokens_for_repo_path(
+        "src/tasks/managed/check_labels/__main__.py", _PKG_MAPPING
+    )
+    assert tokens == frozenset({"release_service_utils.tasks.managed.check_labels"})
+
+
+def test_module_tokens_non_py_returns_empty() -> None:
+    """Non-``.py`` files yield no module tokens."""
+    assert fts.module_tokens_for_repo_path("src/tasks/README.md", _PKG_MAPPING) == frozenset()
+
+
+def test_module_tokens_unknown_root_returns_empty() -> None:
+    """Paths outside mapped source dirs yield no module tokens."""
+    assert fts.module_tokens_for_repo_path("pyxis/foo.py", _PKG_MAPPING) == frozenset()
+
+
+def test_module_tokens_bare_package_skipped() -> None:
+    """Skip bare package name from ``src/__init__.py``."""
+    assert fts.module_tokens_for_repo_path("src/__init__.py", _PKG_MAPPING) == frozenset()
+
+
+def test_module_tokens_directory_path_returns_empty() -> None:
+    """Directory paths (trailing slash) yield no module tokens."""
+    assert fts.module_tokens_for_repo_path("src/tasks/", _PKG_MAPPING) == frozenset()
+
+
+def test_module_tokens_dot_slash_prefix() -> None:
+    """Paths with ``./`` prefix normalize correctly."""
+    tokens = fts.module_tokens_for_repo_path("./src/helpers/tekton/__init__.py", _PKG_MAPPING)
+    assert tokens == frozenset({"release_service_utils.helpers.tekton"})
+
+
+def test_module_tokens_for_changed_paths_unions() -> None:
+    """Union module tokens across multiple changed paths."""
+    tokens = fts.module_tokens_for_changed_paths(
+        [
+            "src/tasks/managed/check_labels/check_labels.py",
+            "src/helpers/tekton/__init__.py",
+        ],
+        _PKG_MAPPING,
+    )
+    assert "release_service_utils.tasks.managed.check_labels" in tokens
+    assert "release_service_utils.helpers.tekton" in tokens

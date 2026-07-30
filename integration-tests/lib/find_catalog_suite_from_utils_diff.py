@@ -299,7 +299,14 @@ def _collect_task_search_tokens(changed: list[str]) -> set[str]:
     if not resolved.is_file():
         raise FileNotFoundError(f"Dockerfile required (run from utils repo root): {resolved}")
     layout = fts.load_layout_from_dockerfile(resolved)
-    return set(fts.search_tokens_for_changed_paths(changed, layout))
+    tokens = set(fts.search_tokens_for_changed_paths(changed, layout))
+
+    pyproject = Path("pyproject.toml").resolve()
+    if pyproject.is_file():
+        source_to_package = fts.parse_pyproject_package_dirs(pyproject)
+        tokens |= set(fts.module_tokens_for_changed_paths(changed, source_to_package))
+
+    return tokens
 
 
 def resolve(catalog: Path, changed_lines: list[str]) -> dict[str, str | None]:

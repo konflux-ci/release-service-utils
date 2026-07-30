@@ -17,17 +17,26 @@ import find_catalog_suite_from_utils_diff as fc
 _MINIMAL_UTILS_DOCKERFILE = """
 COPY pyxis /home/pyxis
 COPY scripts /home/scripts
+COPY src /home/src
 ENV PATH="$PATH:/home/pyxis"
+"""
+
+_MINIMAL_PYPROJECT_TOML = """
+[tool.setuptools]
+package-dir = {"release_service_utils" = "src"}
 """
 
 
 @pytest.fixture
 def utils_repo_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Chdir to a temp tree containing ``Dockerfile``."""
+    """Chdir to a temp tree containing ``Dockerfile`` and ``pyproject.toml``."""
     root = tmp_path / "utils-repo"
     root.mkdir()
     (root / "Dockerfile").write_text(
         _MINIMAL_UTILS_DOCKERFILE.strip() + "\n", encoding="utf-8"
+    )
+    (root / "pyproject.toml").write_text(
+        _MINIMAL_PYPROJECT_TOML.strip() + "\n", encoding="utf-8"
     )
     monkeypatch.chdir(root)
     return root
@@ -413,6 +422,14 @@ def test_collect_task_search_tokens_unions_multiple_paths(tmp_path: Path) -> Non
     tokens = fc._collect_task_search_tokens(["scripts/a.sh", "pyxis/b.py"])
     assert "/home/scripts/a.sh" in tokens
     assert "/home/pyxis/b.py" in tokens
+
+
+@pytest.mark.usefixtures("utils_repo_root")
+def test_collect_task_search_tokens_includes_module_tokens(tmp_path: Path) -> None:
+    """Include dotted module-path tokens from ``pyproject.toml`` package-dir."""
+    tokens = fc._collect_task_search_tokens(["src/tasks/managed/check_labels/check_labels.py"])
+    assert "/home/src/tasks/managed/check_labels/check_labels.py" in tokens
+    assert "release_service_utils.tasks.managed.check_labels" in tokens
 
 
 def test_collect_task_search_tokens_raises_without_dockerfile(
