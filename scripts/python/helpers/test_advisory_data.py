@@ -378,3 +378,38 @@ def test_list_existing_advisory_subdirs_skips_files(tmp_path: Path) -> None:
     (base / "2024" / "notadir.txt").write_text("x", encoding="utf-8")
     (base / "file.txt").write_text("y", encoding="utf-8")
     assert advisory_data.list_existing_advisory_subdirs(base) == []
+
+
+def test_encode_advisory_param_round_trips_decode() -> None:
+    """Gzip/base64 encoding round-trips through decode_advisory_param."""
+    payload = {"type": "RHBA", "content": {"artifacts": []}}
+    encoded = advisory_data.encode_advisory_param(payload)
+    assert advisory_data.decode_advisory_param(encoded) == payload
+
+
+def test_first_mapping_content_type_reads_component_rows() -> None:
+    """Return the first mapping.components content type."""
+    data = {
+        "mapping": {
+            "components": [
+                {"contentType": "generic"},
+                {"contentType": "image"},
+            ],
+        },
+    }
+    assert advisory_data.first_mapping_content_type(data) == "generic"
+
+
+def test_first_mapping_content_type_reads_content_gateway_rows() -> None:
+    """Prefer contentGateway.contentType over top-level contentType."""
+    data = {
+        "mapping": {
+            "components": [
+                {
+                    "contentGateway": {"contentType": "binary"},
+                    "contentType": "image",
+                },
+            ],
+        },
+    }
+    assert advisory_data.first_mapping_content_type(data) == "binary"
