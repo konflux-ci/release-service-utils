@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -698,6 +700,7 @@ def test_main_collects_candidates_and_writes_batches(tmp_path) -> None:
         "registry.redhat.io/myproduct/myrepo:v1.0", "sha256:abc", "myproduct/myrepo", "key-a"
     )
     with (
+        patch("rh_direct_sign_image.pyxis._get_session"),
         patch(
             "rh_direct_sign_image.get_configmap",
             return_value={"data": {"SIG_KEY_NAME": "key-a"}},
@@ -759,6 +762,7 @@ def test_main_returns_zero_on_success(tmp_path) -> None:
     data_path.write_text(json.dumps(data_file))
 
     with (
+        patch("rh_direct_sign_image.pyxis._get_session"),
         patch(
             "rh_direct_sign_image.get_configmap",
             return_value={"data": {"SIG_KEY_NAME": "key-a"}},
@@ -798,6 +802,7 @@ def test_main_returns_one_on_unexpected_error(tmp_path) -> None:
     data_path.write_text(json.dumps({}))
 
     with (
+        patch("rh_direct_sign_image.pyxis._get_session"),
         patch(
             "rh_direct_sign_image.get_configmap",
             side_effect=RuntimeError("something went wrong"),
@@ -954,6 +959,34 @@ def test_submit_batch_includes_intention_label(tmp_path) -> None:
     assert any("internal-services.appstudio.openshift.io/intention=release" in a for a in cmd)
 
 
+def test_submit_batch_logs_completed_with_duration(tmp_path, caplog) -> None:
+    """submit_batch logs completion with elapsed time after the request finishes."""
+    cfg = get_submit_config(_FULL_CONFIGMAP, _make_submit_args(), {})
+    batch_file = tmp_path / "batch_0000.txt"
+    batch_file.write_text("base64content==")
+
+    with patch("rh_direct_sign_image.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        with caplog.at_level(logging.INFO, logger="release"):
+            submit_batch(batch_file, cfg)
+
+    assert any(
+        re.search(r"completed successfully in \d+\.\d+s", r.message) for r in caplog.records
+    )
+
+
+def test_submit_batch_raises_on_nonzero_returncode(tmp_path) -> None:
+    """submit_batch raises RuntimeError when internal-request exits non-zero."""
+    cfg = get_submit_config(_FULL_CONFIGMAP, _make_submit_args(), {})
+    batch_file = tmp_path / "batch_0000.txt"
+    batch_file.write_text("base64content==")
+
+    with patch("rh_direct_sign_image.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stderr="something broke")
+        with pytest.raises(RuntimeError, match="Failed to submit batch"):
+            submit_batch(batch_file, cfg)
+
+
 # --- submit_batches ---
 
 
@@ -1099,6 +1132,7 @@ def test_main_submits_batches_when_flag_set(tmp_path) -> None:
     output_dir = tmp_path / "batches"
 
     with (
+        patch("rh_direct_sign_image.pyxis._get_session"),
         patch(
             "rh_direct_sign_image.get_configmap",
             return_value=_FULL_CONFIGMAP,
@@ -1158,6 +1192,7 @@ def test_main_uses_temp_dir_when_output_not_specified(tmp_path) -> None:
     data_path.write_text(json.dumps(data_file))
 
     with (
+        patch("rh_direct_sign_image.pyxis._get_session"),
         patch(
             "rh_direct_sign_image.get_configmap",
             return_value=_FULL_CONFIGMAP,
@@ -1215,6 +1250,7 @@ def test_main_always_writes_batches(tmp_path) -> None:
     data_path.write_text(json.dumps(data_file))
 
     with (
+        patch("rh_direct_sign_image.pyxis._get_session"),
         patch(
             "rh_direct_sign_image.get_configmap",
             return_value={"data": {"SIG_KEY_NAME": "key-a"}},
