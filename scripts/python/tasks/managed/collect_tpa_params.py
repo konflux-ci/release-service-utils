@@ -338,11 +338,11 @@ def main(argv: list[str] | None = None) -> int:
         result_retry_aws,
         result_retry_s3,
     ) = tekton.result_paths_from_env(
-        "RESULT_ATLASAPIURL",
-        "RESULT_SSOTOKENURL",
-        "RESULT_SECRETNAME",
-        "RESULT_RETRYAWSSECRETNAME",
-        "RESULT_RETRYS3BUCKET",
+        "RESULT_ATLAS_API_URL",
+        "RESULT_SSO_TOKEN_URL",
+        "RESULT_SECRET_NAME",
+        "RESULT_RETRY_AWS_SECRET_NAME",
+        "RESULT_RETRY_S3_BUCKET",
     )
 
     result_paths = {
