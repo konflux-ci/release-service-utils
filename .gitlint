@@ -1,10 +1,7 @@
 [general]
 contrib=contrib-title-conventional-commits,CC1
 extra-path=.github/gitlint
-ignore=T5
-
-[title-max-length]
-line-length=72
+ignore=T1,T5
 
 [body-max-line-length]
 line-length=72
