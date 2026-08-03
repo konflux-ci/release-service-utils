@@ -392,6 +392,58 @@ def test_process_component_raises_when_file_missing_from_container(
 
 
 # ---------------------------------------------------------------------------
+# _safe_extract_layer
+# ---------------------------------------------------------------------------
+
+
+def _make_layer(tmp_path: Path, members: list) -> Path:
+    """Write a tar archive at tmp_path/layer.tar containing the given members."""
+    layer = tmp_path / "layer.tar"
+    with tarfile.open(str(layer), "w") as tf:
+        for m in members:
+            tf.addfile(m)
+    return layer
+
+
+def test_safe_extract_layer_skips_symlink_not_in_wanted(tmp_path: Path) -> None:
+    """A symlink that is not in wanted_files is silently skipped, not an error."""
+    sym = tarfile.TarInfo(name="releases/link.so")
+    sym.type = tarfile.SYMTYPE
+    sym.linkname = "actual.so"
+
+    reg = tarfile.TarInfo(name="releases/real.tar.gz")
+    reg.size = 0
+
+    layer = _make_layer(tmp_path, [sym, reg])
+    target = tmp_path / "out"
+    target.mkdir()
+
+    with tarfile.open(str(layer)) as tf:
+        found = extract_artifacts._safe_extract_layer(
+            tf, "releases", target, "layer.tar", wanted_files={"releases/real.tar.gz"}
+        )
+
+    assert found is True
+
+
+def test_safe_extract_layer_raises_for_symlink_in_wanted(tmp_path: Path) -> None:
+    """A symlink that IS in wanted_files raises RuntimeError."""
+    sym = tarfile.TarInfo(name="releases/needed.tar.gz")
+    sym.type = tarfile.SYMTYPE
+    sym.linkname = "actual.tar.gz"
+
+    layer = _make_layer(tmp_path, [sym])
+    target = tmp_path / "out"
+    target.mkdir()
+
+    with tarfile.open(str(layer)) as tf:
+        with pytest.raises(RuntimeError, match="unsupported entry type"):
+            extract_artifacts._safe_extract_layer(
+                tf, "releases", target, "layer.tar", wanted_files={"releases/needed.tar.gz"}
+            )
+
+
+# ---------------------------------------------------------------------------
 # _extract_from_oras
 # ---------------------------------------------------------------------------
 
