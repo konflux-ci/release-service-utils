@@ -115,6 +115,31 @@ def test_json_dict_to_yaml_text_roundtrip() -> None:
     assert "tags:" in yml
 
 
+@pytest.mark.parametrize("version", ["9.9", "1", "3.20", "4.5", "0.1"])
+def test_json_dict_to_yaml_text_double_quotes_ambiguous_strings(version: str) -> None:
+    """Float/int version strings use double quotes, not single quotes."""
+    lines = {
+        line.strip()
+        for line in advisory_data.json_dict_to_yaml_text(
+            {"product_version": version}
+        ).splitlines()
+    }
+    assert f'product_version: "{version}"' in lines
+    assert f"product_version: '{version}'" not in lines
+
+
+def test_json_dict_to_yaml_text_int_bool_unaffected() -> None:
+    """int/bool fields are written as is and not quoted as strings."""
+    lines = {
+        line.strip()
+        for line in advisory_data.json_dict_to_yaml_text(
+            {"product_id": 479, "skip_customer_notifications": False}
+        ).splitlines()
+    }
+    assert "product_id: 479" in lines
+    assert "skip_customer_notifications: false" in lines
+
+
 def test_list_existing_advisory_subdirs_order(tmp_path: Path) -> None:
     """List advisory subdirs with newest leaf mtime first."""
     base = tmp_path / "t"
