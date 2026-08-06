@@ -513,3 +513,93 @@ def test_main_exception_returns_error() -> None:
             ["push_unsigned.py", "--quay-url", "quay.io/org", "--pipeline-run-uid", "uid"]
         )
     assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# multi-entry (os, arch) collision prevention
+# ---------------------------------------------------------------------------
+
+
+def test_unpack_file_entries_multi_rhel_isolation(tmp_path: Path) -> None:
+    """Multiple Linux entries with the same arch get per-source subdirectories."""
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+
+    rhel9_archive = comp_dir / "oc-mirror-rhel9-linux-amd64.tar.gz"
+    _make_tar(rhel9_archive, {"oc-mirror": b"rhel9-binary"})
+
+    rhel8_archive = comp_dir / "oc-mirror-rhel8-linux-amd64.tar.gz"
+    _make_tar(rhel8_archive, {"oc-mirror": b"rhel8-binary"})
+
+    entries = [
+        {
+            "source": "/releases/oc-mirror-rhel9-linux-amd64.tar.gz",
+            "os": "linux",
+            "arch": "amd64",
+        },
+        {
+            "source": "/releases/oc-mirror-rhel8-linux-amd64.tar.gz",
+            "os": "linux",
+            "arch": "amd64",
+        },
+    ]
+
+    push_unsigned._unpack_file_entries(entries, comp_dir, comp_dir / "unsigned")
+
+    rhel9_dir = comp_dir / "linux" / "amd64" / "oc-mirror-rhel9-linux-amd64"
+    rhel8_dir = comp_dir / "linux" / "amd64" / "oc-mirror-rhel8-linux-amd64"
+    assert (rhel9_dir / "oc-mirror").exists()
+    assert (rhel8_dir / "oc-mirror").exists()
+    assert (rhel9_dir / "oc-mirror").read_bytes() == b"rhel9-binary"
+    assert (rhel8_dir / "oc-mirror").read_bytes() == b"rhel8-binary"
+
+
+def test_unpack_file_entries_single_entry_no_isolation(tmp_path: Path) -> None:
+    """A single entry per (os, arch) still extracts to the shared directory (no regression)."""
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    archive = comp_dir / "binary-linux-amd64.tar.gz"
+    _make_tar(archive, {"mybinary": b"data"})
+
+    push_unsigned._unpack_file_entries(
+        [{"source": "/releases/binary-linux-amd64.tar.gz", "os": "linux", "arch": "amd64"}],
+        comp_dir,
+        comp_dir / "unsigned",
+    )
+
+    assert (comp_dir / "linux" / "amd64" / "mybinary").exists()
+    assert not (comp_dir / "linux" / "amd64" / "binary-linux-amd64").exists()
+
+
+def test_unpack_file_entries_different_binaries_same_arch_isolation(tmp_path: Path) -> None:
+    """Different-named binaries sharing (os, arch) don't cross-contaminate each other."""
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+
+    installer_archive = comp_dir / "product-installer-linux-amd64.tar.gz"
+    _make_tar(installer_archive, {"installer": b"installer-binary"})
+
+    client_archive = comp_dir / "product-client-linux-amd64.tar.gz"
+    _make_tar(client_archive, {"client": b"client-binary"})
+
+    entries = [
+        {
+            "source": "/releases/product-installer-linux-amd64.tar.gz",
+            "os": "linux",
+            "arch": "amd64",
+        },
+        {
+            "source": "/releases/product-client-linux-amd64.tar.gz",
+            "os": "linux",
+            "arch": "amd64",
+        },
+    ]
+
+    push_unsigned._unpack_file_entries(entries, comp_dir, comp_dir / "unsigned")
+
+    installer_dir = comp_dir / "linux" / "amd64" / "product-installer-linux-amd64"
+    client_dir = comp_dir / "linux" / "amd64" / "product-client-linux-amd64"
+    assert (installer_dir / "installer").exists()
+    assert (client_dir / "client").exists()
+    assert not (installer_dir / "client").exists()
+    assert not (client_dir / "installer").exists()
