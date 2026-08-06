@@ -42,8 +42,7 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - pytest with pytest-cov. Run: `uv sync --dev && uv run pytest`.
 - Unit tests are co-located with source files (e.g., `pyxis/test_pyxis.py` next to `pyxis/pyxis.py`).
 - Exception: `utils/` has tests in `utils/tests/`.
-- Mocking with `unittest.mock`: use `patch`, `MagicMock`, `monkeypatch` for env vars.
-- Inject dependencies as callable kwargs with real defaults, replaced only in tests.
+- Mocking with `unittest.mock`: use `patch`, `MagicMock`, `monkeypatch` for env vars. Inject dependencies as callable kwargs with real defaults, replaced only in tests. Minimize per-test mock setup: extract repeated `mock.patch` calls into an `autouse=True` class fixture that provides sane defaults; individualy override only what differs. Avoid stacking `@mock.patch` decorators on every test method in a class. Extract repeated test data (response dicts, config payloads) into module-level constants or small helper functions (e.g. `_inspect_ok(data)`) to keep test bodies focused on the scenario under test.
 - Integration tests live in `integration-tests/` and are not run by pytest.
 - Test function names: `test_<what_is_being_tested>`. Type-hint test functions with `-> None`.
 
