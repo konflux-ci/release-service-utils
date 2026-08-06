@@ -130,6 +130,41 @@ def test_oras_resolve_falls_back_to_empty_auth_on_empty_stdout() -> None:
     assert result == "sha256:abc"
 
 
+def test_oras_resolve_uses_auth_file_directly(tmp_path: Path) -> None:
+    """When auth_file is provided, select-oci-auth is skipped."""
+    af = tmp_path / "auth.json"
+    af.write_text("{}", encoding="utf-8")
+    with patch("oras_utils.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="sha256:abc\n")
+        result = oras_resolve("registry.io/repo:tag", auth_file=af)
+
+    assert result == "sha256:abc"
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args.args[0]
+    assert cmd == ["oras", "resolve", "--registry-config", str(af), "registry.io/repo:tag"]
+
+
+def test_oras_resolve_with_auth_file_returns_none_on_failure(tmp_path: Path) -> None:
+    """With auth_file and check=False, returns None on non-zero exit."""
+    af = tmp_path / "auth.json"
+    af.write_text("{}", encoding="utf-8")
+    with patch("oras_utils.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
+        result = oras_resolve("registry.io/repo:tag", auth_file=af, check=False)
+
+    assert result is None
+
+
+def test_oras_resolve_with_auth_file_raises_when_check_true(tmp_path: Path) -> None:
+    """With auth_file and check=True, raises RuntimeError on non-zero exit."""
+    af = tmp_path / "auth.json"
+    af.write_text("{}", encoding="utf-8")
+    with patch("oras_utils.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="denied")
+        with pytest.raises(RuntimeError, match="oras resolve failed"):
+            oras_resolve("registry.io/repo:tag", auth_file=af)
+
+
 def test_oras_pull_runs_select_oci_auth_and_oras(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -192,3 +227,42 @@ def test_oras_pull_raises_when_subprocess_fails(
         oras_utils.oras_pull("quay.io/org/image:tag", tmp_path)
 
     assert exc_info.value.returncode == 1
+
+
+class TestOrasCp:
+    """Test oras_cp helper."""
+
+    def test_basic_copy(self, tmp_path: Path) -> None:
+        """Build a non-recursive ``oras cp`` command with both auth files."""
+        from_auth = tmp_path / "from.json"
+        to_auth = tmp_path / "to.json"
+        from_auth.write_text("{}", encoding="utf-8")
+        to_auth.write_text("{}", encoding="utf-8")
+        with patch.object(oras_utils.subprocess_cmd, "run_cmd") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            oras_utils.oras_cp("src", "dst", from_auth=from_auth, to_auth=to_auth)
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "oras"
+        assert cmd[1] == "cp"
+        assert "-r" not in cmd
+
+    def test_recursive_with_platform(self, tmp_path: Path) -> None:
+        """Build a recursive ``oras cp`` command with a platform filter."""
+        from_auth = tmp_path / "from.json"
+        to_auth = tmp_path / "to.json"
+        from_auth.write_text("{}", encoding="utf-8")
+        to_auth.write_text("{}", encoding="utf-8")
+        with patch.object(oras_utils.subprocess_cmd, "run_cmd") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            oras_utils.oras_cp(
+                "src",
+                "dst",
+                from_auth=from_auth,
+                to_auth=to_auth,
+                recursive=True,
+                platform="linux/amd64",
+            )
+        cmd = mock_run.call_args[0][0]
+        assert "-r" in cmd
+        assert "--platform" in cmd
+        assert "linux/amd64" in cmd
