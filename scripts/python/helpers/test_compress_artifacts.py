@@ -502,3 +502,160 @@ def test_main_exception_returns_error() -> None:
     with mock.patch.object(compress_artifacts, "run", side_effect=RuntimeError("oras fail")):
         rc = compress_artifacts.main(["compress_artifacts.py", "--quay-url", "quay.io/org"])
     assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# multi-entry (os, arch) — per-source subdirectory support
+# ---------------------------------------------------------------------------
+
+
+def test_compress_file_entry_no_false_match_single_entry(tmp_path: Path) -> None:
+    """A single (os, arch) entry ignores a coincidental subdir matching archive_stem."""
+    comp_dir = tmp_path / "component"
+    ready_dir = comp_dir / "ready_for_distribution"
+    ready_dir.mkdir(parents=True)
+
+    arch_dir = comp_dir / "linux" / "amd64"
+    arch_dir.mkdir(parents=True)
+    (arch_dir / "real-binary").write_bytes(b"the-binary")
+
+    # Coincidental subdirectory whose name matches archive_stem
+    fake_subdir = arch_dir / "product-linux-amd64"
+    fake_subdir.mkdir()
+    (fake_subdir / "decoy").write_bytes(b"should-not-appear-alone")
+
+    from collections import Counter
+
+    counts: Counter[tuple[str, str]] = Counter({("linux", "amd64"): 1})
+
+    compress_artifacts._compress_file_entry(
+        {"source": "/releases/product-linux-amd64.tar.gz", "os": "linux", "arch": "amd64"},
+        "files",
+        comp_dir,
+        ready_dir,
+        os_arch_counts=counts,
+    )
+
+    out = ready_dir / "product-linux-amd64.tar.gz"
+    assert out.exists()
+
+    with tarfile.open(str(out), "r:gz") as tf:
+        names = sorted(tf.getnames())
+
+    # Both the top-level binary and the subdir contents are included,
+    # proving the tarball was built from the full arch_dir, not the subdir.
+    assert "real-binary" in names
+    assert any("decoy" in n for n in names)
+
+
+def test_compress_file_entry_per_source_subdir(tmp_path: Path) -> None:
+    """When per-source subdirectories exist, each entry produces a distinct tarball."""
+    from collections import Counter
+
+    comp_dir = tmp_path / "component"
+    ready_dir = comp_dir / "ready_for_distribution"
+    ready_dir.mkdir(parents=True)
+
+    rhel9_dir = comp_dir / "linux" / "amd64" / "oc-mirror-rhel9-linux-amd64"
+    rhel9_dir.mkdir(parents=True)
+    (rhel9_dir / "oc-mirror").write_bytes(b"rhel9-binary")
+
+    rhel8_dir = comp_dir / "linux" / "amd64" / "oc-mirror-rhel8-linux-amd64"
+    rhel8_dir.mkdir(parents=True)
+    (rhel8_dir / "oc-mirror").write_bytes(b"rhel8-binary")
+
+    counts: Counter[tuple[str, str]] = Counter({("linux", "amd64"): 2})
+
+    compress_artifacts._compress_file_entry(
+        {
+            "source": "/releases/oc-mirror-rhel9-linux-amd64.tar.gz",
+            "os": "linux",
+            "arch": "amd64",
+        },
+        "files",
+        comp_dir,
+        ready_dir,
+        os_arch_counts=counts,
+    )
+    compress_artifacts._compress_file_entry(
+        {
+            "source": "/releases/oc-mirror-rhel8-linux-amd64.tar.gz",
+            "os": "linux",
+            "arch": "amd64",
+        },
+        "files",
+        comp_dir,
+        ready_dir,
+        os_arch_counts=counts,
+    )
+
+    import tarfile
+
+    rhel9_out = ready_dir / "oc-mirror-rhel9-linux-amd64.tar.gz"
+    rhel8_out = ready_dir / "oc-mirror-rhel8-linux-amd64.tar.gz"
+    assert rhel9_out.exists()
+    assert rhel8_out.exists()
+
+    with tarfile.open(str(rhel9_out), "r:gz") as tf:
+        rhel9_content = tf.extractfile("oc-mirror").read()
+    with tarfile.open(str(rhel8_out), "r:gz") as tf:
+        rhel8_content = tf.extractfile("oc-mirror").read()
+
+    assert rhel9_content == b"rhel9-binary"
+    assert rhel8_content == b"rhel8-binary"
+    assert rhel9_content != rhel8_content
+
+
+def test_compress_file_entry_per_source_subdir_different_binaries(tmp_path: Path) -> None:
+    """Different-named binaries sharing (os, arch) don't cross-contaminate output tarballs."""
+    from collections import Counter
+
+    comp_dir = tmp_path / "component"
+    ready_dir = comp_dir / "ready_for_distribution"
+    ready_dir.mkdir(parents=True)
+
+    installer_dir = comp_dir / "linux" / "amd64" / "product-installer-linux-amd64"
+    installer_dir.mkdir(parents=True)
+    (installer_dir / "installer").write_bytes(b"installer-binary")
+
+    client_dir = comp_dir / "linux" / "amd64" / "product-client-linux-amd64"
+    client_dir.mkdir(parents=True)
+    (client_dir / "client").write_bytes(b"client-binary")
+
+    counts: Counter[tuple[str, str]] = Counter({("linux", "amd64"): 2})
+
+    compress_artifacts._compress_file_entry(
+        {
+            "source": "/releases/product-installer-linux-amd64.tar.gz",
+            "os": "linux",
+            "arch": "amd64",
+        },
+        "files",
+        comp_dir,
+        ready_dir,
+        os_arch_counts=counts,
+    )
+    compress_artifacts._compress_file_entry(
+        {
+            "source": "/releases/product-client-linux-amd64.tar.gz",
+            "os": "linux",
+            "arch": "amd64",
+        },
+        "files",
+        comp_dir,
+        ready_dir,
+        os_arch_counts=counts,
+    )
+
+    import tarfile
+
+    installer_out = ready_dir / "product-installer-linux-amd64.tar.gz"
+    client_out = ready_dir / "product-client-linux-amd64.tar.gz"
+
+    with tarfile.open(str(installer_out), "r:gz") as tf:
+        installer_names = tf.getnames()
+    with tarfile.open(str(client_out), "r:gz") as tf:
+        client_names = tf.getnames()
+
+    assert installer_names == ["installer"]
+    assert client_names == ["client"]
