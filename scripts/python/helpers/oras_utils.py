@@ -131,6 +131,19 @@ def oras_push(tag: str, directory: Path, subdirectory: str, component_name: str)
     return match.group(1)
 
 
+def archive_stem(name: str) -> str:
+    """Strip the ``.tar.gz`` extension to produce a stem suitable for subdirectory names.
+
+    Example::
+
+        >>> archive_stem("oc-mirror-rhel9-linux-amd64.tar.gz")
+        'oc-mirror-rhel9-linux-amd64'
+    """
+    if name.endswith(".tar.gz"):
+        return name[: -len(".tar.gz")]
+    return Path(name).stem
+
+
 def os_arch_dir(
     os_name: str, arch: str, *, mac_windows_base: Path, linux_base: Path
 ) -> Path | None:
