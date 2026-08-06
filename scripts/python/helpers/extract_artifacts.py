@@ -97,27 +97,56 @@ def _get_source_paths(component: dict) -> tuple[list[str], list[str]]:
     return unique_files, unique_dirs
 
 
+def _normalize_tar_member_name(name: str) -> str:
+    """Normalize a tar member path for comparison with wanted_files."""
+    normalized = name.lstrip("/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
 def _safe_extract_layer(
-    tf: tarfile.TarFile, image_path: str, target_dir: Path, layer_name: str
+    tf: tarfile.TarFile,
+    image_path: str,
+    target_dir: Path,
+    layer_name: str,
+    wanted_files: list[str] | set[str],
 ) -> bool:
     """Extract members under image_path/ from a layer tarfile with path safety checks.
 
-    Returns True if any matching members were found, False otherwise.
-    Raises RuntimeError for unsafe entries (path traversal, symlinks, hardlinks, devices).
+    Symlink, hardlink, and device entries that are not in wanted_files are skipped
+    (not extracted). Those same types raise if the member path is a wanted artifact
+    — RPA-requested files must be regular files. Path traversal is rejected for
+    every member that is extracted.
+
+    Returns True if any matching members were found under image_path, False otherwise.
     """
+    wanted_set = {_normalize_tar_member_name(w) for w in wanted_files}
     target_real = target_dir.resolve()
     found = False
     for member in tf.getmembers():
-        if not (member.name == image_path or member.name.startswith(f"{image_path}/")):
+        normalized = _normalize_tar_member_name(member.name)
+        if not (normalized == image_path or normalized.startswith(f"{image_path}/")):
             continue
         found = True
         if member.issym() or member.islnk() or member.isdev():
-            raise RuntimeError(
-                f"Layer {layer_name} contains unsupported entry type: {member.name}"
+            if normalized in wanted_set:
+                raise RuntimeError(
+                    f"Layer {layer_name} contains unsupported entry type for "
+                    f"wanted file: {member.name}"
+                )
+            logger.debug(
+                "Skipping unsupported entry type in layer %s: %s",
+                layer_name,
+                member.name,
             )
-        member_real = (target_dir / member.name).resolve()
+            continue
+        # Use the normalized relative path so absolute tar names (e.g. /releases/x)
+        # do not resolve outside target_dir and still land under the extract root.
+        member_real = (target_dir / normalized).resolve()
         if member_real != target_real and target_real not in member_real.parents:
             raise RuntimeError(f"Layer {layer_name} contains unsafe path: {member.name}")
+        member.name = normalized
         tf.extract(member, path=str(target_dir), filter="data")
     return found
 
@@ -232,7 +261,9 @@ def process_component(component: dict) -> None:
                     continue
                 with tarfile.open(str(layer_file)) as tf:
                     for image_path in extract_dirs:
-                        if _safe_extract_layer(tf, image_path, tmp_dir, layer_file.name):
+                        if _safe_extract_layer(
+                            tf, image_path, tmp_dir, layer_file.name, wanted_files
+                        ):
                             logger.info(
                                 "Extracting %s/ from %s...", image_path, layer_file.name
                             )
@@ -245,13 +276,19 @@ def process_component(component: dict) -> None:
 
             for wanted in wanted_files:
                 src = tmp_dir / wanted
-                if src.is_file():
-                    shutil.copy2(str(src), str(destination / src.name))
-                else:
+                # Defense in depth: never follow symlinks into CDN-bound artifacts.
+                if src.is_symlink():
+                    raise RuntimeError(
+                        f"File '{wanted}' declared in RPA resolved to a symlink; "
+                        "wanted artifacts must be regular files"
+                    )
+                if not src.is_file():
                     logger.error("Expected file not found in container: %s", wanted)
                     raise RuntimeError(
-                        f"File '{wanted}' declared in RPA was not found in any container layer"
+                        f"File '{wanted}' declared in RPA was not found in any "
+                        "container layer"
                     )
+                shutil.copy2(str(src), str(destination / src.name), follow_symlinks=False)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

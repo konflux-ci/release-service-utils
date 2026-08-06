@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import tarfile
@@ -247,6 +248,250 @@ def test_validate_disk_image_components_non_linux_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _normalize_tar_member_name / _safe_extract_layer
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_tar_member_name_strips_prefixes() -> None:
+    """Leading slashes and ./ segments are stripped for wanted-path matching."""
+    assert extract_artifacts._normalize_tar_member_name("/releases/bin") == "releases/bin"
+    assert extract_artifacts._normalize_tar_member_name("./releases/bin") == "releases/bin"
+    assert extract_artifacts._normalize_tar_member_name("././releases/bin") == "releases/bin"
+
+
+def _add_regular_file(tf: tarfile.TarFile, arcname: str, content: bytes) -> None:
+    """Add a regular file member to an open tarfile."""
+    info = tarfile.TarInfo(name=arcname)
+    info.size = len(content)
+    tf.addfile(info, io.BytesIO(content))
+
+
+def _add_symlink(tf: tarfile.TarFile, arcname: str, linkname: str) -> None:
+    """Add a symlink member to an open tarfile."""
+    info = tarfile.TarInfo(name=arcname)
+    info.type = tarfile.SYMTYPE
+    info.linkname = linkname
+    tf.addfile(info)
+
+
+def test_safe_extract_layer_skips_noise_symlink(tmp_path: Path) -> None:
+    """Sibling symlinks under the extract dir are skipped; wanted regular files extract."""
+    layer = tmp_path / "layer.tar"
+    with tarfile.open(str(layer), "w") as tf:
+        _add_regular_file(tf, "releases/binary.tar.gz", b"payload")
+        _add_symlink(tf, "releases/noise-link", "../etc/passwd")
+
+    extract_dir = tmp_path / "out"
+    extract_dir.mkdir()
+    with tarfile.open(str(layer)) as tf:
+        found = extract_artifacts._safe_extract_layer(
+            tf,
+            "releases",
+            extract_dir,
+            "layer.tar",
+            ["releases/binary.tar.gz"],
+        )
+
+    assert found is True
+    assert (extract_dir / "releases" / "binary.tar.gz").read_bytes() == b"payload"
+    assert not (extract_dir / "releases" / "noise-link").exists()
+
+
+def test_safe_extract_layer_rejects_wanted_symlink(tmp_path: Path) -> None:
+    """A wanted path that is a symlink must hard-fail."""
+    layer = tmp_path / "layer.tar"
+    with tarfile.open(str(layer), "w") as tf:
+        _add_symlink(tf, "releases/binary.tar.gz", "/etc/passwd")
+
+    extract_dir = tmp_path / "out"
+    extract_dir.mkdir()
+    with tarfile.open(str(layer)) as tf:
+        with pytest.raises(RuntimeError, match="unsupported entry type for wanted"):
+            extract_artifacts._safe_extract_layer(
+                tf,
+                "releases",
+                extract_dir,
+                "layer.tar",
+                ["releases/binary.tar.gz"],
+            )
+
+
+def test_safe_extract_layer_rejects_wanted_hardlink(tmp_path: Path) -> None:
+    """A wanted path that is a hardlink must hard-fail."""
+    layer = tmp_path / "layer.tar"
+    with tarfile.open(str(layer), "w") as tf:
+        info = tarfile.TarInfo(name="releases/binary.tar.gz")
+        info.type = tarfile.LNKTYPE
+        info.linkname = "releases/other"
+        tf.addfile(info)
+
+    extract_dir = tmp_path / "out"
+    extract_dir.mkdir()
+    with tarfile.open(str(layer)) as tf:
+        with pytest.raises(RuntimeError, match="unsupported entry type for wanted"):
+            extract_artifacts._safe_extract_layer(
+                tf,
+                "releases",
+                extract_dir,
+                "layer.tar",
+                ["releases/binary.tar.gz"],
+            )
+
+
+def test_safe_extract_layer_rejects_path_traversal(tmp_path: Path) -> None:
+    """Members that resolve outside the extract dir are rejected."""
+    layer = tmp_path / "layer.tar"
+    with tarfile.open(str(layer), "w") as tf:
+        _add_regular_file(tf, "releases/../../escape.txt", b"nope")
+
+    extract_dir = tmp_path / "out"
+    extract_dir.mkdir()
+    with tarfile.open(str(layer)) as tf:
+        with pytest.raises(RuntimeError, match="unsafe path"):
+            extract_artifacts._safe_extract_layer(tf, "releases", extract_dir, "layer.tar", [])
+
+
+def test_safe_extract_layer_skips_parent_symlink_extracts_child(
+    tmp_path: Path,
+) -> None:
+    """A symlink at a parent path is skipped; a wanted child regular file extracts."""
+    layer = tmp_path / "layer.tar"
+    with tarfile.open(str(layer), "w") as tf:
+        _add_symlink(tf, "assets/downloads/cli", "/somewhere/else")
+        _add_regular_file(tf, "assets/downloads/cli/roxctl", b"roxctl-bin")
+
+    extract_dir = tmp_path / "out"
+    extract_dir.mkdir()
+    with tarfile.open(str(layer)) as tf:
+        found = extract_artifacts._safe_extract_layer(
+            tf,
+            "assets/downloads/cli",
+            extract_dir,
+            "layer.tar",
+            ["assets/downloads/cli/roxctl"],
+        )
+
+    assert found is True
+    assert (extract_dir / "assets/downloads/cli/roxctl").read_bytes() == b"roxctl-bin"
+    # Parent symlink was not materialized
+    cli_path = extract_dir / "assets" / "downloads" / "cli"
+    assert not cli_path.is_symlink()
+
+
+def test_safe_extract_layer_matches_dot_slash_member_names(tmp_path: Path) -> None:
+    """Members named with a ./ prefix still match wanted_files after normalization."""
+    layer = tmp_path / "layer.tar"
+    with tarfile.open(str(layer), "w") as tf:
+        _add_symlink(tf, "./releases/noise", "other")
+        _add_regular_file(tf, "./releases/binary.tar.gz", b"ok")
+
+    extract_dir = tmp_path / "out"
+    extract_dir.mkdir()
+    with tarfile.open(str(layer)) as tf:
+        found = extract_artifacts._safe_extract_layer(
+            tf,
+            "releases",
+            extract_dir,
+            "layer.tar",
+            ["releases/binary.tar.gz"],
+        )
+
+    assert found is True
+    assert (extract_dir / "releases" / "binary.tar.gz").read_bytes() == b"ok"
+
+
+def test_safe_extract_layer_multilayer_wanted_symlink_overwrite_fails(
+    tmp_path: Path,
+) -> None:
+    """A later layer replacing a wanted regular file with a symlink must fail."""
+    layer1 = tmp_path / "layer1.tar"
+    with tarfile.open(str(layer1), "w") as tf:
+        _add_regular_file(tf, "releases/binary.tar.gz", b"v1")
+
+    layer2 = tmp_path / "layer2.tar"
+    with tarfile.open(str(layer2), "w") as tf:
+        _add_symlink(tf, "releases/binary.tar.gz", "/etc/passwd")
+
+    extract_dir = tmp_path / "out"
+    extract_dir.mkdir()
+    wanted = ["releases/binary.tar.gz"]
+    with tarfile.open(str(layer1)) as tf:
+        extract_artifacts._safe_extract_layer(
+            tf, "releases", extract_dir, "layer1.tar", wanted
+        )
+    with tarfile.open(str(layer2)) as tf:
+        with pytest.raises(RuntimeError, match="unsupported entry type for wanted"):
+            extract_artifacts._safe_extract_layer(
+                tf, "releases", extract_dir, "layer2.tar", wanted
+            )
+
+
+def test_safe_extract_layer_ignores_members_outside_image_path(tmp_path: Path) -> None:
+    """Tar members outside image_path are skipped without extraction."""
+    layer = tmp_path / "layer.tar"
+    with tarfile.open(str(layer), "w") as tf:
+        _add_regular_file(tf, "usr/bin/unrelated", b"skip-me")
+        _add_regular_file(tf, "releases/binary.tar.gz", b"wanted")
+
+    extract_dir = tmp_path / "out"
+    extract_dir.mkdir()
+    with tarfile.open(str(layer)) as tf:
+        found = extract_artifacts._safe_extract_layer(
+            tf,
+            "releases",
+            extract_dir,
+            "layer.tar",
+            ["releases/binary.tar.gz"],
+        )
+
+    assert found is True
+    assert (extract_dir / "releases" / "binary.tar.gz").read_bytes() == b"wanted"
+    assert not (extract_dir / "usr").exists()
+
+
+def test_safe_extract_layer_extracts_absolute_member_names(tmp_path: Path) -> None:
+    """Absolute tar member paths are normalized and extracted under target_dir."""
+    layer = tmp_path / "layer.tar"
+    with tarfile.open(str(layer), "w") as tf:
+        _add_regular_file(tf, "/releases/binary.tar.gz", b"abs-payload")
+
+    extract_dir = tmp_path / "out"
+    extract_dir.mkdir()
+    with tarfile.open(str(layer)) as tf:
+        found = extract_artifacts._safe_extract_layer(
+            tf,
+            "releases",
+            extract_dir,
+            "layer.tar",
+            ["releases/binary.tar.gz"],
+        )
+
+    assert found is True
+    assert (extract_dir / "releases" / "binary.tar.gz").read_bytes() == b"abs-payload"
+
+
+def test_safe_extract_layer_rejects_wanted_symlink_with_dot_slash_wanted(
+    tmp_path: Path,
+) -> None:
+    """Wanted paths with ./ still match normalized member names for rejection."""
+    layer = tmp_path / "layer.tar"
+    with tarfile.open(str(layer), "w") as tf:
+        _add_symlink(tf, "releases/binary.tar.gz", "/etc/passwd")
+
+    extract_dir = tmp_path / "out"
+    extract_dir.mkdir()
+    with tarfile.open(str(layer)) as tf:
+        with pytest.raises(RuntimeError, match="unsupported entry type for wanted"):
+            extract_artifacts._safe_extract_layer(
+                tf,
+                "releases",
+                extract_dir,
+                "layer.tar",
+                ["./releases/binary.tar.gz"],
+            )
+
+
+# ---------------------------------------------------------------------------
 # process_component
 # ---------------------------------------------------------------------------
 
@@ -386,6 +631,120 @@ def test_process_component_raises_when_file_missing_from_container(
         ):
             mock_run.return_value = mock.Mock(stdout="", returncode=0)
             with pytest.raises(RuntimeError, match="releases/missing-binary.tar.gz"):
+                extract_artifacts.process_component(component)
+    finally:
+        shutil.rmtree(str(tmp_layer_dir), ignore_errors=True)
+
+
+def test_process_component_skips_missing_layer_blob(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Layer digests listed in the manifest but absent on disk are skipped."""
+    monkeypatch.setattr(extract_artifacts, "CONTENT_DIR", tmp_path)
+
+    component = {
+        "name": "prod",
+        "containerImage": "quay.io/org/prod@sha256:abc",
+        "files": [{"source": "/releases/binary.tar.gz"}],
+    }
+
+    import shutil
+    import tempfile
+
+    tmp_layer_dir = Path(tempfile.mkdtemp())
+    try:
+        layer_file = tmp_layer_dir / "present"
+        with tarfile.open(str(layer_file), "w") as tf:
+            _add_regular_file(tf, "releases/binary.tar.gz", b"from-present-layer")
+
+        # missingdigest is listed but never written to the skopeo dest dir
+        manifest = {
+            "layers": [
+                {"digest": "sha256:missingdigest"},
+                {"digest": "sha256:present"},
+            ]
+        }
+
+        def fake_subprocess_check_output(cmd, **kwargs):
+            if cmd[0] == "select-oci-auth":
+                return b'{"auths":{}}'
+            raise ValueError(f"unexpected command: {cmd}")
+
+        def fake_subprocess_check_call(cmd, **kwargs):
+            if cmd[0] == "skopeo":
+                dest_dir_flag = cmd.index(next(a for a in cmd if a.startswith("dir:")))
+                dest_path = cmd[dest_dir_flag].removeprefix("dir:")
+                dest = Path(dest_path)
+                shutil.copy2(str(layer_file), str(dest / "present"))
+                (dest / "manifest.json").write_text(json.dumps(manifest))
+                return
+            raise ValueError(f"unexpected command: {cmd}")
+
+        with (
+            mock.patch("subprocess.check_output", side_effect=fake_subprocess_check_output),
+            mock.patch("subprocess.check_call", side_effect=fake_subprocess_check_call),
+        ):
+            extract_artifacts.process_component(component)
+
+        assert (tmp_path / "prod" / "binary.tar.gz").read_bytes() == b"from-present-layer"
+    finally:
+        shutil.rmtree(str(tmp_layer_dir), ignore_errors=True)
+
+
+def test_process_component_rejects_symlink_at_wanted_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defense in depth: a symlink at the wanted path after extract must fail."""
+    monkeypatch.setattr(extract_artifacts, "CONTENT_DIR", tmp_path)
+
+    component = {
+        "name": "prod",
+        "containerImage": "quay.io/org/prod@sha256:abc",
+        "files": [{"source": "/releases/binary.tar.gz"}],
+    }
+
+    import shutil
+    import tempfile
+
+    tmp_layer_dir = Path(tempfile.mkdtemp())
+    try:
+        layer_file = tmp_layer_dir / "abc123"
+        with tarfile.open(str(layer_file), "w"):
+            pass
+
+        manifest = {"layers": [{"digest": "sha256:abc123"}]}
+
+        def fake_subprocess_check_output(cmd, **kwargs):
+            if cmd[0] == "select-oci-auth":
+                return b'{"auths":{}}'
+            raise ValueError(f"unexpected command: {cmd}")
+
+        def fake_subprocess_check_call(cmd, **kwargs):
+            if cmd[0] == "skopeo":
+                dest_dir_flag = cmd.index(next(a for a in cmd if a.startswith("dir:")))
+                dest_path = cmd[dest_dir_flag].removeprefix("dir:")
+                dest = Path(dest_path)
+                shutil.copy2(str(layer_file), str(dest / "abc123"))
+                (dest / "manifest.json").write_text(json.dumps(manifest))
+                return
+            raise ValueError(f"unexpected command: {cmd}")
+
+        def plant_wanted_symlink(tf, image_path, target_dir, layer_name, wanted_files):
+            """Simulate extract leaving a symlink at the wanted path."""
+            wanted = next(iter(wanted_files))
+            link_path = target_dir / wanted
+            link_path.parent.mkdir(parents=True, exist_ok=True)
+            link_path.symlink_to("/etc/passwd")
+            return True
+
+        with (
+            mock.patch("subprocess.check_output", side_effect=fake_subprocess_check_output),
+            mock.patch("subprocess.check_call", side_effect=fake_subprocess_check_call),
+            mock.patch.object(
+                extract_artifacts, "_safe_extract_layer", side_effect=plant_wanted_symlink
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="resolved to a symlink"):
                 extract_artifacts.process_component(component)
     finally:
         shutil.rmtree(str(tmp_layer_dir), ignore_errors=True)
