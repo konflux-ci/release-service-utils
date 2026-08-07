@@ -36,9 +36,9 @@ pythonpath = [
   ".",
   "integration-tests/lib",
   "pyxis",
-  "scripts/python/helpers",
-  "scripts/python/tasks/internal",
-  "scripts/python/tasks/managed",
+  "src/helpers",
+  "src/tasks/internal",
+  "src/tasks/managed",
   "utils",
   "pubtools-pulp-wrapper",
   "publish-to-cgw-wrapper",
@@ -53,13 +53,20 @@ dev = [
     "pytest-cov>=6.0",
 ]
 
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"release_service_utils" = "src"}
+
 [tool.basedpyright]
 extraPaths = [
   "integration-tests/lib",
   "pyxis",
-  "scripts/python/helpers",
-  "scripts/python/tasks/internal",
-  "scripts/python/tasks/managed",
+  "src/helpers",
+  "src/tasks/internal",
+  "src/tasks/managed",
   "utils",
   "pubtools-pulp-wrapper",
   "publish-to-cgw-wrapper",
