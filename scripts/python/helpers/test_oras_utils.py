@@ -192,3 +192,22 @@ def test_oras_pull_raises_when_subprocess_fails(
         oras_utils.oras_pull("quay.io/org/image:tag", tmp_path)
 
     assert exc_info.value.returncode == 1
+
+
+# ---------------------------------------------------------------------------
+# archive_stem
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("oc-mirror-rhel9-linux-amd64.tar.gz", "oc-mirror-rhel9-linux-amd64"),
+        ("oc-mirror-rhel8-linux-amd64.tar.gz", "oc-mirror-rhel8-linux-amd64"),
+        ("simple.zip", "simple"),
+        ("no-ext", "no-ext"),
+        ("image.qcow2", "image"),
+    ],
+)
+def test_archive_stem(name: str, expected: str) -> None:
+    assert oras_utils.archive_stem(name) == expected

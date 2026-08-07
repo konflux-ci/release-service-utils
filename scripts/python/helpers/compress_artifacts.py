@@ -34,6 +34,7 @@ import shutil
 import subprocess
 import tarfile
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 import disk_image_utils
@@ -104,6 +105,7 @@ def _compress_file_entry(
     ready_dir: Path,
     *,
     is_disk_image_component: bool = False,
+    os_arch_counts: Counter[tuple[str, str]] | None = None,
 ) -> str:
     """Compress one file entry into ready_dir and return the (possibly normalized) source path.
 
@@ -134,6 +136,11 @@ def _compress_file_entry(
     )
     if arch_dir is None:
         raise RuntimeError(f"Unknown OS '{os_name}' in {array_name}[] entry (arch: {arch})")
+
+    if os_arch_counts and os_arch_counts[(os_name, arch)] > 1:
+        per_source_dir = arch_dir / oras_utils.archive_stem(source_filename)
+        if per_source_dir.is_dir():
+            arch_dir = per_source_dir
 
     if not arch_dir.is_dir() or not any(arch_dir.iterdir()):
         raise RuntimeError(f"Architecture directory is empty or not found: {arch_dir}")
@@ -188,6 +195,10 @@ def compress_component(component: dict, snapshot: dict) -> dict:
 
     is_disk_image = disk_image_utils.is_disk_image_component(component)
 
+    os_arch_counts: Counter[tuple[str, str]] = Counter(
+        (e.get("os", ""), e.get("arch", "")) for e in files_entries + staged_entries
+    )
+
     normalized_files = []
     if files_entries:
         logger.info(
@@ -195,7 +206,12 @@ def compress_component(component: dict, snapshot: dict) -> dict:
         )
         for entry in files_entries:
             normalized_source = _compress_file_entry(
-                entry, "files", component_dir, ready_dir, is_disk_image_component=is_disk_image
+                entry,
+                "files",
+                component_dir,
+                ready_dir,
+                is_disk_image_component=is_disk_image,
+                os_arch_counts=os_arch_counts,
             )
             normalized_entry = dict(entry)
             # no-op for mac/linux, .zip correction for windows
@@ -213,6 +229,7 @@ def compress_component(component: dict, snapshot: dict) -> dict:
                 component_dir,
                 ready_dir,
                 is_disk_image_component=is_disk_image,
+                os_arch_counts=os_arch_counts,
             )
 
     updated_component = dict(component)
