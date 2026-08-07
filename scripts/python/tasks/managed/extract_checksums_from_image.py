@@ -12,24 +12,17 @@ import json
 import os
 import shutil
 import subprocess
-import tarfile
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
+import extract_artifacts
+import file
 import skopeo
 import tekton
 from logger import logger
 
 BINARIES_DIR = "binaries"
-
-
-def load_snapshot(snapshot_path: Path) -> dict[str, Any]:
-    """Load and return the snapshot JSON from *snapshot_path*."""
-    if not snapshot_path.is_file():
-        raise ValueError(f"No valid snapshot file was provided: {snapshot_path}")
-    return json.loads(snapshot_path.read_text(encoding="utf-8"))
 
 
 def load_components(data_path: Path) -> list[str]:
@@ -50,42 +43,6 @@ def load_components(data_path: Path) -> list[str]:
             raise ValueError("Component entry in data file is missing 'name' field")
         names.append(name)
     return names
-
-
-def extract_binaries_from_layers(
-    image_dir: Path,
-    image_binaries_path: str,
-) -> None:
-    """Extract files from image layers that contain *image_binaries_path*."""
-    manifest_path = image_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-    for layer in manifest.get("layers", []):
-        digest: str = layer["digest"]
-        filename = digest.removeprefix("sha256:")
-        tar_path = image_dir / filename
-
-        with tarfile.open(tar_path) as tf:
-            matching_entries = [
-                m for m in tf.getmembers() if m.name.startswith(f"{image_binaries_path}/")
-            ]
-            if matching_entries:
-                logger.info(
-                    "Extracting %s/ from %s...",
-                    image_binaries_path,
-                    filename,
-                )
-                tf.extractall(
-                    path=image_dir,
-                    members=matching_entries,
-                    filter="data",
-                )
-            else:
-                logger.info(
-                    "skipping %s. It doesn't contain the %s dir",
-                    filename,
-                    image_binaries_path,
-                )
 
 
 def copy_to_binaries(source_dir: Path, binaries_path: Path) -> None:
@@ -116,7 +73,7 @@ def extract_checksums(
     Returns the relative binaries path (e.g. ``uid123/binaries``) for
     writing to the Tekton result file.
     """
-    snapshot = load_snapshot(snapshot_path)
+    snapshot = file.load_json_dict(snapshot_path)
 
     relative_binaries = f"{Path(snapshot_rel_path).parent}/{BINARIES_DIR}"
     binaries_path = data_dir / relative_binaries
@@ -146,7 +103,7 @@ def extract_checksums(
                     stderr=result.stderr,
                 )
 
-            extract_binaries_from_layers(tmp_dir, image_binaries_path)
+            extract_artifacts.extract_binaries_from_layers(tmp_dir, image_binaries_path)
 
             extracted_dir = tmp_dir / image_binaries_path
             if not extracted_dir.is_dir():
