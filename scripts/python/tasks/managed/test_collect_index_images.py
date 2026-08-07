@@ -442,7 +442,7 @@ def test_run_collect_index_images_writes_snapshot_and_result(
 
 def test_run_collect_index_images_missing_results_file(tmp_path: Path) -> None:
     """Fail when the internal request results file is missing."""
-    with pytest.raises(FileNotFoundError, match="internal request results file not found"):
+    with pytest.raises(FileNotFoundError):
         collect_index_images.run_collect_index_images(
             data_dir=tmp_path,
             internal_request_results_file=Path("missing.json"),
@@ -461,7 +461,7 @@ def test_module_main_guard_propagates_failure(
     monkeypatch.setenv("PARAM_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("PARAM_INTERNAL_REQUEST_RESULTS_FILE", "missing.json")
     monkeypatch.setenv("RESULT_INDEX_IMAGE_SNAPSHOT_PATH", str(tmp_path / "result.txt"))
-    with pytest.raises(FileNotFoundError, match="internal request results file not found"):
+    with pytest.raises(FileNotFoundError):
         runpy.run_module("collect_index_images", run_name="__main__")
 
 

@@ -176,10 +176,6 @@ def run_collect_index_images(
 ) -> None:
     """Load results, build the snapshot JSON, and write Tekton outputs."""
     results_path = data_dir / internal_request_results_file
-    if not results_path.is_file():
-        msg = f"internal request results file not found: {results_path}"
-        raise FileNotFoundError(msg)
-
     logger.info("Loading internal request results from %s", results_path)
     results = file.load_json_dict(results_path)
     snapshot = collect_index_image_components(results)
