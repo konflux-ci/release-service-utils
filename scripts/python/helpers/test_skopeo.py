@@ -108,6 +108,19 @@ def test_inspect_nonzero_exit_code() -> None:
     assert result.returncode == 1
 
 
+def test_inspect_no_tags_flag() -> None:
+    """``no_tags=True`` adds ``--no-tags`` to the command."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.inspect("img:v1", raw=True, no_tags=True)
+
+    cmd = run_mock.call_args[0][0]
+    assert "--no-tags" in cmd
+    assert "--raw" in cmd
+
+
 def test_inspect_config_and_raw_together() -> None:
     """Both flags can be set simultaneously."""
     with mock.patch(
