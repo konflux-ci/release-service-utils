@@ -98,12 +98,18 @@ def _get_source_paths(component: dict) -> tuple[list[str], list[str]]:
 
 
 def _safe_extract_layer(
-    tf: tarfile.TarFile, image_path: str, target_dir: Path, layer_name: str
+    tf: tarfile.TarFile,
+    image_path: str,
+    target_dir: Path,
+    layer_name: str,
+    wanted_files: set[str],
 ) -> bool:
     """Extract members under image_path/ from a layer tarfile with path safety checks.
 
     Returns True if any matching members were found, False otherwise.
-    Raises RuntimeError for unsafe entries (path traversal, symlinks, hardlinks, devices).
+    Raises RuntimeError for unsafe entries (path traversal, symlinks, hard links, devices)
+    only when the entry is a file that is actually needed (in wanted_files).
+    Symlinks, hard links, and device nodes that are not in wanted_files are skipped.
     """
     target_real = target_dir.resolve()
     found = False
@@ -112,9 +118,11 @@ def _safe_extract_layer(
             continue
         found = True
         if member.issym() or member.islnk() or member.isdev():
-            raise RuntimeError(
-                f"Layer {layer_name} contains unsupported entry type: {member.name}"
-            )
+            if member.name in wanted_files:
+                raise RuntimeError(
+                    f"Layer {layer_name} contains unsupported entry type: {member.name}"
+                )
+            continue
         member_real = (target_dir / member.name).resolve()
         if member_real != target_real and target_real not in member_real.parents:
             raise RuntimeError(f"Layer {layer_name} contains unsafe path: {member.name}")
@@ -225,6 +233,7 @@ def process_component(component: dict) -> None:
             _extract_from_oras(manifest, tmp_dir, wanted_files, destination, name)
         else:
             layer_digests = [layer["digest"] for layer in manifest.get("layers", [])]
+            wanted_set = set(wanted_files)
 
             for digest in layer_digests:
                 layer_file = tmp_dir / digest.removeprefix("sha256:")
@@ -232,7 +241,9 @@ def process_component(component: dict) -> None:
                     continue
                 with tarfile.open(str(layer_file)) as tf:
                     for image_path in extract_dirs:
-                        if _safe_extract_layer(tf, image_path, tmp_dir, layer_file.name):
+                        if _safe_extract_layer(
+                            tf, image_path, tmp_dir, layer_file.name, wanted_set
+                        ):
                             logger.info(
                                 "Extracting %s/ from %s...", image_path, layer_file.name
                             )
