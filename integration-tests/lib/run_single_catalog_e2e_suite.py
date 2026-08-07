@@ -354,7 +354,7 @@ def main() -> None:
         with os.fdopen(fd, "w") as f:
             json.dump(plr_manifest, f)
 
-        out = subprocess.check_output(
+        out = subprocess.run(
             [
                 "kubectl",
                 "create",
@@ -364,8 +364,16 @@ def main() -> None:
                 "jsonpath={.metadata.name}",
             ],
             text=True,
+            capture_output=True,
         )
-        name = out.strip()
+        if out.returncode != 0:
+            sys.exit(
+                f"kubectl create failed (exit {out.returncode}):\n"
+                f"  stdout: {out.stdout.strip()}\n"
+                f"  stderr: {out.stderr.strip()}"
+            )
+
+        name = out.stdout.strip()
         print(
             f"Created catalog test PipelineRun {name} in {ns} for suite {suite!r}", flush=True
         )
