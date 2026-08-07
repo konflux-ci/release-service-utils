@@ -22,6 +22,7 @@ def run_cmd(
     stdin: str | bytes | None = None,
     stderr_path: Path | None = None,
     check: bool = True,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run *cmd*; capture stdout as text; optionally append stderr to *stderr_path*."""
     # Child must inherit pod env (PATH, KUBECONFIG, etc.); only overlay *env*.
@@ -48,7 +49,18 @@ def run_cmd(
                 stderr=err_f,
                 text=True,
                 check=check,
+                timeout=timeout,
             )
+        except subprocess.TimeoutExpired:
+            if stderr_path is not None:
+                with open(
+                    stderr_path,
+                    "a",
+                    encoding="utf-8",
+                    errors="replace",
+                ) as errf:
+                    errf.write(f"\ncommand timed out after {timeout}s: {' '.join(argv)}\n")
+            raise
         except subprocess.CalledProcessError:
             if stderr_path is not None:
                 with open(
@@ -68,19 +80,30 @@ def run_cmd_text(
     cmd: Sequence[str | Path],
     *,
     cwd: Path | None = None,
+    timeout: float | None = None,
 ) -> str:
     """Run *cmd*, return captured stdout as text, and raise on non-zero exit.
 
     Uses a Tekton-friendly command preview in ``CalledProcessError.cmd``.
     """
     argv = [str(x) for x in cmd]
-    proc = subprocess.run(
-        argv,
-        cwd=str(cwd) if cwd else None,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        preview = tekton.subprocess_cmd_preview_for_tekton_result(argv)
+        raise subprocess.CalledProcessError(
+            returncode=124,
+            cmd=preview,
+            output=f"Command timed out after {timeout} seconds",
+        ) from e
+
     if proc.returncode != 0:
         preview = tekton.subprocess_cmd_preview_for_tekton_result(argv)
         err = (proc.stderr or proc.stdout or "").strip()
