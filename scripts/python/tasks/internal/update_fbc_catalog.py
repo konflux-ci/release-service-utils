@@ -22,7 +22,7 @@ import file
 import http_client
 import iib
 import requests
-import skopeo
+from skopeo import SkopeoClient, SkopeoClientError
 import tekton
 from logger import logger
 from requests_kerberos import OPTIONAL, HTTPKerberosAuth
@@ -117,15 +117,13 @@ def inspect_image_created(image_ref: str) -> str | None:
 
     Return ``None`` on any failure.
     """
-    result = skopeo.inspect(image_ref, config=True)
-    if result.returncode != 0:
-        return None
     try:
-        created = json.loads(result.stdout).get("created")
+        result = SkopeoClient().inspect(f"docker://{image_ref}", config=True)
+        created = result.created
         if not created or created == "null":
             return None
-        return str(created)
-    except (json.JSONDecodeError, OSError):
+        return created.strftime("%Y-%m-%dT%H:%M:%SZ")
+    except SkopeoClientError:
         return None
 
 
@@ -470,12 +468,9 @@ def get_manifest_digests(image_ref: str) -> str:
 
     Raise ``RuntimeError`` if the image is not a manifest list.
     """
-    result = skopeo.inspect(image_ref, raw=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"skopeo inspect --raw failed for {image_ref}: {result.stderr}")
-    raw = json.loads(result.stdout)
+    result = SkopeoClient().inspect(image_ref, raw=True)
     media = "application/vnd.docker.distribution.manifest.v2+json"
-    digests = [m["digest"] for m in raw.get("manifests", []) if m.get("mediaType") == media]
+    digests = [m.digest for m in result.manifests if m.media_type == media]
     if not digests:
         raise RuntimeError("Index image produced is not multi-arch with a manifest list")
     return " ".join(digests)
@@ -696,7 +691,7 @@ def _poll_and_collect(
 
     try:
         digests = get_manifest_digests(internal_copy)
-    except (RuntimeError, json.JSONDecodeError) as e:
+    except (RuntimeError, SkopeoClientError) as e:
         return RunResult(
             build_info=build_info,
             state="failed",

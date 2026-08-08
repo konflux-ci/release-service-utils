@@ -19,6 +19,7 @@ from kubectl import get_configmap
 from logger import logger as LOGGER
 from oras_utils import oras_resolve
 from subprocess_cmd import run_cmd
+from skopeo import SkopeoClient
 
 import pyxis
 
@@ -262,27 +263,18 @@ def get_all_image_digests(image_reference: str) -> list[str]:
         auth_file.write(select_auth.stdout)
         auth_file.flush()
 
-        result = run_cmd(
-            [
-                "skopeo",
-                "inspect",
-                "--retry-times",
-                "3",
-                "--raw",
-                "--authfile",
-                auth_file.name,
-                f"docker://{image_reference}",
-            ]
+        result = SkopeoClient().inspect(
+            "docker://" + image_reference,
+            authfile=auth_file.name,
+            raw=True,
+            retry_times=3,
         )
-    raw_manifest = json.loads(result.stdout)
 
     digests = [top_level_digest]
 
-    media_type = raw_manifest.get("mediaType", "")
-    if media_type not in SINGLE_MANIFEST_MEDIA_TYPES:
-        manifests = raw_manifest.get("manifests")
-        if manifests:
-            digests.extend(m["digest"] for m in manifests)
+    if result.media_type not in SINGLE_MANIFEST_MEDIA_TYPES:
+        if result.manifests:
+            digests.extend(m.digest for m in result.manifests)
         else:
             LOGGER.info("Single-manifest artifact (e.g. Helm chart), no nested digests to add")
 

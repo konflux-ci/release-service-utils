@@ -51,9 +51,7 @@ def get_fbc_opt_in(
     *,
     warn_on_query_failure: bool = True,
 ) -> bool:
-    """
-    Return `True` only when the Pyxis JSON body sets `fbc_opt_in` to JSON boolean
-    true.
+    """Return `True` only when the Pyxis JSON body sets `fbc_opt_in` to JSON true.
 
     Query failures, non-JSON responses, and missing fields are treated as
     opt-out (`False`).
@@ -90,8 +88,7 @@ def run_check(
     kinit: Callable[..., None] = authentication.kinit_with_retry,
     get_opt_in: Callable[[str, str, AuthBase | None], bool] = get_fbc_opt_in,
 ) -> list[dict[str, Any]]:
-    """
-    Authenticate with Kerberos then query Pyxis FBC opt-in for each image.
+    """Authenticate with Kerberos then query Pyxis FBC opt-in for each image.
 
     Returns one result object per input image:
     `{"containerImage": "...", "fbcOptIn": bool}`.

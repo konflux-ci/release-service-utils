@@ -7,9 +7,12 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Any, Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from rsmodels.container_image import ContainerImageRaw
 
 from rh_direct_sign_image import (
     PyxisSignature,
@@ -539,10 +542,10 @@ def test_process_component_includes_source_container_candidates() -> None:
 
 # --- get_all_image_digests ---
 
-_SINGLE_MANIFEST = json.dumps(
+_SINGLE_MANIFEST = ContainerImageRaw.from_dict(
     {"mediaType": "application/vnd.oci.image.manifest.v1+json", "schemaVersion": 2}
 )
-_INDEX_MANIFEST = json.dumps(
+_INDEX_MANIFEST = ContainerImageRaw.from_dict(
     {
         "mediaType": "application/vnd.oci.image.index.v1+json",
         "manifests": [
@@ -551,67 +554,89 @@ _INDEX_MANIFEST = json.dumps(
         ],
     }
 )
-_HELM_MANIFEST = json.dumps({"schemaVersion": 2})  # no mediaType, no manifests
+
+# no mediaType, no manifests
+_HELM_MANIFEST = ContainerImageRaw.from_dict({"schemaVersion": 2})
 
 
-def test_get_all_image_digests_single_arch_returns_only_top_level() -> None:
+@pytest.fixture
+def fix_inspect_single_manifest() -> Generator[Any]:
+    """Patch SkopeoClient.inspect to return a single-arch manifest."""
+    with patch("skopeo.SkopeoClient.inspect") as mock_inspect:
+        mock_inspect.return_value = _SINGLE_MANIFEST
+        yield mock_inspect
+
+
+@pytest.fixture
+def fix_inspect_index_manifest() -> Generator[Any]:
+    """Patch SkopeoClient.inspect to return a single-arch manifest."""
+    with patch("skopeo.SkopeoClient.inspect") as mock_inspect:
+        mock_inspect.return_value = _INDEX_MANIFEST
+        yield mock_inspect
+
+
+@pytest.fixture
+def fix_inspect_helm_manifest() -> Generator[Any]:
+    """Patch SkopeoClient.inspect to return a single-arch manifest."""
+    with patch("skopeo.SkopeoClient.inspect") as mock_inspect:
+        mock_inspect.return_value = _HELM_MANIFEST
+        yield mock_inspect
+
+
+@pytest.fixture
+def fix_select_oci_auth() -> Generator[Any]:
+    """Patch run_cmd to simulate select-oci-auth returning an auth file path."""
+    with patch("rh_direct_sign_image.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(stdout="{}")
+        yield mock_run
+
+
+def test_get_all_image_digests_single_arch_returns_only_top_level(
+    fix_inspect_single_manifest, fix_select_oci_auth
+) -> None:
     """A single-arch image returns only its own digest."""
     ref = "registry.io/repo/image@sha256:toplevel"
-    with patch("rh_direct_sign_image.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(stdout=_SINGLE_MANIFEST)
-        digests = get_all_image_digests(ref)
-
+    digests = get_all_image_digests(ref)
     assert digests == ["sha256:toplevel"]
 
 
-def test_get_all_image_digests_multi_arch_includes_nested_digests() -> None:
+def test_get_all_image_digests_multi_arch_includes_nested_digests(
+    fix_inspect_index_manifest, fix_select_oci_auth
+) -> None:
     """A multi-arch index image includes the top-level and all nested digests."""
     ref = "registry.io/repo/image@sha256:index"
-    with patch("rh_direct_sign_image.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(stdout=_INDEX_MANIFEST)
-        digests = get_all_image_digests(ref)
-
+    digests = get_all_image_digests(ref)
     assert digests == ["sha256:index", "sha256:amd64", "sha256:arm64"]
 
 
-def test_get_all_image_digests_helm_chart_returns_only_top_level() -> None:
+def test_get_all_image_digests_helm_chart_returns_only_top_level(
+    fix_inspect_helm_manifest, fix_select_oci_auth
+) -> None:
     """Single-manifest artifact with no nested manifests returns only the top-level digest."""
     ref = "registry.io/repo/chart@sha256:chart"
-    with patch("rh_direct_sign_image.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(stdout=_HELM_MANIFEST)
-        digests = get_all_image_digests(ref)
-
+    digests = get_all_image_digests(ref)
     assert digests == ["sha256:chart"]
 
 
-def test_get_all_image_digests_calls_select_oci_auth_with_reference() -> None:
+def test_get_all_image_digests_calls_select_oci_auth_with_reference(
+    fix_inspect_helm_manifest, fix_select_oci_auth
+) -> None:
     """select-oci-auth is called with the image reference before skopeo inspect."""
     ref = "registry.io/repo/image@sha256:abc"
-    with patch("rh_direct_sign_image.run_cmd") as mock_run:
-        mock_run.side_effect = [
-            MagicMock(stdout="{}"),
-            MagicMock(stdout=_SINGLE_MANIFEST),
-        ]
-        get_all_image_digests(ref)
-
-    first_call = mock_run.call_args_list[0].args[0]
+    get_all_image_digests(ref)
+    first_call = fix_select_oci_auth.call_args_list[0].args[0]
     assert first_call == ["select-oci-auth", ref]
 
 
-def test_get_all_image_digests_passes_authfile_to_skopeo() -> None:
+def test_get_all_image_digests_passes_authfile_to_skopeo(
+    fix_inspect_single_manifest, fix_select_oci_auth
+) -> None:
     """Skopeo inspect is called with --authfile pointing to the auth credentials."""
     ref = "registry.io/repo/image@sha256:abc"
-    with patch("rh_direct_sign_image.run_cmd") as mock_run:
-        mock_run.side_effect = [
-            MagicMock(stdout="{}"),
-            MagicMock(stdout=_SINGLE_MANIFEST),
-        ]
-        get_all_image_digests(ref)
-
-    skopeo_call = mock_run.call_args_list[1].args[0]
-    assert skopeo_call[0] == "skopeo"
-    assert "--authfile" in skopeo_call
-    assert f"docker://{ref}" in skopeo_call
+    get_all_image_digests(ref)
+    print(fix_inspect_single_manifest.call_args_list)
+    assert "authfile" in fix_inspect_single_manifest.call_args_list[0].kwargs
+    assert fix_inspect_single_manifest.call_args_list[0].args[0] == f"docker://{ref}"
 
 
 # --- get_source_container_digest ---
