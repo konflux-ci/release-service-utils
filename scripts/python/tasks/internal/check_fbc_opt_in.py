@@ -57,13 +57,7 @@ def get_fbc_opt_in(
     """
     try:
         # fbc_opt_in is a repository-level attribute; strip tag and digest.
-        # Strip digest first, then strip the tag only from the last path
-        # segment so a registry port (e.g. registry:5000) is never confused
-        # with a tag separator.
-        repo_spec = pull_spec.split("@")[0]
-        parts = repo_spec.split("/")
-        parts[-1] = parts[-1].rsplit(":", 1)[0]
-        repo_spec = "/".join(parts)
+        repo_spec = image_ref.strip_tag_and_digest(pull_spec)
         if repo_spec != pull_spec:
             logger.info(
                 "Pull spec %s includes a tag/digest; stripped to %s for repo query",
