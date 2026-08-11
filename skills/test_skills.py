@@ -65,14 +65,3 @@ def test_skill_symlinks(skill_names: tuple[str, ...]) -> None:
             link = root / skill_name
             assert link.is_symlink(), f"missing symlink: {link}"
             assert link.resolve() == (SKILLS_DIR / skill_name).resolve()
-
-
-def test_agents_md_references_skills(skill_names: tuple[str, ...]) -> None:
-    """AGENTS.md must document the skills directory and list available skills."""
-    text = AGENTS_MD.read_text(encoding="utf-8")
-    assert "## Skills" in text
-    assert "`skills/`" in text
-    assert ".claude/skills/" in text
-    assert ".cursor/skills/" in text
-    for name in skill_names:
-        assert f"`{name}`" in text

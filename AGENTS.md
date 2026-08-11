@@ -19,32 +19,30 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 
 ## Python
 
-- Python 3.12+. Use `|` union syntax, not `Union[]` or `Optional[]`.
+- Use `|` union syntax, not `Union[]` or `Optional[]`.
 - `from __future__ import annotations` at the top of every module.
 - Type hints on all function signatures.
 - Docstrings on every module and public function (triple-double-quote, imperative mood).
-- Black formatter, line length 95. Flake8 linter, line length 95, E203 ignored.
-- Named loggers: `from logger import logger` (shared helper) in task scripts;
-  `logging.getLogger("module_name")` only in standalone helper submodules
-  (e.g. the artifact-signing pipeline).
+- Prefer some duplication over premature abstractions, but check existing helpers and modules before writing code that may already exist.
+- Use `logging` instead of `print()`: `from logger import logger` in task scripts; `logging.getLogger("module_name")` in standalone helper submodules.
 - argparse for CLI arguments; env vars for Tekton-injected config.
 - Entry point: `if __name__ == "__main__": raise SystemExit(main())`.
-- Exception chaining: always use `raise ... from e`.
+- Exception chaining: always use `raise ... from e`. All exception paths should be handled explicitly.
 - File-based credentials via mounted secrets, not bare env vars for secrets.
 - Retry with exponential backoff: use `retry.retry_with_exponential_backoff()` from helpers.
 - HTTP requests: use `http_client.get_text()` from helpers (retries, 429/404 backoff built in).
 - Tekton result files: use `tekton.result_paths_from_env()` to read env var paths, `tekton.CheckStepError` for step failures.
 - Cross-cutting helpers go in `scripts/python/helpers/`; task scripts go in `scripts/python/tasks/`.
 - Flag any function that is not called elsewhere; the unit tests for it do not count as being called elsewhere.
+- Run validations with: `uv run black . && uv run flake8 && ruff check --select D <changed files>`.
 
 ## Testing
 
 - pytest with pytest-cov. Run: `uv sync --dev && uv run pytest`.
-- Unit tests are co-located with source files (e.g., `pyxis/test_pyxis.py` next to `pyxis/pyxis.py`).
-- Exception: `utils/` has tests in `utils/tests/`.
+- Unit tests are co-located with source files; exception: `utils/` has tests in `utils/tests/`.
 - Mocking with `unittest.mock`: use `patch`, `MagicMock`, `monkeypatch` for env vars.
+- Tekton result tests: use `tmp_path` for result files and `monkeypatch.setenv("RESULT_*", str(path))`.
 - Integration tests live in `integration-tests/` and are not run by pytest.
-- Test function names: `test_<what_is_being_tested>`. Type-hint test functions with `-> None`.
 
 ## Commits
 
@@ -53,24 +51,7 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - All commits must be cryptographically signed (`git commit -S`).
 - When generating commits with the assistance of an AI tool, add an `Assisted-by: <AI-agent>` trailer.
 
-## Build
-
-- Container image based on UBI. Dependencies managed with `uv` (see pyproject.toml).
-- CI runs Black, Flake8, pytest with coverage, yamllint, and gitlint on every PR.
-
 ## Key Patterns
 
-- Some task scripts write results to Tekton result files via `tekton.result_paths_from_env()`.
-- Wrapper scripts call external tools (pubtools-pulp, pubtools-marketplacesvm, etc.) via subprocess or library APIs.
 - Internal task scripts (`scripts/python/tasks/internal/`) must catch all exceptions in `main()` and save errors to Tekton result files (the script itself must succeed).
 - Managed task scripts (`scripts/python/tasks/managed/`) must not catch exceptions in `main()` — let the script fail with traceback.
-
-## Skills
-
-AI skills are in `skills/`. Each skill has a `SKILL.md` following the [agentskills.io](https://agentskills.io) spec.
-Symlinked to `.claude/skills/` and `.cursor/skills/` for agent discovery.
-
-Available skills:
-
-- `writing-new-task-scripts` — how to create a new Python task script following repo conventions
-- `using-helpers` — catalog of shared helpers to avoid reinventing existing code
