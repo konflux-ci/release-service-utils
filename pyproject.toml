@@ -52,6 +52,7 @@ dev = [
     "flake8>=7.3.0",
     "pytest>=8.4.2",
     "pytest-cov>=6.0",
+    "ruff>=0.16.3",
 ]
 
 [tool.basedpyright]
