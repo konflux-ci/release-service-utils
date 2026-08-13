@@ -28,6 +28,43 @@ def test_normalize_docker_config_strips_k8s_quotes() -> None:
     assert out == '{"auths":{"quay.io":{"auth":"abc"}}}'
 
 
+def test_normalize_docker_config_preserves_multiple_registries() -> None:
+    """Quoted dockerconfigjson with multiple registries stays valid JSON.
+
+    A brace-junk-stripping regex would collapse the separator between two
+    sibling registry entries and drop the second registry's key entirely.
+    """
+    raw = '"{"auths":{"quay.io":{"auth":"abc"},"registry.redhat.io":{"auth":"xyz"}}}"'
+    out = pulp_push_disk_images.normalize_docker_config(raw)
+    assert json.loads(out) == {
+        "auths": {
+            "quay.io": {"auth": "abc"},
+            "registry.redhat.io": {"auth": "xyz"},
+        }
+    }
+
+
+def test_normalize_docker_config_no_wrapping_quotes_is_unchanged() -> None:
+    """A dockerconfigjson payload with no wrapping quotes passes through as-is."""
+    raw = '{"auths":{"quay.io":{"auth":"abc"}}}'
+    out = pulp_push_disk_images.normalize_docker_config(raw)
+    assert out == raw
+
+
+def test_normalize_docker_config_strips_single_quotes() -> None:
+    """Single-quoted dockerconfigjson (e.g. redhat-workloads-token) is normalized."""
+    raw = '\'{"auths":{"quay.io":{"auth":"abc"}}}\''
+    out = pulp_push_disk_images.normalize_docker_config(raw)
+    assert out == '{"auths":{"quay.io":{"auth":"abc"}}}'
+
+
+def test_normalize_docker_config_mismatched_quotes_is_unchanged() -> None:
+    """Mismatched leading/trailing quote characters are left untouched."""
+    raw = '\'{"auths":{"quay.io":{"auth":"abc"}}}"'
+    out = pulp_push_disk_images.normalize_docker_config(raw)
+    assert out == raw
+
+
 def test_build_staged_payload_lists_files(tmp_path: Path) -> None:
     """Staged payload lists files under the disk image directory with version."""
     (tmp_path / "a" / "b").mkdir(parents=True)

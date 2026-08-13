@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -65,8 +64,19 @@ def _validate_certificates(
 
 
 def normalize_docker_config(raw: str) -> str:
-    """Strip extra quoted fields from a dockerconfigjson secret payload."""
-    return re.sub(r"(^|\})[^{}]+(\{|$)", r"\1\2", raw)
+    """Strip a single pair of wrapping quotes some secrets add around the JSON payload.
+
+    Some dockerconfigjson secrets store the payload quoted as a literal string,
+    e.g. ``"{"auths": {...}}"`` or ``'{"auths": {...}}'``. Only a single
+    matching leading/trailing quote pair (single or double) is removed here;
+    unlike a brace-junk-stripping regex, this cannot corrupt the separator
+    between sibling registry entries in a multi-registry auths map (see
+    RELEASE-1990).
+    """
+    text = raw.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ('"', "'"):
+        text = text[1:-1]
+    return text
 
 
 def build_staged_payload(

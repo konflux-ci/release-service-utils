@@ -135,19 +135,48 @@ def test_oras_pull_runs_select_oci_auth_and_oras(
 ) -> None:
     """`oras_pull` writes auth config then pulls the artifact into *download_dir*."""
     calls: list[list[str]] = []
+    kwargs_list: list[dict[str, object]] = []
 
     def fake_run_cmd(cmd, **kwargs):  # type: ignore[no-untyped-def]
         calls.append([str(x) for x in cmd])
+        kwargs_list.append(kwargs)
         if cmd[0] == "select-oci-auth":
             return subprocess.CompletedProcess(cmd, 0, stdout='{"auths":{}}', stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr(oras_utils.subprocess_cmd, "run_cmd", fake_run_cmd)
-    oras_utils.oras_pull("quay.io/org/image@sha256:abc", tmp_path)
+    stderr_path = tmp_path / "stderr.txt"
+    oras_utils.oras_pull("quay.io/org/image@sha256:abc", tmp_path, stderr_path=stderr_path)
 
     assert calls[0] == ["select-oci-auth", "quay.io/org/image@sha256:abc"]
     assert calls[1][0:3] == ["oras", "pull", "--registry-config"]
     assert calls[1][-1] == "quay.io/org/image@sha256:abc"
+    # Both calls must share the same stderr log so failures are diagnosable.
+    assert kwargs_list[0]["stderr_path"] == stderr_path
+    assert kwargs_list[1]["stderr_path"] == stderr_path
+
+
+def test_oras_pull_select_oci_auth_failure_is_logged_to_stderr_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing select-oci-auth call logs its reason, not just an exit code."""
+    stderr_path = tmp_path / "stderr.txt"
+    stderr_path.write_text("", encoding="utf-8")
+
+    def fake_run_cmd(cmd, *, stderr_path=None, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[0] == "select-oci-auth":
+            if stderr_path is not None:
+                with open(stderr_path, "a", encoding="utf-8") as f:
+                    f.write("select-oci-auth: no credentials found for registry\n")
+            raise subprocess.CalledProcessError(1, cmd)
+        raise AssertionError("oras pull should not run when select-oci-auth fails")
+
+    monkeypatch.setattr(oras_utils.subprocess_cmd, "run_cmd", fake_run_cmd)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        oras_utils.oras_pull("quay.io/org/image:tag", tmp_path, stderr_path=stderr_path)
+
+    assert "no credentials found for registry" in stderr_path.read_text(encoding="utf-8")
 
 
 def test_oras_pull_cleans_up_auth_file(
