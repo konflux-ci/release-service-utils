@@ -806,7 +806,9 @@ def main(argv: list[str] | None = None) -> int:
             build_state_path=build_state_path,
             iib_log_path=iib_log_path,
         )
-    except tekton.CheckStepError as e:
+    except (tekton.CheckStepError, ValueError) as e:
+        # ValueError also caught: _poll_and_collect can raise it directly
+        # (e.g. missing "id" field), which previously skipped result writing.
         _write_failure(
             build_state_path,
             exit_code_path,

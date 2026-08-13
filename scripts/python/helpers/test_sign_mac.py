@@ -78,6 +78,31 @@ def test_build_signing_script_contains_key_commands() -> None:
     assert "My Identity" in script
 
 
+def test_build_signing_script_guards_against_silent_digest_failures() -> None:
+    """Generated script uses pipefail and aborts if the signed digest extraction is empty."""
+    script = sign_mac._build_signing_script(
+        quay_url="quay.io/org",
+        quay_user="user",
+        quay_pass="pass",
+        component_name="prod",
+        unsigned_digest="sha256:abc",
+        pipeline_run_uid="uid-123",
+        temp_dir="/tmp/uid-123_prod",
+        binary_path="/tmp/uid-123_prod/unsigned",
+        zip_path="/tmp/uid-123_prod/signed_content.zip",
+        digest_file="/tmp/uid-123_prod/push_digest.txt",
+        keychain_password="kpwd",
+        signing_identity="My Identity",
+        apple_id="dev@example.com",
+        team_id="TEAMID123",
+        app_specific_password="app-pwd",
+    )
+    # Without pipefail, a `grep` miss in the digest-extraction pipeline would be masked
+    # by the trailing `awk` succeeding on empty input.
+    assert "set -euxo pipefail" in script
+    assert 'if [ -z "$SIGNED_DIGEST" ]; then' in script
+
+
 # ---------------------------------------------------------------------------
 # _ssh_opts
 # ---------------------------------------------------------------------------

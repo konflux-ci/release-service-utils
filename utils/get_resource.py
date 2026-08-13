@@ -263,7 +263,7 @@ def get_resource_dict(
 
 
 def _get_with_jsonpath(resource_type: str, namespace: str, name: str, jsonpath: str) -> str:
-    rc, stdout, _ = _run(
+    rc, stdout, stderr = _run(
         [
             "kubectl",
             "get",
@@ -278,6 +278,16 @@ def _get_with_jsonpath(resource_type: str, namespace: str, name: str, jsonpath: 
     )
     if rc == 0:
         return stdout
+
+    LOGGER.error(
+        "kubectl get %s %s/%s (jsonpath=%s) failed (exit=%d): %s",
+        resource_type,
+        namespace,
+        name,
+        jsonpath,
+        rc,
+        (stderr or stdout).strip(),
+    )
 
     if ka_enabled(resource_type):
         try:

@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 import collect_signing_params
+import kubectl
 
 
 def _mock_configmap(data: dict[str, str]) -> dict[str, Any]:
@@ -248,13 +249,13 @@ def test_collect_signing_params_with_configmap(tmp_path: Path) -> None:
 
 
 def test_collect_signing_params_missing_configmap(tmp_path: Path) -> None:
-    """Collect empty signing params when ConfigMap is not found."""
+    """Collect empty signing params when ConfigMap is genuinely not found."""
     from unittest.mock import patch
 
     result_paths = _make_result_paths(tmp_path)
     with patch(
         "collect_signing_params.kubectl.get_configmap",
-        side_effect=RuntimeError("ConfigMap not found"),
+        side_effect=kubectl.ConfigMapNotFoundError("ConfigMap not found"),
     ):
         params = collect_signing_params.collect_signing_params(
             config_map_name="cluster-config",
@@ -266,6 +267,30 @@ def test_collect_signing_params_missing_configmap(tmp_path: Path) -> None:
     assert params["defaultOIDCIssuer"] == ""
     assert (tmp_path / "enableKeylessSigning").read_text() == "false"
     assert (tmp_path / "defaultOIDCIssuer").read_text() == ""
+
+
+def test_collect_signing_params_other_kubectl_failure_propagates(tmp_path: Path) -> None:
+    """A non-NotFound kubectl failure must not be silently treated as opt-out.
+
+    RBAC/network failures should propagate and fail the task loudly instead
+    of masquerading as an intentional absence of configuration.
+    """
+    from unittest.mock import patch
+
+    result_paths = _make_result_paths(tmp_path)
+    with patch(
+        "collect_signing_params.kubectl.get_configmap",
+        side_effect=RuntimeError("Unable to connect to the server: dial tcp: timeout"),
+    ):
+        with pytest.raises(RuntimeError, match="Unable to connect"):
+            collect_signing_params.collect_signing_params(
+                config_map_name="cluster-config",
+                config_map_namespace="konflux-info",
+                result_paths=result_paths,
+            )
+
+    # No result files should have been written since the task crashed before completing.
+    assert not (tmp_path / "enableKeylessSigning").exists()
 
 
 def test_collect_signing_params_custom_configmap_name(tmp_path: Path) -> None:
@@ -349,7 +374,7 @@ def test_main_missing_configmap_succeeds(
     _set_result_env_vars(tmp_path, monkeypatch)
     with patch(
         "collect_signing_params.kubectl.get_configmap",
-        side_effect=RuntimeError("Not found"),
+        side_effect=kubectl.ConfigMapNotFoundError("Not found"),
     ):
         result = collect_signing_params.main([])
 

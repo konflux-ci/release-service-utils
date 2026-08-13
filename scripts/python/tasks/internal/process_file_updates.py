@@ -733,6 +733,12 @@ def main(argv: list[str] | None = None) -> int:
         info_path.write_text(msg[:500], encoding="utf-8")
         state_path.write_text("Failed", encoding="utf-8")
         return 0
+    except Exception as exc:  # internal task: always record a result and exit 0
+        why = redact.redact_secrets(tekton.result_text_from_exception(exc))
+        msg = f"{program}: Failed: {why}"
+        info_path.write_text(msg[:500], encoding="utf-8")
+        state_path.write_text("Failed", encoding="utf-8")
+        return 0
 
     if exit_code == 1:
         info_path.write_text(info_body, encoding="utf-8")

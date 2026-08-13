@@ -182,7 +182,8 @@ def process_fixed_issue(
     try:
         add_issue_comment(session, issue_url, auth, comment)
     except requests.RequestException as exc:
-        logger.warning("Warning: failed to add comment to issue %s. %s", issue, exc)
+        logger.error("Failed to add comment to issue %s. %s", issue, exc)
+        raise
 
 
 def close_advisory_issues(

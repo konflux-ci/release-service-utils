@@ -556,6 +556,30 @@ def test_main_subprocess_error_writes_failed(
     assert "yq" in info.read_text(encoding="utf-8")
 
 
+def test_main_catches_unexpected_exception_writes_failed(
+    tmp_path: Path, secret_mount: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unanticipated exceptions (e.g. ``KeyError``) still write Failed and exit 0.
+
+    Regression test: previously ``main`` only caught ``CheckStepError`` and
+    ``subprocess.CalledProcessError``, so any other exception type (file I/O,
+    third-party libraries, programming errors) would crash the internal task
+    uncaught, violating the convention that internal tasks always exit 0 and
+    record a Tekton result.
+    """
+    info, state, _, _ = _setup_tekton_env(tmp_path, monkeypatch, secret_mount)
+
+    def _fail(**_k: object) -> tuple[str, str, int]:
+        raise KeyError("unexpected_missing_key")
+
+    with mock.patch.object(process_file_updates, "run_file_updates", side_effect=_fail):
+        rc = process_file_updates.main(["process_file_updates.py", *_VALID_ARGS])
+
+    assert rc == 0
+    assert state.read_text(encoding="utf-8") == "Failed"
+    assert "unexpected_missing_key" in info.read_text(encoding="utf-8")
+
+
 def test_run_file_updates_short_circuit_on_path_outcome(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
