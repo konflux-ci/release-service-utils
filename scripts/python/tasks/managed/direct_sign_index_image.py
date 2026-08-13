@@ -155,8 +155,11 @@ def setup_argparser() -> argparse.ArgumentParser:
     )
     submit.add_argument(
         "--pipeline-image",
-        required=True,
-        help="Container image override for the signing pipeline",
+        default="",
+        help=(
+            "[DEPRECATED] The image reference is now managed internally"
+            " by the pipeline. This option will be removed in a future release"
+        ),
     )
     submit.add_argument(
         "--requester",

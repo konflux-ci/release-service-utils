@@ -945,6 +945,20 @@ def test_submit_batch_reads_file_and_calls_internal_request(tmp_path) -> None:
     assert any("pipeline_image=quay.io/signing/pipeline:latest" in a for a in cmd)
 
 
+def test_submit_batch_omits_pipeline_image_when_empty(tmp_path: Path) -> None:
+    """submit_batch does not pass pipeline_image when it is empty."""
+    cfg = get_submit_config(_FULL_CONFIGMAP, _make_submit_args(pipeline_image=""), {})
+    batch_file = tmp_path / "batch_0000.txt"
+    batch_file.write_text("base64content==")
+
+    with patch("rh_direct_sign_image.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        submit_batch(batch_file, cfg)
+
+    cmd = mock_run.call_args.args[0]
+    assert not any("pipeline_image=" in a for a in cmd)
+
+
 def test_submit_batch_includes_intention_label(tmp_path) -> None:
     """submit_batch passes the intention label to internal-request."""
     cfg = get_submit_config(_FULL_CONFIGMAP, _make_submit_args(), {"intention": "release"})
@@ -1103,12 +1117,11 @@ def test_setup_argparser_submit_requests_defaults(tmp_path) -> None:
             str(sign),
             "--requester",
             "tester",
-            "--pipeline-image",
-            "quay.io/signing/pipeline:latest",
         ]
     )
 
     assert args.submit_requests is False
+    assert args.pipeline_image == ""
     assert args.concurrent_limit == 8
     assert args.request_timeout == "1800"
     assert args.pipeline_timeout == "0h30m0s"
