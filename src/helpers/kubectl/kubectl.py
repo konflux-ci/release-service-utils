@@ -8,6 +8,16 @@ from typing import Any
 from release_service_utils.helpers.subprocess_cmd import run_cmd
 
 
+class ConfigMapNotFoundError(RuntimeError):
+    """Raised specifically when kubectl reports the ConfigMap does not exist.
+
+    Callers that want to treat "genuinely absent" differently from other kubectl
+    failures (RBAC denied, API server unreachable, network errors, etc.) should
+    catch this subclass rather than the base RuntimeError, so infra hiccups aren't
+    silently mistaken for an intentional absence of configuration.
+    """
+
+
 def get_configmap(name: str, *, namespace: str | None = None) -> dict[str, Any]:
     """Fetch a Kubernetes ConfigMap by name and return its parsed JSON.
 
@@ -19,7 +29,8 @@ def get_configmap(name: str, *, namespace: str | None = None) -> dict[str, Any]:
         The full ConfigMap object as a parsed dictionary.
 
     Raises:
-        RuntimeError: If kubectl exits with a non-zero return code.
+        ConfigMapNotFoundError: If kubectl reports the ConfigMap does not exist.
+        RuntimeError: If kubectl exits with a non-zero return code for any other reason.
 
     """
     cmd = ["kubectl", "get", f"cm/{name}", "-ojson"]
@@ -27,7 +38,10 @@ def get_configmap(name: str, *, namespace: str | None = None) -> dict[str, Any]:
         cmd.extend(["-n", namespace])
     result = run_cmd(cmd, check=False)
     if result.returncode != 0:
-        raise RuntimeError(f"Failed to retrieve ConfigMap '{name}': {result.stderr.strip()}")
+        stderr = result.stderr.strip()
+        if f'configmaps "{name}" not found' in stderr:
+            raise ConfigMapNotFoundError(f"ConfigMap '{name}' not found: {stderr}")
+        raise RuntimeError(f"Failed to retrieve ConfigMap '{name}': {stderr}")
     return json.loads(result.stdout)
 
 

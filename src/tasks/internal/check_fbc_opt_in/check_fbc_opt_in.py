@@ -51,12 +51,12 @@ def get_fbc_opt_in(
     *,
     warn_on_query_failure: bool = True,
 ) -> bool:
-    """Get the FBC opt-in status for a container image from Pyxis.
+    """Return `True` only when the Pyxis JSON body sets `fbc_opt_in` to boolean true.
 
-    Return `True` only when the Pyxis JSON body sets `fbc_opt_in` to JSON boolean
-    true.
-    Query failures, non-JSON responses, and missing fields are treated as
-    opt-out (`False`).
+    Missing/false values are a genuine opt-out (`False`). Raises
+    `tekton.CheckStepError` if Pyxis cannot be reached or returns an
+    unparseable response — an outage or bad response must never be silently
+    treated as a legitimate opt-out decision.
     """
     try:
         # Build the Pyxis endpoint for this image pull spec.
@@ -64,20 +64,16 @@ def get_fbc_opt_in(
             image_ref.pyxis_url_for_pull_spec(pyxis_url, pull_spec),
             auth=auth,
         )
+    except (OSError, requests.RequestException) as e:
+        raise tekton.CheckStepError(
+            f"querying Pyxis for FBC opt-in status of {pull_spec}", e
+        ) from e
+    try:
         data: dict[str, Any] = json.loads(body)
-    except (
-        OSError,
-        ValueError,
-        TypeError,
-        json.JSONDecodeError,
-        requests.RequestException,
-    ):
-        # Fail closed: treat query/parsing errors as not opted in.
-        if warn_on_query_failure:
-            logger.warning(
-                f"Failed to query Pyxis for {pull_spec}, assuming opt-out",
-            )
-        return False
+    except (ValueError, TypeError) as e:
+        raise tekton.CheckStepError(
+            f"parsing the Pyxis response for FBC opt-in status of {pull_spec}", e
+        ) from e
     return data.get("fbc_opt_in") is True
 
 
@@ -158,7 +154,12 @@ def run_check(
 
 
 def main() -> int:
-    """Write `RESULT_OPT_IN_RESULTS` and return exit code `0` on success."""
+    """Write `RESULT_OPT_IN_RESULTS` and return exit code `0` on success.
+
+    The managed caller (prepare-fbc-parameters.yaml) trusts `optInResults`
+    only when the InternalRequest's Succeeded condition is True, so failures
+    here must crash via SystemExit, not exit 0.
+    """
     # `RESULT_OPT_IN_RESULTS` is the path of the JSON file this step writes.
     rpath = tekton.result_paths_from_env("RESULT_OPT_IN_RESULTS")[0]
     raw_images = os.environ.get("CONTAINER_IMAGES", "")

@@ -176,6 +176,11 @@ def main(argv: list[str] | None = None) -> int:
     # write the published-files list.
     os.environ["RESULT_PUBLISHED_FILES"] = str(published_path)
 
+    # Placeholder so this result is always written, even if a step before
+    # push_artifacts_mod.run() (which normally overwrites it) fails first.
+    # Otherwise the result file would be left missing, masking the real error.
+    published_path.write_text("", encoding="utf-8")
+
     checksum_map_ref = ""
     try:
         _call_phase("extracting artifacts", extract_artifacts.run, args.concurrent_limit)
