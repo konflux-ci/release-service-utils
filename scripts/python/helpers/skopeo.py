@@ -27,7 +27,8 @@ def copy(
     dest: str,
     *,
     retry_times: int = 3,
+    check: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``skopeo copy`` to copy an image between transports."""
     cmd = ["skopeo", "copy", "--retry-times", str(retry_times), source, dest]
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return subprocess.run(cmd, capture_output=True, text=True, check=check)
