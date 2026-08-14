@@ -58,6 +58,7 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 
 - Container image based on UBI. Dependencies managed with `uv` (see pyproject.toml).
 - CI runs Black, Flake8, pytest with coverage, yamllint, and gitlint on every PR.
+- Dockerfile: `curl` must use `-f`; every binary needs a sanity check (`version`/`--help`; `bash -n` for scripts).
 
 ## Key Patterns
 
@@ -68,8 +69,7 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 
 ## Skills
 
-AI skills are in `skills/`. Each skill has a `SKILL.md` following the [agentskills.io](https://agentskills.io) spec.
-Symlinked to `.claude/skills/` and `.cursor/skills/` for agent discovery.
+AI skills are in `skills/` (symlinked to `.claude/skills/` and `.cursor/skills/`).
 
 Available skills:
 
