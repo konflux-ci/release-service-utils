@@ -51,6 +51,12 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - All commits must be cryptographically signed (`git commit -S`).
 - When generating commits with the assistance of an AI tool, add an `Assisted-by: <AI-agent>` trailer.
 
+## Build
+
+- Container image based on UBI. Dependencies managed with `uv` (see pyproject.toml).
+- CI runs Black, Flake8, pytest with coverage, yamllint, and gitlint on every PR.
+- Dockerfile: `curl` must use `-f`; every binary needs a sanity check (`version`/`--help`; `bash -n` for scripts).
+
 ## Key Patterns
 
 - Internal task scripts (`scripts/python/tasks/internal/`) must catch all exceptions in `main()` and save errors to Tekton result files (the script itself must succeed).
