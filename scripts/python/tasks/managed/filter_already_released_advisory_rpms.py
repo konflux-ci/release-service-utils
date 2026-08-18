@@ -185,23 +185,6 @@ def _build_arch_repo_cache(
     return cache
 
 
-def _build_purl(
-    rpmname: str,
-    version: str,
-    release: str,
-    arch: str,
-    distro: str,
-    repo_id: str,
-) -> str:
-    """Build a Package URL for an RPM."""
-    purl = f"pkg:rpm/redhat/{rpmname}@{version}-{release}?arch={arch}"
-    if distro:
-        purl += f"&distro={distro}"
-    if repo_id:
-        purl += f"&repository_id={repo_id}"
-    return purl
-
-
 def _pull_rpm_files(
     image: str,
     files_dir: Path,
@@ -281,7 +264,7 @@ def _process_component_rpms(
             repo_id = repo_obj.get("repository_id", "")
             distro = repo_obj.get("distro", "")
 
-            purl = _build_purl(
+            purl = advisory_data.generate_purl_rpm(
                 nevra.name, nevra.version, nevra.release, nevra.arch, distro, repo_id
             )
 

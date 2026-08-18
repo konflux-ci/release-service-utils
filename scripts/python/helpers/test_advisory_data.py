@@ -438,3 +438,36 @@ def test_first_mapping_content_type_reads_content_gateway_rows() -> None:
         },
     }
     assert advisory_data.first_mapping_content_type(data) == "binary"
+
+
+def test_generate_purl_rpm_includes_all_fields() -> None:
+    """Formats an RPM PURL with all fields present."""
+    purl = advisory_data.generate_purl_rpm(
+        "hello", "1.0", "1.fc38", "x86_64", "hummingbird", "repo-id"
+    )
+    assert purl == (
+        "pkg:rpm/redhat/hello@1.0-1.fc38"
+        "?arch=x86_64&distro=hummingbird&repository_id=repo-id"
+    )
+
+
+def test_generate_purl_rpm_omits_empty_distro() -> None:
+    """Omits distro when empty."""
+    purl = advisory_data.generate_purl_rpm("pkg", "1.0", "1.el9", "x86_64", "", "repo-id")
+    assert "distro" not in purl
+    assert "repository_id=repo-id" in purl
+
+
+def test_generate_purl_rpm_omits_empty_repository_id() -> None:
+    """Omits repository_id when empty."""
+    purl = advisory_data.generate_purl_rpm("pkg", "1.0", "1.el9", "x86_64", "rhel", "")
+    assert "repository_id" not in purl
+    assert "distro=rhel" in purl
+
+
+def test_generate_purl_rpm_custom_vendor() -> None:
+    """Uses custom vendor when provided."""
+    purl = advisory_data.generate_purl_rpm(
+        "pkg", "1.0", "1.el9", "x86_64", "rhel", "repo-id", vendor="fedora"
+    )
+    assert purl.startswith("pkg:rpm/fedora/")

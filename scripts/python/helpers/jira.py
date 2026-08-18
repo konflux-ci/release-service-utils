@@ -16,7 +16,7 @@ from requests.auth import HTTPBasicAuth
 
 SUPPORTED_JIRA_SERVER = "redhat.atlassian.net"
 LEGACY_JIRA_SERVER = "issues.redhat.com"
-
+JIRA_CVE_CUSTOM_FIELD_ID = "customfield_10667"
 ISSUE_TRACKERS: dict[str, dict[str, Any]] = {
     "Jira": {
         "api": "rest/api/2/issue",

@@ -86,3 +86,11 @@ def component_public(data: dict[str, Any], component: dict[str, Any]) -> bool:
         if isinstance(defaults, dict):
             default = _is_truthy(defaults.get("public", False))
     return _is_truthy(component.get("public", default))
+
+
+def component_label_value(component: dict[str, Any], label_name: str) -> str | None:
+    """Return the value of label_name from a component's metadata labels."""
+    for label in component.get("metadata", {}).get("labels", []) or []:
+        if label.get("name") == label_name:
+            return label.get("value")
+    return None

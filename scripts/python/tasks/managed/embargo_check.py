@@ -24,6 +24,7 @@ import tekton
 from internal_request import SPAWN_OVERHEAD_SECONDS, InternalRequestWaitError, create
 from internal_request.internal_request import PIPELINERUN_UID_LABEL
 from jira import (
+    JIRA_CVE_CUSTOM_FIELD_ID,
     SUPPORTED_JIRA_SERVER,
     jira_issue_url,
     normalize_issue_server,
@@ -35,7 +36,6 @@ from subprocess_cmd import run_cmd
 
 PROG = "embargo_check.py"
 
-CVE_FIELD = "customfield_10667"
 
 MAX_JIRA_404_RETRIES = 3
 
@@ -177,7 +177,7 @@ def _process_issue(
         logger.info("No content found under releaseNotes.content.images or .artifacts;")
         return None
 
-    cve_id = (output.get("fields") or {}).get(CVE_FIELD, "")
+    cve_id = (output.get("fields") or {}).get(JIRA_CVE_CUSTOM_FIELD_ID, "")
     cve_found = any(
         cve_id in (item.get("cves", {}).get("fixed", {})) for item in content_items
     )

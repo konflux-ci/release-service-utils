@@ -370,28 +370,6 @@ class TestExtractRpmMetadata:
             assert filt.extract_rpm_metadata(tmp_path / "bad.rpm") is None
 
 
-class TestBuildPurl:
-    """Test purl construction."""
-
-    def test_full_purl(self) -> None:
-        """Build purl with distro and repo_id."""
-        result = filt._build_purl("hello", "1.0", "1.el9", "x86_64", "el9", "repo-1")
-        assert (
-            result
-            == "pkg:rpm/redhat/hello@1.0-1.el9?arch=x86_64&distro=el9&repository_id=repo-1"
-        )
-
-    def test_purl_no_distro(self) -> None:
-        """Build purl without distro."""
-        result = filt._build_purl("hello", "1.0", "1.el9", "x86_64", "", "repo-1")
-        assert "distro" not in result
-
-    def test_purl_no_repo_id(self) -> None:
-        """Build purl without repository_id."""
-        result = filt._build_purl("hello", "1.0", "1.el9", "x86_64", "el9", "")
-        assert "repository_id" not in result
-
-
 class TestBuildRpmEntries:
     """Test Phase 1: RPM extraction and entry building."""
 
