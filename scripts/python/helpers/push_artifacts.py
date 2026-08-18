@@ -386,7 +386,7 @@ def run(exodus_gw_env: str, cgw_hostname: str, cert_expiration_warn_days: int) -
 
     cgw_push = any(bool(c.get("contentGateway")) for c in snapshot.get("components", []))
     if cgw_push:
-        logger.info("Publishing all components to CGW...")
+        logger.info("Publishing all components to CGW host=%s", cgw_hostname)
         if "developers.qa.redhat.com" in cgw_hostname:
             os.environ["HTTP_PROXY"] = "http://squid.corp.redhat.com:3128"
             os.environ["HTTPS_PROXY"] = "http://squid.corp.redhat.com:3128"

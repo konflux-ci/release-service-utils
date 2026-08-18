@@ -15,6 +15,7 @@ import push_unsigned
 import pytest
 import sign_mac
 import sign_windows
+import tekton
 
 _WRAPPER_PATH = Path(__file__).parent / "push_artifacts_to_cdn.py"
 _spec = importlib.util.spec_from_file_location("push_artifacts_to_cdn_wrapper", _WRAPPER_PATH)
@@ -186,7 +187,9 @@ def test_main_extract_fails_stops_pipeline(
         rc = wrapper.main(REQUIRED_ARGS)
 
     assert rc == 0
-    assert "oras down" in rpath.read_text(encoding="utf-8")
+    text = rpath.read_text(encoding="utf-8")
+    assert "oras down" in text
+    assert "Failed while extracting artifacts" in text
     assert cmap_path.read_text(encoding="utf-8") == ""
     m_push_unsigned.assert_not_called()
 
@@ -210,7 +213,9 @@ def test_main_mid_step_failure_writes_partial_cmap(
         rc = wrapper.main(REQUIRED_ARGS)
 
     assert rc == 0
-    assert "kinit fail" in rpath.read_text(encoding="utf-8")
+    text = rpath.read_text(encoding="utf-8")
+    assert "kinit fail" in text
+    assert "Failed while generating and signing checksums" in text
     assert cmap_path.read_text(encoding="utf-8") == ""
     m_push.assert_not_called()
     m_cmap.assert_not_called()
@@ -280,3 +285,56 @@ def test_main_custom_args_forwarded(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert calls["extract"] == (5,)
     assert calls["checksums"] == ("CUSTOM.REALM", "custom-uid")
     assert calls["push"] == ("live", "cgw.custom.com", 14)
+
+
+def test_main_systemexit_from_cgw_writes_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SystemExit(1) from the CGW wrapper records the product-not-found cause."""
+    rpath, _, _ = _setup_result_env(tmp_path, monkeypatch)
+    cause = ValueError("Product SPMM: aapctl-cli not found with product code aapctl")
+    err = SystemExit(1)
+    err.__cause__ = cause
+
+    with (
+        mock.patch.object(extract_artifacts, "run"),
+        mock.patch.object(push_unsigned, "run"),
+        mock.patch.object(sign_mac, "run"),
+        mock.patch.object(sign_windows, "run"),
+        mock.patch.object(compress_artifacts, "run"),
+        mock.patch.object(generate_checksums, "run"),
+        mock.patch.object(push_artifacts_mod, "run", side_effect=err),
+        mock.patch.object(build_checksum_map, "run"),
+    ):
+        rc = wrapper.main(REQUIRED_ARGS)
+
+    assert rc == 0
+    text = rpath.read_text(encoding="utf-8")
+    assert "Product SPMM: aapctl-cli not found with product code aapctl" in text
+    assert "Failed while pushing artifacts to Pulp, CDN, and Content Gateway" in text
+
+
+def test_main_inner_checkstep_error_uses_phase_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An inner CheckStepError still records the outer pipeline phase in the result."""
+    rpath, _, _ = _setup_result_env(tmp_path, monkeypatch)
+    err = tekton.CheckStepError("kinit", RuntimeError("auth failed"))
+
+    with (
+        mock.patch.object(extract_artifacts, "run"),
+        mock.patch.object(push_unsigned, "run"),
+        mock.patch.object(sign_mac, "run"),
+        mock.patch.object(sign_windows, "run"),
+        mock.patch.object(compress_artifacts, "run"),
+        mock.patch.object(generate_checksums, "run", side_effect=err),
+        mock.patch.object(push_artifacts_mod, "run") as m_push,
+        mock.patch.object(build_checksum_map, "run"),
+    ):
+        rc = wrapper.main(REQUIRED_ARGS)
+
+    assert rc == 0
+    text = rpath.read_text(encoding="utf-8")
+    assert "Failed while generating and signing checksums" in text
+    assert "auth failed" in text
+    m_push.assert_not_called()
