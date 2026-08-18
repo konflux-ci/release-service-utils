@@ -264,11 +264,33 @@ def template_context_merge(
     }
 
 
+class _Dumper(yaml.SafeDumper):
+    pass
+
+
+def _quote_numeric_looking_strings(dumper: yaml.Dumper, data: str) -> yaml.ScalarNode:
+    # PyYAML writes "9.9" or "1" as float/int without quotes.
+    # Force double quotes when the resolver would mistake the value.
+    # See https://github.com/yaml/pyyaml/issues/98
+    if dumper.resolve(yaml.ScalarNode, data, (True, False)) != "tag:yaml.org,2002:str":
+        return yaml.ScalarNode("tag:yaml.org,2002:str", data, style='"')
+    # Force double quotes on strings like "1.0.1" as PyYAML
+    # doesn't see them as ambiguous.
+    is_version = data and "." in data and data.replace(".", "").isdigit()
+    if is_version:
+        return yaml.ScalarNode("tag:yaml.org,2002:str", data, style='"')
+    return yaml.SafeDumper.represent_str(dumper, data)
+
+
+_Dumper.add_representer(str, _quote_numeric_looking_strings)
+
+
 def json_dict_to_yaml_text(document: Any) -> str:
     """Serialize *document* to multi-line YAML (readable advisory file)."""
     # `sort_keys=False` keeps stable-ish ordering for tag-preservation checks.
-    return yaml.safe_dump(
+    return yaml.dump(
         document,
+        Dumper=_Dumper,
         default_flow_style=False,
         sort_keys=False,
         allow_unicode=True,
