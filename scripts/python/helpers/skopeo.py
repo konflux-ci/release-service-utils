@@ -11,6 +11,7 @@ def inspect(
     config: bool = False,
     raw: bool = False,
     retry_times: int = 3,
+    check: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``skopeo inspect`` on a container image reference."""
     cmd = ["skopeo", "inspect", "--retry-times", str(retry_times)]
@@ -19,7 +20,7 @@ def inspect(
     if raw:
         cmd.append("--raw")
     cmd.append(f"docker://{image_ref}")
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
 
 def copy(
