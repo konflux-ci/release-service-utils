@@ -1,18 +1,19 @@
 """Entry point for the push-artifacts-to-cdn Tekton task.
 
-Called as a single step from the catalog task, this script runs each stage
+Called as a single step from the catalog task, this script runs each phase
 in sequence: extract, push unsigned, sign (Mac and Windows), compress,
 generate checksums, push to CDN, and build the advisory checksum map.
 
-Any exception raised by a stage is caught here: the Tekton result file
-receives a short error description and the script exits with code 0 so
-Tekton records the result text rather than masking it with a generic
-step-failure message.
+Any exception raised by a phase is caught here: the Tekton result file
+receives a short error description that names the failing phase and the
+underlying cause, and the script exits with code 0 so Tekton records the
+result. The managed task copies ``status.results.result`` to the
+user-visible failure.
 
 ## Shared file-system layout
 
-All stages read and write under ``CONTENT_DIR`` (default ``/shared/artifacts``).
-The tree below shows how a component directory evolves across stages::
+All phases read and write under ``CONTENT_DIR`` (default ``/shared/artifacts``).
+The tree below shows how a component directory evolves across phases::
 
   /shared/
   ├── snapshot.json          ← written by compress_artifacts; read by generate_checksums
@@ -61,7 +62,13 @@ import argparse
 import logging
 import os
 import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import TypeVar
+
 import tekton
+from logger import logger
+from redact import redact_secrets
 
 import build_checksum_map
 import compress_artifacts
@@ -73,6 +80,7 @@ import sign_mac
 import sign_windows
 
 PROG = "push_artifacts_to_cdn.py"
+T = TypeVar("T")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -113,6 +121,44 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _call_phase(action: str, fn: Callable[..., T], *args: object) -> T:
+    """Run one pipeline phase and attach *action* to any failure."""
+    logger.info("Starting: %s", action)
+    try:
+        result = fn(*args)
+    except tekton.CheckStepError as exc:
+        raise tekton.CheckStepError(action, exc.cause) from exc
+    except Exception as exc:
+        raise tekton.CheckStepError(action, exc) from exc
+    except SystemExit as exc:
+        if exc.code in (0, None):
+            raise
+        cause = exc.__cause__ if isinstance(exc.__cause__, BaseException) else exc
+        raise tekton.CheckStepError(action, cause) from exc
+    logger.info("Finished: %s", action)
+    return result
+
+
+def _write_failure(
+    rpath: Path,
+    cmap_path: Path,
+    checksum_map_ref: str,
+    exc: BaseException,
+) -> None:
+    """Write the Tekton result body for a failed run and log a redacted summary."""
+    action = (
+        exc.action if isinstance(exc, tekton.CheckStepError) else "pushing artifacts to CDN"
+    )
+    logger.error("%s failed while %s: %s", PROG, action, redact_secrets(str(exc)))
+    tekton.write_failure_result(
+        rpath,
+        PROG,
+        exc,
+        workflow_action=action,
+    )
+    cmap_path.write_text(checksum_map_ref, encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point: run every step in order and write Tekton results."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -131,21 +177,44 @@ def main(argv: list[str] | None = None) -> int:
 
     checksum_map_ref = ""
     try:
-        extract_artifacts.run(args.concurrent_limit)
-        push_unsigned.run(args.quay_url, args.pipeline_run_uid)
-        sign_mac.run(args.quay_url, args.pipeline_run_uid)
-        sign_windows.run(args.quay_url, args.pipeline_run_uid)
-        compress_artifacts.run(args.quay_url)
-        generate_checksums.run(args.kerberos_realm, args.pipeline_run_uid)
-        push_artifacts_mod.run(
+        _call_phase("extracting artifacts", extract_artifacts.run, args.concurrent_limit)
+        _call_phase(
+            "pushing unsigned Mac and Windows artifacts",
+            push_unsigned.run,
+            args.quay_url,
+            args.pipeline_run_uid,
+        )
+        _call_phase(
+            "signing Mac artifacts", sign_mac.run, args.quay_url, args.pipeline_run_uid
+        )
+        _call_phase(
+            "signing Windows artifacts",
+            sign_windows.run,
+            args.quay_url,
+            args.pipeline_run_uid,
+        )
+        _call_phase("compressing artifacts", compress_artifacts.run, args.quay_url)
+        _call_phase(
+            "generating and signing checksums",
+            generate_checksums.run,
+            args.kerberos_realm,
+            args.pipeline_run_uid,
+        )
+        _call_phase(
+            "pushing artifacts to Pulp, CDN, and Content Gateway",
+            push_artifacts_mod.run,
             args.exodus_gw_env,
             args.cgw_hostname,
             args.cert_expiration_warn_days,
         )
-        checksum_map_ref = build_checksum_map.run()
-    except Exception as exc:
-        rpath.write_text(f"{PROG}: ERROR {exc}", encoding="utf-8")
-        cmap_path.write_text(checksum_map_ref, encoding="utf-8")
+        checksum_map_ref = _call_phase(
+            "building the advisory checksum map",
+            build_checksum_map.run,
+        )
+    except (Exception, SystemExit) as exc:
+        if isinstance(exc, SystemExit) and exc.code in (0, None):
+            raise
+        _write_failure(rpath, cmap_path, checksum_map_ref, exc)
         return 0
 
     rpath.write_text("Success", encoding="utf-8")

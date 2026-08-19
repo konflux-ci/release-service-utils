@@ -302,7 +302,6 @@ def prune_matching_content_before_push(parsed):
                             }
                         }
                     },
-                    "include_repos": True,
                 }
                 response = pulp_request(search_url, context=context, payload=payload) or []
                 for unit in response:
@@ -427,8 +426,8 @@ def main(argv=None):
             LOG.exception("Command %s failed, check exception for details", cmd_str)
             raise
         except Exception as exc:
-            LOG.exception("Unknown error occurred")
-            raise RuntimeError from exc
+            LOG.exception("Pulp push failed: %s", exc)
+            raise
 
 
 def entrypoint():

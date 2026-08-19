@@ -360,7 +360,7 @@ def main(argv=None):
                 content_gateway.get("productVersionName"),
                 e,
             )
-            raise SystemExit(1) from e
+            raise
     logging.info("Processed result:\n%s", json.dumps(all_results, indent=2))
     logging.info("All files processed successfully.")
     return all_results
