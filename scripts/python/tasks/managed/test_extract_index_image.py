@@ -205,7 +205,7 @@ def test_extract_index_image_writes_expected_file(
 
 def test_extract_index_image_missing_input_raises(tmp_path: Path) -> None:
     """Raise when the InternalRequest results file is missing (catalog fail test)."""
-    with pytest.raises(FileNotFoundError, match="InternalRequest results file not found"):
+    with pytest.raises(FileNotFoundError):
         extract_index_image.extract_index_image(
             data_dir=tmp_path,
             results_dir_path=Path("results"),

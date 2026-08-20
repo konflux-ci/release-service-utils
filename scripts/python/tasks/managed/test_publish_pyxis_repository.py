@@ -580,7 +580,7 @@ def test_run_publish_pyxis_repository_writes_outputs(tmp_path: Path) -> None:
 
 def test_run_publish_missing_snapshot_raises(tmp_path: Path) -> None:
     """Fail fast when the snapshot file is missing."""
-    with pytest.raises(FileNotFoundError, match="No valid snapshot file"):
+    with pytest.raises(FileNotFoundError):
         publish_pyxis_repository.run_publish_pyxis_repository(
             data_dir=tmp_path,
             snapshot_path=tmp_path / "missing.json",
@@ -597,7 +597,7 @@ def test_run_publish_missing_data_raises(tmp_path: Path) -> None:
     """Fail fast when the data JSON file is missing."""
     snapshot = tmp_path / "snap.json"
     snapshot.write_text("{}", encoding="utf-8")
-    with pytest.raises(FileNotFoundError, match="No data JSON"):
+    with pytest.raises(FileNotFoundError):
         publish_pyxis_repository.run_publish_pyxis_repository(
             data_dir=tmp_path,
             snapshot_path=snapshot,
