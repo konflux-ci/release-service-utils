@@ -49,36 +49,52 @@ def parse_cve_list(value: str) -> list[str]:
     return [c for c in re.split(r"\s+", value.strip()) if c]
 
 
-def is_embargoed_flaw_response(data: dict[str, Any]) -> bool:
-    """Return True if the first flaw in the list response is not clearly not embargoed.
+def flaw_response_failure_reason(data: dict[str, Any]) -> str | None:
+    """Return why a flaw JSON is not clearly public, or ``None`` if it is.
 
     Only ``results[0].embargoed`` with JSON value ``false`` is treated as
-    not embargoed. Empty ``results``, a missing first row, a non-dict first row,
+    public. Empty ``results``, a missing first row, a non-dict first row,
     a missing key, or ``null``/``true`` is treated as embargoed or not visible.
     """
+    if not data:
+        return "empty OSIDB response (no flaw JSON)"
     results = data.get("results")
-    if not isinstance(results, list) or not results:
-        return True
+    if not isinstance(results, list):
+        return "OSIDB results missing or not a list"
+    if not results:
+        return "OSIDB returned no matching flaws"
     first = results[0]
     if not isinstance(first, dict):
-        return True
-    em = first.get("embargoed", None)
+        return "OSIDB first result is not an object"
+    if "embargoed" not in first:
+        return "OSIDB flaw missing embargoed field"
+    em = first["embargoed"]
     if em is False:
-        return False
-    return True
+        return None
+    if em is True:
+        return "OSIDB reports embargoed: true"
+    if em is None:
+        return "OSIDB reports embargoed: null"
+    return f"OSIDB reports embargoed: {em!r} (not false)"
 
 
-def _embargo_finding_result_text(program_name: str) -> str:
+def is_embargoed_flaw_response(data: dict[str, Any]) -> bool:
+    """Return True if the first flaw in the list response is not clearly not embargoed."""
+    return flaw_response_failure_reason(data) is not None
+
+
+def _embargo_finding_result_text(program_name: str, details: Sequence[str]) -> str:
     """Build ``RESULT_RESULT`` text when listed CVEs are not clearly public.
 
     Used when the run finished without a Python exception but the OSIDB API
     indicates at least one listed CVE is embargoed or not clearly public.
     CVE ids are written to ``RESULT_EMBARGOED_CVES``; this string in
-    ``RESULT_RESULT`` points readers there.
+    ``RESULT_RESULT`` includes the per-CVE reason from OSIDB.
     """
+    suffix = "; ".join(details) if details else "see the embargoed_cves result for ids"
     return (
         f"{program_name}: check failed: at least one CVE is embargoed or not "
-        f"clearly public in OSIDB; see the embargoed_cves result for ids"
+        f"clearly public in OSIDB ({suffix})"
     )
 
 
@@ -125,7 +141,7 @@ def run_check(
     get_token: Any = osidb.get_access_token,
     get_flaw: Any = fetch_flaw_state,
     krb5_template: Path = Path("/etc/krb5.conf"),
-) -> tuple[list[str], int]:
+) -> tuple[list[str], int, list[str]]:
     """Core check: kinit, then for each CVE fetch token + flaw JSON and test embargo.
 
     Writes the keytab and a patched KRB5_CONFIG to temp files, runs ``kinit``,
@@ -133,11 +149,12 @@ def run_check(
     (``kinit``, ``get_token``, ``get_flaw``) default to the real implementation
     and are only replaced in tests.
 
-    Return value: ``(affected_cve_ids, 0 or 1)`` — the second is ``1`` if
-    at least one CVE is embargoed or not clearly public, and ``0`` if all
-    are clear. Raises ``ValueError`` if ``cve_ids`` is empty. On operational
-    failures, raises ``CheckStepError`` from the ``tekton`` helper, which
-    carries a short English *action* and the original exception.
+    Return value: ``(affected_cve_ids, 0 or 1, details)`` — the second is ``1``
+    if at least one CVE is embargoed or not clearly public, and ``0`` if all
+    are clear. ``details`` has one ``CVE-id: reason`` string per affected CVE.
+    Raises ``ValueError`` if ``cve_ids`` is empty. On operational failures,
+    raises ``CheckStepError`` from the ``tekton`` helper, which carries a
+    short English *action* and the original exception.
     """
     if not cve_ids:
         raise ValueError("no CVEs")
@@ -184,6 +201,7 @@ def run_check(
         # Short-lived token per CVE, matching the shell task (avoids an expired
         # token mid-loop).
         found: list[str] = []
+        details: list[str] = []
         for cve in cve_ids:
             print(f"Checking CVE {cve}", flush=True)
             try:
@@ -204,12 +222,16 @@ def run_check(
                 raise tekton.CheckStepError(
                     "querying the OSIDB flaws API (HTTP request)", e
                 ) from e
-            if is_embargoed_flaw_response(data):
-                print(f"CVE {cve} is embargoed", flush=True)
+            payload = json.dumps(data, separators=(",", ":"), default=str)
+            print(f"CVE {cve} OSIDB response: {payload}", flush=True)
+            reason = flaw_response_failure_reason(data)
+            if reason is not None:
+                print(f"CVE {cve} not clearly public: {reason}", flush=True)
                 found.append(cve)
+                details.append(f"{cve}: {reason}")
 
         # Return code 0/1 is logical outcome only; main() maps it to the Tekton result files.
-        return (found, 0 if not found else 1)
+        return (found, 0 if not found else 1, details)
     finally:
         # kpath, ccache, kcfg: remove all temp files even when kinit or a later step raises.
         for p in (kpath, ccache_path, kcfg):
@@ -251,17 +273,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     problem: list[str] = []
     out_rc: int = 0
+    details: list[str] = []
     step_err: tekton.CheckStepError | None = None
     try:
-        problem, out_rc = run_check(cve_list, mount=mount)
+        problem, out_rc, details = run_check(cve_list, mount=mount)
     except tekton.CheckStepError as e:
         # CheckStepError carries a plain-English action plus the cause.
-        out_rc, problem = 1, []
+        out_rc, problem, details = 1, [], []
         step_err = e
     except Exception as e:
         # Any bug or unexpected error still produces a result line; never drop
         # Tekton with no "result" body.
-        out_rc, problem = 1, []
+        out_rc, problem, details = 1, [], []
         step_err = tekton.CheckStepError("running the check", e)
 
     epath.write_text("".join(f"{c} " for c in problem), encoding="utf-8")
@@ -269,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
         rpath.write_text("Success", encoding="utf-8")
     elif problem:
         # The API ran, but at least one CVE is not clearly public; not a step exception.
-        rpath.write_text(_embargo_finding_result_text(name), encoding="utf-8")
+        rpath.write_text(_embargo_finding_result_text(name, details), encoding="utf-8")
     elif step_err is not None:
         # Exception on the way: which step and the original error; process
         # still exits 0 below.
