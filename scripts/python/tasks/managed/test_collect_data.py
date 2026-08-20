@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -380,6 +381,43 @@ class TestResolvePipelineRef:
         }
         result = resolve_pipeline_ref(rpa)
         assert result["sha"] == "unknown"
+
+    @patch("collect_data.http_client.get_text")
+    def test_empty_sha_in_response_logs_warning(
+        self,
+        mock_get_text: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Log a warning when the GitHub API response has no commit SHA.
+
+        Regression test: previously this fallback to "unknown" happened with
+        no logging at all, making a real provenance-data gap invisible.
+        """
+        mock_get_text.return_value = '{"sha": ""}'
+        rpa = {
+            "spec": {
+                "pipeline": {
+                    "pipelineRef": {
+                        "resolver": "git",
+                        "params": [
+                            {"name": "url", "value": "https://github.com/o/r"},
+                            {"name": "revision", "value": "v1"},
+                            {"name": "pathInRepo", "value": "p"},
+                        ],
+                    }
+                }
+            }
+        }
+        release_logger = logging.getLogger("release")
+        original_propagate = release_logger.propagate
+        release_logger.propagate = True
+        try:
+            with caplog.at_level(logging.WARNING, logger="release"):
+                result = resolve_pipeline_ref(rpa)
+        finally:
+            release_logger.propagate = original_propagate
+        assert result["sha"] == "unknown"
+        assert "did not include a commit SHA" in caplog.text
 
 
 class TestCheckDataKeySources:

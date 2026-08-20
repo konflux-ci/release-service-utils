@@ -463,10 +463,14 @@ def test_process_fixed_issue_adds_comment_when_close_request_fails(
     assert "failed to close issue" in caplog.text
 
 
-def test_process_fixed_issue_warns_when_comment_also_fails(
+def test_process_fixed_issue_raises_when_comment_also_fails(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Log a warning when both close and comment requests fail."""
+    """Propagate the error (after logging it) when both close and comment fail.
+
+    Regression test: previously this failure was only logged, so the task
+    reported success even though the issue was left open with no comment.
+    """
     session = mock.MagicMock()
     auth = HTTPBasicAuth("user", "token")
     with mock.patch(
@@ -480,14 +484,15 @@ def test_process_fixed_issue_warns_when_comment_also_fails(
             "close_advisory_issues.add_issue_comment",
             side_effect=requests.HTTPError("comment failed"),
         ):
-            with caplog.at_level(logging.WARNING, logger="release"):
-                close_advisory_issues.process_fixed_issue(
-                    _fixed_issue("FAIL-999"),
-                    advisory_url="https://access.redhat.com/errata/RHBA-2025:1111",
-                    auth=auth,
-                    session=session,
-                )
-    assert "failed to add comment to issue" in caplog.text
+            with caplog.at_level(logging.ERROR, logger="release"):
+                with pytest.raises(requests.HTTPError, match="comment failed"):
+                    close_advisory_issues.process_fixed_issue(
+                        _fixed_issue("FAIL-999"),
+                        advisory_url="https://access.redhat.com/errata/RHBA-2025:1111",
+                        auth=auth,
+                        session=session,
+                    )
+    assert "Failed to add comment to issue" in caplog.text
 
 
 def test_process_fixed_issue_uses_atlassian_for_legacy_source() -> None:

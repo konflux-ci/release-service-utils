@@ -146,13 +146,24 @@ def _resolve_commit_sha(org: str, repo: str, revision: str) -> str:
     try:
         api_url = f"https://api.github.com/repos/{org}/{repo}/commits/{revision}"
         response_text = http_client.get_text(api_url, timeout=10)
-        return json.loads(response_text).get("sha") or "unknown"
+        sha = json.loads(response_text).get("sha")
     except Exception:
         logger.warning(
             "Failed to resolve commit SHA from GitHub API",
             exc_info=True,
         )
         return "unknown"
+
+    if not sha:
+        logger.warning(
+            "GitHub API response for %s/%s@%s did not include a commit SHA; "
+            "falling back to 'unknown' in the release pipeline metadata",
+            org,
+            repo,
+            revision,
+        )
+        return "unknown"
+    return sha
 
 
 def _resolve_git_pipeline_ref(pipeline_ref: dict[str, Any]) -> dict[str, str]:
