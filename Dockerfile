@@ -33,7 +33,7 @@ RUN ARCH=$(uname -m) && \
     curl -L https://github.com/kubearchive/kubearchive/releases/download/v${KUBEARCHIVE_VERSION}/kubectl-ka-linux-${GO_ARCH} -o /usr/bin/kubectl-ka &&\
     chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft,kubectl-ka}
 
-RUN dnf install -y https://dl.fedoraproject.org/pub/epel/10/Everything/x86_64/Packages/e/epel-release-10-8.el10_3.noarch.rpm
+RUN dnf install -y https://dl.fedoraproject.org/pub/epel/10/Everything/x86_64/Packages/e/epel-release-10-9.el10_3.noarch.rpm
 
 COPY --from=oras /usr/bin/oras /usr/bin/oras
 COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
