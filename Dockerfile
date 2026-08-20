@@ -173,6 +173,7 @@ RUN ln -s /home/src/tasks/managed/cleanup_workspace/cleanup_workspace.py /home/s
     ln -s /home/src/tasks/managed/make_repo_public/make_repo_public.py /home/scripts/python/tasks/managed/make_repo_public.py && \
     ln -s /home/src/tasks/managed/publish_pyxis_repository/publish_pyxis_repository.py /home/scripts/python/tasks/managed/publish_pyxis_repository.py && \
     ln -s /home/src/tasks/managed/update_infra_deployments/update_infra_deployments.py /home/scripts/python/tasks/managed/update_infra_deployments.py && \
+    ln -s /home/src/tasks/managed/update_trusted_tasks/update_trusted_tasks.py /home/scripts/python/tasks/managed/update_trusted_tasks.py && \
     ln -s /home/src/tasks/managed/validate_single_component/validate_single_component.py /home/scripts/python/tasks/managed/validate_single_component.py && \
     ln -s /home/src/tasks/managed/extract_checksums_from_image/extract_checksums_from_image.py /home/scripts/python/tasks/managed/extract_checksums_from_image.py && \
     ln -s /home/src/tasks/managed/publish_to_nrrc/publish_to_nrrc.py /home/scripts/python/tasks/managed/publish_to_nrrc.py && \
