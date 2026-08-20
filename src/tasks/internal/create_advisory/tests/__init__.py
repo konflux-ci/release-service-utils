@@ -1,0 +1,1 @@
+"""create_advisory tests."""

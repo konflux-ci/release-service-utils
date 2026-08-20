@@ -110,11 +110,10 @@ RUN curl -LO https://github.com/release-engineering/exodus-rsync/releases/latest
     chmod +x exodus-rsync && mv exodus-rsync /usr/local/bin/rsync
 
 # Install Python dependencies using uv
-COPY pyproject.toml uv.lock ./
-RUN uv pip install -r pyproject.toml --system && \
+COPY . ./
+RUN pip install . && \
     # Remove PyPI's python-qpid-proton so the system RPM (python3-qpid-proton) takes precedence.
     # The PyPI wheel bundles its own OpenSSL which doesn't use the system CA trust store.
-    # The system RPM is properly linked to the distro's OpenSSL and respects /etc/pki/ca-trust.
     pip uninstall -y python-qpid-proton
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
@@ -126,7 +125,57 @@ RUN update-ca-trust
 COPY pyxis /home/pyxis
 COPY utils /home/utils
 COPY integration-tests /home/integration-tests
-COPY scripts /home/scripts
+COPY src /home/src
+
+# TODO: remove when fixed in release-service-catalog
+RUN mkdir -p /home/scripts/python/tasks/managed && \
+    mkdir -p /home/scripts/python/tasks/internal
+
+RUN ln -s /home/src/tasks/managed/cleanup_workspace/cleanup_workspace.py /home/scripts/python/tasks/managed/cleanup_workspace.py && \
+    ln -s /home/src/tasks/managed/base64_encode_checksum/base64_encode_checksum.py /home/scripts/python/tasks/managed/base64_encode_checksum.py && \
+    ln -s /home/src/tasks/managed/check_data_keys/check_data_keys.py /home/scripts/python/tasks/managed/check_data_keys.py && \
+    ln -s /home/src/tasks/managed/check_labels/check_labels.py /home/scripts/python/tasks/managed/check_labels.py && \
+    ln -s /home/src/tasks/managed/cleanup_internal_requests/cleanup_internal_requests.py /home/scripts/python/tasks/managed/cleanup_internal_requests.py && \
+    ln -s /home/src/tasks/managed/close_advisory_issues/close_advisory_issues.py /home/scripts/python/tasks/managed/close_advisory_issues.py && \
+    ln -s /home/src/tasks/managed/collect_charon_params/collect_charon_params.py /home/scripts/python/tasks/managed/collect_charon_params.py && \
+    ln -s /home/src/tasks/managed/collect_gh_params/collect_gh_params.py /home/scripts/python/tasks/managed/collect_gh_params.py && \
+    ln -s /home/src/tasks/managed/collect_index_images/collect_index_images.py /home/scripts/python/tasks/managed/collect_index_images.py && \
+    ln -s /home/src/tasks/managed/collect_slack_notification_params/collect_slack_notification_params.py /home/scripts/python/tasks/managed/collect_slack_notification_params.py && \
+    ln -s /home/src/tasks/managed/extract_index_image/extract_index_image.py /home/scripts/python/tasks/managed/extract_index_image.py && \
+    ln -s /home/src/tasks/managed/filter_already_released_images/filter_already_released_images.py /home/scripts/python/tasks/managed/filter_already_released_images.py && \
+    ln -s /home/src/tasks/managed/make_repo_public/make_repo_public.py /home/scripts/python/tasks/managed/make_repo_public.py && \
+    ln -s /home/src/tasks/managed/publish_pyxis_repository/publish_pyxis_repository.py /home/scripts/python/tasks/managed/publish_pyxis_repository.py && \
+    ln -s /home/src/tasks/managed/update_infra_deployments/update_infra_deployments.py /home/scripts/python/tasks/managed/update_infra_deployments.py && \
+    ln -s /home/src/tasks/managed/validate_single_component/validate_single_component.py /home/scripts/python/tasks/managed/validate_single_component.py && \
+    ln -s /home/src/tasks/managed/extract_checksums_from_image/extract_checksums_from_image.py /home/scripts/python/tasks/managed/extract_checksums_from_image.py && \
+    ln -s /home/src/tasks/managed/publish_to_nrrc/publish_to_nrrc.py /home/scripts/python/tasks/managed/publish_to_nrrc.py && \
+    ln -s /home/src/tasks/managed/rh_direct_sign_image/rh_direct_sign_image.py /home/scripts/python/tasks/managed/rh_direct_sign_image.py && \
+    ln -s /home/src/tasks/managed/direct_sign_index_image/direct_sign_index_image.py /home/scripts/python/tasks/managed/direct_sign_index_image.py && \
+    ln -s /home/src/tasks/managed/request_advisory_creation/request_advisory_creation.py /home/scripts/python/tasks/managed/request_advisory_creation.py && \
+    ln -s /home/src/tasks/managed/embargo_check/embargo_check.py /home/scripts/python/tasks/managed/embargo_check.py && \
+    ln -s /home/src/tasks/managed/collect_registry_token_secret/collect_registry_token_secret.py /home/scripts/python/tasks/managed/collect_registry_token_secret.py && \
+    ln -s /home/src/tasks/managed/collect_signing_params/collect_signing_params.py /home/scripts/python/tasks/managed/collect_signing_params.py && \
+    ln -s /home/src/tasks/managed/collect_task_params/collect_task_params.py /home/scripts/python/tasks/managed/collect_task_params.py && \
+    ln -s /home/src/tasks/managed/collect_tpa_params/collect_tpa_params.py /home/scripts/python/tasks/managed/collect_tpa_params.py && \
+    ln -s /home/src/tasks/managed/publish_to_mrrc_prepare_repo/publish_to_mrrc_prepare_repo.py /home/scripts/python/tasks/managed/publish_to_mrrc_prepare_repo.py && \
+    ln -s /home/src/tasks/managed/publish_to_mrrc_push_merged/publish_to_mrrc_push_merged.py /home/scripts/python/tasks/managed/publish_to_mrrc_push_merged.py && \
+    ln -s /home/src/tasks/managed/filter_already_released_advisory_rpms/filter_already_released_advisory_rpms.py /home/scripts/python/tasks/managed/filter_already_released_advisory_rpms.py && \
+    ln -s /home/src/tasks/managed/collect_data/collect_data.py /home/scripts/python/tasks/managed/collect_data.py && \
+    ln -s /home/src/tasks/managed/extract_oot_kmods/extract_oot_kmods.py /home/scripts/python/tasks/managed/extract_oot_kmods.py && \
+    ln -s /home/src/tasks/managed/marketplacesvm_push_disk_images/marketplacesvm_push_disk_images.py /home/scripts/python/tasks/managed/marketplacesvm_push_disk_images.py && \
+    ln -s /home/src/tasks/managed/push_artifacts_to_storage/push_artifacts_to_storage.py /home/scripts/python/tasks/managed/push_artifacts_to_storage.py && \
+    ln -s /home/src/tasks/internal/filter_already_released_advisory_images/filter_already_released_advisory_images.py /home/scripts/python/tasks/internal/filter_already_released_advisory_images.py && \
+    ln -s /home/src/tasks/internal/check_embargoed_cves/check_embargoed_cves.py /home/scripts/python/tasks/internal/check_embargoed_cves.py && \
+    ln -s /home/src/tasks/internal/check_fbc_opt_in/check_fbc_opt_in.py /home/scripts/python/tasks/internal/check_fbc_opt_in.py && \
+    ln -s /home/src/tasks/internal/create_advisory/create_advisory.py /home/scripts/python/tasks/internal/create_advisory.py && \
+    ln -s /home/src/tasks/internal/get_advisory_severity/get_advisory_severity.py /home/scripts/python/tasks/internal/get_advisory_severity.py && \
+    ln -s /home/src/tasks/internal/process_file_updates/process_file_updates.py /home/scripts/python/tasks/internal/process_file_updates.py && \
+    ln -s /home/src/tasks/internal/pulp_push_disk_images/pulp_push_disk_images.py /home/scripts/python/tasks/internal/pulp_push_disk_images.py && \
+    ln -s /home/src/tasks/internal/push_artifacts_to_cdn/push_artifacts_to_cdn.py /home/scripts/python/tasks/internal/push_artifacts_to_cdn.py && \
+    ln -s /home/src/tasks/internal/update_fbc_catalog/update_fbc_catalog.py /home/scripts/python/tasks/internal/update_fbc_catalog.py
+
+##############################################################
+
 COPY templates /home/templates
 COPY kafka /home/kafka
 COPY pubtools-pulp-wrapper /home/pubtools-pulp-wrapper
@@ -174,11 +223,14 @@ ENV PATH="$PATH:/home/pubtools-pulp-wrapper"
 ENV PATH="$PATH:/home/pubtools-marketplacesvm-wrapper"
 ENV PATH="$PATH:/home/developer-portal-wrapper"
 ENV PATH="$PATH:/home/publish-to-cgw-wrapper"
+
+# TODO: remove when fixed in release-service-catalog
 ENV PATH="$PATH:/home/scripts/python/tasks/managed"
+ENV PATH="$PATH:/home/scripts/python/tasks/internal"
 # Flat imports: helpers and task scripts must be importable.
 # Tests use the same layout via pyproject [tool.pytest.ini_options] pythonpath.
 # Keep /home for other modules (e.g. pyxis, sbom) that expect it.
-ENV PYTHONPATH="/home:/home/pyxis:/home/utils:/home/scripts/python/helpers:/home/scripts/python/tasks/internal:/home/scripts/python/tasks/managed:/home/pubtools-pulp-wrapper:/home/publish-to-cgw-wrapper"
+ENV PYTHONPATH="/home:/home/pyxis:/home/utils:/home/scripts/python/tasks/internal:/home/scripts/python/tasks/managed:/home/pubtools-pulp-wrapper:/home/publish-to-cgw-wrapper"
 
 # uv installs newer requests and certifi which don't use the system CA like the one installed via
 # dnf. So we need to point requests to the system CA bundle explicitly.
