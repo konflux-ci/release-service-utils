@@ -192,3 +192,45 @@ def test_oras_pull_raises_when_subprocess_fails(
         oras_utils.oras_pull("quay.io/org/image:tag", tmp_path)
 
     assert exc_info.value.returncode == 1
+
+
+def test_oras_manifest_fetch_returns_stdout(tmp_path: Path) -> None:
+    """oras_manifest_fetch returns the raw manifest JSON string."""
+    auth = tmp_path / "auth.json"
+    auth.write_text("{}")
+    with patch("oras_utils.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(stdout='{"layers": []}')
+        result = oras_utils.oras_manifest_fetch("quay.io/org/img@sha256:abc", auth)
+    assert result == '{"layers": []}'
+    cmd = mock_run.call_args.args[0]
+    assert cmd[:3] == ["oras", "manifest", "fetch"]
+    assert "--registry-config" in cmd
+    assert "quay.io/org/img@sha256:abc" in cmd
+
+
+def test_oras_manifest_fetch_with_platform(tmp_path: Path) -> None:
+    """When platform is given, --platform is passed to oras."""
+    auth = tmp_path / "auth.json"
+    auth.write_text("{}")
+    with patch("oras_utils.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(stdout="{}")
+        oras_utils.oras_manifest_fetch(
+            "quay.io/org/img@sha256:abc", auth, platform="linux/amd64"
+        )
+    cmd = mock_run.call_args.args[0]
+    idx = cmd.index("--platform")
+    assert cmd[idx + 1] == "linux/amd64"
+
+
+def test_oras_blob_fetch_runs_oras(tmp_path: Path) -> None:
+    """oras_blob_fetch runs the expected oras blob fetch command."""
+    auth = tmp_path / "auth.json"
+    auth.write_text("{}")
+    output = tmp_path / "blob.gz"
+    with patch("oras_utils.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock()
+        oras_utils.oras_blob_fetch("quay.io/org/img@sha256:abc", output, auth)
+    cmd = mock_run.call_args.args[0]
+    assert cmd[:3] == ["oras", "blob", "fetch"]
+    assert str(output) in cmd
+    assert "quay.io/org/img@sha256:abc" in cmd

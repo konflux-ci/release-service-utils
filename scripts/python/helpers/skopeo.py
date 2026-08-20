@@ -10,11 +10,14 @@ def inspect(
     *,
     config: bool = False,
     raw: bool = False,
+    no_tags: bool = False,
     retry_times: int = 3,
     check: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``skopeo inspect`` on a container image reference."""
     cmd = ["skopeo", "inspect", "--retry-times", str(retry_times)]
+    if no_tags:
+        cmd.append("--no-tags")
     if config:
         cmd.append("--config")
     if raw:
