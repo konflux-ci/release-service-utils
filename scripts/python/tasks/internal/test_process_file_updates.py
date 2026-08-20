@@ -268,6 +268,30 @@ def _large_deploy_yaml() -> str:
     return content
 
 
+def test_clear_stale_artifacts_removes_files(tmp_path: Path) -> None:
+    """_clear_stale_artifacts removes sentinel and input JSON files if present."""
+    temp_dir = tmp_path / "file-updates"
+    temp_dir.mkdir(parents=True)
+
+    # Create stale artifacts
+    (temp_dir / "prepare.failed").write_text("", encoding="utf-8")
+    (temp_dir / "updatePaths.input.json").write_text("{}", encoding="utf-8")
+    (temp_dir / "updatePaths.json").write_text("{}", encoding="utf-8")
+
+    process_file_updates._clear_stale_artifacts(temp_dir)
+
+    assert not (temp_dir / "prepare.failed").exists()
+    assert not (temp_dir / "updatePaths.input.json").exists()
+    assert not (temp_dir / "updatePaths.json").exists()
+
+
+def test_clear_stale_artifacts_handles_missing_directory(tmp_path: Path) -> None:
+    """_clear_stale_artifacts tolerates a missing temp directory."""
+    temp_dir = tmp_path / "nonexistent"
+    # Should not raise
+    process_file_updates._clear_stale_artifacts(temp_dir)
+
+
 def test_parse_args_help() -> None:
     """``-h`` prints usage and exits with code 1."""
     with pytest.raises(SystemExit) as exc:

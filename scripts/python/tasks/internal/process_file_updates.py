@@ -672,6 +672,25 @@ def run_file_updates(
     )
 
 
+def _clear_stale_artifacts(temp_dir: Path) -> None:
+    """Remove stale artifacts from a previous failed attempt (retry scenario).
+
+    When tempDir is PipelineRun-scoped and reused across retries, old sentinel
+    files or input JSON from a prior run can cause incorrect behavior. This
+    clears them before each attempt.
+    """
+    stale_files = [
+        temp_dir / "prepare.failed",  # Legacy bash sentinel
+        temp_dir / "updatePaths.input.json",  # Legacy bash input file
+        temp_dir / "updatePaths.json",  # Python input file
+    ]
+    for path in stale_files:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass  # Best effort; directory may not exist yet
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse args, run file updates, and write Tekton result files."""
     raw_argv = sys.argv if argv is None else argv
@@ -686,6 +705,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.temp_dir
         else Path(os.environ.get("TEMP", "/tmp/file-updates"))
     )
+
+    # Clear stale artifacts from previous failed attempts before doing anything else.
+    _clear_stale_artifacts(temp_dir)
 
     (
         info_path,
