@@ -20,6 +20,52 @@ def _propagate_release_logger() -> None:
     release_logger.propagate = False
 
 
+class TestRegistry:
+    """Test image_ref.registry()."""
+
+    def test_digest_reference(self) -> None:
+        """Extract the registry host from a digest reference."""
+        assert image_ref.registry("quay.io/org/repo@sha256:abc123") == "quay.io"
+
+    def test_tagged_reference(self) -> None:
+        """Extract the registry host from a tagged reference."""
+        assert image_ref.registry("docker.io/library/nginx:latest") == "docker.io"
+
+    def test_simple_reference(self) -> None:
+        """Extract the registry host from a reference with no tag or digest."""
+        assert image_ref.registry("registry.example.com/image") == "registry.example.com"
+
+
+class TestRepository:
+    """Test image_ref.repository()."""
+
+    def test_strips_digest(self) -> None:
+        """Strip the digest suffix from a reference."""
+        assert (
+            image_ref.repository("registry.io/org/repo@sha256:abc123")
+            == "registry.io/org/repo"
+        )
+
+    def test_strips_tag(self) -> None:
+        """Strip the tag suffix from a reference."""
+        assert image_ref.repository("quay.io/org/repo:v1.0") == "quay.io/org/repo"
+
+    def test_no_digest_or_tag(self) -> None:
+        """Return the reference unchanged when it has no tag or digest."""
+        assert image_ref.repository("quay.io/org/repo") == "quay.io/org/repo"
+
+    def test_port_in_registry_not_confused_for_tag(self) -> None:
+        """A registry port is not mistaken for a tag separator."""
+        assert (
+            image_ref.repository("localhost:5000/org/repo@sha256:abc")
+            == "localhost:5000/org/repo"
+        )
+
+    def test_port_in_registry_with_tag(self) -> None:
+        """A registry port coexists with a trailing tag being stripped."""
+        assert image_ref.repository("localhost:5000/org/repo:v2") == "localhost:5000/org/repo"
+
+
 def test_pyxis_url_for_pull_spec_with_tag_and_registry_rewrite() -> None:
     """Tagged refs map to `.../tag/<tag>` and rewrite registry.redhat.io host."""
     out = image_ref.pyxis_url_for_pull_spec(

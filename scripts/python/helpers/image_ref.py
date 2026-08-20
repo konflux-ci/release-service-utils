@@ -13,6 +13,32 @@ _QUAY_SHA_TAG = re.compile(r"^[0-9a-f]{40}$")
 _MAX_QUAY_TAG_PAGES = 50
 
 
+def registry(ref: str) -> str:
+    """Return the registry hostname from an OCI image reference.
+
+    >>> registry("quay.io/org/repo@sha256:abc123")
+    'quay.io'
+    >>> registry("docker.io/library/nginx:latest")
+    'docker.io'
+    """
+    return ref.split("/", 1)[0]
+
+
+def repository(ref: str) -> str:
+    """Return the full repository path (registry + path) without digest or tag.
+
+    >>> repository("quay.io/org/repo@sha256:abc123")
+    'quay.io/org/repo'
+    >>> repository("quay.io/org/repo:v1.0")
+    'quay.io/org/repo'
+    """
+    without_digest = ref.split("@", 1)[0]
+    last_segment = without_digest.rsplit("/", 1)[-1]
+    if ":" in last_segment:
+        without_digest = without_digest.rsplit(":", 1)[0]
+    return without_digest
+
+
 def translate_delivery_repo(repo: str) -> list[dict[str, str]]:
     """Translate a Quay delivery-repo reference to public registry URLs.
 
