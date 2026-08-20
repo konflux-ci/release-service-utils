@@ -7,8 +7,10 @@ from .internal_request import (
     PIPELINERUN_UID_LABEL,
     SPAWN_OVERHEAD_SECONDS,
     create,
+    create_internal_request,
     duration_to_seconds,
     fetch_results,
+    wait_for_completion,
 )
 
 __all__ = [
@@ -16,6 +18,8 @@ __all__ = [
     "PIPELINERUN_UID_LABEL",
     "SPAWN_OVERHEAD_SECONDS",
     "create",
+    "create_internal_request",
     "duration_to_seconds",
     "fetch_results",
+    "wait_for_completion",
 ]
