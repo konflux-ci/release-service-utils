@@ -104,6 +104,19 @@ def resolve_quay_digest_to_git_sha(digest: str, container_image: str) -> str | N
         return None
 
 
+def strip_tag_and_digest(pull_spec: str) -> str:
+    """Return the repository portion of a pull spec, without tag or digest.
+
+    Strips the digest (``@sha256:...``) first, then strips the tag only
+    from the last path segment so a registry port (e.g. ``registry:5000``)
+    is never confused with a tag separator.
+    """
+    repo = pull_spec.split("@")[0]
+    parts = repo.split("/")
+    parts[-1] = parts[-1].rsplit(":", 1)[0]
+    return "/".join(parts)
+
+
 def pyxis_url_for_pull_spec(pyxis_url: str, pull_spec: str) -> str:
     """Build the Pyxis repository/tag API URL for `pull_spec`.
 

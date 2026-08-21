@@ -13,16 +13,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import requests
-from requests.auth import AuthBase
-from requests_kerberos import HTTPKerberosAuth, OPTIONAL
-
 import authentication
 import file
 import http_client
 import image_ref
+import requests
 import tekton
 from logger import logger
+from requests.auth import AuthBase
+from requests_kerberos import OPTIONAL, HTTPKerberosAuth
 
 PROG = "check_fbc_opt_in.py"
 
@@ -32,11 +31,11 @@ def parse_container_images(value: str) -> list[str]:
     # Input is a JSON array string; keep validation strict so malformed input fails fast.
     data = json.loads(value)
     if not isinstance(data, list):
-        raise ValueError("container images must be a JSON array")
+        raise TypeError("container images must be a JSON array")
     out: list[str] = []
     for item in data:
         if not isinstance(item, str):
-            raise ValueError("container images must be strings")
+            raise TypeError("container images must be strings")
         stripped = item.strip()
         if not stripped:
             raise ValueError("container images must be non-empty")
@@ -51,17 +50,22 @@ def get_fbc_opt_in(
     *,
     warn_on_query_failure: bool = True,
 ) -> bool:
-    """
-    Return `True` only when the Pyxis JSON body sets `fbc_opt_in` to JSON boolean
-    true.
+    """Return `True` when Pyxis sets `fbc_opt_in` to JSON boolean true.
 
     Query failures, non-JSON responses, and missing fields are treated as
     opt-out (`False`).
     """
     try:
-        # Build the Pyxis endpoint for this image pull spec.
+        # fbc_opt_in is a repository-level attribute; strip tag and digest.
+        repo_spec = image_ref.strip_tag_and_digest(pull_spec)
+        if repo_spec != pull_spec:
+            logger.info(
+                "Pull spec %s includes a tag/digest; stripped to %s for repo query",
+                pull_spec,
+                repo_spec,
+            )
         body = http_client.get_text(
-            image_ref.pyxis_url_for_pull_spec(pyxis_url, pull_spec),
+            image_ref.pyxis_url_for_pull_spec(pyxis_url, repo_spec),
             auth=auth,
         )
         data: dict[str, Any] = json.loads(body)
@@ -90,8 +94,7 @@ def run_check(
     kinit: Callable[..., None] = authentication.kinit_with_retry,
     get_opt_in: Callable[[str, str, AuthBase | None], bool] = get_fbc_opt_in,
 ) -> list[dict[str, Any]]:
-    """
-    Authenticate with Kerberos then query Pyxis FBC opt-in for each image.
+    """Authenticate with Kerberos then query Pyxis FBC opt-in for each image.
 
     Returns one result object per input image:
     `{"containerImage": "...", "fbcOptIn": bool}`.
@@ -183,9 +186,10 @@ def main() -> int:
             service_account_mount,
             iib_services_config_mount,
         )
-    except (ValueError, tekton.CheckStepError) as e:
-        # Surface validation and step failures as a clear one-line SystemExit message.
-        raise SystemExit(f"{PROG}: {e}") from e
+    except Exception as e:
+        logger.error("%s: %s", PROG, e, exc_info=True)
+        rpath.write_text(json.dumps([]), encoding="utf-8")
+        return 0
 
     logger.info("FBC opt-in check completed")
     logger.info("Results:")

@@ -20,6 +20,22 @@ def _propagate_release_logger() -> None:
     release_logger.propagate = False
 
 
+@pytest.mark.parametrize(
+    "pull_spec, expected",
+    [
+        ("r.io/repo/img:tag", "r.io/repo/img"),
+        ("r.io/repo/img@sha256:abc", "r.io/repo/img"),
+        ("r.io/repo/img:tag@sha256:abc", "r.io/repo/img"),
+        ("r.io/repo/img", "r.io/repo/img"),
+        ("registry:5000/repo/img:tag", "registry:5000/repo/img"),
+        ("registry:5000/repo/img", "registry:5000/repo/img"),
+    ],
+)
+def test_strip_tag_and_digest(pull_spec: str, expected: str) -> None:
+    """Tag, digest, or both are stripped; registry ports are preserved."""
+    assert image_ref.strip_tag_and_digest(pull_spec) == expected
+
+
 def test_pyxis_url_for_pull_spec_with_tag_and_registry_rewrite() -> None:
     """Tagged refs map to `.../tag/<tag>` and rewrite registry.redhat.io host."""
     out = image_ref.pyxis_url_for_pull_spec(
