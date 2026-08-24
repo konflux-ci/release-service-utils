@@ -63,7 +63,6 @@ class SubmitConfig:
     """Configuration for submitting signing batches via the internal-request CLI."""
 
     pipeline: str
-    pipeline_image: str
     requester: str
     pyxis_ssl_cert_secret_name: str
     pyxis_graphql_url: str
@@ -80,6 +79,7 @@ class SubmitConfig:
     pipelinerun_uid: str
     concurrent_limit: int
     intention: str
+    pipeline_image: str = ""
 
 
 def validate_file(arg: str) -> Path:
@@ -161,8 +161,11 @@ def setup_argparser() -> argparse.ArgumentParser:
     )
     submit.add_argument(
         "--pipeline-image",
-        required=True,
-        help="Container image override for the signing pipeline",
+        default="",
+        help=(
+            "[DEPRECATED] The image reference is now managed internally"
+            " by the pipeline. This option will be removed in a future release"
+        ),
     )
     submit.add_argument(
         "--requester",
@@ -673,8 +676,10 @@ def submit_batch(batch_file: Path, config: SubmitConfig) -> None:
         "internal-request",
         "--pipeline",
         config.pipeline,
-        "-p",
-        f"pipeline_image={config.pipeline_image}",
+    ]
+    if config.pipeline_image:
+        cmd += ["-p", f"pipeline_image={config.pipeline_image}"]
+    cmd += [
         "-p",
         f"signing_requests={batch_content}",
         "-p",
