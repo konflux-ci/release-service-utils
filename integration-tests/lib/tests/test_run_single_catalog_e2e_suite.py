@@ -525,14 +525,16 @@ def test_main_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_path, capsys) -> N
 
     monkeypatch.setattr(rs.tempfile, "mkstemp", fake_mkstemp)
 
-    def fake_check_output(cmd: list, **kwargs):
+    def fake_run(cmd: list, **kwargs):
         assert "-f" in cmd
         plr_path = cmd[cmd.index("-f") + 1]
         with open(plr_path, encoding="utf-8") as f:
             manifests.append(json.load(f))
-        return "child-plr-name\n"
+        return subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="child-plr-name\n", stderr=""
+        )
 
-    monkeypatch.setattr(rs.subprocess, "check_output", fake_check_output)
+    monkeypatch.setattr(rs.subprocess, "run", fake_run)
     monkeypatch.setattr(
         rs,
         "_wait_pipelinerun_terminal",
@@ -569,8 +571,10 @@ def test_main_wait_failure_exits_1(monkeypatch: pytest.MonkeyPatch, tmp_path, ca
     monkeypatch.setattr(rs.tempfile, "mkstemp", fake_mkstemp)
     monkeypatch.setattr(
         rs.subprocess,
-        "check_output",
-        lambda cmd, **kw: "n\n",
+        "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="n\n", stderr=""
+        ),
     )
     monkeypatch.setattr(rs, "_wait_pipelinerun_terminal", lambda **kw: False)
     log_calls: list[tuple[str, str]] = []
@@ -619,8 +623,10 @@ def test_main_bad_test_output_dumps_logs(
     monkeypatch.setattr(rs.tempfile, "mkstemp", fake_mkstemp)
     monkeypatch.setattr(
         rs.subprocess,
-        "check_output",
-        lambda cmd, **kw: "child-plr\n",
+        "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="child-plr\n", stderr=""
+        ),
     )
     monkeypatch.setattr(rs, "_wait_pipelinerun_terminal", lambda **kw: True)
     monkeypatch.setattr(
@@ -663,8 +669,10 @@ def test_main_missing_test_output_dumps_logs(
     monkeypatch.setattr(rs.tempfile, "mkstemp", fake_mkstemp)
     monkeypatch.setattr(
         rs.subprocess,
-        "check_output",
-        lambda cmd, **kw: "child-plr\n",
+        "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="child-plr\n", stderr=""
+        ),
     )
     monkeypatch.setattr(rs, "_wait_pipelinerun_terminal", lambda **kw: True)
     monkeypatch.setattr(rs, "_fetch_run_test_task_output_json", lambda pr, ns: None)
