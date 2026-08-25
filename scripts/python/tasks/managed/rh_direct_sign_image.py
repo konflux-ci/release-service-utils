@@ -727,10 +727,31 @@ def submit_batch(batch_file: Path, config: SubmitConfig) -> None:
         check=False,
     )
     duration = time.monotonic() - start
+    stdout = result.stdout.strip()
+    stderr = result.stderr.strip()
     if result.returncode != 0:
-        LOGGER.error("Failed to submit batch '%s': %s", batch_file, result.stderr.strip())
-        raise RuntimeError(f"Failed to submit batch '{batch_file}': {result.stderr.strip()}")
-    LOGGER.info("Batch '%s' completed successfully in %.1fs", batch_file, duration)
+        LOGGER.error(
+            "Internal request failed for batch '%s', pipeline '%s'.\n"
+            "stdout:\n%s\nstderr:\n%s",
+            batch_file,
+            config.pipeline,
+            stdout,
+            stderr,
+        )
+        raise RuntimeError(
+            f"Internal request failed for batch '{batch_file}',"
+            f" pipeline '{config.pipeline}': {stderr}"
+        )
+    LOGGER.info(
+        "Batch '%s' for pipeline '%s' completed successfully in %.1fs",
+        batch_file,
+        config.pipeline,
+        duration,
+    )
+    if stdout:
+        LOGGER.debug("internal-request stdout:\n%s", stdout)
+    if stderr:
+        LOGGER.debug("internal-request stderr:\n%s", stderr)
 
 
 def submit_batches(batch_dir: Path, config: SubmitConfig) -> None:
@@ -762,11 +783,11 @@ def submit_batches(batch_dir: Path, config: SubmitConfig) -> None:
                 failures.append(exc)
 
     succeeded = len(batch_files) - len(failures)
-    LOGGER.info("Batch submission summary: %d succeeded, %d failed", succeeded, len(failures))
+    LOGGER.info("Batch request summary: %d succeeded, %d failed", succeeded, len(failures))
     if failures:
         for i, failure in enumerate(failures, 1):
-            LOGGER.error("Batch submission failure %d/%d: %s", i, len(failures), failure)
-        raise RuntimeError(f"{len(failures)} batch(es) failed during submission")
+            LOGGER.error("Batch request failure %d/%d: %s", i, len(failures), failure)
+        raise RuntimeError(f"{len(failures)} batch request(s) failed")
 
 
 def main() -> int:
