@@ -28,6 +28,43 @@ def test_normalize_docker_config_strips_k8s_quotes() -> None:
     assert out == '{"auths":{"quay.io":{"auth":"abc"}}}'
 
 
+def test_normalize_docker_config_preserves_multiple_registries() -> None:
+    """Quoted dockerconfigjson with multiple registries stays valid JSON.
+
+    A brace-junk-stripping regex would collapse the separator between two
+    sibling registry entries and drop the second registry's key entirely.
+    """
+    raw = '"{"auths":{"quay.io":{"auth":"abc"},"registry.redhat.io":{"auth":"xyz"}}}"'
+    out = pulp_push_disk_images.normalize_docker_config(raw)
+    assert json.loads(out) == {
+        "auths": {
+            "quay.io": {"auth": "abc"},
+            "registry.redhat.io": {"auth": "xyz"},
+        }
+    }
+
+
+def test_normalize_docker_config_no_wrapping_quotes_is_unchanged() -> None:
+    """A dockerconfigjson payload with no wrapping quotes passes through as-is."""
+    raw = '{"auths":{"quay.io":{"auth":"abc"}}}'
+    out = pulp_push_disk_images.normalize_docker_config(raw)
+    assert out == raw
+
+
+def test_normalize_docker_config_strips_single_quotes() -> None:
+    """Single-quoted dockerconfigjson (e.g. redhat-workloads-token) is normalized."""
+    raw = '\'{"auths":{"quay.io":{"auth":"abc"}}}\''
+    out = pulp_push_disk_images.normalize_docker_config(raw)
+    assert out == '{"auths":{"quay.io":{"auth":"abc"}}}'
+
+
+def test_normalize_docker_config_mismatched_quotes_is_unchanged() -> None:
+    """Mismatched leading/trailing quote characters are left untouched."""
+    raw = '\'{"auths":{"quay.io":{"auth":"abc"}}}"'
+    out = pulp_push_disk_images.normalize_docker_config(raw)
+    assert out == raw
+
+
 def test_build_staged_payload_lists_files(tmp_path: Path) -> None:
     """Staged payload lists files under the disk image directory with version."""
     (tmp_path / "a" / "b").mkdir(parents=True)
@@ -151,6 +188,7 @@ def test_run_push_calls_wrappers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         exodus_gw_env="pre",
         cgw_hostname="https://content-gateway.com",
         cert_warn_days=7,
+        pulp_task_timeout=7200,
         exodus_mount=exodus,
         pulp_mount=pulp,
         udcache_mount=udc,
@@ -164,6 +202,10 @@ def test_run_push_calls_wrappers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert "developer_portal_wrapper" in joined
     assert env_by_cmd["developer_portal_wrapper"]["CGW_USERNAME"] == "user"
     assert env_by_cmd["developer_portal_wrapper"]["CGW_PASSWORD"] == "tok"
+
+    pulp_push_call = next(c for c in calls if c[0] == "pulp_push_wrapper")
+    idx = pulp_push_call.index("--pulp-task-timeout-seconds")
+    assert pulp_push_call[idx + 1] == "7200"
 
 
 def _setup_mount_secrets(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
@@ -262,6 +304,7 @@ def test_run_push_developer_portal_uses_staged_destination(
         exodus_gw_env="pre",
         cgw_hostname="https://content-gateway.com",
         cert_warn_days=7,
+        pulp_task_timeout=7200,
         exodus_mount=exodus,
         pulp_mount=pulp,
         udcache_mount=udc,
@@ -292,6 +335,58 @@ def test_main_writes_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 def test_main_missing_snapshot_exits_before_results() -> None:
     """`main` exits with code 1 when SNAPSHOT_JSON is unset."""
+    with pytest.raises(SystemExit) as exc:
+        pulp_push_disk_images.main()
+    assert exc.value.code == 1
+
+
+def test_main_defaults_pulp_task_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`main` defaults PULP_TASK_TIMEOUT to 7200 when unset."""
+    result = tmp_path / "result"
+    monkeypatch.setenv("RESULT_RESULT", str(result))
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON", json.dumps({"components": [{"staged": {"version": "1"}}]})
+    )
+    monkeypatch.setenv("EXODUS_GW_ENV", "pre")
+    monkeypatch.setenv("CGW_HOSTNAME", "https://cgw.example.com")
+    monkeypatch.delenv("PULP_TASK_TIMEOUT", raising=False)
+
+    with mock.patch.object(pulp_push_disk_images, "run_push") as mock_run_push:
+        assert pulp_push_disk_images.main() == 0
+    assert mock_run_push.call_args.kwargs["pulp_task_timeout"] == 7200
+
+
+def test_main_passes_through_pulp_task_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`main` threads a custom PULP_TASK_TIMEOUT through to run_push."""
+    result = tmp_path / "result"
+    monkeypatch.setenv("RESULT_RESULT", str(result))
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON", json.dumps({"components": [{"staged": {"version": "1"}}]})
+    )
+    monkeypatch.setenv("EXODUS_GW_ENV", "pre")
+    monkeypatch.setenv("CGW_HOSTNAME", "https://cgw.example.com")
+    monkeypatch.setenv("PULP_TASK_TIMEOUT", "300")
+
+    with mock.patch.object(pulp_push_disk_images, "run_push") as mock_run_push:
+        assert pulp_push_disk_images.main() == 0
+    assert mock_run_push.call_args.kwargs["pulp_task_timeout"] == 300
+
+
+def test_main_rejects_non_positive_pulp_task_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`main` exits with code 1 when PULP_TASK_TIMEOUT isn't a positive integer."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON", json.dumps({"components": [{"staged": {"version": "1"}}]})
+    )
+    monkeypatch.setenv("EXODUS_GW_ENV", "pre")
+    monkeypatch.setenv("CGW_HOSTNAME", "https://cgw.example.com")
+    monkeypatch.setenv("PULP_TASK_TIMEOUT", "0")
+
     with pytest.raises(SystemExit) as exc:
         pulp_push_disk_images.main()
     assert exc.value.code == 1
@@ -469,6 +564,7 @@ def test_run_push_missing_staged_version(
             exodus_gw_env="pre",
             cgw_hostname="https://content-gateway.com",
             cert_warn_days=7,
+            pulp_task_timeout=7200,
             exodus_mount=exodus,
             pulp_mount=pulp,
             udcache_mount=udc,
@@ -506,6 +602,7 @@ def test_run_push_oras_pull_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             exodus_gw_env="pre",
             cgw_hostname="https://content-gateway.com",
             cert_warn_days=7,
+            pulp_task_timeout=7200,
             exodus_mount=exodus,
             pulp_mount=pulp,
             udcache_mount=udc,
@@ -554,6 +651,7 @@ def test_run_push_gzip_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
             exodus_gw_env="pre",
             cgw_hostname="https://content-gateway.com",
             cert_warn_days=7,
+            pulp_task_timeout=7200,
             exodus_mount=exodus,
             pulp_mount=pulp,
             udcache_mount=udc,
@@ -603,6 +701,7 @@ def test_run_push_pulp_push_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             exodus_gw_env="pre",
             cgw_hostname="https://content-gateway.com",
             cert_warn_days=7,
+            pulp_task_timeout=7200,
             exodus_mount=exodus,
             pulp_mount=pulp,
             udcache_mount=udc,

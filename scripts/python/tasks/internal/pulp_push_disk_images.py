@@ -6,7 +6,7 @@ oras, stages files, invokes pulp_push_wrapper and developer_portal_wrapper.
 
 Environment variables (set by the pulp-push-disk-images Tekton task):
   SNAPSHOT_JSON, CERT_EXPIRATION_WARN_DAYS, CONCURRENT_LIMIT, EXODUS_GW_ENV,
-  CGW_HOSTNAME, RESULT_RESULT
+  CGW_HOSTNAME, PULP_TASK_TIMEOUT, RESULT_RESULT
 
 Mount paths default to /mnt/exodusGwSecret, /mnt/pulpSecret, /mnt/udcacheSecret,
 /mnt/redhat-workloads-token, /mnt/cgwSecret and can be overridden in tests.
@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -65,8 +64,19 @@ def _validate_certificates(
 
 
 def normalize_docker_config(raw: str) -> str:
-    """Strip extra quoted fields from a dockerconfigjson secret payload."""
-    return re.sub(r"(^|\})[^{}]+(\{|$)", r"\1\2", raw)
+    """Strip a single pair of wrapping quotes some secrets add around the JSON payload.
+
+    Some dockerconfigjson secrets store the payload quoted as a literal string,
+    e.g. ``"{"auths": {...}}"`` or ``'{"auths": {...}}'``. Only a single
+    matching leading/trailing quote pair (single or double) is removed here;
+    unlike a brace-junk-stripping regex, this cannot corrupt the separator
+    between sibling registry entries in a multi-registry auths map (see
+    RELEASE-1990).
+    """
+    text = raw.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ('"', "'"):
+        text = text[1:-1]
+    return text
 
 
 def build_staged_payload(
@@ -214,6 +224,7 @@ def run_push(
     exodus_gw_env: str,
     cgw_hostname: str,
     cert_warn_days: int,
+    pulp_task_timeout: int,
     exodus_mount: Path,
     pulp_mount: Path,
     udcache_mount: Path,
@@ -338,6 +349,8 @@ def run_push(
                 str(pulp_key_file),
                 "--udcache-url",
                 udc_url,
+                "--pulp-task-timeout-seconds",
+                str(pulp_task_timeout),
             ],
             env=env,
             stderr_path=stderr_path,
@@ -371,11 +384,15 @@ def main() -> int:
     concurrent_limit = int(os.environ.get("CONCURRENT_LIMIT", "3"))
     exodus_gw_env = os.environ.get("EXODUS_GW_ENV", "").strip()
     cgw_hostname = os.environ.get("CGW_HOSTNAME", "").strip()
+    pulp_task_timeout = int(os.environ.get("PULP_TASK_TIMEOUT", "7200"))
     if not exodus_gw_env:
         print(f"{PROG}: EXODUS_GW_ENV must be set", file=sys.stderr)
         raise SystemExit(1)
     if not cgw_hostname:
         print(f"{PROG}: CGW_HOSTNAME must be set", file=sys.stderr)
+        raise SystemExit(1)
+    if pulp_task_timeout <= 0:
+        print(f"{PROG}: PULP_TASK_TIMEOUT must be a positive integer", file=sys.stderr)
         raise SystemExit(1)
 
     exodus_mount = file.path_from_env_variable("EXODUS_GW_SECRET_MOUNT", DEFAULT_EXODUS_MOUNT)
@@ -399,6 +416,7 @@ def main() -> int:
             exodus_gw_env=exodus_gw_env,
             cgw_hostname=cgw_hostname,
             cert_warn_days=cert_warn_days,
+            pulp_task_timeout=pulp_task_timeout,
             exodus_mount=exodus_mount,
             pulp_mount=pulp_mount,
             udcache_mount=udcache_mount,

@@ -82,6 +82,7 @@ def oras_pull(
     try:
         auth_out = subprocess_cmd.run_cmd(
             ["select-oci-auth", str(pull_spec)],
+            stderr_path=stderr_path,
             check=True,
         ).stdout
         auth_file.write_text(auth_out, encoding="utf-8")
