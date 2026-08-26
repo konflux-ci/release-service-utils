@@ -155,10 +155,10 @@ def _process_issue(
                     f"Error: {issue_id} returned unexpected JSON from {api_url}. "
                     "Cannot verify embargo status; assuming embargoed."
                 )
-    except requests.RequestException:
+    except requests.RequestException as exc:
         return (
-            f"Error: {issue_id} is not visible. "
-            "Assuming it is embargoed and stopping pipelineRun execution."
+            f"Error: {issue_id} could not be verified ({exc}). "
+            "Cannot confirm embargo status; assuming embargoed."
         )
 
     public = False
@@ -296,12 +296,16 @@ def check_cves(
     except json.JSONDecodeError:
         return [f"Could not parse InternalRequest results: {result.stdout.strip()}"]
 
-    if results.get("result") == "Success":
+    result_text = results.get("result", "")
+    if result_text == "Success":
         logger.info("No embargoed CVEs found")
         return []
 
-    embargoed = results.get("embargoed_cves", "")
-    return [f"The following CVEs are marked as embargoed: {embargoed}"]
+    embargoed = results.get("embargoed_cves", "").strip()
+    if embargoed:
+        return [f"Embargoed or non-public CVEs found: {embargoed}"]
+
+    return [f"CVE embargo check failed: {result_text}"]
 
 
 def run(

@@ -337,7 +337,7 @@ class TestCheckIssues:
             data, secret_path=jira_secret_path, session=session
         )
         assert len(errors) == 1
-        assert "not visible" in errors[0]
+        assert "could not be verified" in errors[0]
 
     def test_bugzilla_issue_not_visible(self, jira_secret_path: Path) -> None:
         """Return error when Bugzilla issue is not visible."""
@@ -349,7 +349,7 @@ class TestCheckIssues:
             data, secret_path=jira_secret_path, session=session
         )
         assert len(errors) == 1
-        assert "not visible" in errors[0]
+        assert "could not be verified" in errors[0]
 
     def test_bugzilla_issue_visible(self, jira_secret_path: Path) -> None:
         """Mark Bugzilla issue as public=False (security field check)."""
@@ -626,7 +626,40 @@ class TestCheckCves:
             task_git_revision="main",
         )
         assert len(errors) == 1
+        assert "Embargoed or non-public CVEs found" in errors[0]
         assert "CVE-2024-001" in errors[0]
+
+    @mock.patch("release_service_utils.tasks.managed.embargo_check.embargo_check.run_cmd")
+    @mock.patch(
+        "release_service_utils.tasks.managed.embargo_check.embargo_check.create",
+        return_value="ir-abc",
+    )
+    def test_step_error_forwarded(
+        self,
+        mock_create: mock.MagicMock,
+        mock_run: mock.MagicMock,
+    ) -> None:
+        """Forward the internal task error when embargoed_cves is empty."""
+        data = _data_with_cves(["CVE-2024-001"])
+        mock_run.return_value = _kubectl_result(
+            json.dumps(
+                {
+                    "result": "check_embargoed_cves.py: Failed while"
+                    " getting an OSIDB access token",
+                    "embargoed_cves": "",
+                }
+            )
+        )
+        errors = embargo_check.check_cves(
+            data,
+            pipeline_run_uid="uid-123",
+            request_timeout=2700,
+            task_git_url="https://github.com/test/repo",
+            task_git_revision="main",
+        )
+        assert len(errors) == 1
+        assert "CVE embargo check failed:" in errors[0]
+        assert "OSIDB access token" in errors[0]
 
     @mock.patch("release_service_utils.tasks.managed.embargo_check.embargo_check.run_cmd")
     @mock.patch(
