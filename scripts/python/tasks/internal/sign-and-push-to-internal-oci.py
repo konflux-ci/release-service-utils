@@ -71,11 +71,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Destination Quay URL base for signed artifacts",
     )
-    p.add_argument(
-        "--origin",
-        required=True,
-        help="Origin tenant namespace that triggered the release",
-    )
+    # TODO: ADD THIS BACK AFTER TESTING ENTITLEMENTS
+    #p.add_argument(
+    #    "--origin",
+    #    required=True,
+    #    help="Origin tenant namespace that triggered the release",
+    #)
     return p.parse_args(argv)
 
 
@@ -94,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         extract_oci_artifacts.run(args.concurrent_limit)
         push_oci_unsigned.run(args.quay_url, args.pipeline_run_uid)
-        sign_mac.run(
+        sign_mac.run_custom_signing(
             args.quay_url,
             args.pipeline_run_uid,
             signing_script=args.mac_signing_script,
@@ -102,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
             dest_quay_url=args.dest_quay_url,
             origin=args.origin,
         )
-        sign_windows.run(
+        sign_windows.run_custom_signing(
             args.quay_url,
             args.pipeline_run_uid,
             signing_script=args.windows_signing_script,

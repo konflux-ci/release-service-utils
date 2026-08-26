@@ -37,6 +37,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import oras_utils
+
 PROG = "sign_mac.py"
 
 MAC_SSH_KEY_MOUNT = Path(os.environ.get("MAC_SSH_KEY_MOUNT", "/mnt/secrets"))
@@ -135,6 +137,52 @@ def _ssh_opts(key_path: str, known_hosts: str) -> list[str]:
     ]
 
 
+def _get_entitlements_artifact_name(component: dict) -> str | None:
+    """Return the entitlementsArtifact value from the component's staged files, if any."""
+    for entry in (component.get("staged") or {}).get("files") or []:
+        name = entry.get("entitlementsArtifact")
+        if name:
+            return name
+    for entry in component.get("files") or []:
+        name = entry.get("entitlementsArtifact")
+        if name:
+            return name
+    return None
+
+
+def _push_entitlements_artifact(
+    component: dict,
+    component_dir: Path,
+    quay_url: str,
+    name: str,
+    pipeline_run_uid: str,
+) -> str:
+    """Push the entitlements OCI artifact to Quay and return the oras reference.
+
+    Returns an empty string if the component has no entitlements artifact configured
+    or the artifact file is not found locally.
+    """
+    artifact_name = _get_entitlements_artifact_name(component)
+    if not artifact_name:
+        return ""
+
+    artifact_path = component_dir / artifact_name
+    if not artifact_path.exists():
+        logger.warning(
+            "Entitlements artifact '%s' not found at %s, skipping",
+            artifact_name,
+            artifact_path,
+        )
+        return ""
+
+    logger.info("Pushing entitlements artifact '%s' for component %s...", artifact_name, name)
+    tag = f"{quay_url}/unsigned/{name}:{pipeline_run_uid}-entitlements"
+    digest = oras_utils.oras_push(tag, component_dir, artifact_name, name)
+    ref = f"{quay_url}/unsigned/{name}@{digest}"
+    logger.info("Entitlements pushed: %s", ref)
+    return ref
+
+
 def _run_custom_script(
     *,
     signing_script: str,
@@ -156,6 +204,7 @@ def _run_custom_script(
     pipeline_run_uid: str,
     keychain_password: str,
     signing_identity: str,
+    entitlements_ref: str = "",
 ) -> None:
     """Run a custom signing script already present on the remote Mac host."""
     digest_file = f"/tmp/signed_digest_{pipeline_run_uid}_{name}.txt"
@@ -172,6 +221,8 @@ def _run_custom_script(
         "SIGNED_REF": f"{dest_quay_url}/{origin}/{name}:{tag}",
         "OUTPUT_DIGEST": digest_file,
     }
+    if entitlements_ref:
+        env_vars["ENTITLEMENTS_REF"] = entitlements_ref
     args_str = " ".join(shlex.quote(a) for a in signing_args)
     stdin_script = "#!/bin/bash\nset -eu\n"
     for k, v in env_vars.items():
@@ -221,119 +272,145 @@ def _run_custom_script(
         )
 
 
-def _run_default_script(
-    *,
-    ssh_opts: list[str],
-    mac_user: str,
-    mac_host: str,
-    name: str,
-    component_dir: Path,
-    quay_url: str,
-    quay_user: str,
-    quay_pass: str,
-    unsigned_digest: str,
-    pipeline_run_uid: str,
-    keychain_password: str,
-    signing_identity: str,
-    apple_id: str,
-    team_id: str,
-    app_specific_password: str,
-) -> None:
-    """Build, upload, and run the default codesign/notarytool script on the remote Mac host."""
-    mac_script_path = f"/tmp/mac_signing_script_{pipeline_run_uid}_{name}.sh"
-    temp_dir = f"/tmp/{pipeline_run_uid}_{name}"
-    binary_path = f"{temp_dir}/unsigned"
-    zip_path = f"{temp_dir}/signed_content.zip"
-    digest_file = f"{temp_dir}/push_digest.txt"
+def run(quay_url: str, pipeline_run_uid: str) -> None:
+    """Sign macOS binaries on the remote Mac host for every component with a has_mac flag."""
+    snapshot = json.loads(os.environ["SNAPSHOT_JSON"])
+    quay_url = quay_url.rstrip("/")
 
-    script_content = _build_signing_script(
-        quay_url=quay_url,
-        quay_user=quay_user,
-        quay_pass=quay_pass,
-        component_name=name,
-        unsigned_digest=unsigned_digest,
-        pipeline_run_uid=pipeline_run_uid,
-        temp_dir=temp_dir,
-        binary_path=binary_path,
-        zip_path=zip_path,
-        digest_file=digest_file,
-        keychain_password=keychain_password,
-        signing_identity=signing_identity,
-        apple_id=apple_id,
-        team_id=team_id,
-        app_specific_password=app_specific_password,
+    mac_user = (MAC_HOST_CREDS_MOUNT / "username").read_text().strip()
+    mac_host = (MAC_HOST_CREDS_MOUNT / "host").read_text().strip()
+    keychain_password = (MAC_SIGNING_CREDS_MOUNT / "keychain_password").read_text().strip()
+    signing_identity = (MAC_SIGNING_CREDS_MOUNT / "signing_identity").read_text().strip()
+    apple_id = (MAC_SIGNING_CREDS_MOUNT / "apple_id").read_text().strip()
+    team_id = (MAC_SIGNING_CREDS_MOUNT / "team_id").read_text().strip()
+    app_specific_password = (
+        (MAC_SIGNING_CREDS_MOUNT / "app_specific_password").read_text().strip()
     )
+    quay_user = (QUAY_SECRET_MOUNT / "username").read_text().strip()
+    quay_pass = (QUAY_SECRET_MOUNT / "password").read_text().strip()
 
-    fd, script_path = tempfile.mkstemp(suffix=".sh")
-    local_script = Path(script_path)
-    os.write(fd, script_content.encode())
-    os.close(fd)
+    ssh_dir = Path("/tmp/.ssh")
+    ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    id_rsa = ssh_dir / "id_rsa"
+    known_hosts = ssh_dir / "known_hosts"
+    shutil.copy2(str(MAC_SSH_KEY_MOUNT / "mac_id_rsa"), str(id_rsa))
+    shutil.copy2(str(MAC_SSH_KEY_MOUNT / "mac_fingerprint"), str(known_hosts))
+    id_rsa.chmod(0o600)
+    known_hosts.chmod(0o600)
 
-    try:
-        subprocess.check_call(
-            ["scp"]
-            + ssh_opts
-            + [str(local_script), f"{mac_user}@{mac_host}:{mac_script_path}"]
+    ssh_opts = _ssh_opts(str(id_rsa), str(known_hosts))
+
+    for component in snapshot.get("components", []):
+        name = component.get("name", "")
+        component_dir = CONTENT_DIR / name
+
+        if not (component_dir / "has_mac").exists():
+            logger.info("No macOS content for component %s, skipping Mac signing...", name)
+            continue
+
+        logger.info("Signing Mac binaries for component: %s", name)
+
+        unsigned_digest = (component_dir / "unsigned_mac_digest.txt").read_text().strip()
+
+        mac_script_path = f"/tmp/mac_signing_script_{pipeline_run_uid}_{name}.sh"
+        temp_dir = f"/tmp/{pipeline_run_uid}_{name}"
+        binary_path = f"{temp_dir}/unsigned"
+        zip_path = f"{temp_dir}/signed_content.zip"
+        digest_file = f"{temp_dir}/push_digest.txt"
+
+        script_content = _build_signing_script(
+            quay_url=quay_url,
+            quay_user=quay_user,
+            quay_pass=quay_pass,
+            component_name=name,
+            unsigned_digest=unsigned_digest,
+            pipeline_run_uid=pipeline_run_uid,
+            temp_dir=temp_dir,
+            binary_path=binary_path,
+            zip_path=zip_path,
+            digest_file=digest_file,
+            keychain_password=keychain_password,
+            signing_identity=signing_identity,
+            apple_id=apple_id,
+            team_id=team_id,
+            app_specific_password=app_specific_password,
         )
 
-        ssh_exit = 0
-        failed_op = ""
-        result = subprocess.run(
-            ["ssh"] + ssh_opts + [f"{mac_user}@{mac_host}", "bash", mac_script_path]
-        )
-        if result.returncode != 0:
-            ssh_exit = result.returncode
-            failed_op = "signing"
+        fd, script_path = tempfile.mkstemp(suffix=".sh")
+        local_script = Path(script_path)
+        os.write(fd, script_content.encode())
+        os.close(fd)
 
-        if ssh_exit == 0:
-            scp_result = subprocess.run(
+        try:
+            subprocess.check_call(
                 ["scp"]
                 + ssh_opts
+                + [str(local_script), f"{mac_user}@{mac_host}:{mac_script_path}"]
+            )
+
+            ssh_exit = 0
+            failed_op = ""
+            result = subprocess.run(
+                ["ssh"] + ssh_opts + [f"{mac_user}@{mac_host}", "bash", mac_script_path]
+            )
+            if result.returncode != 0:
+                ssh_exit = result.returncode
+                failed_op = "signing"
+
+            if ssh_exit == 0:
+                scp_result = subprocess.run(
+                    ["scp"]
+                    + ssh_opts
+                    + [
+                        f"{mac_user}@{mac_host}:{temp_dir}/push_digest.txt",
+                        str(component_dir / "signed_mac_digest.txt"),
+                    ]
+                )
+                if scp_result.returncode != 0:
+                    ssh_exit = scp_result.returncode
+                    failed_op = "scp of signed digest"
+
+            cleanup = subprocess.run(
+                ["ssh"]
+                + ssh_opts
                 + [
-                    f"{mac_user}@{mac_host}:{temp_dir}/push_digest.txt",
-                    str(component_dir / "signed_mac_digest.txt"),
-                ]
+                    f"{mac_user}@{mac_host}",
+                    "rm -rf " + shlex.quote(temp_dir) + " " + shlex.quote(mac_script_path),
+                ],
+                check=False,
             )
-            if scp_result.returncode != 0:
-                ssh_exit = scp_result.returncode
-                failed_op = "scp of signed digest"
+            if cleanup.returncode != 0:
+                logger.warning(
+                    "Remote cleanup failed for %s (exit code: %d) — "
+                    "%s and %s may remain on the Mac host",
+                    name,
+                    cleanup.returncode,
+                    temp_dir,
+                    mac_script_path,
+                )
 
-        cleanup = subprocess.run(
-            ["ssh"]
-            + ssh_opts
-            + [
-                f"{mac_user}@{mac_host}",
-                "rm -rf " + shlex.quote(temp_dir) + " " + shlex.quote(mac_script_path),
-            ],
-            check=False,
-        )
-        if cleanup.returncode != 0:
-            logger.warning(
-                "Remote cleanup failed for %s (exit code: %d) — "
-                "%s and %s may remain on the Mac host",
-                name,
-                cleanup.returncode,
-                temp_dir,
-                mac_script_path,
-            )
-
-        if ssh_exit != 0:
-            raise RuntimeError(
-                f"Mac {failed_op} failed for component: {name}" f" (exit code: {ssh_exit})"
-            )
-    finally:
-        local_script.unlink(missing_ok=True)
+            if ssh_exit != 0:
+                raise RuntimeError(
+                    f"Mac {failed_op} failed for component: {name} (exit code: {ssh_exit})"
+                )
+        finally:
+            local_script.unlink(missing_ok=True)
 
 
-def run(
+def run_custom_signing(
     quay_url: str,
     pipeline_run_uid: str,
-    signing_script: str | None = None,
+    signing_script: str,
     signing_args: list[str] | None = None,
     dest_quay_url: str | None = None,
     origin: str = "",
 ) -> None:
-    """Sign macOS binaries on the remote Mac host for every component with a has_mac flag."""
+    """Sign macOS binaries using custom signing scripts on the remote Mac host.
+
+    This function is specific to the sign-and-push-to-internal-oci workflow.
+    It supports custom signing scripts, destination Quay URLs, entitlements artifacts,
+    and origin-based tagging.
+    """
     snapshot = json.loads(os.environ["SNAPSHOT_JSON"])
     quay_url = quay_url.rstrip("/")
 
@@ -352,13 +429,6 @@ def run(
     else:
         dest_quay_user = quay_user
         dest_quay_pass = quay_pass
-
-    if not signing_script:
-        apple_id = (MAC_SIGNING_CREDS_MOUNT / "apple_id").read_text().strip()
-        team_id = (MAC_SIGNING_CREDS_MOUNT / "team_id").read_text().strip()
-        app_specific_password = (
-            (MAC_SIGNING_CREDS_MOUNT / "app_specific_password").read_text().strip()
-        )
 
     ssh_dir = Path("/tmp/.ssh")
     ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -398,30 +468,24 @@ def run(
         unsigned_digest = (component_dir / "unsigned_mac_digest.txt").read_text().strip()
         commit_sha = component.get("source", {}).get("git", {}).get("revision", "")
 
-        if signing_script:
-            _run_custom_script(
-                signing_script=signing_script,
-                signing_args=signing_args or [],
-                name=name,
-                origin=origin,
-                commit_sha=commit_sha,
-                component_dir=component_dir,
-                unsigned_digest=unsigned_digest,
-                dest_quay_url=effective_dest_quay_url,
-                dest_quay_user=dest_quay_user,
-                dest_quay_pass=dest_quay_pass,
-                **common_kwargs,
-            )
-        else:
-            _run_default_script(
-                name=name,
-                component_dir=component_dir,
-                unsigned_digest=unsigned_digest,
-                apple_id=apple_id,
-                team_id=team_id,
-                app_specific_password=app_specific_password,
-                **common_kwargs,
-            )
+        entitlements_ref = _push_entitlements_artifact(
+            component, component_dir, quay_url, name, pipeline_run_uid,
+        )
+
+        _run_custom_script(
+            signing_script=signing_script,
+            signing_args=signing_args or [],
+            name=name,
+            origin=origin,
+            commit_sha=commit_sha,
+            component_dir=component_dir,
+            unsigned_digest=unsigned_digest,
+            dest_quay_url=effective_dest_quay_url,
+            dest_quay_user=dest_quay_user,
+            dest_quay_pass=dest_quay_pass,
+            entitlements_ref=entitlements_ref,
+            **common_kwargs,
+        )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

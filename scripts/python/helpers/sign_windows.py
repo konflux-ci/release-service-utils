@@ -198,118 +198,160 @@ def _run_custom_script(
         )
 
 
-def _run_default_script(
-    *,
-    ssh_opts: list[str],
-    scp_opts: list[str],
-    windows_user: str,
-    windows_host: str,
-    name: str,
-    component_dir: Path,
-    quay_url: str,
-    quay_user: str,
-    quay_pass: str,
-    unsigned_digest: str,
-    pipeline_run_uid: str,
-) -> None:
-    """Build, upload, and run the default signtool script on the remote Windows host."""
-    windows_temp_dir = f"{pipeline_run_uid}_{name}"
-    win_temp_base = f"C:/Users/{windows_user}/AppData/Local/Temp"
-    windows_script_path = f"{win_temp_base}/windows_signing_script_file_{windows_temp_dir}.bat"
+def run(quay_url: str, pipeline_run_uid: str) -> None:
+    """Sign Windows binaries on the remote host for every component with a has_windows flag."""
+    snapshot = json.loads(os.environ["SNAPSHOT_JSON"])
 
-    script_content = _build_batch_script(
-        quay_url=quay_url,
-        quay_user=quay_user,
-        quay_pass=quay_pass,
-        component_name=name,
-        unsigned_digest=unsigned_digest,
-        pipeline_run_uid=pipeline_run_uid,
-        windows_temp_dir=windows_temp_dir,
-    )
+    windows_user = (WINDOWS_CREDS_MOUNT / "username").read_text().strip()
+    windows_port = (WINDOWS_CREDS_MOUNT / "port").read_text().strip()
+    windows_host = (WINDOWS_CREDS_MOUNT / "host").read_text().strip()
+    quay_user = (QUAY_SECRET_MOUNT / "username").read_text().strip()
+    quay_pass = (QUAY_SECRET_MOUNT / "password").read_text().strip()
 
-    fd, script_path = tempfile.mkstemp(suffix=".bat")
-    local_script = Path(script_path)
-    os.write(fd, script_content.encode())
-    os.close(fd)
+    ssh_dir = Path("/tmp/.ssh")
+    ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    id_rsa = ssh_dir / "id_rsa"
+    known_hosts = ssh_dir / "known_hosts"
+    shutil.copy2(str(WINDOWS_SSH_KEY_MOUNT / "windows_id_rsa"), str(id_rsa))
+    shutil.copy2(str(WINDOWS_SSH_KEY_MOUNT / "windows_fingerprint"), str(known_hosts))
+    id_rsa.chmod(0o600)
+    known_hosts.chmod(0o600)
 
-    try:
-        subprocess.check_call(
-            ["scp"]
-            + scp_opts
-            + [
-                str(local_script),
-                f"{windows_user}@{windows_host}:{windows_script_path}",
-            ]
+    ssh_opts = [
+        "-i",
+        str(id_rsa),
+        "-o",
+        f"UserKnownHostsFile={known_hosts}",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-p",
+        windows_port,
+    ]
+    scp_opts = [
+        "-i",
+        str(id_rsa),
+        "-o",
+        f"UserKnownHostsFile={known_hosts}",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-P",
+        windows_port,
+    ]
+
+    for component in snapshot.get("components", []):
+        name = component.get("name", "")
+        component_dir = CONTENT_DIR / name
+
+        if not (component_dir / "has_windows").exists():
+            logger.info(
+                "No Windows content for component %s, skipping Windows signing...", name
+            )
+            continue
+
+        logger.info("Signing Windows binaries for component: %s", name)
+
+        unsigned_digest = (component_dir / "unsigned_windows_digest.txt").read_text().strip()
+
+        windows_temp_dir = f"{pipeline_run_uid}_{name}"
+        win_temp_base = f"C:/Users/{windows_user}/AppData/Local/Temp"
+        windows_script_path = (
+            f"{win_temp_base}/windows_signing_script_file_{windows_temp_dir}.bat"
         )
 
-        ssh_exit = 0
-        failed_op = ""
-        result = subprocess.run(
-            ["ssh"] + ssh_opts + [f"{windows_user}@{windows_host}", windows_script_path],
-            capture_output=True,
-            text=True,
+        script_content = _build_batch_script(
+            quay_url=quay_url,
+            quay_user=quay_user,
+            quay_pass=quay_pass,
+            component_name=name,
+            unsigned_digest=unsigned_digest,
+            pipeline_run_uid=pipeline_run_uid,
+            windows_temp_dir=windows_temp_dir,
         )
-        logger.info("%s", result.stdout)
-        if result.stderr:
-            logger.info("%s", result.stderr)
-        if result.returncode != 0:
-            ssh_exit = result.returncode
-            failed_op = "signing"
 
-        if ssh_exit == 0:
-            digest = None
-            for line in result.stdout.splitlines():
-                if line.strip().startswith("Digest:"):
-                    digest = line.strip().split()[-1]
-            if digest:
-                (component_dir / "signed_windows_digest.txt").write_text(
-                    digest, encoding="utf-8"
+        fd, script_path = tempfile.mkstemp(suffix=".bat")
+        local_script = Path(script_path)
+        os.write(fd, script_content.encode())
+        os.close(fd)
+
+        try:
+            subprocess.check_call(
+                ["scp"]
+                + scp_opts
+                + [str(local_script), f"{windows_user}@{windows_host}:{windows_script_path}"]
+            )
+
+            ssh_exit = 0
+            failed_op = ""
+            result = subprocess.run(
+                ["ssh"] + ssh_opts + [f"{windows_user}@{windows_host}", windows_script_path],
+                capture_output=True,
+                text=True,
+            )
+            logger.info("%s", result.stdout)
+            if result.stderr:
+                logger.info("%s", result.stderr)
+            if result.returncode != 0:
+                ssh_exit = result.returncode
+                failed_op = "signing"
+
+            if ssh_exit == 0:
+                digest = None
+                for line in result.stdout.splitlines():
+                    if line.strip().startswith("Digest:"):
+                        digest = line.strip().split()[-1]
+                if digest:
+                    (component_dir / "signed_windows_digest.txt").write_text(
+                        digest, encoding="utf-8"
+                    )
+                else:
+                    ssh_exit = 1
+                    failed_op = "parsing Digest from oras push output"
+
+            cleanup_path = (
+                f"C:\\\\Users\\\\{windows_user}\\\\AppData\\\\Local\\\\Temp"
+                f"\\\\{windows_temp_dir}"
+            )
+            cleanup = subprocess.run(
+                ["ssh"]
+                + ssh_opts
+                + [
+                    f"{windows_user}@{windows_host}",
+                    f"Remove-Item -LiteralPath '{cleanup_path}' -Force -Recurse; "
+                    f"Remove-Item -LiteralPath '{windows_script_path}' -Force",
+                ],
+                check=False,
+            )
+            if cleanup.returncode != 0:
+                logger.warning(
+                    "Remote cleanup failed for %s (exit code: %d) — "
+                    "%s and %s may remain on the Windows host",
+                    name,
+                    cleanup.returncode,
+                    cleanup_path,
+                    windows_script_path,
                 )
-            else:
-                ssh_exit = 1
-                failed_op = "parsing Digest from oras push output"
 
-        cleanup_path = (
-            f"C:\\\\Users\\\\{windows_user}\\\\AppData\\\\Local\\\\Temp"
-            f"\\\\{windows_temp_dir}"
-        )
-        cleanup = subprocess.run(
-            ["ssh"]
-            + ssh_opts
-            + [
-                f"{windows_user}@{windows_host}",
-                f"Remove-Item -LiteralPath '{cleanup_path}' -Force -Recurse; "
-                f"Remove-Item -LiteralPath '{windows_script_path}' -Force",
-            ],
-            check=False,
-        )
-        if cleanup.returncode != 0:
-            logger.warning(
-                "Remote cleanup failed for %s (exit code: %d) — "
-                "%s and %s may remain on the Windows host",
-                name,
-                cleanup.returncode,
-                cleanup_path,
-                windows_script_path,
-            )
-
-        if ssh_exit != 0:
-            raise RuntimeError(
-                f"Windows {failed_op} failed for component: {name}" f" (exit code: {ssh_exit})"
-            )
-    finally:
-        local_script.unlink(missing_ok=True)
+            if ssh_exit != 0:
+                raise RuntimeError(
+                    f"Windows {failed_op} failed for component: {name} (exit code: {ssh_exit})"
+                )
+        finally:
+            local_script.unlink(missing_ok=True)
 
 
-def run(
+def run_custom_signing(
     quay_url: str,
     pipeline_run_uid: str,
-    signing_script: str | None = None,
+    signing_script: str,
     signing_args: list[str] | None = None,
     dest_quay_url: str | None = None,
     origin: str = "",
 ) -> None:
-    """Sign Windows binaries on the remote host for every component with a has_windows flag."""
+    """Sign Windows binaries using custom signing scripts on the remote Windows host.
+
+    This function is specific to the sign-and-push-to-internal-oci workflow.
+    It supports custom signing scripts, destination Quay URLs, and origin-based tagging.
+    """
     snapshot = json.loads(os.environ["SNAPSHOT_JSON"])
     quay_url = quay_url.rstrip("/")
 
@@ -386,33 +428,25 @@ def run(
         unsigned_digest = (component_dir / "unsigned_windows_digest.txt").read_text().strip()
         commit_sha = component.get("source", {}).get("git", {}).get("revision", "")
 
-        if signing_script:
-            thumbprint_path = WINDOWS_CREDS_MOUNT / "cert_thumbprint"
-            win_cert_thumbprint = ""
-            if thumbprint_path.exists():
-                win_cert_thumbprint = thumbprint_path.read_text().strip()
+        thumbprint_path = WINDOWS_CREDS_MOUNT / "cert_thumbprint"
+        win_cert_thumbprint = ""
+        if thumbprint_path.exists():
+            win_cert_thumbprint = thumbprint_path.read_text().strip()
 
-            _run_custom_script(
-                signing_script=signing_script,
-                signing_args=signing_args or [],
-                name=name,
-                origin=origin,
-                commit_sha=commit_sha,
-                component_dir=component_dir,
-                dest_quay_url=effective_dest_quay_url,
-                unsigned_digest=unsigned_digest,
-                win_cert_thumbprint=win_cert_thumbprint,
-                dest_quay_user=dest_quay_user,
-                dest_quay_pass=dest_quay_pass,
-                **common_kwargs,
-            )
-        else:
-            _run_default_script(
-                name=name,
-                component_dir=component_dir,
-                unsigned_digest=unsigned_digest,
-                **common_kwargs,
-            )
+        _run_custom_script(
+            signing_script=signing_script,
+            signing_args=signing_args or [],
+            name=name,
+            origin=origin,
+            commit_sha=commit_sha,
+            component_dir=component_dir,
+            dest_quay_url=effective_dest_quay_url,
+            unsigned_digest=unsigned_digest,
+            win_cert_thumbprint=win_cert_thumbprint,
+            dest_quay_user=dest_quay_user,
+            dest_quay_pass=dest_quay_pass,
+            **common_kwargs,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

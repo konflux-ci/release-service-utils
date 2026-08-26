@@ -69,6 +69,9 @@ def _get_wanted_filenames(component: dict) -> set[str]:
         filename = entry.get("filename", "")
         if filename:
             wanted.add(filename)
+        entitlements_artifact = entry.get("entitlementsArtifact", "")
+        if entitlements_artifact:
+            wanted.add(entitlements_artifact)
     return wanted
 
 
