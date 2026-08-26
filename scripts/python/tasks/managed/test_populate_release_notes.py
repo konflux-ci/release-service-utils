@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -1376,3 +1377,27 @@ def test_main_missing_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(SystemExit):
         populate_release_notes.main()
+
+
+def test_1100_cves(_patch_get_arch: None) -> None:
+    """1100 CVEs produce 1101 sorted references with no duplicates and finish under 2s."""
+    cves = [
+        {"key": f"CVE-{i:04d}", "component": "comp", "packages": []} for i in range(1, 1101)
+    ]
+    data = _default_data(releaseNotes=_default_release_notes(cves=cves))
+
+    start = time.monotonic()
+    populate_release_notes.populate_images(data, _default_snapshot())
+    populate_release_notes.update_type_and_references(data)
+    # Should run in under 2 seconds
+    assert time.monotonic() - start < 2.0
+
+    references = data["releaseNotes"]["references"]
+
+    assert data["releaseNotes"]["type"] == "RHSA"
+    # 1100 CVE URLs plus 1 classification URL
+    assert len(references) == 1101
+    assert len(references) == len(set(references))
+    assert references[0] == "https://access.redhat.com/security/cve/CVE-0001"
+    assert references[1099] == "https://access.redhat.com/security/cve/CVE-1100"
+    assert references[1100] == "https://access.redhat.com/security/updates/classification/"
