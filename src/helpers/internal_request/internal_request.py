@@ -113,6 +113,7 @@ from release_service_utils.helpers.subprocess_cmd import run_cmd
 
 PIPELINE_NAME_LABEL = "internal-services.appstudio.openshift.io/pipeline-name"
 PIPELINERUN_UID_LABEL = "internal-services.appstudio.openshift.io/pipelinerun-uid"
+TASK_GROUP_LABEL = "internal-services.appstudio.openshift.io/group-id"
 CLEANUP_PROPAGATION_SLEEP_SECONDS = 5
 # Extra poll budget before the PipelineRun starts (operator reconcile and scheduling).
 SPAWN_OVERHEAD_SECONDS = 300
@@ -142,6 +143,14 @@ def duration_to_seconds(duration: str) -> int:
         raise ValueError(msg)
     hours, minutes, seconds = (int(match.group(i)) for i in range(1, 4))
     return (hours * 3600) + (minutes * 60) + seconds
+
+
+def seconds_to_duration(seconds: int) -> str:
+    """Format an integer number of seconds as an ``XhYmZs`` Tekton duration."""
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    return f"{h:02d}h{m:02d}m{s:02d}s"
 
 
 def validate_timeouts(
