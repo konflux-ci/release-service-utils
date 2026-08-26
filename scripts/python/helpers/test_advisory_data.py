@@ -19,6 +19,18 @@ def _gzip_b64(obj: dict) -> str:
     return base64.standard_b64encode(gz).decode("ascii")
 
 
+def test_advisory_secret_name_stage() -> None:
+    """Return the stage secret name for the 'stage' environment."""
+    assert advisory_data.advisory_secret_name("stage") == advisory_data.ADVISORY_SECRET_STAGE
+
+
+def test_advisory_secret_name_production() -> None:
+    """Return the prod secret name for the 'production' environment."""
+    assert (
+        advisory_data.advisory_secret_name("production") == advisory_data.ADVISORY_SECRET_PROD
+    )
+
+
 def test_spec_content_json_pointer_image() -> None:
     """Map `image` content type to `.content.images`."""
     assert advisory_data.spec_content_json_pointer("image") == ".content.images"
@@ -101,6 +113,31 @@ def test_json_dict_to_yaml_text_roundtrip() -> None:
     yml = advisory_data.json_dict_to_yaml_text(document)
     assert "RHSA" in yml
     assert "tags:" in yml
+
+
+@pytest.mark.parametrize("version", ["9.9", "1", "3.20", "4.5", "0.1", "1.0.1"])
+def test_json_dict_to_yaml_text_quotes_numeric_strings(version: str) -> None:
+    """Numeric looking strings use double quotes."""
+    lines = {
+        line.strip()
+        for line in advisory_data.json_dict_to_yaml_text(
+            {"product_version": version}
+        ).splitlines()
+    }
+    assert f'product_version: "{version}"' in lines
+    assert f"product_version: '{version}'" not in lines
+
+
+def test_json_dict_to_yaml_text_int_bool_unaffected() -> None:
+    """int/bool fields are written as is and not quoted as strings."""
+    lines = {
+        line.strip()
+        for line in advisory_data.json_dict_to_yaml_text(
+            {"product_id": 479, "skip_customer_notifications": False}
+        ).splitlines()
+    }
+    assert "product_id: 479" in lines
+    assert "skip_customer_notifications: false" in lines
 
 
 def test_list_existing_advisory_subdirs_order(tmp_path: Path) -> None:
@@ -366,3 +403,71 @@ def test_list_existing_advisory_subdirs_skips_files(tmp_path: Path) -> None:
     (base / "2024" / "notadir.txt").write_text("x", encoding="utf-8")
     (base / "file.txt").write_text("y", encoding="utf-8")
     assert advisory_data.list_existing_advisory_subdirs(base) == []
+
+
+def test_encode_advisory_param_round_trips_decode() -> None:
+    """Gzip/base64 encoding round-trips through decode_advisory_param."""
+    payload = {"type": "RHBA", "content": {"artifacts": []}}
+    encoded = advisory_data.encode_advisory_param(payload)
+    assert advisory_data.decode_advisory_param(encoded) == payload
+
+
+def test_first_mapping_content_type_reads_component_rows() -> None:
+    """Return the first mapping.components content type."""
+    data = {
+        "mapping": {
+            "components": [
+                {"contentType": "generic"},
+                {"contentType": "image"},
+            ],
+        },
+    }
+    assert advisory_data.first_mapping_content_type(data) == "generic"
+
+
+def test_first_mapping_content_type_reads_content_gateway_rows() -> None:
+    """Prefer contentGateway.contentType over top-level contentType."""
+    data = {
+        "mapping": {
+            "components": [
+                {
+                    "contentGateway": {"contentType": "binary"},
+                    "contentType": "image",
+                },
+            ],
+        },
+    }
+    assert advisory_data.first_mapping_content_type(data) == "binary"
+
+
+def test_generate_purl_rpm_includes_all_fields() -> None:
+    """Formats an RPM PURL with all fields present."""
+    purl = advisory_data.generate_purl_rpm(
+        "hello", "1.0", "1.fc38", "x86_64", "hummingbird", "repo-id"
+    )
+    assert purl == (
+        "pkg:rpm/redhat/hello@1.0-1.fc38"
+        "?arch=x86_64&distro=hummingbird&repository_id=repo-id"
+    )
+
+
+def test_generate_purl_rpm_omits_empty_distro() -> None:
+    """Omits distro when empty."""
+    purl = advisory_data.generate_purl_rpm("pkg", "1.0", "1.el9", "x86_64", "", "repo-id")
+    assert "distro" not in purl
+    assert "repository_id=repo-id" in purl
+
+
+def test_generate_purl_rpm_omits_empty_repository_id() -> None:
+    """Omits repository_id when empty."""
+    purl = advisory_data.generate_purl_rpm("pkg", "1.0", "1.el9", "x86_64", "rhel", "")
+    assert "repository_id" not in purl
+    assert "distro=rhel" in purl
+
+
+def test_generate_purl_rpm_custom_vendor() -> None:
+    """Uses custom vendor when provided."""
+    purl = advisory_data.generate_purl_rpm(
+        "pkg", "1.0", "1.el9", "x86_64", "rhel", "repo-id", vendor="fedora"
+    )
+    assert purl.startswith("pkg:rpm/fedora/")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import unittest.mock as mock
 
+import pytest
 import skopeo
 
 
@@ -135,6 +136,131 @@ def test_inspect_image_ref_with_digest() -> None:
     assert cmd[-1] == f"docker://{ref}"
 
 
+def test_inspect_no_tags_flag() -> None:
+    """``no_tags=True`` adds ``--no-tags`` to the command."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.inspect("img:v1", no_tags=True)
+
+    cmd = run_mock.call_args[0][0]
+    assert "--no-tags" in cmd
+
+
+def test_inspect_override_os_and_arch() -> None:
+    """``override_os``/``override_arch`` are appended with their values."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.inspect("img:v1", override_os="linux", override_arch="arm64")
+
+    cmd = run_mock.call_args[0][0]
+    assert "--override-os" in cmd
+    assert cmd[cmd.index("--override-os") + 1] == "linux"
+    assert "--override-arch" in cmd
+    assert cmd[cmd.index("--override-arch") + 1] == "arm64"
+
+
+def test_inspect_override_flags_omitted_when_none() -> None:
+    """Override flags are omitted entirely when not provided."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.inspect("img:v1")
+
+    cmd = run_mock.call_args[0][0]
+    assert "--override-os" not in cmd
+    assert "--override-arch" not in cmd
+    assert "--no-tags" not in cmd
+
+
+def test_inspect_check_true_passes_check() -> None:
+    """``check=True`` is forwarded to subprocess.run."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.inspect("img:v1", check=True)
+
+    assert run_mock.call_args[1]["check"] is True
+
+
+def test_inspect_check_true_raises_on_failure() -> None:
+    """``check=True`` raises CalledProcessError on non-zero exit."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        side_effect=subprocess.CalledProcessError(1, "skopeo"),
+    ):
+        with pytest.raises(subprocess.CalledProcessError):
+            skopeo.inspect("img:v1", check=True)
+
+
+# ---------------------------------------------------------------------------
+# list_tags
+# ---------------------------------------------------------------------------
+
+
+def test_list_tags_basic_command() -> None:
+    """Default list_tags builds the correct command."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.list_tags("registry.example.com/repo")
+
+    cmd = run_mock.call_args[0][0]
+    assert cmd == [
+        "skopeo",
+        "list-tags",
+        "--retry-times",
+        "3",
+        "docker://registry.example.com/repo",
+    ]
+    assert run_mock.call_args[1]["capture_output"] is True
+    assert run_mock.call_args[1]["text"] is True
+    assert run_mock.call_args[1]["check"] is False
+
+
+def test_list_tags_custom_retry_times() -> None:
+    """``retry_times`` overrides the default retry count."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.list_tags("repo", retry_times=7)
+
+    cmd = run_mock.call_args[0][0]
+    idx = cmd.index("--retry-times")
+    assert cmd[idx + 1] == "7"
+
+
+def test_list_tags_returns_completed_process() -> None:
+    """The raw ``CompletedProcess`` is returned to the caller."""
+    expected = _completed(stdout='{"Tags": ["v1", "v2"]}')
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=expected,
+    ):
+        result = skopeo.list_tags("repo")
+
+    assert result is expected
+
+
+def test_list_tags_nonzero_exit_code() -> None:
+    """A non-zero exit code is returned, not raised."""
+    expected = _completed(returncode=1)
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=expected,
+    ):
+        result = skopeo.list_tags("repo")
+
+    assert result.returncode == 1
+
+
 # ---------------------------------------------------------------------------
 # copy
 # ---------------------------------------------------------------------------
@@ -197,3 +323,24 @@ def test_copy_nonzero_exit_code() -> None:
         result = skopeo.copy("docker://img:v1", "dir:/tmp/out")
 
     assert result.returncode == 1
+
+
+def test_copy_check_true_passes_check() -> None:
+    """``check=True`` is forwarded to subprocess.run."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.copy("docker://img:v1", "dir:/tmp/out", check=True)
+
+    assert run_mock.call_args[1]["check"] is True
+
+
+def test_copy_check_true_raises_on_failure() -> None:
+    """``check=True`` raises CalledProcessError on non-zero exit."""
+    with mock.patch(
+        "skopeo.subprocess.run",
+        side_effect=subprocess.CalledProcessError(1, "skopeo"),
+    ):
+        with pytest.raises(subprocess.CalledProcessError):
+            skopeo.copy("docker://img:v1", "dir:/tmp/out", check=True)

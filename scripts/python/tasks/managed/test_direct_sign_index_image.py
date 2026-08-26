@@ -227,6 +227,77 @@ def test_collect_fbc_signing_items_missing_rh_registry_repo(mock_translate) -> N
     assert items[0].repository == ""
 
 
+@patch("direct_sign_index_image.translate_reference")
+def test_collect_fbc_signing_items_with_timestamp(mock_translate) -> None:
+    """Items are created for both target_index and target_index_with_timestamp."""
+    mock_translate.side_effect = [
+        "registry.redhat.io/redhat/fbc-target-index:v4.23",
+        "registry.redhat.io/redhat/fbc-target-index:v4.23-1783502029",
+    ]
+    fbc = {
+        "components": [
+            {
+                "target_index": "quay.io/redhat/redhat----fbc-target-index:v4.23",
+                "target_index_with_timestamp": (
+                    "quay.io/redhat/redhat----fbc-target-index:v4.23-1783502029"
+                ),
+                "rh-registry-repo": "registry.redhat.io/redhat/fbc-target-index",
+                "image_digests": ["sha256:aaa"],
+            }
+        ]
+    }
+    items = collect_fbc_signing_items(fbc, ["key-a"])
+
+    assert len(items) == 2
+    assert items[0].reference == "registry.redhat.io/redhat/fbc-target-index:v4.23"
+    assert items[1].reference == "registry.redhat.io/redhat/fbc-target-index:v4.23-1783502029"
+    assert mock_translate.call_count == 2
+
+
+@patch("direct_sign_index_image.translate_reference")
+def test_collect_fbc_signing_items_timestamp_empty(mock_translate) -> None:
+    """Empty target_index_with_timestamp is skipped."""
+    mock_translate.return_value = "registry.redhat.io/redhat/fbc-target-index:v4.23"
+    fbc = {
+        "components": [
+            {
+                "target_index": "quay.io/redhat/redhat----fbc-target-index:v4.23",
+                "target_index_with_timestamp": "",
+                "rh-registry-repo": "registry.redhat.io/redhat/fbc-target-index",
+                "image_digests": ["sha256:aaa"],
+            }
+        ]
+    }
+    items = collect_fbc_signing_items(fbc, ["key-a"])
+
+    assert len(items) == 1
+    assert items[0].reference == "registry.redhat.io/redhat/fbc-target-index:v4.23"
+    mock_translate.assert_called_once()
+
+
+@patch("direct_sign_index_image.translate_reference")
+def test_collect_fbc_signing_items_timestamp_equals_target(mock_translate) -> None:
+    """target_index_with_timestamp equal to target_index does not create duplicates."""
+    mock_translate.return_value = "registry.redhat.io/redhat/fbc-target-index:v4.23"
+    fbc = {
+        "components": [
+            {
+                "target_index": "quay.io/redhat/redhat----fbc-target-index:v4.23",
+                "target_index_with_timestamp": (
+                    "quay.io/redhat/redhat----fbc-target-index:v4.23"
+                ),
+                "rh-registry-repo": "registry.redhat.io/redhat/fbc-target-index",
+                "image_digests": ["sha256:aaa"],
+            }
+        ]
+    }
+    items = collect_fbc_signing_items(fbc, ["key-a"])
+
+    assert len(items) == 1
+    assert items[0].reference == "registry.redhat.io/redhat/fbc-target-index:v4.23"
+    mock_translate.assert_called_once()
+
+
 # --- setup_argparser ---
 
 
@@ -248,8 +319,6 @@ def test_setup_argparser_defaults(tmp_path) -> None:
             str(data),
             "--requester",
             "testuser",
-            "--pipeline-image",
-            "quay.io/signing:latest",
         ]
     )
 
@@ -259,6 +328,7 @@ def test_setup_argparser_defaults(tmp_path) -> None:
     assert args.verbose is False
     assert args.output is None
     assert args.pipeline == "container-signing"
+    assert args.pipeline_image == ""
     assert args.service_account == "signing-pipeline-sa"
     assert args.request_timeout == "1800"
     assert args.concurrent_limit == 8
@@ -283,8 +353,6 @@ def test_setup_argparser_rejects_invalid_pyxis_server(tmp_path) -> None:
                 str(data),
                 "--requester",
                 "testuser",
-                "--pipeline-image",
-                "quay.io/signing:latest",
             ]
         )
 
@@ -306,8 +374,6 @@ def test_setup_argparser_validates_fbc_results_file(tmp_path) -> None:
                 str(data),
                 "--requester",
                 "testuser",
-                "--pipeline-image",
-                "quay.io/signing:latest",
             ]
         )
 
@@ -349,9 +415,10 @@ def _base_argv(
         str(data_path),
         "--requester",
         overrides.pop("requester", "testuser"),
-        "--pipeline-image",
-        overrides.pop("pipeline_image", "quay.io/signing:latest"),
     ]
+    pipeline_image = overrides.pop("pipeline_image", None)
+    if pipeline_image is not None:
+        argv += ["--pipeline-image", pipeline_image]
     if output_dir is not None:
         argv += ["--output", str(output_dir)]
     for key, value in overrides.items():
@@ -587,6 +654,7 @@ def test_main_passes_submit_config_to_submit_batches(tmp_path) -> None:
                 data_path,
                 output_dir,
                 pipeline="custom-signing",
+                pipeline_image="quay.io/signing:latest",
                 service_account="custom-sa",
                 task_id="uid-123",
                 pipelinerun_uid="pr-456",

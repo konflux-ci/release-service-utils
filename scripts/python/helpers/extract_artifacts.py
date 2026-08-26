@@ -97,27 +97,49 @@ def _get_source_paths(component: dict) -> tuple[list[str], list[str]]:
     return unique_files, unique_dirs
 
 
+def _normalize_tar_member_name(name: str) -> str:
+    """Normalize a tar member path for prefix matching and safe extraction."""
+    normalized = name.lstrip("/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
 def _safe_extract_layer(
-    tf: tarfile.TarFile, image_path: str, target_dir: Path, layer_name: str
+    tf: tarfile.TarFile,
+    image_path: str,
+    target_dir: Path,
+    layer_name: str,
 ) -> bool:
     """Extract members under image_path/ from a layer tarfile with path safety checks.
 
-    Returns True if any matching members were found, False otherwise.
-    Raises RuntimeError for unsafe entries (path traversal, symlinks, hardlinks, devices).
+    Symlink, hardlink, and device entries are always skipped (not extracted). Later
+    layers may replace a skipped special with a regular file; final wanted-path
+    validation happens in process_component after all layers are merged. Path
+    traversal is rejected for every member that is extracted.
+
+    Returns True if any matching members were found under image_path, False otherwise.
     """
     target_real = target_dir.resolve()
     found = False
     for member in tf.getmembers():
-        if not (member.name == image_path or member.name.startswith(f"{image_path}/")):
+        normalized = _normalize_tar_member_name(member.name)
+        if not (normalized == image_path or normalized.startswith(f"{image_path}/")):
             continue
         found = True
         if member.issym() or member.islnk() or member.isdev():
-            raise RuntimeError(
-                f"Layer {layer_name} contains unsupported entry type: {member.name}"
+            logger.debug(
+                "Skipping unsupported entry type in layer %s: %s",
+                layer_name,
+                member.name,
             )
-        member_real = (target_dir / member.name).resolve()
+            continue
+        # Use the normalized relative path so absolute tar names (e.g. /releases/x)
+        # do not resolve outside target_dir and still land under the extract root.
+        member_real = (target_dir / normalized).resolve()
         if member_real != target_real and target_real not in member_real.parents:
             raise RuntimeError(f"Layer {layer_name} contains unsafe path: {member.name}")
+        member.name = normalized
         tf.extract(member, path=str(target_dir), filter="data")
     return found
 
@@ -245,13 +267,19 @@ def process_component(component: dict) -> None:
 
             for wanted in wanted_files:
                 src = tmp_dir / wanted
-                if src.is_file():
-                    shutil.copy2(str(src), str(destination / src.name))
-                else:
+                # Validate final merged state after all layers; never follow symlinks.
+                if src.is_symlink():
+                    raise RuntimeError(
+                        f"File '{wanted}' declared in RPA resolved to a symlink; "
+                        "wanted artifacts must be regular files"
+                    )
+                if not src.is_file():
                     logger.error("Expected file not found in container: %s", wanted)
                     raise RuntimeError(
-                        f"File '{wanted}' declared in RPA was not found in any container layer"
+                        f"File '{wanted}' declared in RPA was not found in any "
+                        "container layer"
                     )
+                shutil.copy2(str(src), str(destination / src.name))
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

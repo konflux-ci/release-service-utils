@@ -128,7 +128,7 @@ def test_all_managed_pipeline_tokens_from_rpa(tmp_path: Path) -> None:
 
 
 def test_changed_paths_trigger_global_catalog_run() -> None:
-    """Integration-tests plumbing (with exclusions) and repo-root Dockerfile."""
+    """Integration-tests plumbing (with exclusions), Dockerfile, dataKeys schema."""
     g = fc._changed_paths_trigger_global_catalog_run
     assert g(["integration-tests/lib/x.py"]) is True
     assert g(["integration-tests/run-test.sh"]) is False
@@ -142,6 +142,10 @@ def test_changed_paths_trigger_global_catalog_run() -> None:
     assert g(["  Dockerfile  "]) is True
     assert g(["subdir/Dockerfile"]) is False
     assert g(["Dockerfile/"]) is False
+    assert g(["schemas/dataKeys.json"]) is True
+    assert g(["./schemas/dataKeys.json"]) is True
+    assert g(["  schemas/dataKeys.json  "]) is True
+    assert g(["schemas/other.json"]) is False
 
 
 def test_is_under_task_tests_dir(tmp_path: Path) -> None:
@@ -483,6 +487,19 @@ def test_resolve_dockerfile_only_unions_all_rpa_tokens(tmp_path: Path) -> None:
     _write_rpa(tmp_path, "suite-b", "p: pipelines/managed/zebra-pipe/")
     with patch.object(fc, "_suites_from_catalog_script", return_value=set()):
         out = fc.resolve(tmp_path, ["Dockerfile"])
+    assert out == {
+        "pipelineTestSuite": "suite-a suite-b",
+        "pipelineUsed": "alpha-pipe zebra-pipe",
+    }
+
+
+@pytest.mark.usefixtures("utils_repo_root")
+def test_resolve_datakeys_schema_unions_all_rpa_tokens(tmp_path: Path) -> None:
+    """Changes to ``schemas/dataKeys.json`` union every managed pipeline token from RPA."""
+    _write_rpa(tmp_path, "suite-a", "p: pipelines/managed/alpha-pipe/")
+    _write_rpa(tmp_path, "suite-b", "p: pipelines/managed/zebra-pipe/")
+    with patch.object(fc, "_suites_from_catalog_script", return_value=set()):
+        out = fc.resolve(tmp_path, ["schemas/dataKeys.json"])
     assert out == {
         "pipelineTestSuite": "suite-a suite-b",
         "pipelineUsed": "alpha-pipe zebra-pipe",

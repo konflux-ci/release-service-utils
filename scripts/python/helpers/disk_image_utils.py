@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 # Unambiguous disk-image file suffixes (simple and compound). Files matching
 # these are handled as raw binary blobs rather than tar archives, even when the
 # component does not carry contentType: disk-image.
@@ -11,6 +13,8 @@ from __future__ import annotations
 DISK_IMAGE_SUFFIXES: frozenset[str] = frozenset(
     {".qcow2", ".iso", ".iso.gz", ".raw.gz", ".vhd.gz"}
 )
+# Disk-image advisory rows always use linux; arch is sniffed from the filename.
+DISK_IMAGE_DEFAULT_OS = "linux"
 
 
 def is_disk_image_file(filename: str) -> bool:
@@ -29,3 +33,16 @@ def is_disk_image_component(component: dict) -> bool:
         component.get("contentType") == "disk-image"
         or (component.get("contentGateway") or {}).get("contentType") == "disk-image"
     )
+
+
+def architecture_from_filename(filename: str) -> str:
+    """Return ``aarch64`` / ``x86_64`` if present in the basename, else ``unknown``.
+
+    Check aarch64 before x86_64 so a name containing both prefers aarch64.
+    """
+    name = Path(filename).name
+    if "aarch64" in name:
+        return "aarch64"
+    if "x86_64" in name:
+        return "x86_64"
+    return "unknown"

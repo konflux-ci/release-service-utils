@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -44,6 +46,15 @@ COMPONENT = {
 
 DATA_FILE: dict = {"mapping": {"defaults": {"pushSourceContainer": False}}}
 PYXIS_URL = "https://graphql-pyxis.example.com/graphql/"
+
+
+@pytest.fixture(autouse=True)
+def _propagate_release_logger() -> None:
+    """Allow caplog to capture records from the 'release' logger."""
+    release_logger = logging.getLogger("release")
+    release_logger.propagate = True
+    yield
+    release_logger.propagate = False
 
 
 # --- setup_argparser --output ---
@@ -698,6 +709,7 @@ def test_main_collects_candidates_and_writes_batches(tmp_path) -> None:
         "registry.redhat.io/myproduct/myrepo:v1.0", "sha256:abc", "myproduct/myrepo", "key-a"
     )
     with (
+        patch("rh_direct_sign_image.pyxis._get_session"),
         patch(
             "rh_direct_sign_image.get_configmap",
             return_value={"data": {"SIG_KEY_NAME": "key-a"}},
@@ -759,6 +771,7 @@ def test_main_returns_zero_on_success(tmp_path) -> None:
     data_path.write_text(json.dumps(data_file))
 
     with (
+        patch("rh_direct_sign_image.pyxis._get_session"),
         patch(
             "rh_direct_sign_image.get_configmap",
             return_value={"data": {"SIG_KEY_NAME": "key-a"}},
@@ -798,6 +811,7 @@ def test_main_returns_one_on_unexpected_error(tmp_path) -> None:
     data_path.write_text(json.dumps({}))
 
     with (
+        patch("rh_direct_sign_image.pyxis._get_session"),
         patch(
             "rh_direct_sign_image.get_configmap",
             side_effect=RuntimeError("something went wrong"),
@@ -940,6 +954,20 @@ def test_submit_batch_reads_file_and_calls_internal_request(tmp_path) -> None:
     assert any("pipeline_image=quay.io/signing/pipeline:latest" in a for a in cmd)
 
 
+def test_submit_batch_omits_pipeline_image_when_empty(tmp_path: Path) -> None:
+    """submit_batch does not pass pipeline_image when it is empty."""
+    cfg = get_submit_config(_FULL_CONFIGMAP, _make_submit_args(pipeline_image=""), {})
+    batch_file = tmp_path / "batch_0000.txt"
+    batch_file.write_text("base64content==")
+
+    with patch("rh_direct_sign_image.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        submit_batch(batch_file, cfg)
+
+    cmd = mock_run.call_args.args[0]
+    assert not any("pipeline_image=" in a for a in cmd)
+
+
 def test_submit_batch_includes_intention_label(tmp_path) -> None:
     """submit_batch passes the intention label to internal-request."""
     cfg = get_submit_config(_FULL_CONFIGMAP, _make_submit_args(), {"intention": "release"})
@@ -952,6 +980,68 @@ def test_submit_batch_includes_intention_label(tmp_path) -> None:
 
     cmd = mock_run.call_args.args[0]
     assert any("internal-services.appstudio.openshift.io/intention=release" in a for a in cmd)
+
+
+def test_submit_batch_logs_completed_with_duration_and_pipeline(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """submit_batch logs completion with pipeline name and elapsed time."""
+    cfg = get_submit_config(_FULL_CONFIGMAP, _make_submit_args(), {})
+    batch_file = tmp_path / "batch_0000.txt"
+    batch_file.write_text("base64content==")
+
+    with patch("rh_direct_sign_image.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with caplog.at_level(logging.INFO, logger="release"):
+            submit_batch(batch_file, cfg)
+
+    assert any(
+        # "container-signing" is the default pipeline name from _make_submit_args()
+        "container-signing" in r.message
+        and re.search(r"completed successfully in \d+\.\d+s", r.message)
+        for r in caplog.records
+    )
+
+
+def test_submit_batch_raises_on_nonzero_returncode(tmp_path: Path) -> None:
+    """submit_batch raises RuntimeError with pipeline name and stderr on failure."""
+    cfg = get_submit_config(_FULL_CONFIGMAP, _make_submit_args(), {})
+    batch_file = tmp_path / "batch_0000.txt"
+    batch_file.write_text("base64content==")
+
+    with patch("rh_direct_sign_image.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="IR created", stderr="some error"
+        )
+        with pytest.raises(RuntimeError, match="pipeline 'container-signing': some error"):
+            submit_batch(batch_file, cfg)
+
+
+def test_submit_batch_logs_stdout_and_stderr_on_failure(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """submit_batch logs both stdout and stderr from the internal-request on failure."""
+    cfg = get_submit_config(_FULL_CONFIGMAP, _make_submit_args(), {})
+    batch_file = tmp_path / "batch_0000.txt"
+    batch_file.write_text("base64content==")
+
+    with patch("rh_direct_sign_image.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="InternalRequest 'mock-container-signing' created.",
+            stderr="error: request timed out",
+        )
+        with caplog.at_level(logging.ERROR, logger="release"):
+            with pytest.raises(RuntimeError):
+                submit_batch(batch_file, cfg)
+
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert any(
+        "container-signing" in r.message
+        and "InternalRequest 'mock-container-signing' created." in r.message
+        and "error: request timed out" in r.message
+        for r in error_records
+    )
 
 
 # --- submit_batches ---
@@ -1006,7 +1096,7 @@ def test_submit_batches_logs_all_succeeded(tmp_path) -> None:
     ):
         submit_batches(tmp_path, cfg)
 
-    mock_logger.info.assert_any_call("Batch submission summary: %d succeeded, %d failed", 3, 0)
+    mock_logger.info.assert_any_call("Batch request summary: %d succeeded, %d failed", 3, 0)
 
 
 def test_submit_batches_logs_partial_failure_counts(tmp_path) -> None:
@@ -1030,7 +1120,7 @@ def test_submit_batches_logs_partial_failure_counts(tmp_path) -> None:
     ):
         submit_batches(tmp_path, cfg)
 
-    mock_logger.info.assert_any_call("Batch submission summary: %d succeeded, %d failed", 2, 1)
+    mock_logger.info.assert_any_call("Batch request summary: %d succeeded, %d failed", 2, 1)
 
 
 def test_submit_batches_raises_after_logging_summary(tmp_path) -> None:
@@ -1040,7 +1130,7 @@ def test_submit_batches_raises_after_logging_summary(tmp_path) -> None:
 
     with (
         patch("rh_direct_sign_image.submit_batch", side_effect=RuntimeError("request failed")),
-        pytest.raises(RuntimeError, match="1 batch.*failed"),
+        pytest.raises(RuntimeError, match="1 batch request.*failed"),
     ):
         submit_batches(tmp_path, cfg)
 
@@ -1070,12 +1160,11 @@ def test_setup_argparser_submit_requests_defaults(tmp_path) -> None:
             str(sign),
             "--requester",
             "tester",
-            "--pipeline-image",
-            "quay.io/signing/pipeline:latest",
         ]
     )
 
     assert args.submit_requests is False
+    assert args.pipeline_image == ""
     assert args.concurrent_limit == 8
     assert args.request_timeout == "1800"
     assert args.pipeline_timeout == "0h30m0s"
@@ -1099,6 +1188,7 @@ def test_main_submits_batches_when_flag_set(tmp_path) -> None:
     output_dir = tmp_path / "batches"
 
     with (
+        patch("rh_direct_sign_image.pyxis._get_session"),
         patch(
             "rh_direct_sign_image.get_configmap",
             return_value=_FULL_CONFIGMAP,
@@ -1158,6 +1248,7 @@ def test_main_uses_temp_dir_when_output_not_specified(tmp_path) -> None:
     data_path.write_text(json.dumps(data_file))
 
     with (
+        patch("rh_direct_sign_image.pyxis._get_session"),
         patch(
             "rh_direct_sign_image.get_configmap",
             return_value=_FULL_CONFIGMAP,
@@ -1215,6 +1306,7 @@ def test_main_always_writes_batches(tmp_path) -> None:
     data_path.write_text(json.dumps(data_file))
 
     with (
+        patch("rh_direct_sign_image.pyxis._get_session"),
         patch(
             "rh_direct_sign_image.get_configmap",
             return_value={"data": {"SIG_KEY_NAME": "key-a"}},

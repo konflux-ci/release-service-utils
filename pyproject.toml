@@ -26,6 +26,8 @@ dependencies = [
     "confluent-kafka",
     "python-gitlab>=4.0",
     "python-dotenv>=1.0.0",
+    "pulp-tool @ git+https://github.com/konflux-ci/pulp-tool.git",
+    "jq",
 ]
 
 [tool.black]

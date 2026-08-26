@@ -46,6 +46,19 @@ CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 logger = logging.getLogger(__name__)
 
 
+def _is_staging_quay_url(quay_url: str) -> bool:
+    """Return True if quay_url targets the nonprod (staging) artifact path.
+
+    Staging releases route through the nonprod Quay path (set based on
+    release intention in release-service-catalog's
+    tasks/managed/push-artifacts-to-cdn/push-artifacts-to-cdn.yaml) and sign
+    with a certificate in the Local Machine store, so signtool needs the
+    /sm flag only for those. Production keeps using its HSM-backed cert in
+    the Current User store.
+    """
+    return "/nonprod" in quay_url
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse and return CLI arguments."""
     p = argparse.ArgumentParser(prog=PROG)
@@ -63,8 +76,10 @@ def _build_batch_script(
     unsigned_digest: str,
     pipeline_run_uid: str,
     windows_temp_dir: str,
+    use_machine_store: bool = False,
 ) -> str:
     """Build the remote batch script that pulls, signs, verifies, and pushes binaries."""
+    sm_flag = " /sm" if use_machine_store else ""
     return f"""
 mkdir %TEMP%\\{windows_temp_dir} && cd /d %TEMP%\\{windows_temp_dir}
 @echo off
@@ -75,7 +90,8 @@ REM The content is extracted to unsigned\\windows with os/arch/ subdirectories
 
 REM Recursively sign all files in unsigned\\windows directory tree
 for /r unsigned\\windows %%f in (*) do (
-  signtool sign /v /n "Red Hat" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "%%f"
+  signtool sign{sm_flag} /v /n "Red Hat" /fd SHA256 ^
+    /tr http://timestamp.digicert.com /td SHA256 "%%f"
   if errorlevel 1 (
     echo Signing of %%f failed
     exit /B %ERRORLEVEL%
@@ -266,6 +282,7 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
             unsigned_digest=unsigned_digest,
             pipeline_run_uid=pipeline_run_uid,
             windows_temp_dir=windows_temp_dir,
+            use_machine_store=_is_staging_quay_url(quay_url),
         )
 
         fd, script_path = tempfile.mkstemp(suffix=".bat")

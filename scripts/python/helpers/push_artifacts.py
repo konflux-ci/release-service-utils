@@ -47,6 +47,7 @@ import tempfile
 from pathlib import Path
 
 import disk_image_utils
+import content_gateway
 import publish_to_cgw_wrapper
 import pulp_push_wrapper
 import yaml  # type: ignore
@@ -188,16 +189,20 @@ def _push_component_to_pulp(
                 continue
 
             source_filename = Path(source_path).name
-            # Handle windows .tar.gz/.tar → .zip conversion
+            # Windows sources are declared as .tar.gz, but this pipeline repackages
+            # Windows binaries as .zip after signing (see compress_artifacts.py). Use the
+            # real .zip name on disk instead of the declared name so we copy the correct
+            # file and publish it to Pulp/Customer Portal under its actual extension.
             if "windows" in source_filename:
-                for old_ext, new_ext in [(".tar.gz", ".zip"), (".tar", ".zip")]:
-                    if source_filename.endswith(old_ext):
-                        candidate = source_filename[: -len(old_ext)] + new_ext
-                        if (component_dir / candidate).exists():
-                            source_filename = candidate
-                            if dest_filename.endswith(old_ext):
-                                dest_filename = dest_filename[: -len(old_ext)] + new_ext
-                        break
+                zip_filename = content_gateway.windows_zip_filename(source_filename)
+                zip_on_disk = component_dir / zip_filename
+                if zip_filename != source_filename and zip_on_disk.is_file():
+                    source_filename = zip_filename
+                    if dest_filename:
+                        dest_name = Path(dest_filename).name
+                        dest_zip = content_gateway.windows_zip_filename(dest_name)
+                        if dest_zip != dest_name:
+                            dest_filename = dest_zip
 
             if not dest_filename:
                 dest_filename = source_filename
@@ -381,7 +386,7 @@ def run(exodus_gw_env: str, cgw_hostname: str, cert_expiration_warn_days: int) -
 
     cgw_push = any(bool(c.get("contentGateway")) for c in snapshot.get("components", []))
     if cgw_push:
-        logger.info("Publishing all components to CGW...")
+        logger.info("Publishing all components to CGW host=%s", cgw_hostname)
         if "developers.qa.redhat.com" in cgw_hostname:
             os.environ["HTTP_PROXY"] = "http://squid.corp.redhat.com:3128"
             os.environ["HTTPS_PROXY"] = "http://squid.corp.redhat.com:3128"

@@ -10,7 +10,11 @@ def inspect(
     *,
     config: bool = False,
     raw: bool = False,
+    no_tags: bool = False,
+    override_os: str | None = None,
+    override_arch: str | None = None,
     retry_times: int = 3,
+    check: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``skopeo inspect`` on a container image reference."""
     cmd = ["skopeo", "inspect", "--retry-times", str(retry_times)]
@@ -18,7 +22,23 @@ def inspect(
         cmd.append("--config")
     if raw:
         cmd.append("--raw")
+    if no_tags:
+        cmd.append("--no-tags")
+    if override_os:
+        cmd += ["--override-os", override_os]
+    if override_arch:
+        cmd += ["--override-arch", override_arch]
     cmd.append(f"docker://{image_ref}")
+    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+
+
+def list_tags(
+    repo: str,
+    *,
+    retry_times: int = 3,
+) -> subprocess.CompletedProcess[str]:
+    """Run ``skopeo list-tags`` on a repository reference."""
+    cmd = ["skopeo", "list-tags", "--retry-times", str(retry_times), f"docker://{repo}"]
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
@@ -27,7 +47,8 @@ def copy(
     dest: str,
     *,
     retry_times: int = 3,
+    check: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``skopeo copy`` to copy an image between transports."""
     cmd = ["skopeo", "copy", "--retry-times", str(retry_times), source, dest]
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return subprocess.run(cmd, capture_output=True, text=True, check=check)

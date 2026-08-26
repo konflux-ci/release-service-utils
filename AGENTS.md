@@ -15,6 +15,7 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - `templates/` — Jinja2 templates (advisory.yaml.jinja, GraphQL)
 - `utils/` — General utilities (apply_template, get_resource, find_matching_purl)
 - `integration-tests/` — Orchestration harness that detects which catalog E2E suites are affected by utils changes, patches a temporary catalog fork with the new image, and runs the matching tests
+- `schemas/` - Schema files to describe structs such as the `data` one used in various python scripts
 
 ## Python
 
@@ -23,7 +24,9 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - Type hints on all function signatures.
 - Docstrings on every module and public function (triple-double-quote, imperative mood).
 - Black formatter, line length 95. Flake8 linter, line length 95, E203 ignored.
-- Named loggers: `LOGGER = logging.getLogger("module_name")`.
+- Named loggers: `from logger import logger` (shared helper) in task scripts;
+  `logging.getLogger("module_name")` only in standalone helper submodules
+  (e.g. the artifact-signing pipeline).
 - argparse for CLI arguments; env vars for Tekton-injected config.
 - Entry point: `if __name__ == "__main__": raise SystemExit(main())`.
 - Exception chaining: always use `raise ... from e`.
@@ -32,6 +35,7 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - HTTP requests: use `http_client.get_text()` from helpers (retries, 429/404 backoff built in).
 - Tekton result files: use `tekton.result_paths_from_env()` to read env var paths, `tekton.CheckStepError` for step failures.
 - Cross-cutting helpers go in `scripts/python/helpers/`; task scripts go in `scripts/python/tasks/`.
+- Flag any function that is not called elsewhere; the unit tests for it do not count as being called elsewhere.
 
 ## Testing
 
@@ -39,7 +43,6 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - Unit tests are co-located with source files (e.g., `pyxis/test_pyxis.py` next to `pyxis/pyxis.py`).
 - Exception: `utils/` has tests in `utils/tests/`.
 - Mocking with `unittest.mock`: use `patch`, `MagicMock`, `monkeypatch` for env vars.
-- Inject dependencies as callable kwargs with real defaults, replaced only in tests.
 - Integration tests live in `integration-tests/` and are not run by pytest.
 - Test function names: `test_<what_is_being_tested>`. Type-hint test functions with `-> None`.
 
@@ -61,3 +64,13 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - Wrapper scripts call external tools (pubtools-pulp, pubtools-marketplacesvm, etc.) via subprocess or library APIs.
 - Internal task scripts (`scripts/python/tasks/internal/`) must catch all exceptions in `main()` and save errors to Tekton result files (the script itself must succeed).
 - Managed task scripts (`scripts/python/tasks/managed/`) must not catch exceptions in `main()` — let the script fail with traceback.
+
+## Skills
+
+AI skills are in `skills/`. Each skill has a `SKILL.md` following the [agentskills.io](https://agentskills.io) spec.
+Symlinked to `.claude/skills/` and `.cursor/skills/` for agent discovery.
+
+Available skills:
+
+- `writing-new-task-scripts` — how to create a new Python task script following repo conventions
+- `using-helpers` — catalog of shared helpers to avoid reinventing existing code

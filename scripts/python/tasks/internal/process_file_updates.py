@@ -9,7 +9,7 @@ configuration repositories, creating an MR for human review.
   ``FILE_UPDATES_SECRET_MOUNT``): ``gitlab_host``, ``gitlab_access_token``,
   ``git_author_name``, ``git_author_email``.
 * Clones ``--repo`` at ``--ref``, rebases on ``--upstream-repo``, applies path
-  seeds and YAML replacements (``yq``/``sed``), then commits or reuses an MR.
+  seeds and YAML replacements (``yq`` for key lookup), then commits or reuses an MR.
 * Writes ``RESULT_FILE_UPDATES_*`` and internal-request name results.
 * After a valid run with result env vars, almost always exits ``0``; failures use
   ``RESULT_FILE_UPDATES_STATE``. Invalid YAML on a replacement target exits ``1``.
@@ -23,12 +23,14 @@ Catalog Tekton tests mock ``git`` via ``tests/mocks/git`` on ``PATH``.
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import re
 import subprocess
 import sys
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -145,21 +147,37 @@ def gitlab_create_mr(
     )
 
 
-def list_konflux_open_mrs(upstream_repo: str, gitlab_client: gitlab.Gitlab) -> list[Any]:
-    """List open MRs in *upstream_repo* matching ``Konflux release`` (paginated)."""
+def iter_konflux_open_mrs(
+    upstream_repo: str,
+    gitlab_client: gitlab.Gitlab,
+    component_group: str,
+) -> Iterator[Any]:
+    """Yield open MRs in *upstream_repo* matching the component group.
+
+    Searches for ``[Konflux release] <component_group>:`` and yields only MRs whose
+    title starts with that prefix. The trailing ``:`` matches titles created by
+    ``commit_and_create_mr`` and avoids prefix collisions (e.g. group ``foo`` must
+    not match ``[Konflux release] foobar: ...``). This two-level filter (API search
+    + title check) also skips unrelated MRs that only mention the search term in
+    other fields, avoiding expensive git fetch operations.
+
+    Yields lazily so callers can stop early when a match is found.
+    """
     project_path = vcs_gitlab.gitlab_project_path(upstream_repo)
     try:
         project = gitlab_client.projects.get(project_path)
     except GitlabError as e:
         raise tekton.CheckStepError("getting GitLab project", e) from e
 
+    # Include the colon delimiter used in created MR titles so a shorter group
+    # name cannot match a longer one that shares the same prefix.
+    title_prefix = f"[Konflux release] {component_group}:"
     page = 1
-    found: list[Any] = []
     while True:
         try:
             batch = project.mergerequests.list(
                 state="opened",
-                search="Konflux release",
+                search=title_prefix,
                 per_page=100,
                 page=page,
             )
@@ -167,26 +185,23 @@ def list_konflux_open_mrs(upstream_repo: str, gitlab_client: gitlab.Gitlab) -> l
             raise tekton.CheckStepError("listing GitLab merge requests", e) from e
         if not batch:
             break
-        found.extend(batch)
+        for mr in batch:
+            mr_title = getattr(mr, "title", "") or ""
+            if mr_title.startswith(title_prefix):
+                yield mr
         page += 1
-    return found
 
 
 def blank_lines_before_yaml(target_file: Path) -> int:
     """Lines before first non-comment YAML line (matches legacy bash/sed numbering)."""
-    proc = subprocess.run(
-        [
-            "awk",
-            r"/[[:alpha:]]+/{ if(! match($0, \"^#\")) { print NR-1; exit } }",
-            str(target_file),
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if proc.returncode != 0 or not proc.stdout.strip():
+    try:
+        with target_file.open(encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                if re.search(r"[a-zA-Z]", line) and not line.lstrip().startswith("#"):
+                    return i
+    except OSError:
         return 0
-    return int(proc.stdout.strip().splitlines()[0])
+    return 0
 
 
 def parse_replacement_expression(replacement: str) -> tuple[str, str] | None:
@@ -204,7 +219,7 @@ def apply_replacement_block(
     replacement: str,
     temp_dir: Path,
 ) -> tuple[str | None, Path | None]:
-    """Apply one ``|search|replace|`` sed to a YAML block; write diff to *temp_dir*.
+    """Apply one ``|search|replace|`` to a YAML block; write diff to *temp_dir*.
 
     Returns ``(None, diff_path)`` on success or ``(error, diff_path)`` on failure.
     """
@@ -212,31 +227,36 @@ def apply_replacement_block(
     if parsed is None:
         return "Replace expression should be in '|search|replace|' format", None
 
-    search, replace = parsed
-    sed_expr = f"{start_block},+{value_size}s|{search}|{replace}|"
-    subprocess.run(["sed", "-i", sed_expr, str(target_file)], check=True)
+    search, replace_str = parsed
+    search_re = re.compile(search)
 
-    replace_str = replace
+    lines = target_file.read_text(encoding="utf-8").splitlines(keepends=True)
+    start_idx = start_block - 1
+    end_idx = start_idx + value_size + 1
+
+    for i in range(start_idx, min(end_idx, len(lines))):
+        lines[i] = search_re.sub(replace_str, lines[i])
+
+    target_file.write_text("".join(lines), encoding="utf-8")
+
+    result_lines = lines[start_idx:end_idx]
+    result_text = "".join(result_lines)
     result_path = temp_dir / "result.txt"
-    proc = subprocess.run(
-        ["sed", "-ne", f"{start_block},+{value_size}p", str(target_file)],
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    result_path.write_text(proc.stdout, encoding="utf-8")
+    result_path.write_text(result_text, encoding="utf-8")
 
     found_path = temp_dir / "found.txt"
+    found_text = found_path.read_text(encoding="utf-8") if found_path.exists() else ""
     diff_path = temp_dir / "diff.txt"
-    diff_proc = subprocess.run(
-        ["diff", "-u", str(found_path), str(result_path)],
-        text=True,
-        capture_output=True,
-        check=False,
+    diff_output = "".join(
+        difflib.unified_diff(
+            found_text.splitlines(keepends=True),
+            result_text.splitlines(keepends=True),
+            fromfile=str(found_path),
+            tofile=str(result_path),
+        )
     )
-    diff_path.write_text(diff_proc.stdout, encoding="utf-8")
+    diff_path.write_text(diff_output, encoding="utf-8")
 
-    result_text = result_path.read_text(encoding="utf-8")
     replaced_block_lines = len(result_text.splitlines())
     if replaced_block_lines != value_size + 1:
         return "Text block size differs from the original", diff_path
@@ -271,7 +291,7 @@ class PathProcessingState:
 
     replacements_update_error: str | None = None
     diff_path: Path | None = None
-    replacements_performed: int | None = None
+    replacements_performed: int = 0
     key_not_found: bool = False
 
 
@@ -400,7 +420,7 @@ def apply_replacements_for_entry(
     if replacements_length == 0:
         return None
 
-    state.replacements_performed = 0
+    performed_this_entry = 0
     blank_offset = blank_lines_before_yaml(target_file)
 
     yaml_check = subprocess.run(
@@ -462,11 +482,13 @@ def apply_replacements_for_entry(
             target_file, start_block, value_size, replacement, temp_dir
         )
         if err:
+            state.replacements_performed += performed_this_entry
             state.replacements_update_error = err
             state.diff_path = diff_path
             return None
-        state.replacements_performed += 1
+        performed_this_entry += 1
 
+    state.replacements_performed += performed_this_entry
     return None
 
 
@@ -546,9 +568,14 @@ def find_existing_mr_with_same_diff(
     repo_cwd: Path,
     temp_dir: Path,
     gitlab_client: gitlab.Gitlab,
+    component_group: str,
 ) -> str | None:
-    """Return result info when an open MR already has the same staged diff."""
-    for mr in list_konflux_open_mrs(upstream_repo, gitlab_client):
+    """Return result info when an open MR already has the same staged diff.
+
+    Uses lazy iteration to stop as soon as a matching MR is found, avoiding
+    unnecessary git fetch operations for remaining MRs.
+    """
+    for mr in iter_konflux_open_mrs(upstream_repo, gitlab_client, component_group):
         mr_num = mr.iid
         local_ref = _fetch_merge_request_head(repo_cwd, mr_num)
         final_diff = vcs_git.working_tree_diff(repo_cwd, cached=True, other_ref=local_ref)
@@ -631,7 +658,7 @@ def run_file_updates(
         return "nothing needs change\n", "Success", 0
 
     existing_mr = find_existing_mr_with_same_diff(
-        upstream_repo, repo_cwd, temp_dir, gitlab_client
+        upstream_repo, repo_cwd, temp_dir, gitlab_client, component_group
     )
     if existing_mr is not None:
         return existing_mr, "Success", 0

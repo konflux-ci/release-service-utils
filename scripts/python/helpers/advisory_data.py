@@ -11,6 +11,23 @@ from typing import Any
 
 import yaml
 
+DEFAULT_ADVISORY_TYPE = "RHBA"
+VALID_ADVISORY_TYPES = frozenset({"RHSA", "RHBA", "RHEA"})
+# "image" is the default content type and is intentionally omitted (uses .content.images).
+ARTIFACT_CONTENT_TYPES = frozenset({"binary", "generic", "disk-image", "rpm"})
+# Advisory GitLab instances (prod and staging) each have matching secrets.
+ADVISORY_SECRET_STAGE = "create-advisory-stage-secret"
+ADVISORY_SECRET_PROD = "create-advisory-prod-secret"
+ERRATA_SECRET_STAGE = "errata-stage-service-account"
+ERRATA_SECRET_PROD = "errata-prod-service-account"
+
+
+def advisory_secret_name(environment: str) -> str:
+    """Return the advisory secret name for *environment* (``"stage"`` or ``"production"``)."""
+    if environment == "stage":
+        return ADVISORY_SECRET_STAGE
+    return ADVISORY_SECRET_PROD
+
 
 def _strip_checksum_from_purl(purl: str) -> str:
     """Strip `checksum` query/fragment parts from a package URL for comparison."""
@@ -89,6 +106,32 @@ def decode_advisory_param(advisory_b64gzip: str) -> dict[str, Any]:
     b64_decoded = base64.standard_b64decode(advisory_b64gzip.strip())
     gzip_decoded = gzip.decompress(b64_decoded)
     return json.loads(gzip_decoded.decode("utf-8"))
+
+
+def encode_advisory_param(advisory: dict[str, Any]) -> str:
+    """Gzip and base64-encode advisory JSON for InternalRequest parameters."""
+    raw = json.dumps(advisory, separators=(",", ":")).encode("utf-8")
+    compressed = gzip.compress(raw)
+    return base64.standard_b64encode(compressed).decode("ascii")
+
+
+def first_mapping_content_type(data: dict[str, Any]) -> str:
+    """Return the first component content type from mapping.components."""
+    components = data.get("mapping", {}).get("components")
+    if not isinstance(components, list):
+        return ""
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        content_gateway = component.get("contentGateway")
+        if isinstance(content_gateway, dict):
+            content_type = content_gateway.get("contentType")
+            if content_type:
+                return str(content_type)
+        content_type = component.get("contentType")
+        if content_type:
+            return str(content_type)
+    return ""
 
 
 def content_array_from_decoded(root: dict[str, Any], content_list_path: str) -> list[Any]:
@@ -221,11 +264,33 @@ def template_context_merge(
     }
 
 
+class _Dumper(yaml.SafeDumper):
+    pass
+
+
+def _quote_numeric_looking_strings(dumper: yaml.Dumper, data: str) -> yaml.ScalarNode:
+    # PyYAML writes "9.9" or "1" as float/int without quotes.
+    # Force double quotes when the resolver would mistake the value.
+    # See https://github.com/yaml/pyyaml/issues/98
+    if dumper.resolve(yaml.ScalarNode, data, (True, False)) != "tag:yaml.org,2002:str":
+        return yaml.ScalarNode("tag:yaml.org,2002:str", data, style='"')
+    # Force double quotes on strings like "1.0.1" as PyYAML
+    # doesn't see them as ambiguous.
+    is_version = data and "." in data and data.replace(".", "").isdigit()
+    if is_version:
+        return yaml.ScalarNode("tag:yaml.org,2002:str", data, style='"')
+    return yaml.SafeDumper.represent_str(dumper, data)
+
+
+_Dumper.add_representer(str, _quote_numeric_looking_strings)
+
+
 def json_dict_to_yaml_text(document: Any) -> str:
     """Serialize *document* to multi-line YAML (readable advisory file)."""
     # `sort_keys=False` keeps stable-ish ordering for tag-preservation checks.
-    return yaml.safe_dump(
+    return yaml.dump(
         document,
+        Dumper=_Dumper,
         default_flow_style=False,
         sort_keys=False,
         allow_unicode=True,
@@ -236,7 +301,7 @@ def spec_content_json_pointer(content_type: str) -> str:
     """Return the dotted *content_list_path* for *content_type* (under `spec` in YAML)."""
     if content_type == "image":
         return ".content.images"
-    if content_type in ("binary", "generic", "rpm", "disk-image"):
+    if content_type in ARTIFACT_CONTENT_TYPES:
         return ".content.artifacts"
     msg = f"Unsupported contentType: {content_type}"
     raise ValueError(msg)
@@ -304,3 +369,22 @@ def filter_content_by_existing(
 
     # Compact JSON (no extra spaces) for small temp files in the idempotency loop.
     return json.dumps(filtered, separators=(",", ":"))
+
+
+def generate_purl_rpm(
+    name: str,
+    version: str,
+    release: str,
+    arch: str,
+    distro: str,
+    repository_id: str,
+    vendor: str = "redhat",
+) -> str:
+    """Generate an RPM Package URL."""
+    purl = f"pkg:rpm/{vendor}/{name}@{version}-{release}?arch={arch}"
+    # Distro and repository_id are only added when non empty.
+    if distro:
+        purl += f"&distro={distro}"
+    if repository_id:
+        purl += f"&repository_id={repository_id}"
+    return purl

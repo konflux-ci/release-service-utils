@@ -26,13 +26,13 @@ jobs:
             -o /usr/local/bin/yq
           sudo chmod +x /usr/local/bin/yq
       - name: Check out repo
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
       - name: Black Lint
         uses: psf/black@87928e6d6761a4a6d22250e1fee5601b3998086e  # stable
       - name: Setup python environment for flake8 check
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
         with:
           python-version: "3.12"  # Same as in Dockerfile
       - name: flake8 Lint

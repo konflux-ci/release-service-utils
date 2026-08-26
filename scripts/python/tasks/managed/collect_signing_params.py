@@ -30,14 +30,24 @@ RESULT_KEYS = (
 )
 
 USAGE = """\
-usage: collect_signing_params.py --results-dir DIR [--config-map-name NAME] \
+usage: python3 -m collect_signing_params [--config-map-name NAME] \
 [--config-map-namespace NAMESPACE]
 
 Collect signing parameters from a Kubernetes ConfigMap and write them to
-Tekton result files.
+Tekton result files. All result file path environment variables are required;
+the script exits with code 1 if any are missing.
 
-required arguments:
-  --results-dir DIR           Directory to write Tekton result files
+environment variables (all required):
+  RESULT_ENABLE_KEYLESS_SIGNING   Path to enableKeylessSigning result file
+  RESULT_DEFAULT_OIDC_ISSUER      Path to defaultOIDCIssuer result file
+  RESULT_REKOR_EXTERNAL_URL       Path to rekorExternalUrl result file
+  RESULT_REKOR_URL                Path to rekorUrl result file
+  RESULT_FULCIO_EXTERNAL_URL      Path to fulcioExternalUrl result file
+  RESULT_FULCIO_URL               Path to fulcioUrl result file
+  RESULT_TUF_EXTERNAL_URL         Path to tufExternalUrl result file
+  RESULT_TUF_URL                  Path to tufUrl result file
+  RESULT_BUILD_IDENTITY_REGEXP    Path to buildIdentityRegexp result file
+  RESULT_TEKTON_CHAINS_IDENTITY   Path to tektonChainsIdentity result file
 
 optional arguments:
   --config-map-name NAME      ConfigMap name (default: cluster-config)
@@ -107,16 +117,16 @@ def extract_signing_params_from_configmap(
     return params
 
 
-def write_result_files(results_dir: Path, params: dict[str, str]) -> None:
+def write_result_files(params: dict[str, str], result_paths: dict[str, Path]) -> None:
     """Write signing parameters to Tekton result files.
 
     Args:
-        results_dir: The directory containing Tekton result files.
         params: A dictionary of result keys to their string values.
+        result_paths: A dictionary mapping result keys to their file paths.
 
     """
     for key in RESULT_KEYS:
-        result_path = results_dir / key
+        result_path = result_paths[key]
         value = params.get(key, "")
         result_path.write_text(value, encoding="utf-8")
         logger.info("Wrote result %s = %s", key, value if value else "(empty)")
@@ -125,14 +135,14 @@ def write_result_files(results_dir: Path, params: dict[str, str]) -> None:
 def collect_signing_params(
     config_map_name: str,
     config_map_namespace: str,
-    results_dir: Path,
+    result_paths: dict[str, Path],
 ) -> dict[str, str]:
     """Collect signing parameters from a ConfigMap and write to result files.
 
     Args:
         config_map_name: The name of the ConfigMap to read.
         config_map_namespace: The namespace where the ConfigMap is located.
-        results_dir: The directory to write Tekton result files.
+        result_paths: A dictionary mapping result keys to their file paths.
 
     Returns:
         The collected signing parameters as a dictionary.
@@ -153,7 +163,7 @@ def collect_signing_params(
         logger.info("Using empty signing parameters with keyless signing disabled")
         params = get_empty_signing_params()
 
-    write_result_files(results_dir, params)
+    write_result_files(params, result_paths)
     return params
 
 
@@ -167,18 +177,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         Parsed arguments namespace.
 
     """
-    parser = tekton.tekton_argument_parser("collect_signing_params.py")
+    parser = tekton.tekton_argument_parser("collect_signing_params")
     parser.add_argument("--config-map-name", default="cluster-config")
     parser.add_argument("--config-map-namespace", default="konflux-info")
-    parser.add_argument("--results-dir")
-
-    if argv is not None and ("-h" in argv or "--help" in argv):
-        tekton.exit_with_usage(USAGE)
+    parser.add_argument("-h", "--help", action="store_true")
 
     args = parser.parse_args(argv)
 
-    missing = tekton.missing_blank_option_values(("--results-dir", args.results_dir))
-    if missing:
+    if args.help:
         tekton.exit_with_usage(USAGE)
 
     return args
@@ -187,10 +193,48 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments, collect signing parameters, and write Tekton results."""
     args = parse_args(argv)
+
+    (
+        enable_keyless_signing_path,
+        default_oidc_issuer_path,
+        rekor_external_url_path,
+        rekor_url_path,
+        fulcio_external_url_path,
+        fulcio_url_path,
+        tuf_external_url_path,
+        tuf_url_path,
+        build_identity_regexp_path,
+        tekton_chains_identity_path,
+    ) = tekton.result_paths_from_env(
+        "RESULT_ENABLE_KEYLESS_SIGNING",
+        "RESULT_DEFAULT_OIDC_ISSUER",
+        "RESULT_REKOR_EXTERNAL_URL",
+        "RESULT_REKOR_URL",
+        "RESULT_FULCIO_EXTERNAL_URL",
+        "RESULT_FULCIO_URL",
+        "RESULT_TUF_EXTERNAL_URL",
+        "RESULT_TUF_URL",
+        "RESULT_BUILD_IDENTITY_REGEXP",
+        "RESULT_TEKTON_CHAINS_IDENTITY",
+    )
+
+    result_paths = {
+        "enableKeylessSigning": enable_keyless_signing_path,
+        "defaultOIDCIssuer": default_oidc_issuer_path,
+        "rekorExternalUrl": rekor_external_url_path,
+        "rekorUrl": rekor_url_path,
+        "fulcioExternalUrl": fulcio_external_url_path,
+        "fulcioUrl": fulcio_url_path,
+        "tufExternalUrl": tuf_external_url_path,
+        "tufUrl": tuf_url_path,
+        "buildIdentityRegexp": build_identity_regexp_path,
+        "tektonChainsIdentity": tekton_chains_identity_path,
+    }
+
     collect_signing_params(
         config_map_name=args.config_map_name,
         config_map_namespace=args.config_map_namespace,
-        results_dir=Path(args.results_dir),
+        result_paths=result_paths,
     )
     return 0
 

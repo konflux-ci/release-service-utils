@@ -39,6 +39,25 @@ def _setup_mounts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# _is_staging_quay_url
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "quay_url,expected",
+    [
+        ("quay.io/konflux-artifacts/nonprod", True),
+        ("quay.io/konflux-artifacts/prod", False),
+        ("quay.io/konflux-artifacts", False),
+        ("", False),
+    ],
+)
+def test_is_staging_quay_url(quay_url: str, expected: bool) -> None:
+    """_is_staging_quay_url matches the nonprod path and rejects others."""
+    assert sign_windows._is_staging_quay_url(quay_url) is expected
+
+
+# ---------------------------------------------------------------------------
 # _build_batch_script
 # ---------------------------------------------------------------------------
 
@@ -61,6 +80,24 @@ def test_build_batch_script_contains_signtool() -> None:
     assert "sha256:unsigned" in script
     assert "uid-123-windows" in script
     assert "Red Hat" in script
+    assert "/sm" not in script
+
+
+def test_build_batch_script_use_machine_store_adds_sm_flag() -> None:
+    """The /sm flag is added to both signtool calls when use_machine_store is True."""
+    script = sign_windows._build_batch_script(
+        quay_url="quay.io/org",
+        quay_user="user",
+        quay_pass="pass",
+        component_name="prod",
+        unsigned_digest="sha256:unsigned",
+        pipeline_run_uid="uid-123",
+        windows_temp_dir="uid-123_prod",
+        use_machine_store=True,
+    )
+    assert 'signtool sign /sm /v /n "Red Hat"' in script
+    assert 'signtool verify /v /pa "%%f"' in script
+    assert "verify /sm" not in script
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +170,45 @@ def test_run_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
     digest = (comp_dir / "signed_windows_digest.txt").read_text()
     assert digest == "sha256:signed"
+
+
+def test_run_passes_machine_store_flag_for_staging_quay_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A nonprod quay_url results in /sm being written to the batch script."""
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps({"components": [{"name": "prod"}]}))
+    monkeypatch.setattr(sign_windows, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    (comp_dir / "has_windows").touch()
+    (comp_dir / "unsigned_windows_digest.txt").write_text("sha256:unsigned")
+
+    written_scripts = []
+
+    def fake_write(self, data):
+        written_scripts.append(data)
+        return len(data)
+
+    def fake_subprocess_run(cmd, **kwargs):
+        if cmd[0] == "ssh" and "Remove-Item" not in " ".join(str(a) for a in cmd):
+            m = mock.Mock(returncode=0)
+            m.stdout = "Digest: sha256:signed\n"
+            m.stderr = ""
+            return m
+        return mock.Mock(returncode=0, stdout="", stderr="")
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch("subprocess.check_call"),
+        mock.patch("subprocess.run", side_effect=fake_subprocess_run),
+        mock.patch("os.write", side_effect=fake_write),
+    ):
+        sign_windows.run("quay.io/konflux-artifacts/nonprod", "uid-123")
+
+    assert any("/sm" in s.decode() for s in written_scripts)
 
 
 def test_run_raises_on_signing_failure(

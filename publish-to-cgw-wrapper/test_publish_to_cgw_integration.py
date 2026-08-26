@@ -1,3 +1,5 @@
+"""Integration tests for publish_to_cgw_wrapper covering multi-component main() flows."""
+
 import os
 import json
 import pytest
@@ -7,6 +9,7 @@ import publish_to_cgw_wrapper as cgw_wrapper
 
 @pytest.fixture
 def cosign_content_dir(tmpdir):
+    """Create a temp content directory with cosign-related files."""
     content_dir = tmpdir.mkdir("content_dir_1")
     files = [
         "cosign",
@@ -25,6 +28,7 @@ def cosign_content_dir(tmpdir):
 
 @pytest.fixture
 def gitsign_content_dir(tmpdir):
+    """Create a temp content directory with gitsign-related files."""
     content_dir = tmpdir.mkdir("content_dir_2")
     files = [
         "gitsign",
@@ -42,6 +46,7 @@ def gitsign_content_dir(tmpdir):
 
 @pytest.fixture
 def data_json(cosign_content_dir, gitsign_content_dir):
+    """Build a snapshot data_json with two components backed by the temp content dirs."""
     return {
         "application": "test-app",
         "artifacts": {},
@@ -161,8 +166,8 @@ def test_main_creates_files(
     mock_call,
     data_json,
 ):
-    """
-    Test main() for two components where all files are created:
+    """Test main() for two components where all files are created.
+
     - First component processes 6 files (3 checksums + 3 RPA) and creates all 6.
     - Second component processes 6 files (3 checksums + 3 RPA) and creates all 6.
     """
@@ -218,8 +223,8 @@ def test_main_creates_files(
 @patch.dict(os.environ, {"CGW_USERNAME": "user", "CGW_PASSWORD": "password"})
 @patch("sys.argv", new_callable=lambda: ["publish_to_cgw_wrapper.py"])
 def test_main_skips_3_creates_2(mock_sys_argv, mock_call, data_json, metadata):
-    """
-    Test main() for two components:
+    """Test main() for two components.
+
     - First component should skip 3 existing files and create 3 new files.
     - Second component should create 6 new files with no skips.
     """
@@ -277,8 +282,8 @@ def test_main_skips_3_creates_2(mock_sys_argv, mock_call, data_json, metadata):
 @patch.dict(os.environ, {"CGW_USERNAME": "user", "CGW_PASSWORD": "password"})
 @patch("sys.argv", new_callable=lambda: ["publish_to_cgw_wrapper.py"])
 def test_main_partial_skip_fail_rollback(mock_sys_argv, mock_call, data_json):
-    """
-    Test main() with 2 components where:
+    """Test main() with 2 components, exercising a mid-run failure and rollback.
+
     - The first component successfully creates 6 files.
     - The second component creates 1 file, then fails on the next file.
     - A failure in the 2nd component triggers rollback of its created
@@ -326,9 +331,8 @@ def test_main_partial_skip_fail_rollback(mock_sys_argv, mock_call, data_json):
         MagicMock(),  # delete file 4572
     ]
 
-    with pytest.raises(SystemExit) as exc:
+    with pytest.raises(RuntimeError, match="File creation failed in second component"):
         cgw_wrapper.main()
-    assert exc.value.code == 1
 
     expected_delete_calls = [
         # Second component file

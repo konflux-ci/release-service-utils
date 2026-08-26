@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""
-Map a release-service-utils diff to catalog ``PIPELINE_TEST_SUITE`` /
-``PIPELINE_USED`` strings.
+"""Map a release-service-utils diff to catalog pipeline test suite strings.
+
+Maps changed utils paths to catalog ``PIPELINE_TEST_SUITE`` / ``PIPELINE_USED``
+strings.
 
 1. Build search tokens from changed paths using the utils ``Dockerfile``
    (``COPY`` into ``/home``, ``PATH``) via :mod:`find_search_tokens_from_dockerfile`
@@ -13,8 +14,9 @@ Map a release-service-utils diff to catalog ``PIPELINE_TEST_SUITE`` /
    ``_catalog_stdin_task_paths_to_testcase_tokens`` (same mapping as catalog PR
    tooling).
 4. Changes under **utils** ``integration-tests/`` (except ``run-test.sh`` and
-   any ``*.md`` file), or changes to the repo-root ``Dockerfile``, force all catalog
-   RPA suites—plumbing and image layout are not reliably reflected in Task YAML
+   any ``*.md`` file), changes to the repo-root ``Dockerfile``, or changes to
+   ``schemas/dataKeys.json``, force all catalog RPA suites—plumbing, image
+   layout, and the shared data schema are not reliably reflected in Task YAML
    substring search alone.
 5. Changes under ``scripts/python/helpers/*.py`` also add repo paths for task
    scripts that import those modules (see `helper_task_import_graph`) so
@@ -134,11 +136,12 @@ def _all_managed_pipeline_tokens_from_rpa(catalog: Path) -> set[str]:
 
 
 def _changed_paths_trigger_global_catalog_run(changed: list[str]) -> bool:
-    """True if changed paths should force union of all catalog RPA pipeline tokens.
+    """Return whether changed paths force union of all catalog RPA pipeline tokens.
 
-    Triggers when the repo-root ``Dockerfile`` changes, or when any path under
-    ``integration-tests/`` changes except ``integration-tests/run-test.sh`` and
-    except Markdown files (``*.md``, case-insensitive).
+    Triggers when the repo-root ``Dockerfile`` or ``schemas/dataKeys.json``
+    changes, or when any path under ``integration-tests/`` changes except
+    ``integration-tests/run-test.sh`` and except Markdown files (``*.md``,
+    case-insensitive).
     """
     for raw in changed:
         s = raw.strip()
@@ -148,6 +151,8 @@ def _changed_paths_trigger_global_catalog_run(changed: list[str]) -> bool:
         if not p:
             continue
         if p == "Dockerfile":
+            return True
+        if p == "schemas/dataKeys.json":
             return True
         if Path(p).suffix.lower() == ".md":
             continue

@@ -9,16 +9,18 @@ import json
 import logging
 import re
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import pyxis
 from kubectl import get_configmap
 from logger import logger as LOGGER
 from oras_utils import oras_resolve
 from subprocess_cmd import run_cmd
+
+import pyxis
 
 PYXIS_INSTANCE_MAP = {
     "production": "https://graphql-pyxis.api.redhat.com/graphql/",
@@ -61,7 +63,6 @@ class SubmitConfig:
     """Configuration for submitting signing batches via the internal-request CLI."""
 
     pipeline: str
-    pipeline_image: str
     requester: str
     pyxis_ssl_cert_secret_name: str
     pyxis_graphql_url: str
@@ -78,6 +79,7 @@ class SubmitConfig:
     pipelinerun_uid: str
     concurrent_limit: int
     intention: str
+    pipeline_image: str = ""
 
 
 def validate_file(arg: str) -> Path:
@@ -159,8 +161,11 @@ def setup_argparser() -> argparse.ArgumentParser:
     )
     submit.add_argument(
         "--pipeline-image",
-        required=True,
-        help="Container image override for the signing pipeline",
+        default="",
+        help=(
+            "[DEPRECATED] The image reference is now managed internally"
+            " by the pipeline. This option will be removed in a future release"
+        ),
     )
     submit.add_argument(
         "--requester",
@@ -671,8 +676,10 @@ def submit_batch(batch_file: Path, config: SubmitConfig) -> None:
         "internal-request",
         "--pipeline",
         config.pipeline,
-        "-p",
-        f"pipeline_image={config.pipeline_image}",
+    ]
+    if config.pipeline_image:
+        cmd += ["-p", f"pipeline_image={config.pipeline_image}"]
+    cmd += [
         "-p",
         f"signing_requests={batch_content}",
         "-p",
@@ -714,14 +721,37 @@ def submit_batch(batch_file: Path, config: SubmitConfig) -> None:
     ]
 
     LOGGER.debug("Submitting batch with command: %s", " ".join(cmd))
+    start = time.monotonic()
     result = run_cmd(
         cmd,
         check=False,
     )
+    duration = time.monotonic() - start
+    stdout = result.stdout.strip()
+    stderr = result.stderr.strip()
     if result.returncode != 0:
-        LOGGER.error("Failed to submit batch '%s': %s", batch_file, result.stderr.strip())
-        raise RuntimeError(f"Failed to submit batch '{batch_file}': {result.stderr.strip()}")
-    LOGGER.info("Submitted batch '%s' successfully", batch_file)
+        LOGGER.error(
+            "Internal request failed for batch '%s', pipeline '%s'.\n"
+            "stdout:\n%s\nstderr:\n%s",
+            batch_file,
+            config.pipeline,
+            stdout,
+            stderr,
+        )
+        raise RuntimeError(
+            f"Internal request failed for batch '{batch_file}',"
+            f" pipeline '{config.pipeline}': {stderr}"
+        )
+    LOGGER.info(
+        "Batch '%s' for pipeline '%s' completed successfully in %.1fs",
+        batch_file,
+        config.pipeline,
+        duration,
+    )
+    if stdout:
+        LOGGER.debug("internal-request stdout:\n%s", stdout)
+    if stderr:
+        LOGGER.debug("internal-request stderr:\n%s", stderr)
 
 
 def submit_batches(batch_dir: Path, config: SubmitConfig) -> None:
@@ -753,11 +783,11 @@ def submit_batches(batch_dir: Path, config: SubmitConfig) -> None:
                 failures.append(exc)
 
     succeeded = len(batch_files) - len(failures)
-    LOGGER.info("Batch submission summary: %d succeeded, %d failed", succeeded, len(failures))
+    LOGGER.info("Batch request summary: %d succeeded, %d failed", succeeded, len(failures))
     if failures:
         for i, failure in enumerate(failures, 1):
-            LOGGER.error("Batch submission failure %d/%d: %s", i, len(failures), failure)
-        raise RuntimeError(f"{len(failures)} batch(es) failed during submission")
+            LOGGER.error("Batch request failure %d/%d: %s", i, len(failures), failure)
+        raise RuntimeError(f"{len(failures)} batch request(s) failed")
 
 
 def main() -> int:
@@ -769,6 +799,9 @@ def main() -> int:
         LOGGER.setLevel(logging.DEBUG if args.verbose else logging.INFO)
         pyxis_url = PYXIS_INSTANCE_MAP[args.pyxis_server]
         LOGGER.info("Using Pyxis instance URL: %s", pyxis_url)
+        # Retry all HTTP methods including POST — needed for GraphQL queries.
+        # Default retry excludes POST, which misses 503s from the GraphQL endpoint.
+        pyxis.session = pyxis._get_session(retry_allowed_methods=None)
         sign_registry_access_repos = set(
             args.sign_registry_access_file.read_text().splitlines()
         )
