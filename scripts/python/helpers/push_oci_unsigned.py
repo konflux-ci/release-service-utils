@@ -112,14 +112,11 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
 
         has_mac = (component_dir / "has_mac").exists()
         has_windows = (component_dir / "has_windows").exists()
-        has_linux = (component_dir / "has_linux").exists()
 
         if has_mac:
             (unsigned_dir / "macos").mkdir(parents=True, exist_ok=True)
         if has_windows:
             (unsigned_dir / "windows").mkdir(parents=True, exist_ok=True)
-        if has_linux:
-            (component_dir / "linux").mkdir(parents=True, exist_ok=True)
 
         _stage_file_entries(component.get("files") or [], component_dir, unsigned_dir)
         _stage_file_entries(

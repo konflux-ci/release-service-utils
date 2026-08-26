@@ -34,13 +34,11 @@ REQUIRED_ARGS = [
 ]
 
 
-def _setup_result_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
-    """Create result file paths and set the required env vars."""
+def _setup_result_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Create result file path and set the required env var."""
     rpath = tmp_path / "result"
-    cmap_path = tmp_path / "checksum_map"
     monkeypatch.setenv("RESULT_RESULT", str(rpath))
-    monkeypatch.setenv("RESULT_CHECKSUM_MAP", str(cmap_path))
-    return rpath, cmap_path
+    return rpath
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +96,7 @@ def test_parse_args_requires_pipeline_run_uid() -> None:
 
 def test_main_passes_signing_scripts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """main() forwards signing_script to sign_mac/sign_windows.run_custom_signing."""
-    rpath, cmap_path = _setup_result_env(tmp_path, monkeypatch)
+    rpath = _setup_result_env(tmp_path, monkeypatch)
 
     with (
         mock.patch.object(extract_oci_artifacts, "run") as mock_extract,
@@ -171,7 +169,7 @@ def test_main_writes_error_on_exception(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Tekton result file receives error text when a stage raises."""
-    rpath, cmap_path = _setup_result_env(tmp_path, monkeypatch)
+    rpath = _setup_result_env(tmp_path, monkeypatch)
 
     with mock.patch.object(
         extract_oci_artifacts, "run", side_effect=RuntimeError("extract boom")

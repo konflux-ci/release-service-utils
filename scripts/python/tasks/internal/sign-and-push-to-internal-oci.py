@@ -73,12 +73,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parse_args(argv[1:] if argv is not None else None)
 
-    rpath, cmap_path = tekton.result_paths_from_env(
-        "RESULT_RESULT",
-        "RESULT_CHECKSUM_MAP",
-    )
+    (rpath,) = tekton.result_paths_from_env("RESULT_RESULT")
 
-    checksum_map_ref = ""
     try:
         extract_oci_artifacts.run(args.concurrent_limit)
         push_oci_unsigned.run(args.quay_url, args.pipeline_run_uid)
@@ -98,11 +94,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     except Exception as exc:
         rpath.write_text(f"{PROG}: ERROR {exc}", encoding="utf-8")
-        cmap_path.write_text(checksum_map_ref, encoding="utf-8")
         return 0
 
     rpath.write_text("Success", encoding="utf-8")
-    cmap_path.write_text(checksum_map_ref, encoding="utf-8")
     return 0
 
 

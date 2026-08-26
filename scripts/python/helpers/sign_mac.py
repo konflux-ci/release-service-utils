@@ -469,7 +469,11 @@ def run_custom_signing(
         commit_sha = component.get("source", {}).get("git", {}).get("revision", "")
 
         entitlements_ref = _push_entitlements_artifact(
-            component, component_dir, quay_url, name, pipeline_run_uid,
+            component,
+            component_dir,
+            quay_url,
+            name,
+            pipeline_run_uid,
         )
 
         _run_custom_script(
