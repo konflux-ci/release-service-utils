@@ -225,7 +225,15 @@ def _updated_binary_or_generic_entries(
     cgw_base_url: str,
     cdn_base_url: str,
 ) -> list[dict[str, Any]]:
-    """Build updated artifact rows for one binary/generic mapping component."""
+    """Build updated artifact rows for one binary/generic mapping component.
+
+    Multiple files can share the same (architecture, os) (e.g. two differently
+    named binaries built for the same target), so each existing advisory
+    template row is expanded into one output row per matching file -- the same
+    per-file expansion _updated_disk_image_entries uses for disk-images. See
+    _merge_updated_artifacts for how same-key rows are merged back without
+    dropping any of them.
+    """
     component_name = str(component.get("name", ""))
     version_name = _component_version_name(component)
     if not version_name:
@@ -257,29 +265,32 @@ def _updated_binary_or_generic_entries(
         operating_system = str(entry.get("os", ""))
         # Match files by arch/os, falling back to staged.files for teams that use
         # the CDN staged structure instead of a top-level files array.
-        filename = content_gateway.filename_for_binary_or_generic(
+        filenames = content_gateway.filenames_for_binary_or_generic(
             component,
             architecture=architecture,
             operating_system=operating_system,
         )
-        # compress-artifacts renames Windows .tar.gz to .zip; checksum map keys use .zip.
-        filename_basename = content_gateway.windows_archive_basename(
-            filename,
-            operating_system,
-        )
-        checksum = _checksum_for_file(
-            checksum_map,
-            component_name=component_name,
-            filename_basename=filename_basename,
-        )
-        purl = _build_purl(
-            component_name=component_name,
-            version_name=version_name,
-            filename_basename=filename_basename,
-            checksum=checksum,
-            download_url=download_url,
-        )
-        updated.append({**entry, "purl": purl})
+        # Preserve the old no-match behavior of emitting one row per template entry
+        # (empty filename/checksum) instead of silently dropping it.
+        for filename in filenames or [""]:
+            # compress-artifacts renames Windows .tar.gz to .zip; checksum map keys use .zip.
+            filename_basename = content_gateway.windows_archive_basename(
+                filename,
+                operating_system,
+            )
+            checksum = _checksum_for_file(
+                checksum_map,
+                component_name=component_name,
+                filename_basename=filename_basename,
+            )
+            purl = _build_purl(
+                component_name=component_name,
+                version_name=version_name,
+                filename_basename=filename_basename,
+                checksum=checksum,
+                download_url=download_url,
+            )
+            updated.append({**entry, "purl": purl})
     return updated
 
 
@@ -406,13 +417,16 @@ def _merge_updated_artifacts(
     if not updated_entries:
         return
 
-    # Merge binary/generic updated entries. Deduplicate by component|architecture|os
-    # when multiple files share the same arch/os. Disk-image components are excluded
-    # from this pass (and re-appended untouched) because they were already expanded
-    # above and can legitimately have multiple entries sharing the same
-    # component|architecture|os -- deduplicating them here would drop all but one
-    # file's PURL/checksum.
-    updated_map = {_dedupe_artifact_key(row): row for row in updated_entries}
+    # Merge binary/generic updated entries, keyed by component|architecture|os.
+    # Multiple files can legitimately share a key (e.g. two differently named
+    # binaries for the same arch/os), so each key maps to a *list* of rows rather
+    # than a single row -- replacing a template row with all of its expanded
+    # matches instead of picking just one. Disk-image components are excluded
+    # from this pass (and re-appended untouched) because they were already
+    # merged above via full per-component replacement.
+    updated_by_key: dict[str, list[dict[str, Any]]] = {}
+    for row in updated_entries:
+        updated_by_key.setdefault(_dedupe_artifact_key(row), []).append(row)
     disk_items = [
         row
         for row in artifacts
@@ -423,13 +437,20 @@ def _merge_updated_artifacts(
         for row in artifacts
         if isinstance(row, dict) and str(row.get("component", "")) not in disk_components
     ]
-    merged_rows: dict[str, dict[str, Any]] = {}
+    merged: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
     for row in other_items:
         key = _dedupe_artifact_key(row)
-        merged_rows[key] = updated_map.get(key, row)
-    for key, row in updated_map.items():
-        merged_rows.setdefault(key, row)
-    content["artifacts"] = list(merged_rows.values()) + disk_items
+        if key in updated_by_key:
+            if key not in seen_keys:
+                merged.extend(updated_by_key[key])
+                seen_keys.add(key)
+        else:
+            merged.append(row)
+    for key, rows in updated_by_key.items():
+        if key not in seen_keys:
+            merged.extend(rows)
+    content["artifacts"] = merged + disk_items
 
 
 def update_artifact_purls(

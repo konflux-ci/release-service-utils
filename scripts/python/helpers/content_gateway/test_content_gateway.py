@@ -115,3 +115,52 @@ def test_filename_for_binary_or_generic_empty_when_no_match() -> None:
         )
         == ""
     )
+
+
+def test_filenames_for_binary_or_generic_returns_all_matches() -> None:
+    """All files sharing the same (arch, os) are returned, not just the first."""
+    component = {
+        "files": [
+            {"arch": "amd64", "os": "linux", "source": "cli-a.tgz"},
+            {"arch": "amd64", "os": "linux", "source": "cli-b.tgz"},
+            {"arch": "arm64", "os": "linux", "source": "cli-c.tgz"},
+        ],
+    }
+    assert content_gateway.filenames_for_binary_or_generic(
+        component,
+        architecture="amd64",
+        operating_system="linux",
+    ) == ["cli-a.tgz", "cli-b.tgz"]
+
+
+def test_filenames_for_binary_or_generic_empty_when_no_match() -> None:
+    """Return an empty list when no file row matches arch and operating system."""
+    component = {
+        "files": [{"arch": "amd64", "os": "linux", "source": "app-linux.tgz"}],
+    }
+    assert (
+        content_gateway.filenames_for_binary_or_generic(
+            component,
+            architecture="aarch64",
+            operating_system="linux",
+        )
+        == []
+    )
+
+
+def test_filename_for_binary_or_generic_uses_first_of_multiple_matches() -> None:
+    """The singular helper still returns just the first match, for compatibility."""
+    component = {
+        "files": [
+            {"arch": "amd64", "os": "linux", "source": "cli-a.tgz"},
+            {"arch": "amd64", "os": "linux", "source": "cli-b.tgz"},
+        ],
+    }
+    assert (
+        content_gateway.filename_for_binary_or_generic(
+            component,
+            architecture="amd64",
+            operating_system="linux",
+        )
+        == "cli-a.tgz"
+    )

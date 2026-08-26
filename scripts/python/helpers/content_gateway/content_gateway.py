@@ -42,19 +42,40 @@ def component_file_entries(component: dict[str, Any]) -> list[dict[str, Any]]:
     return [row for row in staged_files if isinstance(row, dict)]
 
 
+def filenames_for_binary_or_generic(
+    component: dict[str, Any],
+    *,
+    architecture: str,
+    operating_system: str,
+) -> list[str]:
+    """Return every ``source`` for binary/generic rows matching arch and operating_system.
+
+    Multiple files can legitimately share the same (architecture, operating_system)
+    pair (e.g. two differently-named binaries built for the same target), so all
+    matches are returned instead of only the first.
+    """
+    sources: list[str] = []
+    for file_row in component_file_entries(component):
+        if file_row.get("arch") == architecture and file_row.get("os") == operating_system:
+            source = file_row.get("source")
+            if isinstance(source, str):
+                sources.append(source)
+    return sources
+
+
 def filename_for_binary_or_generic(
     component: dict[str, Any],
     *,
     architecture: str,
     operating_system: str,
 ) -> str:
-    """Return ``source`` for binary/generic rows matching arch and operating_system."""
-    for file_row in component_file_entries(component):
-        if file_row.get("arch") == architecture and file_row.get("os") == operating_system:
-            source = file_row.get("source")
-            if isinstance(source, str):
-                return source
-    return ""
+    """Return the first ``source`` for binary/generic rows matching arch and os."""
+    matches = filenames_for_binary_or_generic(
+        component,
+        architecture=architecture,
+        operating_system=operating_system,
+    )
+    return matches[0] if matches else ""
 
 
 def windows_zip_filename(filename: str) -> str:
