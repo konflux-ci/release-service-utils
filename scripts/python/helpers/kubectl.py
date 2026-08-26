@@ -29,3 +29,36 @@ def get_configmap(name: str, *, namespace: str | None = None) -> dict[str, Any]:
     if result.returncode != 0:
         raise RuntimeError(f"Failed to retrieve ConfigMap '{name}': {result.stderr.strip()}")
     return json.loads(result.stdout)
+
+
+def auth_can_i(
+    verb: str,
+    resource: str,
+    *,
+    name: str | None = None,
+    namespace: str | None = None,
+) -> bool:
+    """Check whether the current service account can perform an action.
+
+    Args:
+        verb: The API verb to check (e.g. "get", "create").
+        resource: The Kubernetes resource type (e.g. "release", "snapshot").
+        name: Optional resource name to check access for.
+        namespace: Optional namespace to check access in.
+
+    Returns:
+        True if the action is allowed, False otherwise.
+
+    """
+    target = f"{resource}/{name}" if name else resource
+    cmd = ["kubectl", "auth", "can-i", verb, target]
+    if namespace:
+        cmd.extend(["-n", namespace])
+    result = run_cmd(cmd, check=False)
+    if result.returncode != 0:
+        ns_flag = f" -n {namespace}" if namespace else ""
+        raise RuntimeError(
+            f"Failed to run 'kubectl auth can-i {verb} {target}{ns_flag}': "
+            f"{(result.stderr or result.stdout or '').strip()}"
+        )
+    return result.stdout.strip() == "yes"
