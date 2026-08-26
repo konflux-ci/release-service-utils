@@ -229,3 +229,152 @@ def test_translate_delivery_repo_unknown_format_warns(
         {"repo": "access.redhat.com", "url": ""},
     ]
     assert "Repo to translate is not in expected format" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# convert_to_quay
+# ---------------------------------------------------------------------------
+
+
+def test_convert_to_quay_redhat_prod() -> None:
+    """A registry.redhat.io repo converts to the redhat-prod quay namespace."""
+    assert (
+        image_ref.convert_to_quay("registry.redhat.io/rhel8/nodejs")
+        == "quay.io/redhat-prod/rhel8----nodejs"
+    )
+
+
+def test_convert_to_quay_redhat_pending() -> None:
+    """A registry.stage.redhat.io repo converts to the redhat-pending quay namespace."""
+    assert (
+        image_ref.convert_to_quay("registry.stage.redhat.io/rhel8/nodejs")
+        == "quay.io/redhat-pending/rhel8----nodejs"
+    )
+
+
+def test_convert_to_quay_flatpaks_prod() -> None:
+    """A flatpaks.registry.redhat.io repo converts to the rh-flatpaks-prod quay namespace."""
+    assert (
+        image_ref.convert_to_quay("flatpaks.registry.redhat.io/rhel8/nodejs")
+        == "quay.io/rh-flatpaks-prod/rhel8----nodejs"
+    )
+
+
+def test_convert_to_quay_flatpaks_stage() -> None:
+    """A flatpaks.registry.stage.redhat.io repo converts to the rh-flatpaks-stage namespace."""
+    assert (
+        image_ref.convert_to_quay("flatpaks.registry.stage.redhat.io/rhel8/nodejs")
+        == "quay.io/rh-flatpaks-stage/rhel8----nodejs"
+    )
+
+
+def test_convert_to_quay_multiple_path_segments() -> None:
+    """Every path separator after the registry host is dash-encoded."""
+    assert (
+        image_ref.convert_to_quay("registry.redhat.io/a/b/c/d")
+        == "quay.io/redhat-prod/a----b----c----d"
+    )
+
+
+def test_convert_to_quay_single_segment_repo() -> None:
+    """A repository with a single path segment has no dashes added."""
+    assert image_ref.convert_to_quay("registry.redhat.io/repo") == "quay.io/redhat-prod/repo"
+
+
+def test_convert_to_quay_unrecognized_format_unchanged() -> None:
+    """Repositories that don't match a known prefix are returned unchanged."""
+    assert image_ref.convert_to_quay("quay.io/someorg/somerepo") == "quay.io/someorg/somerepo"
+
+
+# ---------------------------------------------------------------------------
+# convert_to_registry
+# ---------------------------------------------------------------------------
+
+
+def test_convert_to_registry_redhat_prod() -> None:
+    """A redhat-prod quay repo converts back to registry.redhat.io."""
+    assert (
+        image_ref.convert_to_registry("quay.io/redhat-prod/rhel8----nodejs")
+        == "registry.redhat.io/rhel8/nodejs"
+    )
+
+
+def test_convert_to_registry_redhat_pending() -> None:
+    """A redhat-pending quay repo converts back to registry.stage.redhat.io."""
+    assert (
+        image_ref.convert_to_registry("quay.io/redhat-pending/rhel8----nodejs")
+        == "registry.stage.redhat.io/rhel8/nodejs"
+    )
+
+
+def test_convert_to_registry_flatpaks_prod() -> None:
+    """An rh-flatpaks-prod quay repo converts back to flatpaks.registry.redhat.io."""
+    assert (
+        image_ref.convert_to_registry("quay.io/rh-flatpaks-prod/rhel8----nodejs")
+        == "flatpaks.registry.redhat.io/rhel8/nodejs"
+    )
+
+
+def test_convert_to_registry_flatpaks_stage() -> None:
+    """An rh-flatpaks-stage quay repo converts back to flatpaks.registry.stage.redhat.io."""
+    assert (
+        image_ref.convert_to_registry("quay.io/rh-flatpaks-stage/rhel8----nodejs")
+        == "flatpaks.registry.stage.redhat.io/rhel8/nodejs"
+    )
+
+
+def test_convert_to_registry_already_registry_format_unchanged() -> None:
+    """A repo already in registry.redhat.io/registry.stage.redhat.io format passes through."""
+    assert (
+        image_ref.convert_to_registry("registry.redhat.io/rhel8/nodejs")
+        == "registry.redhat.io/rhel8/nodejs"
+    )
+    assert (
+        image_ref.convert_to_registry("registry.stage.redhat.io/rhel8/nodejs")
+        == "registry.stage.redhat.io/rhel8/nodejs"
+    )
+
+
+def test_convert_to_registry_unhandled_format_returns_empty() -> None:
+    """Repositories that don't match any known format return an empty string."""
+    assert image_ref.convert_to_registry("quay.io/someorg/somerepo") == ""
+
+
+def test_convert_to_registry_round_trips_with_convert_to_quay() -> None:
+    """convert_to_registry is the inverse of convert_to_quay."""
+    original = "registry.redhat.io/a/b/c"
+    quay = image_ref.convert_to_quay(original)
+    assert image_ref.convert_to_registry(quay) == original
+
+
+# ---------------------------------------------------------------------------
+# convert_to_registry_access
+# ---------------------------------------------------------------------------
+
+
+def test_convert_to_registry_access_redhat_io() -> None:
+    """A registry.redhat.io repo converts to registry.access.redhat.com."""
+    assert (
+        image_ref.convert_to_registry_access("registry.redhat.io/rhel8/nodejs")
+        == "registry.access.redhat.com/rhel8/nodejs"
+    )
+
+
+def test_convert_to_registry_access_stage_redhat_io() -> None:
+    """A registry.stage.redhat.io repo converts to registry.access.stage.redhat.com."""
+    assert (
+        image_ref.convert_to_registry_access("registry.stage.redhat.io/rhel8/nodejs")
+        == "registry.access.stage.redhat.com/rhel8/nodejs"
+    )
+
+
+def test_convert_to_registry_access_flatpaks_returns_empty() -> None:
+    """Flatpaks prefixes are not handled and return an empty string."""
+    assert (
+        image_ref.convert_to_registry_access("flatpaks.registry.redhat.io/rhel8/nodejs") == ""
+    )
+
+
+def test_convert_to_registry_access_unhandled_format_returns_empty() -> None:
+    """Repositories that don't match any known format return an empty string."""
+    assert image_ref.convert_to_registry_access("quay.io/someorg/somerepo") == ""
