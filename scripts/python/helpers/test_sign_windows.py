@@ -337,7 +337,7 @@ def test_run_custom_script_happy_path(tmp_path: Path, monkeypatch: pytest.Monkey
         mock.patch("shutil.copy2"),
         mock.patch("subprocess.run", side_effect=fake_subprocess_run),
     ):
-        sign_windows.run(
+        sign_windows.run_custom_signing(
             "quay.io/org",
             "uid-123",
             signing_script="C:/Scripts/sign.bat",
@@ -401,7 +401,7 @@ def test_run_custom_script_with_dest_quay(
         mock.patch("shutil.copy2"),
         mock.patch("subprocess.run", side_effect=fake_subprocess_run),
     ):
-        sign_windows.run(
+        sign_windows.run_custom_signing(
             "quay.io/org",
             "uid-123",
             signing_script="C:/Scripts/sign.bat",
@@ -448,7 +448,7 @@ def test_run_custom_script_dest_quay_falls_back_to_source(
         mock.patch("shutil.copy2"),
         mock.patch("subprocess.run", side_effect=fake_subprocess_run),
     ):
-        sign_windows.run(
+        sign_windows.run_custom_signing(
             "quay.io/org",
             "uid-123",
             signing_script="C:/Scripts/sign.bat",
@@ -492,7 +492,7 @@ def test_run_custom_script_ssh_failure(
         mock.patch("subprocess.run", side_effect=fake_subprocess_run),
     ):
         with pytest.raises(RuntimeError, match="Windows signing failed"):
-            sign_windows.run(
+            sign_windows.run_custom_signing(
                 "quay.io/org",
                 "uid-123",
                 signing_script="C:/Scripts/sign.bat",
@@ -528,7 +528,7 @@ def test_run_custom_script_scp_failure_raises(
         mock.patch("subprocess.run", side_effect=fake_subprocess_run),
         pytest.raises(RuntimeError, match="scp of signed digest"),
     ):
-        sign_windows.run(
+        sign_windows.run_custom_signing(
             "quay.io/org",
             "uid-123",
             signing_script="C:/Scripts/sign.bat",
@@ -568,7 +568,7 @@ def test_run_custom_script_cleanup_warning(
         mock.patch("subprocess.run", side_effect=fake_subprocess_run),
         caplog.at_level("WARNING"),
     ):
-        sign_windows.run(
+        sign_windows.run_custom_signing(
             "quay.io/org",
             "uid-123",
             signing_script="C:/Scripts/sign.bat",

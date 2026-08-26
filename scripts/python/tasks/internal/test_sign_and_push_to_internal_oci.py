@@ -49,20 +49,18 @@ def _setup_result_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[
 
 
 def test_parse_args_defaults() -> None:
-    """Default values for concurrent_limit and signing script args."""
+    """Default values for concurrent_limit and signing script paths."""
     args = wrapper.parse_args(
         ["--quay-url", "quay.io/org", "--pipeline-run-uid", "uid-123", "--origin", "my-tenant"]
     )
     assert args.concurrent_limit == 3
     assert args.mac_signing_script is None
-    assert args.mac_signing_args == []
     assert args.windows_signing_script is None
-    assert args.windows_signing_args == []
     assert args.dest_quay_url is None
 
 
 def test_parse_args_with_signing_scripts() -> None:
-    """Signing script paths and args are parsed correctly."""
+    """Signing script paths are parsed correctly."""
     args = wrapper.parse_args(
         [
             "--quay-url",
@@ -73,19 +71,12 @@ def test_parse_args_with_signing_scripts() -> None:
             "my-tenant",
             "--mac-signing-script",
             "/opt/sign_mac.sh",
-            "--mac-signing-args",
-            "profile=internal",
-            "verbose",
             "--windows-signing-script",
             "C:/Scripts/sign.bat",
-            "--windows-signing-args",
-            "env=staging",
         ]
     )
     assert args.mac_signing_script == "/opt/sign_mac.sh"
-    assert args.mac_signing_args == ["profile=internal", "verbose"]
     assert args.windows_signing_script == "C:/Scripts/sign.bat"
-    assert args.windows_signing_args == ["env=staging"]
 
 
 def test_parse_args_requires_quay_url() -> None:
@@ -105,28 +96,23 @@ def test_parse_args_requires_pipeline_run_uid() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_main_passes_signing_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """main() forwards signing_script and signing_args to sign_mac.run and sign_windows.run."""
+def test_main_passes_signing_scripts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """main() forwards signing_script to sign_mac/sign_windows.run_custom_signing."""
     rpath, cmap_path = _setup_result_env(tmp_path, monkeypatch)
 
     with (
         mock.patch.object(extract_oci_artifacts, "run") as mock_extract,
         mock.patch.object(push_oci_unsigned, "run") as mock_push,
-        mock.patch.object(sign_mac, "run") as mock_mac,
-        mock.patch.object(sign_windows, "run") as mock_win,
+        mock.patch.object(sign_mac, "run_custom_signing") as mock_mac,
+        mock.patch.object(sign_windows, "run_custom_signing") as mock_win,
     ):
         rc = wrapper.main(
             REQUIRED_ARGS
             + [
                 "--mac-signing-script",
                 "/opt/sign.sh",
-                "--mac-signing-args",
-                "profile=prod",
-                "verbose",
                 "--windows-signing-script",
                 "C:/sign.bat",
-                "--windows-signing-args",
-                "env=staging",
                 "--dest-quay-url",
                 "quay.io/internal",
             ]
@@ -139,7 +125,6 @@ def test_main_passes_signing_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         "quay.io/org",
         "uid-123",
         signing_script="/opt/sign.sh",
-        signing_args=["profile=prod", "verbose"],
         dest_quay_url="quay.io/internal",
         origin="red-hat-desktop-tenant",
     )
@@ -147,7 +132,6 @@ def test_main_passes_signing_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         "quay.io/org",
         "uid-123",
         signing_script="C:/sign.bat",
-        signing_args=["env=staging"],
         dest_quay_url="quay.io/internal",
         origin="red-hat-desktop-tenant",
     )
@@ -155,14 +139,14 @@ def test_main_passes_signing_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 
 def test_main_without_signing_scripts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """main() passes None/[] when no signing script args are given."""
+    """main() passes None when no signing script paths are given."""
     _setup_result_env(tmp_path, monkeypatch)
 
     with (
         mock.patch.object(extract_oci_artifacts, "run"),
         mock.patch.object(push_oci_unsigned, "run"),
-        mock.patch.object(sign_mac, "run") as mock_mac,
-        mock.patch.object(sign_windows, "run") as mock_win,
+        mock.patch.object(sign_mac, "run_custom_signing") as mock_mac,
+        mock.patch.object(sign_windows, "run_custom_signing") as mock_win,
     ):
         rc = wrapper.main(REQUIRED_ARGS)
 
@@ -171,7 +155,6 @@ def test_main_without_signing_scripts(tmp_path: Path, monkeypatch: pytest.Monkey
         "quay.io/org",
         "uid-123",
         signing_script=None,
-        signing_args=[],
         dest_quay_url=None,
         origin="red-hat-desktop-tenant",
     )
@@ -179,7 +162,6 @@ def test_main_without_signing_scripts(tmp_path: Path, monkeypatch: pytest.Monkey
         "quay.io/org",
         "uid-123",
         signing_script=None,
-        signing_args=[],
         dest_quay_url=None,
         origin="red-hat-desktop-tenant",
     )
@@ -191,10 +173,8 @@ def test_main_writes_error_on_exception(
     """Tekton result file receives error text when a stage raises."""
     rpath, cmap_path = _setup_result_env(tmp_path, monkeypatch)
 
-    with (
-        mock.patch.object(
-            extract_oci_artifacts, "run", side_effect=RuntimeError("extract boom")
-        ),
+    with mock.patch.object(
+        extract_oci_artifacts, "run", side_effect=RuntimeError("extract boom")
     ):
         rc = wrapper.main(REQUIRED_ARGS)
 

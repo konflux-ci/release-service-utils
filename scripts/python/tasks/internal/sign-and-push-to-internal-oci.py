@@ -50,33 +50,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Path to custom Mac signing script on the remote host",
     )
     p.add_argument(
-        "--mac-signing-args",
-        nargs="*",
-        default=[],
-        help="Extra arguments for the custom Mac signing script",
-    )
-    p.add_argument(
         "--windows-signing-script",
         default=None,
         help="Path to custom Windows signing script on the remote host",
-    )
-    p.add_argument(
-        "--windows-signing-args",
-        nargs="*",
-        default=[],
-        help="Extra arguments for the custom Windows signing script",
     )
     p.add_argument(
         "--dest-quay-url",
         default=None,
         help="Destination Quay URL base for signed artifacts",
     )
-    # TODO: ADD THIS BACK AFTER TESTING ENTITLEMENTS
-    #p.add_argument(
-    #    "--origin",
-    #    required=True,
-    #    help="Origin tenant namespace that triggered the release",
-    #)
+    p.add_argument(
+        "--origin",
+        required=True,
+        help="Origin tenant namespace that triggered the release",
+    )
     return p.parse_args(argv)
 
 
@@ -99,7 +86,6 @@ def main(argv: list[str] | None = None) -> int:
             args.quay_url,
             args.pipeline_run_uid,
             signing_script=args.mac_signing_script,
-            signing_args=args.mac_signing_args,
             dest_quay_url=args.dest_quay_url,
             origin=args.origin,
         )
@@ -107,7 +93,6 @@ def main(argv: list[str] | None = None) -> int:
             args.quay_url,
             args.pipeline_run_uid,
             signing_script=args.windows_signing_script,
-            signing_args=args.windows_signing_args,
             dest_quay_url=args.dest_quay_url,
             origin=args.origin,
         )
