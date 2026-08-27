@@ -19,6 +19,7 @@ __all__ = [
     "jira",
     "kubectl",
     "logger",
+    "ocp_version",
     "oras_utils",
     "osidb",
     "push_artifacts",
