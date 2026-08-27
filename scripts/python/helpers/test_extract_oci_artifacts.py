@@ -112,6 +112,14 @@ def test_get_wanted_filenames_deduplicates() -> None:
     assert extract_oci_artifacts._get_wanted_filenames(component) == {"app.tar.gz"}
 
 
+def test_get_wanted_filenames_includes_entitlements_artifact() -> None:
+    """Verify entitlementsArtifact values are included in the wanted set."""
+    component = {"files": [{"source": "app.tar.gz", "entitlementsArtifact": "ent.plist"}]}
+    wanted = extract_oci_artifacts._get_wanted_filenames(component)
+    assert "ent.plist" in wanted
+    assert "app.tar.gz" in wanted
+
+
 def test_get_wanted_filenames_empty_for_no_files() -> None:
     """Empty set returned for a component with no file entries."""
     assert extract_oci_artifacts._get_wanted_filenames({}) == set()

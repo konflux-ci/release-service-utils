@@ -312,6 +312,36 @@ def test_run_default_cleanup_warning(
 # ---------------------------------------------------------------------------
 
 
+def test_run_custom_signing_skips_component_without_has_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Component without has_windows is skipped in run_custom_signing."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps({"components": [{"name": "prod"}]}),
+    )
+    monkeypatch.setattr(sign_windows, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+
+    with (
+        caplog.at_level(logging.INFO, logger="sign_windows"),
+        mock.patch("shutil.copy2"),
+    ):
+        sign_windows.run_custom_signing(
+            "quay.io/org",
+            "uid-123",
+            signing_script="C:/Scripts/sign.bat",
+        )
+
+    assert "skipping Windows signing" in caplog.text
+
+
 def test_run_custom_script_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Custom script is invoked via SSH with PowerShell env vars and digest is SCP'd back."""
     monkeypatch.setenv("SNAPSHOT_JSON", json.dumps({"components": [{"name": "prod"}]}))

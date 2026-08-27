@@ -46,6 +46,81 @@ def _setup_mounts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# _get_entitlements_artifact_name
+# ---------------------------------------------------------------------------
+
+
+def test_get_entitlements_artifact_name_from_staged() -> None:
+    """Return entitlementsArtifact found in staged.files."""
+    component = {"staged": {"files": [{"entitlementsArtifact": "entitlements.plist"}]}}
+    assert sign_mac._get_entitlements_artifact_name(component) == "entitlements.plist"
+
+
+def test_get_entitlements_artifact_name_from_files() -> None:
+    """Return entitlementsArtifact found in files."""
+    component = {"files": [{"entitlementsArtifact": "entitlements.plist"}]}
+    assert sign_mac._get_entitlements_artifact_name(component) == "entitlements.plist"
+
+
+def test_get_entitlements_artifact_name_none() -> None:
+    """None returned when no entitlementsArtifact in any file entry."""
+    component = {"files": [{"source": "app.tar.gz"}]}
+    assert sign_mac._get_entitlements_artifact_name(component) is None
+
+
+# ---------------------------------------------------------------------------
+# _push_entitlements_artifact
+# ---------------------------------------------------------------------------
+
+
+def test_push_entitlements_artifact_success(tmp_path: Path) -> None:
+    """Entitlements file is pushed via oras and reference is returned."""
+    component = {"staged": {"files": [{"entitlementsArtifact": "ent.plist"}]}}
+    comp_dir = tmp_path / "comp"
+    comp_dir.mkdir()
+    (comp_dir / "ent.plist").write_text("fake-entitlements")
+
+    with mock.patch("oras_utils.oras_push", return_value="sha256:ent123") as mock_push:
+        ref = sign_mac._push_entitlements_artifact(
+            component, comp_dir, "quay.io/org", "mycomp", "uid-123"
+        )
+
+    assert ref == "quay.io/org/unsigned/mycomp@sha256:ent123"
+    mock_push.assert_called_once_with(
+        "quay.io/org/unsigned/mycomp:uid-123-entitlements",
+        comp_dir,
+        "ent.plist",
+        "mycomp",
+    )
+
+
+def test_push_entitlements_artifact_file_not_found(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Empty string returned with warning when artifact file does not exist."""
+    component = {"staged": {"files": [{"entitlementsArtifact": "missing.plist"}]}}
+    comp_dir = tmp_path / "comp"
+    comp_dir.mkdir()
+
+    with caplog.at_level("WARNING"):
+        ref = sign_mac._push_entitlements_artifact(
+            component, comp_dir, "quay.io/org", "mycomp", "uid-123"
+        )
+
+    assert ref == ""
+    assert "not found" in caplog.text
+
+
+def test_push_entitlements_artifact_no_artifact() -> None:
+    """Empty string returned when component has no entitlements artifact."""
+    component = {"files": [{"source": "app.tar.gz"}]}
+    ref = sign_mac._push_entitlements_artifact(
+        component, Path("/fake"), "quay.io/org", "mycomp", "uid-123"
+    )
+    assert ref == ""
+
+
+# ---------------------------------------------------------------------------
 # _build_signing_script
 # ---------------------------------------------------------------------------
 
@@ -266,6 +341,90 @@ def test_run_default_cleanup_warning(
 # ---------------------------------------------------------------------------
 # _run_custom_script (custom signing script path)
 # ---------------------------------------------------------------------------
+
+
+def test_run_custom_signing_skips_component_without_has_mac(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Component without has_mac is skipped in run_custom_signing."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps({"components": [{"name": "prod"}]}),
+    )
+    monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+
+    with (
+        caplog.at_level(logging.INFO, logger="sign_mac"),
+        mock.patch("shutil.copy2"),
+    ):
+        sign_mac.run_custom_signing(
+            "quay.io/org",
+            "uid-123",
+            signing_script="/opt/sign.sh",
+        )
+
+    assert "skipping Mac signing" in caplog.text
+
+
+def test_run_custom_script_with_entitlements_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ENTITLEMENTS_REF env var is set when entitlements artifact is present."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps(
+            {
+                "components": [
+                    {
+                        "name": "prod",
+                        "staged": {"files": [{"entitlementsArtifact": "ent.plist"}]},
+                    }
+                ]
+            }
+        ),
+    )
+    monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    (comp_dir / "has_mac").touch()
+    (comp_dir / "unsigned_mac_digest.txt").write_text("sha256:unsigned")
+    (comp_dir / "ent.plist").write_text("fake-entitlements")
+
+    calls: list = []
+
+    def fake_subprocess_run(cmd, **kwargs):
+        calls.append((list(cmd), kwargs))
+        if cmd[0] == "scp" and "signed_digest_" in " ".join(cmd):
+            (comp_dir / "signed_mac_digest.txt").write_text("sha256:signed")
+        return mock.Mock(returncode=0)
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch("subprocess.run", side_effect=fake_subprocess_run),
+        mock.patch("oras_utils.oras_push", return_value="sha256:ent123"),
+    ):
+        sign_mac.run_custom_signing(
+            "quay.io/org",
+            "uid-123",
+            signing_script="/opt/sign.sh",
+            origin="my-tenant",
+        )
+
+    ssh_calls = [(c, kw) for c, kw in calls if c[0] == "ssh"]
+    assert len(ssh_calls) >= 1
+    stdin_script = ssh_calls[0][1].get("input", "")
+    assert "ENTITLEMENTS_REF=" in stdin_script
+    assert "sha256:ent123" in stdin_script
 
 
 def test_run_custom_script_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
