@@ -205,6 +205,7 @@ RUN ln -s /home/src/tasks/managed/cleanup_workspace/cleanup_workspace.py /home/s
     ln -s /home/src/tasks/internal/process_file_updates/process_file_updates.py /home/scripts/python/tasks/internal/process_file_updates.py && \
     ln -s /home/src/tasks/internal/pulp_push_disk_images/pulp_push_disk_images.py /home/scripts/python/tasks/internal/pulp_push_disk_images.py && \
     ln -s /home/src/tasks/internal/push_artifacts_to_cdn/push_artifacts_to_cdn.py /home/scripts/python/tasks/internal/push_artifacts_to_cdn.py && \
+    ln -s /home/src/tasks/internal/sign_and_push_to_internal_oci/sign_and_push_to_internal_oci.py /home/scripts/python/tasks/internal/sign_and_push_to_internal_oci.py && \
     ln -s /home/src/tasks/internal/update_fbc_catalog/update_fbc_catalog.py /home/scripts/python/tasks/internal/update_fbc_catalog.py
 
 ##############################################################
