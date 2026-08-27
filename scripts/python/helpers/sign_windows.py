@@ -291,6 +291,8 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
         os.close(fd)
 
         try:
+            # Output is intentionally not captured — the script contains plaintext
+            # credentials and routing SCP output through the logger could expose them.
             subprocess.check_call(
                 ["scp"]
                 + scp_opts
