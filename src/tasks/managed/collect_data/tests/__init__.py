@@ -1,0 +1,1 @@
+"""collect_data tests."""

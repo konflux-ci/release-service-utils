@@ -1,0 +1,46 @@
+"""Version-control helpers: `git`, `gitlab`, and `github` submodules."""
+
+from .git import (  # noqa: F401
+    changed_paths_from_status,
+    checkout,
+    clone,
+    commit_and_push,
+    commit_staged,
+    configure_git_global_user,
+    fetch,
+    index_add_commit,
+    origin_main_has_path_matching,
+    push,
+    rebase_onto_remote,
+    repository_workdir_name,
+    set_remote_url,
+    sync_to_origin_main,
+    working_tree_diff,
+    working_tree_status,
+)
+from .github import (  # noqa: F401
+    GitHubAppSession,
+    api_request,
+    app_jwt,
+    branch_name_from_origin_repo,
+    compare_changelog,
+    configure_git_askpass_auth,
+    create_pull_request,
+    find_open_pull_request_by_branch,
+    force_push_updated_files,
+    open_session,
+    owner_repo_from_url,
+    pull_request_url_for_commit_sha,
+    update_pull_request_body,
+)
+from .gitlab import (  # noqa: F401
+    DEFAULT_BRANCH,
+    GitLabCredentials,
+    authentication,
+    clone_project_sparse,
+    configure_git_oauth2_auth,
+    export_env_for_image_helpers,
+    gitlab_project_path,
+    raw_file_url,
+    read_credentials_from_mount,
+)

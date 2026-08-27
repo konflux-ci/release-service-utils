@@ -4,7 +4,9 @@ FROM --platform=linux/amd64 registry.redhat.io/rhtas/ec-rhel9:0.7@sha256:1fc7c61
 
 FROM --platform=linux/amd64 registry.redhat.io/rhtas/cosign-rhel9:1.3.3-1773309431 as cosign
 
-FROM --platform=linux/amd64 registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.4-1 as roxctl
+# No --platform pin here (unlike cosign/ec-rhel9 above): we copy the roxctl binary
+# itself, not an arch-bundled blob, so this must resolve to the target build platform.
+FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.4-1 as roxctl
 
 FROM registry.access.redhat.com/ubi10/ubi:10.2-1782277716
 
@@ -24,20 +26,32 @@ RUN ARCH=$(uname -m) && \
     elif [ "$ARCH" = "aarch64" ]; then \
         GO_ARCH="arm64"; \
     fi && \
-    curl -L https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${GO_ARCH} -o /usr/bin/yq &&\
-    curl -L https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${GO_ARCH}/kubectl -o /usr/bin/kubectl &&\
-    curl -L https://github.com/operator-framework/operator-registry/releases/download/${OPM_VERSION}/linux-${GO_ARCH}-opm -o /usr/bin/opm &&\
-    curl -L https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr -xzf - bin/glab &&\
-    curl -L https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GO_ARCH}.tar.gz  | tar -C /usr -xzf - --strip=1 gh_${GH_VERSION}_linux_${GO_ARCH}/bin/gh &&\
-    curl -L https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr/bin/ -xzf - syft &&\
-    curl -L https://github.com/kubearchive/kubearchive/releases/download/v${KUBEARCHIVE_VERSION}/kubectl-ka-linux-${GO_ARCH} -o /usr/bin/kubectl-ka &&\
-    chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft,kubectl-ka}
+    # -f: fail (non-zero exit) on HTTP errors instead of saving the error page as the binary
+    # -sS: silent but still show errors; -L: follow redirects
+    curl -fsSL https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${GO_ARCH} -o /usr/bin/yq &&\
+    curl -fsSL https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${GO_ARCH}/kubectl -o /usr/bin/kubectl &&\
+    curl -fsSL https://github.com/operator-framework/operator-registry/releases/download/${OPM_VERSION}/linux-${GO_ARCH}-opm -o /usr/bin/opm &&\
+    curl -fsSL https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr -xzf - bin/glab &&\
+    curl -fsSL https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GO_ARCH}.tar.gz  | tar -C /usr -xzf - --strip=1 gh_${GH_VERSION}_linux_${GO_ARCH}/bin/gh &&\
+    curl -fsSL https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr/bin/ -xzf - syft &&\
+    curl -fsSL https://github.com/kubearchive/kubearchive/releases/download/v${KUBEARCHIVE_VERSION}/kubectl-ka-linux-${GO_ARCH} -o /usr/bin/kubectl-ka &&\
+    chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft,kubectl-ka} && \
+    # Verify each binary is actually a working executable, not a truncated/error-page
+    # download that a bare curl exit code wouldn't catch.
+    yq --version && \
+    kubectl version --client && \
+    opm version && \
+    glab --version && \
+    gh --version && \
+    syft version && \
+    kubectl-ka version
 
 RUN dnf install -y https://dl.fedoraproject.org/pub/epel/10/Everything/$(arch)/Packages/e/epel-release-10-9.el10_3.noarch.rpm
 
 COPY --from=oras /usr/bin/oras /usr/bin/oras
 COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
 COPY --from=oras /usr/local/bin/get-reference-base /usr/local/bin/get-reference-base
+RUN oras version
 COPY --from=conforma-cli /usr/local/bin/ec_linux_*.gz /tmp/
 COPY --from=cosign /usr/local/bin/cosign-linux-*.gz /tmp/
 RUN ARCH=$(uname -m) && \
@@ -54,7 +68,8 @@ RUN ARCH=$(uname -m) && \
     fi && \
     gunzip -c /tmp/cosign-linux-${COSIGN_ARCH}.gz > /usr/local/bin/cosign && \
     chmod +x /usr/local/bin/cosign && \
-    rm -f /tmp/cosign-linux-*.gz
+    rm -f /tmp/cosign-linux-*.gz && \
+    cosign version
 
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
@@ -66,7 +81,8 @@ RUN ARCH=$(uname -m) && \
     fi && \
     gunzip -c /tmp/ec_linux_${EC_ARCH}.gz > /usr/bin/ec && \
     chmod +x /usr/bin/ec && \
-    rm -f /tmp/ec_linux_*.gz
+    rm -f /tmp/ec_linux_*.gz && \
+    ec version
 
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then ARCH=amd64; fi && \
@@ -77,10 +93,12 @@ RUN ARCH=$(uname -m) && \
 
 
 COPY --from=roxctl /usr/bin/roxctl /usr/bin/roxctl
+RUN roxctl version
 
 # Install uv via curl
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
-    mv /root/.local/bin/uv /usr/local/bin/uv
+    mv /root/.local/bin/uv /usr/local/bin/uv && \
+    uv --version
 
 RUN dnf install -y 'dnf-command(config-manager)' && \
     dnf config-manager --set-enabled codeready-builder-for-ubi-10-$(arch)-rpms
@@ -106,15 +124,23 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     zip \
     && dnf clean all
 
-RUN curl -LO https://github.com/release-engineering/exodus-rsync/releases/latest/download/exodus-rsync && \
-    chmod +x exodus-rsync && mv exodus-rsync /usr/local/bin/rsync
+# exodus-rsync only publishes an amd64 binary upstream (no arm64 build exists:
+# https://github.com/release-engineering/exodus-rsync/releases). On arm64, leave the
+# plain system rsync installed above as-is: callers using exodus-specific flags (e.g.
+# --exodus-conf) will get a clear "unknown option" error from it instead of a crash,
+# and generic rsync usage keeps working normally.
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        curl -fLO https://github.com/release-engineering/exodus-rsync/releases/latest/download/exodus-rsync && \
+        chmod +x exodus-rsync && mv exodus-rsync /usr/local/bin/rsync && \
+        rsync --help > /dev/null; \
+    fi
 
 # Install Python dependencies using uv
-COPY pyproject.toml uv.lock ./
-RUN uv pip install -r pyproject.toml --system && \
+COPY . ./
+RUN pip install . && \
     # Remove PyPI's python-qpid-proton so the system RPM (python3-qpid-proton) takes precedence.
     # The PyPI wheel bundles its own OpenSSL which doesn't use the system CA trust store.
-    # The system RPM is properly linked to the distro's OpenSSL and respects /etc/pki/ca-trust.
     pip uninstall -y python-qpid-proton
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
@@ -126,7 +152,63 @@ RUN update-ca-trust
 COPY pyxis /home/pyxis
 COPY utils /home/utils
 COPY integration-tests /home/integration-tests
-COPY scripts /home/scripts
+COPY src /home/src
+
+# TODO: remove when fixed in release-service-catalog
+RUN mkdir -p /home/scripts/python/tasks/managed && \
+    mkdir -p /home/scripts/python/tasks/internal
+
+RUN ln -s /home/src/tasks/managed/cleanup_workspace/cleanup_workspace.py /home/scripts/python/tasks/managed/cleanup_workspace.py && \
+    ln -s /home/src/tasks/managed/base64_encode_checksum/base64_encode_checksum.py /home/scripts/python/tasks/managed/base64_encode_checksum.py && \
+    ln -s /home/src/tasks/managed/check_data_keys/check_data_keys.py /home/scripts/python/tasks/managed/check_data_keys.py && \
+    ln -s /home/src/tasks/managed/check_labels/check_labels.py /home/scripts/python/tasks/managed/check_labels.py && \
+    ln -s /home/src/tasks/managed/cleanup_internal_requests/cleanup_internal_requests.py /home/scripts/python/tasks/managed/cleanup_internal_requests.py && \
+    ln -s /home/src/tasks/managed/close_advisory_issues/close_advisory_issues.py /home/scripts/python/tasks/managed/close_advisory_issues.py && \
+    ln -s /home/src/tasks/managed/collect_charon_params/collect_charon_params.py /home/scripts/python/tasks/managed/collect_charon_params.py && \
+    ln -s /home/src/tasks/managed/collect_gh_params/collect_gh_params.py /home/scripts/python/tasks/managed/collect_gh_params.py && \
+    ln -s /home/src/tasks/managed/collect_index_images/collect_index_images.py /home/scripts/python/tasks/managed/collect_index_images.py && \
+    ln -s /home/src/tasks/managed/collect_slack_notification_params/collect_slack_notification_params.py /home/scripts/python/tasks/managed/collect_slack_notification_params.py && \
+    ln -s /home/src/tasks/managed/extract_index_image/extract_index_image.py /home/scripts/python/tasks/managed/extract_index_image.py && \
+    ln -s /home/src/tasks/managed/filter_already_released_images/filter_already_released_images.py /home/scripts/python/tasks/managed/filter_already_released_images.py && \
+    ln -s /home/src/tasks/managed/make_repo_public/make_repo_public.py /home/scripts/python/tasks/managed/make_repo_public.py && \
+    ln -s /home/src/tasks/managed/publish_pyxis_repository/publish_pyxis_repository.py /home/scripts/python/tasks/managed/publish_pyxis_repository.py && \
+    ln -s /home/src/tasks/managed/update_infra_deployments/update_infra_deployments.py /home/scripts/python/tasks/managed/update_infra_deployments.py && \
+    ln -s /home/src/tasks/managed/validate_single_component/validate_single_component.py /home/scripts/python/tasks/managed/validate_single_component.py && \
+    ln -s /home/src/tasks/managed/extract_checksums_from_image/extract_checksums_from_image.py /home/scripts/python/tasks/managed/extract_checksums_from_image.py && \
+    ln -s /home/src/tasks/managed/publish_to_nrrc/publish_to_nrrc.py /home/scripts/python/tasks/managed/publish_to_nrrc.py && \
+    ln -s /home/src/tasks/managed/rh_direct_sign_image/rh_direct_sign_image.py /home/scripts/python/tasks/managed/rh_direct_sign_image.py && \
+    ln -s /home/src/tasks/managed/direct_sign_index_image/direct_sign_index_image.py /home/scripts/python/tasks/managed/direct_sign_index_image.py && \
+    ln -s /home/src/tasks/managed/request_advisory_creation/request_advisory_creation.py /home/scripts/python/tasks/managed/request_advisory_creation.py && \
+    ln -s /home/src/tasks/managed/embargo_check/embargo_check.py /home/scripts/python/tasks/managed/embargo_check.py && \
+    ln -s /home/src/tasks/managed/collect_registry_token_secret/collect_registry_token_secret.py /home/scripts/python/tasks/managed/collect_registry_token_secret.py && \
+    ln -s /home/src/tasks/managed/collect_signing_params/collect_signing_params.py /home/scripts/python/tasks/managed/collect_signing_params.py && \
+    ln -s /home/src/tasks/managed/collect_task_params/collect_task_params.py /home/scripts/python/tasks/managed/collect_task_params.py && \
+    ln -s /home/src/tasks/managed/collect_tpa_params/collect_tpa_params.py /home/scripts/python/tasks/managed/collect_tpa_params.py && \
+    ln -s /home/src/tasks/managed/publish_to_mrrc_prepare_repo/publish_to_mrrc_prepare_repo.py /home/scripts/python/tasks/managed/publish_to_mrrc_prepare_repo.py && \
+    ln -s /home/src/tasks/managed/publish_to_mrrc_push_merged/publish_to_mrrc_push_merged.py /home/scripts/python/tasks/managed/publish_to_mrrc_push_merged.py && \
+    ln -s /home/src/tasks/managed/filter_already_released_advisory_rpms/filter_already_released_advisory_rpms.py /home/scripts/python/tasks/managed/filter_already_released_advisory_rpms.py && \
+    ln -s /home/src/tasks/managed/collect_data/collect_data.py /home/scripts/python/tasks/managed/collect_data.py && \
+    ln -s /home/src/tasks/managed/extract_oot_kmods/extract_oot_kmods.py /home/scripts/python/tasks/managed/extract_oot_kmods.py && \
+    ln -s /home/src/tasks/managed/marketplacesvm_push_disk_images/marketplacesvm_push_disk_images.py /home/scripts/python/tasks/managed/marketplacesvm_push_disk_images.py && \
+    ln -s /home/src/tasks/managed/push_artifacts_to_storage/push_artifacts_to_storage.py /home/scripts/python/tasks/managed/push_artifacts_to_storage.py && \
+    ln -s /home/src/tasks/managed/get_ocp_version/get_ocp_version.py /home/scripts/python/tasks/managed/get_ocp_version.py && \
+    ln -s /home/src/tasks/managed/populate_release_notes/populate_release_notes.py /home/scripts/python/tasks/managed/populate_release_notes.py && \
+    ln -s /home/src/tasks/managed/push_disk_images/push_disk_images.py /home/scripts/python/tasks/managed/push_disk_images.py && \
+    ln -s /home/src/tasks/managed/reduce_snapshot/reduce_snapshot.py /home/scripts/python/tasks/managed/reduce_snapshot.py && \
+    ln -s /home/src/tasks/managed/send_slack_notification/send_slack_notification.py /home/scripts/python/tasks/managed/send_slack_notification.py && \
+    ln -s /home/src/tasks/managed/apply_mapping/apply_mapping.py /home/scripts/python/tasks/managed/apply_mapping.py && \
+    ln -s /home/src/tasks/internal/filter_already_released_advisory_images/filter_already_released_advisory_images.py /home/scripts/python/tasks/internal/filter_already_released_advisory_images.py && \
+    ln -s /home/src/tasks/internal/check_embargoed_cves/check_embargoed_cves.py /home/scripts/python/tasks/internal/check_embargoed_cves.py && \
+    ln -s /home/src/tasks/internal/check_fbc_opt_in/check_fbc_opt_in.py /home/scripts/python/tasks/internal/check_fbc_opt_in.py && \
+    ln -s /home/src/tasks/internal/create_advisory/create_advisory.py /home/scripts/python/tasks/internal/create_advisory.py && \
+    ln -s /home/src/tasks/internal/get_advisory_severity/get_advisory_severity.py /home/scripts/python/tasks/internal/get_advisory_severity.py && \
+    ln -s /home/src/tasks/internal/process_file_updates/process_file_updates.py /home/scripts/python/tasks/internal/process_file_updates.py && \
+    ln -s /home/src/tasks/internal/pulp_push_disk_images/pulp_push_disk_images.py /home/scripts/python/tasks/internal/pulp_push_disk_images.py && \
+    ln -s /home/src/tasks/internal/push_artifacts_to_cdn/push_artifacts_to_cdn.py /home/scripts/python/tasks/internal/push_artifacts_to_cdn.py && \
+    ln -s /home/src/tasks/internal/update_fbc_catalog/update_fbc_catalog.py /home/scripts/python/tasks/internal/update_fbc_catalog.py
+
+##############################################################
+
 COPY templates /home/templates
 COPY kafka /home/kafka
 COPY pubtools-pulp-wrapper /home/pubtools-pulp-wrapper
@@ -174,11 +256,14 @@ ENV PATH="$PATH:/home/pubtools-pulp-wrapper"
 ENV PATH="$PATH:/home/pubtools-marketplacesvm-wrapper"
 ENV PATH="$PATH:/home/developer-portal-wrapper"
 ENV PATH="$PATH:/home/publish-to-cgw-wrapper"
+
+# TODO: remove when fixed in release-service-catalog
 ENV PATH="$PATH:/home/scripts/python/tasks/managed"
+ENV PATH="$PATH:/home/scripts/python/tasks/internal"
 # Flat imports: helpers and task scripts must be importable.
 # Tests use the same layout via pyproject [tool.pytest.ini_options] pythonpath.
 # Keep /home for other modules (e.g. pyxis, sbom) that expect it.
-ENV PYTHONPATH="/home:/home/pyxis:/home/utils:/home/scripts/python/helpers:/home/scripts/python/tasks/internal:/home/scripts/python/tasks/managed:/home/pubtools-pulp-wrapper:/home/publish-to-cgw-wrapper"
+ENV PYTHONPATH="/home:/home/pyxis:/home/utils:/home/scripts/python/tasks/internal:/home/scripts/python/tasks/managed:/home/pubtools-pulp-wrapper:/home/publish-to-cgw-wrapper"
 
 # uv installs newer requests and certifi which don't use the system CA like the one installed via
 # dnf. So we need to point requests to the system CA bundle explicitly.
