@@ -593,6 +593,71 @@ class TestCheckCves:
         )
         assert len(errors) == 1
         assert "CVE-2024-001" in errors[0]
+        assert "Failure" in errors[0]
+
+    @mock.patch("embargo_check.run_cmd")
+    @mock.patch("embargo_check.create", return_value="ir-abc")
+    def test_osidb_connection_failure_is_not_labeled_embargoed(
+        self,
+        mock_create: mock.MagicMock,
+        mock_run: mock.MagicMock,
+    ) -> None:
+        """Surface the InternalRequest result when no CVE ids were flagged."""
+        data = _data_with_cves(["CVE-2024-001"])
+        mock_run.return_value = _kubectl_result(
+            json.dumps(
+                {
+                    "result": (
+                        "check_embargoed_cves.py: Failed while querying the "
+                        "OSIDB flaws API (HTTP request): Connection refused"
+                    ),
+                    "embargoed_cves": "",
+                }
+            )
+        )
+        errors = embargo_check.check_cves(
+            data,
+            pipeline_run_uid="uid-123",
+            request_timeout=2700,
+            task_git_url="https://github.com/test/repo",
+            task_git_revision="main",
+        )
+        assert len(errors) == 1
+        assert "marked as embargoed" not in errors[0]
+        assert "embargo check failed:" in errors[0]
+        assert "Connection refused" in errors[0]
+
+    @mock.patch("embargo_check.run_cmd")
+    @mock.patch("embargo_check.create", return_value="ir-abc")
+    def test_embargoed_error_includes_osidb_reason(
+        self,
+        mock_create: mock.MagicMock,
+        mock_run: mock.MagicMock,
+    ) -> None:
+        """Include the inner result text so empty/null vs embargoed is visible."""
+        data = _data_with_cves(["CVE-2024-001"])
+        mock_run.return_value = _kubectl_result(
+            json.dumps(
+                {
+                    "result": (
+                        "check_embargoed_cves.py: check failed: at least one CVE "
+                        "is embargoed or not clearly public in OSIDB "
+                        "(CVE-2024-001: OSIDB returned no matching flaws)"
+                    ),
+                    "embargoed_cves": "CVE-2024-001 ",
+                }
+            )
+        )
+        errors = embargo_check.check_cves(
+            data,
+            pipeline_run_uid="uid-123",
+            request_timeout=2700,
+            task_git_url="https://github.com/test/repo",
+            task_git_revision="main",
+        )
+        assert len(errors) == 1
+        assert "CVE-2024-001" in errors[0]
+        assert "OSIDB returned no matching flaws" in errors[0]
 
     @mock.patch("embargo_check.run_cmd")
     @mock.patch("embargo_check.create", return_value="ir-abc")

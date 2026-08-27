@@ -291,12 +291,20 @@ def check_cves(
     except json.JSONDecodeError:
         return [f"Could not parse InternalRequest results: {result.stdout.strip()}"]
 
-    if results.get("result") == "Success":
+    result_text = str(results.get("result", "")).strip()
+    if result_text == "Success":
         logger.info("No embargoed CVEs found")
         return []
 
-    embargoed = results.get("embargoed_cves", "")
-    return [f"The following CVEs are marked as embargoed: {embargoed}"]
+    embargoed = str(results.get("embargoed_cves", "")).strip()
+    if embargoed:
+        msg = f"The following CVEs are marked as embargoed: {embargoed}"
+        if result_text:
+            msg = f"{msg}. {result_text}"
+        return [msg]
+    if result_text:
+        return [f"embargo check failed: {result_text}"]
+    return ["embargo check failed: InternalRequest result was not Success"]
 
 
 def run(

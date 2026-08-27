@@ -61,21 +61,23 @@ def test_parse_cve_list() -> None:
 
 
 @pytest.mark.parametrize(
-    ("payload", "exp"),
+    ("payload", "reason"),
     [
-        ({}, True),
-        ({"results": []}, True),
-        ({"results": None}, True),
-        ({"results": ["not-a-dict"]}, True),
-        ({"results": [{}]}, True),
-        ({"results": [{"embargoed": None}]}, True),
-        ({"results": [{"embargoed": True}]}, True),
-        ({"results": [{"embargoed": False}]}, False),
+        ({}, "empty OSIDB response (no flaw JSON)"),
+        ({"results": []}, "OSIDB returned no matching flaws"),
+        ({"results": None}, "OSIDB results missing or not a list"),
+        ({"results": ["not-a-dict"]}, "OSIDB first result is not an object"),
+        ({"results": [{}]}, "OSIDB flaw missing embargoed field"),
+        ({"results": [{"embargoed": None}]}, "OSIDB reports embargoed: null"),
+        ({"results": [{"embargoed": True}]}, "OSIDB reports embargoed: true"),
+        ({"results": [{"embargoed": "yes"}]}, "OSIDB reports embargoed: 'yes' (not false)"),
+        ({"results": [{"embargoed": False}]}, None),
     ],
 )
-def test_is_embargoed_flaw_response(payload: dict, exp: bool) -> None:
-    """Only ``results[0].embargoed == false`` means not embargoed; all other shapes do."""
-    assert check_embargoed_cves.is_embargoed_flaw_response(payload) is exp
+def test_flaw_response_failure_reason(payload: dict, reason: str | None) -> None:
+    """Classify each OSIDB payload shape with a distinct fail-closed reason."""
+    assert check_embargoed_cves.flaw_response_failure_reason(payload) == reason
+    assert check_embargoed_cves.is_embargoed_flaw_response(payload) is (reason is not None)
 
 
 def test_fetch_flaw_state_empty_bodies() -> None:
@@ -131,9 +133,11 @@ def test_main_passes_service_account_mount_resolved_by_environ(
     _setup_tekton_env(tmp_path, monkeypatch, sa_mount)
     seen: list[Path] = []
 
-    def _fake_run_check(_cve: list[str], mount: Path, **_k: object) -> tuple[list[str], int]:
+    def _fake_run_check(
+        _cve: list[str], mount: Path, **_k: object
+    ) -> tuple[list[str], int, list[str]]:
         seen.append(mount)
-        return ([], 0)
+        return ([], 0, [])
 
     with mock.patch.object(check_embargoed_cves, "run_check", side_effect=_fake_run_check):
         check_embargoed_cves.main(["check_embargoed_cves.py", "--cves", "CVE-1"])
@@ -169,7 +173,7 @@ def test_run_check_all_flaws_not_embargoed(sa_mount: Path, tmp_path: Path) -> No
     def gflav(_u: str, _t: str, _c: str) -> dict:  # noqa: ARG001
         return {"results": [{"embargoed": False}]}
 
-    p, r = check_embargoed_cves.run_check(
+    p, r, details = check_embargoed_cves.run_check(
         ["CVE-123", "CVE-456"],
         sa_mount,
         kinit=_no_kinit,
@@ -177,7 +181,7 @@ def test_run_check_all_flaws_not_embargoed(sa_mount: Path, tmp_path: Path) -> No
         get_flaw=gflav,
         krb5_template=krb5,
     )
-    assert p == [] and r == 0
+    assert p == [] and r == 0 and details == []
 
 
 def test_run_check_rejects_empty_cve_list(sa_mount: Path) -> None:
@@ -276,7 +280,7 @@ def test_run_check_empty_body_treated_as_embargoed(sa_mount: Path, tmp_path: Pat
             return {}
         return {"results": [{"embargoed": False}]}
 
-    p, r = check_embargoed_cves.run_check(
+    p, r, details = check_embargoed_cves.run_check(
         ["CVE-noaccess"],
         sa_mount,
         kinit=_no_kinit,
@@ -285,6 +289,7 @@ def test_run_check_empty_body_treated_as_embargoed(sa_mount: Path, tmp_path: Pat
         krb5_template=krb5,
     )
     assert p == ["CVE-noaccess"] and r == 1
+    assert details == ["CVE-noaccess: empty OSIDB response (no flaw JSON)"]
 
 
 def test_run_check_mixed_list_reports_embargoed_cve(sa_mount: Path, tmp_path: Path) -> None:
@@ -299,7 +304,7 @@ def test_run_check_mixed_list_reports_embargoed_cve(sa_mount: Path, tmp_path: Pa
             return {"results": [{"embargoed": True}]}
         return {"results": [{"embargoed": False}]}
 
-    p, r = check_embargoed_cves.run_check(
+    p, r, details = check_embargoed_cves.run_check(
         ["CVE-123", "CVE-embargo"],
         sa_mount,
         kinit=_no_kinit,
@@ -308,6 +313,37 @@ def test_run_check_mixed_list_reports_embargoed_cve(sa_mount: Path, tmp_path: Pa
         krb5_template=krb5,
     )
     assert p == ["CVE-embargo"] and r == 1
+    assert details == ["CVE-embargo: OSIDB reports embargoed: true"]
+
+
+def test_run_check_logs_osidb_payload_and_reason(
+    sa_mount: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Stdout includes the compact OSIDB JSON and the fail-closed reason."""
+    krb5 = _minimal_krb5(tmp_path / "k5.conf")
+
+    def gflav(_u: str, _t: str, cve: str) -> dict:  # noqa: ARG001
+        if cve == "CVE-empty":
+            return {}
+        if cve == "CVE-null":
+            return {"results": [{"cve_id": cve, "embargoed": None}]}
+        return {"results": [{"cve_id": cve, "embargoed": False}]}
+
+    check_embargoed_cves.run_check(
+        ["CVE-ok", "CVE-empty", "CVE-null"],
+        sa_mount,
+        kinit=_no_kinit,
+        get_token=lambda _: "dummy-token",
+        get_flaw=gflav,
+        krb5_template=krb5,
+    )
+    log = capsys.readouterr().out
+    assert "CVE CVE-ok OSIDB response:" in log
+    assert '{"cve_id":"CVE-ok","embargoed":false}' in log
+    assert "CVE CVE-empty OSIDB response: {}" in log
+    assert "CVE CVE-empty not clearly public: empty OSIDB response (no flaw JSON)" in log
+    assert "CVE CVE-null not clearly public: OSIDB reports embargoed: null" in log
+    assert "CVE CVE-ok not clearly public" not in log
 
 
 def test_main_all_clear(
@@ -318,7 +354,7 @@ def test_main_all_clear(
     with mock.patch.object(
         check_embargoed_cves,
         "run_check",
-        return_value=([], 0),
+        return_value=([], 0, []),
     ) as run_mock:
         out = check_embargoed_cves.main(
             ["check_embargoed_cves.py", "--cves", "CVE-123 CVE-456"]
@@ -337,11 +373,16 @@ def test_main_cve_treated_inaccessible(
     with mock.patch.object(
         check_embargoed_cves,
         "run_check",
-        return_value=(["CVE-noaccess"], 1),
+        return_value=(
+            ["CVE-noaccess"],
+            1,
+            ["CVE-noaccess: empty OSIDB response (no flaw JSON)"],
+        ),
     ):
         out = check_embargoed_cves.main(["check_embargoed_cves.py", "--cves", "CVE-noaccess"])
     assert out == 0
     assert _is_expected_embargo_outcome(rpath.read_text())
+    assert "CVE-noaccess: empty OSIDB response (no flaw JSON)" in rpath.read_text()
     assert epath.read_text() == "CVE-noaccess "
 
 
@@ -353,13 +394,14 @@ def test_main_mixed_cves_one_reported_embargoed(
     with mock.patch.object(
         check_embargoed_cves,
         "run_check",
-        return_value=(["CVE-embargo"], 1),
+        return_value=(["CVE-embargo"], 1, ["CVE-embargo: OSIDB reports embargoed: true"]),
     ):
         out = check_embargoed_cves.main(
             ["check_embargoed_cves.py", "--cves", "CVE-123 CVE-embargo"]
         )
     assert out == 0
     assert _is_expected_embargo_outcome(rpath.read_text())
+    assert "CVE-embargo: OSIDB reports embargoed: true" in rpath.read_text()
     assert epath.read_text() == "CVE-embargo "
 
 
