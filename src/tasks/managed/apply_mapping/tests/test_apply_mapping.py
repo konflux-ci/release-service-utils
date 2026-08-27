@@ -1449,10 +1449,24 @@ def test_skopeo_list_repo_tags_failure_raises() -> None:
     """A failing skopeo list-tags call raises ``RuntimeError``."""
     with mock.patch(
         f"{TASK}.skopeo.list_tags",
-        return_value=_completed(returncode=1, stderr="not found"),
+        return_value=_completed(returncode=1, stderr="unauthorized: access denied"),
     ):
         with pytest.raises(RuntimeError, match="skopeo list-tags failed"):
             apply_mapping._skopeo_list_repo_tags("repo")
+
+
+def test_skopeo_list_repo_tags_repo_not_found_returns_empty_list() -> None:
+    """A repository that has never been pushed to is treated as having no tags.
+
+    Detection of the "not found" condition itself is exercised in
+    ``test_skopeo.py``; this only verifies ``_skopeo_list_repo_tags`` wires
+    ``skopeo.is_repo_not_found`` to an empty-list result instead of raising.
+    """
+    with mock.patch(
+        f"{TASK}.skopeo.list_tags",
+        return_value=_completed(returncode=1, stderr="name unknown: repository not found"),
+    ):
+        assert apply_mapping._skopeo_list_repo_tags("repo") == []
 
 
 def test_skopeo_list_repo_tags_missing_tags_key_returns_empty_list() -> None:
