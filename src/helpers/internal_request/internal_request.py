@@ -99,7 +99,9 @@ Intended for clusters whose API includes the `InternalRequest` resource type
 from __future__ import annotations
 
 import json
+import logging
 import re
+import subprocess
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -227,6 +229,20 @@ def build_payload(
     if service_account:
         payload["spec"]["serviceAccount"] = service_account
     return payload
+
+
+def _log_subprocess_output(
+    result: subprocess.CompletedProcess[str],
+    *,
+    label: str,
+    stdout_level: int = logging.DEBUG,
+    stderr_level: int = logging.INFO,
+) -> None:
+    """Log captured stdout/stderr from a subprocess result."""
+    if result.stdout and result.stdout.strip():
+        logger.log(stdout_level, "%s stdout: %s", label, result.stdout.strip())
+    if result.stderr and result.stderr.strip():
+        logger.log(stderr_level, "%s stderr: %s", label, result.stderr.strip())
 
 
 def _pipelinerun_uid_from_labels(labels: Mapping[str, str]) -> str:
@@ -406,7 +422,7 @@ def cleanup_existing_requests(
         if not isinstance(ir_name, str) or not ir_name:
             continue
         logger.info("Deleting InternalRequest %s...", ir_name)
-        run_cmd(
+        result = run_cmd(
             [
                 "kubectl",
                 "delete",
@@ -417,6 +433,7 @@ def cleanup_existing_requests(
             ],
             check=True,
         )
+        _log_subprocess_output(result, label=f"kubectl delete {ir_name}")
 
     logger.info(
         "Cleanup complete. Waiting %ds for PipelineRun cancellation to propagate...",
@@ -432,6 +449,7 @@ def create_internal_request(payload: dict[str, Any]) -> str:
         stdin=json.dumps(payload),
         check=True,
     )
+    _log_subprocess_output(result, label="kubectl create")
     resource = json.loads(result.stdout)
     name = resource.get("metadata", {}).get("name")
     if not isinstance(name, str) or not name:
@@ -470,11 +488,16 @@ def create(
     pipeline_timeout: str = "1h0m0s",
     task_timeout: str = "0h55m0s",
     finally_timeout: str = "0h5m0s",
+    cleanup: bool = True,
 ) -> str:
     """Create an InternalRequest and optionally wait for it to complete.
 
     Returns the created InternalRequest name. When *sync* is true, blocks until
     the InternalRequest completes using the same semantics as the bash utility.
+
+    When *cleanup* is false it skips deleting prior InternalRequests for the same
+    pipeline run. Set this when multiple InternalRequests are created
+    concurrently with the same labels.
     """
     if not pipeline:
         msg = "pipeline is required"
@@ -497,7 +520,8 @@ def create(
         task_timeout=task_timeout,
         finally_timeout=finally_timeout,
     )
-    cleanup_existing_requests(pipeline=pipeline, labels=merged_labels)
+    if cleanup:
+        cleanup_existing_requests(pipeline=pipeline, labels=merged_labels)
 
     payload = build_payload(
         pipeline=pipeline,

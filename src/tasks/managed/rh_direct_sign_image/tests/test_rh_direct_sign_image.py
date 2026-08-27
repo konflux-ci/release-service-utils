@@ -936,42 +936,44 @@ def test_get_submit_config_raises_on_missing_configmap_key() -> None:
 # --- submit_batch ---
 
 
-def test_submit_batch_reads_file_and_calls_internal_request(tmp_path) -> None:
-    """submit_batch reads the batch file content and passes it to internal-request."""
+def test_submit_batch_calls_create_with_expected_params(tmp_path: Path) -> None:
+    """submit_batch passes correct params and labels to create_internal_request."""
     cfg = get_submit_config(_FULL_CONFIGMAP, _make_submit_args(), {})
     batch_file = tmp_path / "batch_0000.txt"
     batch_file.write_text("base64content==")
 
-    with patch(f"{TASK}.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0)
+    with patch(f"{TASK}.create_internal_request") as mock_create:
+        mock_create.return_value = "container-signing-abc123"
         submit_batch(batch_file, cfg)
 
-    cmd = mock_run.call_args.args[0]
-    assert cmd[0] in ("internal-request", "internal-request")
-    assert "--pipeline" in cmd and "container-signing" in cmd
-    assert "-p" in cmd
-    assert any("signing_requests=base64content==" in a for a in cmd)
-    assert any("requester=tester" in a for a in cmd)
-    assert any("pyxis_ssl_cert_secret_name=pyxis-cert-secret" in a for a in cmd)
-    assert any(
-        "pyxis_graphql_url=https://graphql-pyxis.example.com/graphql/" in a for a in cmd
+    mock_create.assert_called_once()
+    call_kwargs = mock_create.call_args
+    assert call_kwargs.args[0] == "container-signing"
+    params = call_kwargs.kwargs["params"]
+    assert params["signing_requests"] == "base64content=="
+    assert params["requester"] == "tester"
+    assert params["pyxis_ssl_cert_secret_name"] == "pyxis-cert-secret"
+    assert params["pyxis_graphql_url"] == "https://graphql-pyxis.example.com/graphql/"
+    assert params["kerberos_principal"] == "svc@REALM"
+    assert params["kerberos_keytab"] == "/etc/keytab"
+    assert params["kerberos_keytab_secret"] == "keytab-secret"
+    assert params["taskGitUrl"] == "https://gitlab.cee.redhat.com/signing/signing.git"
+    assert params["taskGitRevision"] == "main"
+    assert params["pipeline_image"] == "quay.io/signing/pipeline:latest"
+    labels = call_kwargs.kwargs["labels"]
+    assert labels["internal-services.appstudio.openshift.io/group-id"] == "task-uid-123"
+    assert labels["internal-services.appstudio.openshift.io/pipelinerun-uid"] == "pr-uid-456"
+    assert labels["internal-services.appstudio.openshift.io/rate-limited"] == "true"
+    assert (
+        labels["internal-services.appstudio.openshift.io/rate-limiting-group"]
+        == "signing-server"
     )
-    assert any("kerberos_principal=svc@REALM" in a for a in cmd)
-    assert any("kerberos_keytab=/etc/keytab" in a for a in cmd)
-    assert any("kerberos_keytab_secret=keytab-secret" in a for a in cmd)
-    assert any(
-        "internal-services.appstudio.openshift.io/group-id=task-uid-123" in a for a in cmd
-    )
-    assert any(
-        "internal-services.appstudio.openshift.io/pipelinerun-uid=pr-uid-456" in a for a in cmd
-    )
-    assert any("internal-services.appstudio.openshift.io/rate-limited=true" in a for a in cmd)
-    assert "-t" in cmd and "1800" in cmd
-    assert "--pipeline-timeout" in cmd and "0h30m0s" in cmd
-    assert "--task-timeout" in cmd and "0h25m0s" in cmd
-    assert "--service-account" in cmd and "signing-pipeline-sa" in cmd
-    assert "-s" in cmd and "true" in cmd
-    assert any("pipeline_image=quay.io/signing/pipeline:latest" in a for a in cmd)
+    assert call_kwargs.kwargs["sync"] is True
+    assert call_kwargs.kwargs["timeout"] == 1800
+    assert call_kwargs.kwargs["pipeline_timeout"] == "0h30m0s"
+    assert call_kwargs.kwargs["task_timeout"] == "0h25m0s"
+    assert call_kwargs.kwargs["service_account"] == "signing-pipeline-sa"
+    assert call_kwargs.kwargs["cleanup"] is False
 
 
 def test_submit_batch_omits_pipeline_image_when_empty(tmp_path: Path) -> None:
@@ -980,26 +982,26 @@ def test_submit_batch_omits_pipeline_image_when_empty(tmp_path: Path) -> None:
     batch_file = tmp_path / "batch_0000.txt"
     batch_file.write_text("base64content==")
 
-    with patch(f"{TASK}.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0)
+    with patch(f"{TASK}.create_internal_request") as mock_create:
+        mock_create.return_value = "container-signing-abc123"
         submit_batch(batch_file, cfg)
 
-    cmd = mock_run.call_args.args[0]
-    assert not any("pipeline_image=" in a for a in cmd)
+    params = mock_create.call_args.kwargs["params"]
+    assert "pipeline_image" not in params
 
 
-def test_submit_batch_includes_intention_label(tmp_path) -> None:
-    """submit_batch passes the intention label to internal-request."""
+def test_submit_batch_includes_intention_label(tmp_path: Path) -> None:
+    """submit_batch passes the intention label to create_internal_request."""
     cfg = get_submit_config(_FULL_CONFIGMAP, _make_submit_args(), {"intention": "release"})
     batch_file = tmp_path / "batch_0000.txt"
     batch_file.write_text("base64content==")
 
-    with patch(f"{TASK}.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0)
+    with patch(f"{TASK}.create_internal_request") as mock_create:
+        mock_create.return_value = "container-signing-abc123"
         submit_batch(batch_file, cfg)
 
-    cmd = mock_run.call_args.args[0]
-    assert any("internal-services.appstudio.openshift.io/intention=release" in a for a in cmd)
+    labels = mock_create.call_args.kwargs["labels"]
+    assert labels["internal-services.appstudio.openshift.io/intention"] == "release"
 
 
 def test_submit_batch_logs_completed_with_duration_and_pipeline(
@@ -1010,44 +1012,50 @@ def test_submit_batch_logs_completed_with_duration_and_pipeline(
     batch_file = tmp_path / "batch_0000.txt"
     batch_file.write_text("base64content==")
 
-    with patch(f"{TASK}.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0)
+    with patch(f"{TASK}.create_internal_request") as mock_create:
+        mock_create.return_value = "container-signing-abc123"
         with caplog.at_level(logging.INFO, logger="release"):
             submit_batch(batch_file, cfg)
 
     assert any(
-        # "container-signing" is the default pipeline name from _make_submit_args()
         "container-signing" in r.message
         and re.search(r"completed successfully in \d+\.\d+s", r.message)
         for r in caplog.records
     )
 
 
-def test_submit_batch_raises_on_nonzero_returncode(tmp_path: Path) -> None:
-    """submit_batch raises RuntimeError with pipeline name and stderr on failure."""
+def test_submit_batch_raises_on_internal_request_failure(tmp_path: Path) -> None:
+    """submit_batch raises RuntimeError when InternalRequestWaitError is raised."""
+    from release_service_utils.helpers.internal_request import InternalRequestWaitError
+
     cfg = get_submit_config(_FULL_CONFIGMAP, _make_submit_args(), {})
     batch_file = tmp_path / "batch_0000.txt"
     batch_file.write_text("base64content==")
 
-    with patch(f"{TASK}.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(returncode=1, stderr="something broke")
-        with pytest.raises(RuntimeError, match="Internal request failed"):
+    with patch(f"{TASK}.create_internal_request") as mock_create:
+        mock_create.side_effect = InternalRequestWaitError(
+            "At least one InternalRequest failed", 21
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="pipeline 'container-signing': At least one InternalRequest failed",
+        ):
             submit_batch(batch_file, cfg)
 
 
-def test_submit_batch_logs_stdout_and_stderr_on_failure(
+def test_submit_batch_logs_error_on_failure(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """submit_batch logs both stdout and stderr from the internal-request on failure."""
+    """submit_batch logs the pipeline name and error reason on failure."""
+    from release_service_utils.helpers.internal_request import InternalRequestWaitError
+
     cfg = get_submit_config(_FULL_CONFIGMAP, _make_submit_args(), {})
     batch_file = tmp_path / "batch_0000.txt"
     batch_file.write_text("base64content==")
 
-    with patch(f"{TASK}.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(
-            returncode=1,
-            stdout="InternalRequest 'mock-container-signing' created.",
-            stderr="error: request timed out",
+    with patch(f"{TASK}.create_internal_request") as mock_create:
+        mock_create.side_effect = InternalRequestWaitError(
+            "At least one InternalRequest failed", 21
         )
         with caplog.at_level(logging.ERROR, logger="release"):
             with pytest.raises(RuntimeError):
@@ -1055,9 +1063,7 @@ def test_submit_batch_logs_stdout_and_stderr_on_failure(
 
     error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert any(
-        "container-signing" in r.message
-        and "InternalRequest 'mock-container-signing' created." in r.message
-        and "error: request timed out" in r.message
+        "container-signing" in r.message and "At least one InternalRequest failed" in r.message
         for r in error_records
     )
 

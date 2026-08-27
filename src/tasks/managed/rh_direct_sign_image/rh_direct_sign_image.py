@@ -16,6 +16,10 @@ from pathlib import Path
 from typing import Any
 
 import pyxis
+from release_service_utils.helpers.internal_request import (
+    InternalRequestWaitError,
+    create as create_internal_request,
+)
 from release_service_utils.helpers.kubectl import get_configmap
 from release_service_utils.helpers.logger import logger as LOGGER
 from release_service_utils.helpers.oras_utils import oras_resolve
@@ -663,7 +667,7 @@ def get_submit_config(
 
 
 def submit_batch(batch_file: Path, config: SubmitConfig) -> None:
-    """Submit a single signing batch via the internal-request CLI.
+    """Submit a single signing batch via the internal_request helper.
 
     Reads the base64-encoded batch content from *batch_file* and passes it
     as the ``signing_requests`` parameter.
@@ -674,86 +678,65 @@ def submit_batch(batch_file: Path, config: SubmitConfig) -> None:
 
     """
     batch_content = batch_file.read_text()
-    cmd = [
-        "internal-request",
-        "--pipeline",
-        config.pipeline,
-    ]
-    if config.pipeline_image:
-        cmd += ["-p", f"pipeline_image={config.pipeline_image}"]
-    cmd += [
-        "-p",
-        f"signing_requests={batch_content}",
-        "-p",
-        f"requester={config.requester}",
-        "-p",
-        f"pyxis_ssl_cert_secret_name={config.pyxis_ssl_cert_secret_name}",
-        "-p",
-        f"pyxis_graphql_url={config.pyxis_graphql_url}",
-        "-p",
-        f"kerberos_keytab_secret={config.kerberos_keytab_secret}",
-        "-p",
-        f"kerberos_keytab={config.kerberos_keytab}",
-        "-p",
-        f"kerberos_principal={config.kerberos_principal}",
-        "-p",
-        f"taskGitUrl={config.signing_repo}",
-        "-p",
-        f"taskGitRevision={config.signing_revision}",
-        "-l",
-        f"{_TASK_LABEL}={config.task_id}",
-        "-l",
-        f"{_PIPELINERUN_LABEL}={config.pipelinerun_uid}",
-        "-l",
-        f"{_INTENTION_LABEL}={config.intention}",
-        "-l",
-        "internal-services.appstudio.openshift.io/rate-limited=true",
-        "-l",
-        "internal-services.appstudio.openshift.io/rate-limiting-group=signing-server",
-        "-t",
-        config.request_timeout,
-        "--pipeline-timeout",
-        config.pipeline_timeout,
-        "--task-timeout",
-        config.task_timeout,
-        "--service-account",
-        config.service_account,
-        "-s",
-        "true",
-    ]
 
-    LOGGER.debug("Submitting batch with command: %s", " ".join(cmd))
+    params: dict[str, str] = {
+        "signing_requests": batch_content,
+        "requester": config.requester,
+        "pyxis_ssl_cert_secret_name": config.pyxis_ssl_cert_secret_name,
+        "pyxis_graphql_url": config.pyxis_graphql_url,
+        "kerberos_keytab_secret": config.kerberos_keytab_secret,
+        "kerberos_keytab": config.kerberos_keytab,
+        "kerberos_principal": config.kerberos_principal,
+        "taskGitUrl": config.signing_repo,
+        "taskGitRevision": config.signing_revision,
+    }
+    if config.pipeline_image:
+        params["pipeline_image"] = config.pipeline_image
+
+    labels = {
+        _TASK_LABEL: config.task_id,
+        _PIPELINERUN_LABEL: config.pipelinerun_uid,
+        _INTENTION_LABEL: config.intention,
+        "internal-services.appstudio.openshift.io/rate-limited": "true",
+        "internal-services.appstudio.openshift.io/rate-limiting-group": "signing-server",
+    }
+
+    LOGGER.debug("Submitting batch '%s' for pipeline '%s'", batch_file, config.pipeline)
     start = time.monotonic()
-    result = run_cmd(
-        cmd,
-        check=False,
-    )
-    duration = time.monotonic() - start
-    stdout = result.stdout.strip()
-    stderr = result.stderr.strip()
-    if result.returncode != 0:
+    try:
+        ir_name = create_internal_request(
+            config.pipeline,
+            params=params,
+            labels=labels,
+            sync=True,
+            timeout=int(config.request_timeout),
+            service_account=config.service_account,
+            pipeline_timeout=config.pipeline_timeout,
+            task_timeout=config.task_timeout,
+            cleanup=False,
+        )
+    except InternalRequestWaitError as exc:
+        duration = time.monotonic() - start
         LOGGER.error(
-            "Internal request failed for batch '%s', pipeline '%s'.\n"
-            "stdout:\n%s\nstderr:\n%s",
+            "Internal request failed for batch '%s', pipeline '%s' after %.1fs: %s",
             batch_file,
             config.pipeline,
-            stdout,
-            stderr,
+            duration,
+            exc,
         )
         raise RuntimeError(
             f"Internal request failed for batch '{batch_file}',"
-            f" pipeline '{config.pipeline}': {stderr}"
-        )
+            f" pipeline '{config.pipeline}': {exc}"
+        ) from exc
+    duration = time.monotonic() - start
     LOGGER.info(
-        "Batch '%s' for pipeline '%s' completed successfully in %.1fs",
+        "Batch '%s' for pipeline '%s' completed successfully in %.1fs"
+        " (InternalRequest: %s)",
         batch_file,
         config.pipeline,
         duration,
+        ir_name,
     )
-    if stdout:
-        LOGGER.debug("internal-request stdout:\n%s", stdout)
-    if stderr:
-        LOGGER.debug("internal-request stderr:\n%s", stderr)
 
 
 def submit_batches(batch_dir: Path, config: SubmitConfig) -> None:
