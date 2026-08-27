@@ -4,7 +4,9 @@ FROM --platform=linux/amd64 registry.redhat.io/rhtas/ec-rhel9:0.7@sha256:1fc7c61
 
 FROM --platform=linux/amd64 registry.redhat.io/rhtas/cosign-rhel9:1.3.3-1773309431 as cosign
 
-FROM --platform=linux/amd64 registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.4-1 as roxctl
+# No --platform pin here (unlike cosign/ec-rhel9 above): we copy the roxctl binary
+# itself, not an arch-bundled blob, so this must resolve to the target build platform.
+FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.4-1 as roxctl
 
 FROM registry.access.redhat.com/ubi10/ubi:10.2-1782277716
 
@@ -24,20 +26,32 @@ RUN ARCH=$(uname -m) && \
     elif [ "$ARCH" = "aarch64" ]; then \
         GO_ARCH="arm64"; \
     fi && \
-    curl -L https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${GO_ARCH} -o /usr/bin/yq &&\
-    curl -L https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${GO_ARCH}/kubectl -o /usr/bin/kubectl &&\
-    curl -L https://github.com/operator-framework/operator-registry/releases/download/${OPM_VERSION}/linux-${GO_ARCH}-opm -o /usr/bin/opm &&\
-    curl -L https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr -xzf - bin/glab &&\
-    curl -L https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GO_ARCH}.tar.gz  | tar -C /usr -xzf - --strip=1 gh_${GH_VERSION}_linux_${GO_ARCH}/bin/gh &&\
-    curl -L https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr/bin/ -xzf - syft &&\
-    curl -L https://github.com/kubearchive/kubearchive/releases/download/v${KUBEARCHIVE_VERSION}/kubectl-ka-linux-${GO_ARCH} -o /usr/bin/kubectl-ka &&\
-    chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft,kubectl-ka}
+    # -f: fail (non-zero exit) on HTTP errors instead of saving the error page as the binary
+    # -sS: silent but still show errors; -L: follow redirects
+    curl -fsSL https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${GO_ARCH} -o /usr/bin/yq &&\
+    curl -fsSL https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${GO_ARCH}/kubectl -o /usr/bin/kubectl &&\
+    curl -fsSL https://github.com/operator-framework/operator-registry/releases/download/${OPM_VERSION}/linux-${GO_ARCH}-opm -o /usr/bin/opm &&\
+    curl -fsSL https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr -xzf - bin/glab &&\
+    curl -fsSL https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GO_ARCH}.tar.gz  | tar -C /usr -xzf - --strip=1 gh_${GH_VERSION}_linux_${GO_ARCH}/bin/gh &&\
+    curl -fsSL https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr/bin/ -xzf - syft &&\
+    curl -fsSL https://github.com/kubearchive/kubearchive/releases/download/v${KUBEARCHIVE_VERSION}/kubectl-ka-linux-${GO_ARCH} -o /usr/bin/kubectl-ka &&\
+    chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft,kubectl-ka} && \
+    # Verify each binary is actually a working executable, not a truncated/error-page
+    # download that a bare curl exit code wouldn't catch.
+    yq --version && \
+    kubectl version --client && \
+    opm version && \
+    glab --version && \
+    gh --version && \
+    syft version && \
+    kubectl-ka version
 
 RUN dnf install -y https://dl.fedoraproject.org/pub/epel/10/Everything/$(arch)/Packages/e/epel-release-10-9.el10_3.noarch.rpm
 
 COPY --from=oras /usr/bin/oras /usr/bin/oras
 COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
 COPY --from=oras /usr/local/bin/get-reference-base /usr/local/bin/get-reference-base
+RUN oras version
 COPY --from=conforma-cli /usr/local/bin/ec_linux_*.gz /tmp/
 COPY --from=cosign /usr/local/bin/cosign-linux-*.gz /tmp/
 RUN ARCH=$(uname -m) && \
@@ -54,7 +68,8 @@ RUN ARCH=$(uname -m) && \
     fi && \
     gunzip -c /tmp/cosign-linux-${COSIGN_ARCH}.gz > /usr/local/bin/cosign && \
     chmod +x /usr/local/bin/cosign && \
-    rm -f /tmp/cosign-linux-*.gz
+    rm -f /tmp/cosign-linux-*.gz && \
+    cosign version
 
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
@@ -66,7 +81,8 @@ RUN ARCH=$(uname -m) && \
     fi && \
     gunzip -c /tmp/ec_linux_${EC_ARCH}.gz > /usr/bin/ec && \
     chmod +x /usr/bin/ec && \
-    rm -f /tmp/ec_linux_*.gz
+    rm -f /tmp/ec_linux_*.gz && \
+    ec version
 
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then ARCH=amd64; fi && \
@@ -77,10 +93,12 @@ RUN ARCH=$(uname -m) && \
 
 
 COPY --from=roxctl /usr/bin/roxctl /usr/bin/roxctl
+RUN roxctl version
 
 # Install uv via curl
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
-    mv /root/.local/bin/uv /usr/local/bin/uv
+    mv /root/.local/bin/uv /usr/local/bin/uv && \
+    uv --version
 
 RUN dnf install -y 'dnf-command(config-manager)' && \
     dnf config-manager --set-enabled codeready-builder-for-ubi-10-$(arch)-rpms
@@ -106,8 +124,17 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     zip \
     && dnf clean all
 
-RUN curl -LO https://github.com/release-engineering/exodus-rsync/releases/latest/download/exodus-rsync && \
-    chmod +x exodus-rsync && mv exodus-rsync /usr/local/bin/rsync
+# exodus-rsync only publishes an amd64 binary upstream (no arm64 build exists:
+# https://github.com/release-engineering/exodus-rsync/releases). On arm64, leave the
+# plain system rsync installed above as-is: callers using exodus-specific flags (e.g.
+# --exodus-conf) will get a clear "unknown option" error from it instead of a crash,
+# and generic rsync usage keeps working normally.
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        curl -fLO https://github.com/release-engineering/exodus-rsync/releases/latest/download/exodus-rsync && \
+        chmod +x exodus-rsync && mv exodus-rsync /usr/local/bin/rsync && \
+        rsync --help > /dev/null; \
+    fi
 
 # Install Python dependencies using uv
 COPY pyproject.toml uv.lock ./
