@@ -1,27 +1,34 @@
-#!/usr/bin/env python3
+"""Jinja2 template rendering with YAML-to-JSON conversion for advisory data.
+
+Two-pass rendering with AnsibleCoreFiltersExtension support. Outputs JSON to
+prevent YAML type coercion (e.g., version strings like "33158e1" being
+parsed as numbers).
+"""
+
 from __future__ import annotations
 
-import traceback
-
-import yaml
-from jinja2 import Template, DebugUndefined, exceptions
-from jinja2_ansible_filters import AnsibleCoreFiltersExtension
 import argparse
 import json
 import logging
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
-LOGGER = logging.getLogger("apply_template")
+import yaml
+from jinja2 import DebugUndefined, Template, exceptions
+from jinja2_ansible_filters import AnsibleCoreFiltersExtension
+
+LOGGER = logging.getLogger(__name__)
 
 
 def setup_argparser() -> argparse.Namespace:  # pragma: no cover
-    """Setup argument parser
+    """Set up argument parser for CLI usage.
 
-    :return: Initialized argument parser
+    Returns:
+        Parsed command-line arguments.
+
     """
-
     parser = argparse.ArgumentParser(description="Applies a template.")
 
     # Create mutually exclusive group for data input
@@ -57,12 +64,20 @@ def render_template_to_json_file(
     *,
     verbose: bool = False,
 ) -> None:
-    """
+    """Render Jinja2 template with two-pass processing and write as JSON.
+
     Two-pass Jinja render of *template_path* with *template_data*; write JSON to
     *output_path*.
 
     YAML is used as an intermediate representation; output is JSON so values like
     version strings are not corrupted by YAML type coercion.
+
+    Args:
+        output_path: Path where the rendered JSON will be written.
+        template_path: Path to the Jinja2 template file.
+        template_data: Dictionary of data to use in template rendering.
+        verbose: Enable debug logging if True.
+
     """
     log_level = logging.DEBUG if verbose else logging.INFO
     setup_logger(level=log_level)
@@ -84,7 +99,7 @@ def render_template_to_json_file(
         LOGGER.exception("Exception with Template Syntax:")
         # we use this traceback to get the line number
         LOGGER.error(traceback.format_exc())
-        raise jexc
+        raise jexc from jexc
 
     # try 2nd pass
     LOGGER.info("Rendering 2nd pass")
@@ -95,13 +110,13 @@ def render_template_to_json_file(
         LOGGER.exception("Exception with Template Syntax:")
         # we use this traceback to get the line number
         LOGGER.error(traceback.format_exc())
-        raise jexc
+        raise jexc from jexc
 
     try:
         # load to check it is valid yaml
         LOGGER.info("Load 2nd pass content")
         yaml.safe_load(content)
-    except yaml.YAMLError:
+    except yaml.YAMLError as exc:
         LOGGER.exception("Invalid yaml...fall back to first pass rendered content")
         # we use this traceback to get the line number
         LOGGER.error(traceback.format_exc())
@@ -111,11 +126,11 @@ def render_template_to_json_file(
             # load to check it is valid yaml
             LOGGER.info("Load 1st pass content")
             yaml.safe_load(content)
-        except yaml.YAMLError as exc:
+        except yaml.YAMLError as first_exc:
             LOGGER.exception("Invalid yaml")
             # we use this traceback to get the line number
             LOGGER.error(traceback.format_exc())
-            raise exc
+            raise first_exc from exc
 
     # Convert to JSON for safer parsing. Jinja works cleaner with YAML syntax
     # but YAML type conversion can corrupt data e.g. "33158e1" to 331580 JSON
@@ -127,29 +142,15 @@ def render_template_to_json_file(
         LOGGER.info("Wrote %s", out)
 
 
-def main():  # pragma: no cover
-    """CLI entrypoint."""
-    args = setup_argparser()
-    if args.data:
-        template_data = json.loads(args.data)
-    else:
-        with open(args.data_file, encoding="utf-8") as data_file:
-            template_data = json.loads(data_file.read())
-    render_template_to_json_file(
-        args.output,
-        args.template,
-        template_data,
-        verbose=args.verbose,
-    )
-
-
-def setup_logger(level: int = logging.INFO, log_format: Any = None):
+def setup_logger(level: int = logging.INFO, log_format: Any = None) -> None:
     """Set up and configure logger with stdout and stderr handlers.
 
     Logs at passed level to stdout, ERROR and above to stderr.
+
     Args:
         level: Minimum logging level for stdout (default: logging.INFO)
         log_format: Logging message format (default: standard format)
+
     """
     if log_format is None:
         log_format = "%(asctime)s [%(name)s] %(levelname)s %(message)s"
@@ -168,5 +169,27 @@ def setup_logger(level: int = logging.INFO, log_format: Any = None):
         root.addHandler(handler)
 
 
+def main() -> int:  # pragma: no cover
+    """CLI entrypoint for applying Jinja2 templates.
+
+    Returns:
+        Exit code (0 for success).
+
+    """
+    args = setup_argparser()
+    if args.data:
+        template_data = json.loads(args.data)
+    else:
+        with open(args.data_file, encoding="utf-8") as data_file:
+            template_data = json.loads(data_file.read())
+    render_template_to_json_file(
+        args.output,
+        args.template,
+        template_data,
+        verbose=args.verbose,
+    )
+    return 0
+
+
 if __name__ == "__main__":  # pragma: no cover
-    main()
+    raise SystemExit(main())

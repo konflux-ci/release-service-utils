@@ -34,9 +34,11 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+import tempfile
 from typing import Any, Callable
 
 from release_service_utils.helpers import (
+    apply_template,
     date_format,
     file,
     image_ref,
@@ -523,6 +525,21 @@ def process_component(
             repository["rh-registry-repo"] = url
             repository["registry-access-repo"] = image_ref.convert_to_registry_access(url)
             repository["url"] = image_ref.convert_to_quay(url)
+
+    component_json = json.dumps(component, indent=2, sort_keys=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", prefix=f"component-{name}-", delete=True, encoding="utf-8"
+    ) as temp_file:
+        temp_file.write(component_json)
+        temp_file.flush()
+        apply_template.render_template_to_json_file(
+            output_path=temp_file.name + ".rendered.json",
+            template_path=temp_file.name,
+            template_data=substitute_map,
+        )
+        udpated_component = json.load(open(temp_file.name + ".rendered.json"))
+        for k, v in udpated_component.items():
+            component[k] = v
 
 
 def process_components(
