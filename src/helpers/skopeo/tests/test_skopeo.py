@@ -12,9 +12,10 @@ from release_service_utils.helpers import skopeo
 def _completed(
     stdout: str = "",
     returncode: int = 0,
+    stderr: str = "",
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(
-        args=[], returncode=returncode, stdout=stdout, stderr=""
+        args=[], returncode=returncode, stdout=stdout, stderr=stderr
     )
 
 
@@ -107,6 +108,19 @@ def test_inspect_nonzero_exit_code() -> None:
         result = skopeo.inspect("img:v1")
 
     assert result.returncode == 1
+
+
+def test_inspect_no_tags_with_raw() -> None:
+    """``no_tags=True`` can be combined with ``raw=True``."""
+    with mock.patch(
+        "release_service_utils.helpers.skopeo.skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.inspect("img:v1", raw=True, no_tags=True)
+
+    cmd = run_mock.call_args[0][0]
+    assert "--no-tags" in cmd
+    assert "--raw" in cmd
 
 
 def test_inspect_config_and_raw_together() -> None:
@@ -259,6 +273,43 @@ def test_list_tags_nonzero_exit_code() -> None:
         result = skopeo.list_tags("repo")
 
     assert result.returncode == 1
+
+
+# ---------------------------------------------------------------------------
+# is_repo_not_found
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        'level=fatal msg="Error listing repository tags: fetching tags list: '
+        'name unknown: repository not found"',
+        "repository not found",
+        "NAME UNKNOWN",
+    ],
+)
+def test_is_repo_not_found_true_for_missing_repo(stderr: str) -> None:
+    """Registry NAME_UNKNOWN errors (in either phrasing) are recognized."""
+    assert skopeo.is_repo_not_found(_completed(returncode=1, stderr=stderr)) is True
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "unauthorized: access denied",
+        "unable to connect to registry",
+        "",
+    ],
+)
+def test_is_repo_not_found_false_for_other_errors(stderr: str) -> None:
+    """Other failures (auth, network, ...) are not mistaken for a missing repo."""
+    assert skopeo.is_repo_not_found(_completed(returncode=1, stderr=stderr)) is False
+
+
+def test_is_repo_not_found_false_on_success() -> None:
+    """A successful result is never treated as repo-not-found."""
+    assert skopeo.is_repo_not_found(_completed(stdout='{"Tags": []}')) is False
 
 
 # ---------------------------------------------------------------------------

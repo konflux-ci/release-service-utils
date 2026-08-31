@@ -340,3 +340,45 @@ def test_oras_push_raises_on_missing_digest(tmp_path: Path) -> None:
     with patch("subprocess.check_output", return_value="no digest here\n"):
         with pytest.raises(RuntimeError, match="Could not extract digest"):
             oras_utils.oras_push("quay.io/org/repo:tag", tmp_path, "macos", "mycomp")
+
+
+def test_oras_manifest_fetch_returns_stdout(tmp_path: Path) -> None:
+    """oras_manifest_fetch returns the raw manifest JSON string."""
+    auth = tmp_path / "auth.json"
+    auth.write_text("{}")
+    with patch("release_service_utils.helpers.oras_utils.oras_utils.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(stdout='{"layers": []}')
+        result = oras_utils.oras_manifest_fetch("quay.io/org/img@sha256:abc", auth)
+    assert result == '{"layers": []}'
+    cmd = mock_run.call_args.args[0]
+    assert cmd[:3] == ["oras", "manifest", "fetch"]
+    assert "--registry-config" in cmd
+    assert "quay.io/org/img@sha256:abc" in cmd
+
+
+def test_oras_manifest_fetch_with_platform(tmp_path: Path) -> None:
+    """When platform is given, --platform is passed to oras."""
+    auth = tmp_path / "auth.json"
+    auth.write_text("{}")
+    with patch("release_service_utils.helpers.oras_utils.oras_utils.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(stdout="{}")
+        oras_utils.oras_manifest_fetch(
+            "quay.io/org/img@sha256:abc", auth, platform="linux/amd64"
+        )
+    cmd = mock_run.call_args.args[0]
+    idx = cmd.index("--platform")
+    assert cmd[idx + 1] == "linux/amd64"
+
+
+def test_oras_blob_fetch_runs_oras(tmp_path: Path) -> None:
+    """oras_blob_fetch runs the expected oras blob fetch command."""
+    auth = tmp_path / "auth.json"
+    auth.write_text("{}")
+    output = tmp_path / "blob.gz"
+    with patch("release_service_utils.helpers.oras_utils.oras_utils.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock()
+        oras_utils.oras_blob_fetch("quay.io/org/img@sha256:abc", output, auth)
+    cmd = mock_run.call_args.args[0]
+    assert cmd[:3] == ["oras", "blob", "fetch"]
+    assert str(output) in cmd
+    assert "quay.io/org/img@sha256:abc" in cmd

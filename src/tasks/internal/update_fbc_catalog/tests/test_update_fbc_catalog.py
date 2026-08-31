@@ -992,7 +992,7 @@ def test_main_check_step_error_writes_failure(
     )
 
     with mock.patch(
-        "update_fbc_catalog.update_fbc_catalog.run",
+        f"{TASK}.update_fbc_catalog.run",
         side_effect=tekton.CheckStepError(
             "kinit",
             subprocess.CalledProcessError(1, "kinit"),
@@ -1011,6 +1011,43 @@ def test_main_check_step_error_writes_failure(
     assert paths["RESULT_EXIT_CODE"].read_text(encoding="utf-8") == "1"
     state = json.loads(paths["RESULT_BUILD_STATE"].read_text(encoding="utf-8"))
     assert state["state"] == "failed"
+    assert "kinit" in state["state_reason"]
+    _assert_all_results_exist(paths)
+
+
+def test_main_uncaught_value_error_writes_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An uncaught ``ValueError`` from ``run`` still writes Tekton results.
+
+    Regression test: ``_poll_and_collect`` raises a bare ``ValueError`` when
+    a build response is missing its ``id`` field (see
+    ``test_poll_and_collect_missing_id``). Before the fix, that error
+    propagated straight out of ``run()``/``main()`` uncaught, skipping all
+    result-file writes.
+    """
+    paths = _setup_result_env(monkeypatch, tmp_path)
+    _setup_mount_env(monkeypatch, tmp_path)
+
+    with mock.patch(
+        f"{TASK}.update_fbc_catalog.run",
+        side_effect=ValueError("Build response missing 'id' field"),
+    ):
+        with pytest.raises(SystemExit, match="update_fbc_catalog.py"):
+            update_fbc_catalog.update_fbc_catalog.main(
+                [
+                    "--fbc-fragments",
+                    '["frag-a"]',
+                    "--from-index",
+                    "idx:v1",
+                ]
+            )
+
+    assert paths["RESULT_EXIT_CODE"].read_text(encoding="utf-8") == "1"
+    state = json.loads(paths["RESULT_BUILD_STATE"].read_text(encoding="utf-8"))
+    assert state["state"] == "failed"
+    assert "missing 'id'" in state["state_reason"]
     _assert_all_results_exist(paths)
 
 

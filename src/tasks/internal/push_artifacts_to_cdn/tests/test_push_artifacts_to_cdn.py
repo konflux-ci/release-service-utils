@@ -197,6 +197,31 @@ def test_main_extract_fails_stops_pipeline(
     m_push_unsigned.assert_not_called()
 
 
+def test_main_extract_fails_still_writes_published_files_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RESULT_PUBLISHED_FILES is written (as empty) even when an early step fails.
+
+    Regression test: previously this result file was only written inside
+    push_artifacts_mod.run(), so a failure in an earlier step (e.g. extract_artifacts)
+    left the file missing entirely, masking the real error behind a confusing
+    "missing Tekton result" failure instead.
+    """
+    rpath, _, published_path = _setup_result_env(tmp_path, monkeypatch)
+
+    with (
+        mock.patch.object(extract_artifacts, "run", side_effect=RuntimeError("oras down")),
+        mock.patch.object(push_unsigned, "run") as m_push_unsigned,
+    ):
+        rc = wrapper.main(REQUIRED_ARGS)
+
+    assert rc == 0
+    assert "oras down" in rpath.read_text(encoding="utf-8")
+    assert published_path.is_file()
+    assert published_path.read_text(encoding="utf-8") == ""
+    m_push_unsigned.assert_not_called()
+
+
 def test_main_mid_step_failure_writes_partial_cmap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

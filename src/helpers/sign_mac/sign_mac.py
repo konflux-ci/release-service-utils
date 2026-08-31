@@ -73,7 +73,7 @@ def _build_signing_script(
 ) -> str:
     """Build the remote shell script that pulls, signs, notarizes, and pushes Mac binaries."""
     return f"""#!/bin/bash
-set -eux
+set -euxo pipefail
 
 mkdir -p {temp_dir}
 mkdir -p {binary_path}
@@ -120,6 +120,10 @@ SIGNED_TAG="{pipeline_run_uid}-mac"
 PUSH_OUTPUT=$(/usr/local/bin/oras push --annotation=quay.expires-after=1d \\
   "{quay_url}/signed/{component_name}:$SIGNED_TAG" macos)
 SIGNED_DIGEST=$(echo "$PUSH_OUTPUT" | grep 'Digest:' | awk '{{print $2}}')
+if [ -z "$SIGNED_DIGEST" ]; then
+    echo "Failed to extract signed digest from oras push output" >&2
+    exit 1
+fi
 echo -n "$SIGNED_DIGEST" >> "{digest_file}"
 echo "Process completed successfully."
 """

@@ -476,7 +476,11 @@ def test_process_fixed_issue_adds_comment_when_close_request_fails(
 def test_process_fixed_issue_warns_when_comment_also_fails(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Log a warning when both close and comment requests fail."""
+    """Log a warning when both close and comment requests fail.
+
+    KONFLUX-7489: the task must not fail the release when Jira denies
+    close/comment permission. The advisory is already published.
+    """
     session = mock.MagicMock()
     auth = HTTPBasicAuth("user", "token")
     with mock.patch(

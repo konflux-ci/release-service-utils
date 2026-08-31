@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
+
+_REPO_NOT_FOUND_RE = re.compile(r"name unknown|repository not found", re.IGNORECASE)
 
 
 def inspect(
@@ -40,6 +43,18 @@ def list_tags(
     """Run ``skopeo list-tags`` on a repository reference."""
     cmd = ["skopeo", "list-tags", "--retry-times", str(retry_times), f"docker://{repo}"]
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+
+def is_repo_not_found(result: subprocess.CompletedProcess[str]) -> bool:
+    """Return whether a failed skopeo result means the repository doesn't exist.
+
+    Matches the registry API's ``NAME_UNKNOWN`` error (surfaced by skopeo as
+    ``name unknown`` or ``repository not found``), as opposed to other
+    failures like auth or network errors. Useful for callers that want to
+    treat a never-pushed-to repository the same as an existing-but-empty one
+    (e.g. tag incrementer logic).
+    """
+    return bool(_REPO_NOT_FOUND_RE.search(result.stderr or ""))
 
 
 def copy(

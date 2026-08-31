@@ -83,18 +83,40 @@ def test_get_fbc_opt_in_true_false_and_missing() -> None:
         )
 
 
-def test_get_fbc_opt_in_http_error_returns_false() -> None:
-    """HTTP exceptions are treated as opt-out."""
+def test_get_fbc_opt_in_http_error_raises_check_step_error() -> None:
+    """HTTP/connection failures must not be treated as a legitimate opt-out."""
     with mock.patch(
         f"{TASK}.check_fbc_opt_in.http_client.get_text",
         side_effect=requests.HTTPError("boom", response=mock.MagicMock()),
     ):
-        assert (
+        with pytest.raises(tekton.CheckStepError, match="querying Pyxis"):
             check_fbc_opt_in.check_fbc_opt_in.get_fbc_opt_in(
                 "https://p", "r.io/repo/i:1", None
             )
-            is False
-        )
+
+
+def test_get_fbc_opt_in_connection_error_raises_check_step_error() -> None:
+    """A network-level failure (Pyxis unreachable) raises, not a silent opt-out."""
+    with mock.patch(
+        f"{TASK}.check_fbc_opt_in.http_client.get_text",
+        side_effect=requests.ConnectionError("connection refused"),
+    ):
+        with pytest.raises(tekton.CheckStepError, match="querying Pyxis"):
+            check_fbc_opt_in.check_fbc_opt_in.get_fbc_opt_in(
+                "https://p", "r.io/repo/i:1", None
+            )
+
+
+def test_get_fbc_opt_in_malformed_json_raises_check_step_error() -> None:
+    """A non-JSON Pyxis response raises rather than being treated as opt-out."""
+    with mock.patch(
+        f"{TASK}.check_fbc_opt_in.http_client.get_text",
+        return_value="not json",
+    ):
+        with pytest.raises(tekton.CheckStepError, match="parsing the Pyxis response"):
+            check_fbc_opt_in.check_fbc_opt_in.get_fbc_opt_in(
+                "https://p", "r.io/repo/i:1", None
+            )
 
 
 def test_run_check_returns_results_for_each_input(tmp_path: Path) -> None:
@@ -185,7 +207,12 @@ def test_main_writes_result_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
 
 def test_main_requires_pyxis_url_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """`PYXIS_URL` must be set."""
+    """Missing `PYXIS_URL` fails the step via `SystemExit`.
+
+    This task runs as its own InternalRequest/PipelineRun; the managed caller
+    checks the InternalRequest's Succeeded condition before trusting the
+    result content, so validation failures must fail the step, not exit 0.
+    """
     rpath = tmp_path / "result"
     monkeypatch.setenv("RESULT_OPT_IN_RESULTS", str(rpath))
     monkeypatch.setenv("CONTAINER_IMAGES", '["r/repo/i:1"]')
@@ -200,13 +227,41 @@ def test_main_missing_result_env_raises_system_exit() -> None:
         check_fbc_opt_in.check_fbc_opt_in.main()
 
 
-def test_main_invalid_container_images_exits(
+def test_main_invalid_container_images_raises_system_exit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Invalid `CONTAINER_IMAGES` raises `SystemExit` with program prefix."""
+    """Invalid `CONTAINER_IMAGES` fails the step via `SystemExit`."""
     rpath = tmp_path / "result"
     monkeypatch.setenv("RESULT_OPT_IN_RESULTS", str(rpath))
     monkeypatch.setenv("CONTAINER_IMAGES", '{"bad": 1}')
     monkeypatch.setenv("PYXIS_URL", "https://pyxis/v1")
+
     with pytest.raises(SystemExit, match="check_fbc_opt_in.py"):
         check_fbc_opt_in.check_fbc_opt_in.main()
+
+
+def test_main_pyxis_outage_raises_system_exit_not_opt_out(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A Pyxis outage during the check fails the step, not a fake opt-out result.
+
+    Exiting 0 here would let the InternalRequest report Succeeded=True, and
+    the managed caller (prepare-fbc-parameters.yaml) would then trust
+    whatever is in the result file as if it were a real opt-in decision.
+    """
+    rpath = tmp_path / "result"
+    monkeypatch.setenv("RESULT_OPT_IN_RESULTS", str(rpath))
+    monkeypatch.setenv("CONTAINER_IMAGES", '["r/repo/i:1"]')
+    monkeypatch.setenv("PYXIS_URL", "https://pyxis/v1")
+
+    outage = tekton.CheckStepError(
+        "querying Pyxis for FBC opt-in status of r/repo/i:1",
+        requests.ConnectionError("connection refused"),
+    )
+    with mock.patch.object(check_fbc_opt_in.check_fbc_opt_in, "run_check", side_effect=outage):
+        with pytest.raises(SystemExit, match="querying Pyxis"):
+            check_fbc_opt_in.check_fbc_opt_in.main()
+
+    # The step must fail without ever writing a result file: nothing here
+    # should be readable by the caller as a real (even if empty) result.
+    assert not rpath.exists()

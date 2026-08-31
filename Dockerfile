@@ -173,6 +173,7 @@ RUN ln -s /home/src/tasks/managed/cleanup_workspace/cleanup_workspace.py /home/s
     ln -s /home/src/tasks/managed/make_repo_public/make_repo_public.py /home/scripts/python/tasks/managed/make_repo_public.py && \
     ln -s /home/src/tasks/managed/publish_pyxis_repository/publish_pyxis_repository.py /home/scripts/python/tasks/managed/publish_pyxis_repository.py && \
     ln -s /home/src/tasks/managed/update_infra_deployments/update_infra_deployments.py /home/scripts/python/tasks/managed/update_infra_deployments.py && \
+    ln -s /home/src/tasks/managed/update_trusted_tasks/update_trusted_tasks.py /home/scripts/python/tasks/managed/update_trusted_tasks.py && \
     ln -s /home/src/tasks/managed/validate_single_component/validate_single_component.py /home/scripts/python/tasks/managed/validate_single_component.py && \
     ln -s /home/src/tasks/managed/extract_checksums_from_image/extract_checksums_from_image.py /home/scripts/python/tasks/managed/extract_checksums_from_image.py && \
     ln -s /home/src/tasks/managed/publish_to_nrrc/publish_to_nrrc.py /home/scripts/python/tasks/managed/publish_to_nrrc.py && \
@@ -197,6 +198,7 @@ RUN ln -s /home/src/tasks/managed/cleanup_workspace/cleanup_workspace.py /home/s
     ln -s /home/src/tasks/managed/reduce_snapshot/reduce_snapshot.py /home/scripts/python/tasks/managed/reduce_snapshot.py && \
     ln -s /home/src/tasks/managed/send_slack_notification/send_slack_notification.py /home/scripts/python/tasks/managed/send_slack_notification.py && \
     ln -s /home/src/tasks/managed/apply_mapping/apply_mapping.py /home/scripts/python/tasks/managed/apply_mapping.py && \
+    ln -s /home/src/tasks/managed/create_pyxis_image/create_pyxis_image.py /home/scripts/python/tasks/managed/create_pyxis_image.py && \
     ln -s /home/src/tasks/internal/filter_already_released_advisory_images/filter_already_released_advisory_images.py /home/scripts/python/tasks/internal/filter_already_released_advisory_images.py && \
     ln -s /home/src/tasks/internal/check_embargoed_cves/check_embargoed_cves.py /home/scripts/python/tasks/internal/check_embargoed_cves.py && \
     ln -s /home/src/tasks/internal/check_fbc_opt_in/check_fbc_opt_in.py /home/scripts/python/tasks/internal/check_fbc_opt_in.py && \

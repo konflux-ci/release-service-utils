@@ -126,6 +126,20 @@ def _unpack_file_entries(
             archive_path.unlink()
 
 
+def _verify_unpacked_content(directory: Path, os_label: str, component_name: str) -> None:
+    """Raise ``RuntimeError`` if *directory* is missing or has no files.
+
+    Guards against pushing an OCI artifact built from content that a prior
+    extraction step silently failed to produce (missing directory, or one left
+    empty by a truncated/incomplete unpack).
+    """
+    if not directory.is_dir() or not any(p.is_file() for p in directory.rglob("*")):
+        raise RuntimeError(
+            f"No unpacked {os_label} content found in {directory} for component "
+            f"{component_name}; refusing to push an empty or missing artifact"
+        )
+
+
 def run(quay_url: str, pipeline_run_uid: str) -> None:
     """Organise extracted binaries and push unsigned Mac/Windows content to Quay."""
     snapshot = json.loads(os.environ["SNAPSHOT_JSON"])
@@ -181,6 +195,7 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
 
         if has_mac:
             logger.info("Pushing unsigned macOS content for %s to %s...", name, quay_url)
+            _verify_unpacked_content(unsigned_dir / "macos", "macOS", name)
             tag = f"{quay_url}/unsigned/{name}:{pipeline_run_uid}-mac"
             mac_digest = oras_utils.oras_push(tag, unsigned_dir, "macos", name)
             logger.info("Digest for %s mac content: %s", name, mac_digest)
@@ -190,6 +205,7 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
 
         if has_windows:
             logger.info("Pushing unsigned Windows content for %s to %s...", name, quay_url)
+            _verify_unpacked_content(unsigned_dir / "windows", "Windows", name)
             tag = f"{quay_url}/unsigned/{name}:{pipeline_run_uid}-windows"
             win_digest = oras_utils.oras_push(tag, unsigned_dir, "windows", name)
             logger.info("Digest for %s windows content: %s", name, win_digest)
