@@ -33,7 +33,7 @@ from requests_kerberos import OPTIONAL, HTTPKerberosAuth
 import yaml
 
 from release_service_utils.helpers import advisory_data
-import apply_template
+from release_service_utils.helpers.apply_template import render_template_to_json_file
 from release_service_utils.helpers import authentication
 from release_service_utils.helpers import file
 from release_service_utils.helpers import http_client
@@ -364,7 +364,7 @@ def _render_and_validate_advisory_yaml(
     template_variables = advisory_data.template_context_merge(
         wrapped_advisory, portal_advisory_id, ship_date
     )
-    apply_template.render_template_to_json_file(
+    render_template_to_json_file(
         rendered_json_path,
         ADVISORY_TEMPLATE_PATH,
         template_variables,
