@@ -8,7 +8,7 @@ Python, this helper shells out to ``date`` so behavior matches exactly.
 
 from __future__ import annotations
 
-from subprocess_cmd import run_cmd_text
+from release_service_utils.helpers.subprocess_cmd import run_cmd_text
 
 
 def current_timestamp() -> str:
