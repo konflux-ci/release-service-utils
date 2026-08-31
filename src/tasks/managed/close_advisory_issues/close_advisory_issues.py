@@ -182,6 +182,9 @@ def process_fixed_issue(
     try:
         add_issue_comment(session, issue_url, auth, comment)
     except requests.RequestException as exc:
+        # KONFLUX-7489: some projects deny close/comment permission. The
+        # advisory is already published, so warn and continue rather than
+        # failing the release.
         logger.warning("Warning: failed to add comment to issue %s. %s", issue, exc)
 
 

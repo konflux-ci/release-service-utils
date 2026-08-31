@@ -7,6 +7,7 @@ kubectl-ka behavior without requiring actual cluster access.
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 import pytest
@@ -690,6 +691,40 @@ def test_get_resource_jsonpath_failure_returns_empty(mock_run: MagicMock) -> Non
     mock_run.return_value = (1, "", "not found")
     result = get_resource("pod", "ns1", "p1", "{.spec}")
     assert result == "{}"
+
+
+@patch("utils.get_resource._run")
+def test_get_resource_jsonpath_failure_logs_kubectl_error(
+    mock_run: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failing kubectl call is logged with its error output before falling back.
+
+    Regression test: previously a kubectl failure on the jsonpath path was
+    silently collapsed into ``"{}"`` with no logging at all, making it
+    impossible to tell "no matching field" apart from a real kubectl failure
+    (e.g. permission denied, resource not found, cluster unreachable).
+    """
+    mock_run.return_value = (1, "", "Error from server (Forbidden): pods is forbidden")
+    with caplog.at_level(logging.ERROR, logger="get_resource"):
+        result = get_resource("pod", "ns1", "p1", "{.spec}")
+    assert result == "{}"
+    assert "Forbidden" in caplog.text
+    assert "pod" in caplog.text
+    assert "ns1/p1" in caplog.text
+
+
+@patch("utils.get_resource.get_from_ka")
+@patch("utils.get_resource._run")
+def test_get_resource_jsonpath_failure_logs_kubectl_error_ka_eligible(
+    mock_run: MagicMock, mock_ka: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The original kubectl error is logged even when a KA-eligible fallback succeeds."""
+    mock_run.return_value = (1, "", "Error from server (NotFound): snapshots not found")
+    mock_ka.return_value = json.dumps({"spec": {"app": "x"}})
+    with caplog.at_level(logging.ERROR, logger="get_resource"):
+        result = get_resource("snapshot", "ns1", "s1", "{.spec.app}")
+    assert result == "x"
+    assert "NotFound" in caplog.text
 
 
 @patch("utils.get_resource.get_from_ka")

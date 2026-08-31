@@ -402,6 +402,34 @@ def test_oras_push_raises_on_missing_digest(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# _verify_unpacked_content
+# ---------------------------------------------------------------------------
+
+
+def test_verify_unpacked_content_passes_for_nonempty_dir(tmp_path: Path) -> None:
+    """No exception is raised when the directory exists and contains a file."""
+    d = tmp_path / "macos"
+    d.mkdir()
+    (d / "amd64" / "binary").parent.mkdir(parents=True)
+    (d / "amd64" / "binary").write_bytes(b"data")
+    push_unsigned._verify_unpacked_content(d, "macOS", "prod")
+
+
+def test_verify_unpacked_content_raises_for_missing_dir(tmp_path: Path) -> None:
+    """RuntimeError is raised when the directory does not exist at all."""
+    with pytest.raises(RuntimeError, match="No unpacked macOS content"):
+        push_unsigned._verify_unpacked_content(tmp_path / "missing", "macOS", "prod")
+
+
+def test_verify_unpacked_content_raises_for_empty_dir(tmp_path: Path) -> None:
+    """RuntimeError is raised when the directory exists but has no files."""
+    d = tmp_path / "windows"
+    d.mkdir()
+    with pytest.raises(RuntimeError, match="No unpacked Windows content"):
+        push_unsigned._verify_unpacked_content(d, "Windows", "prod")
+
+
+# ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
 
@@ -460,6 +488,40 @@ def test_run_pushes_mac_and_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert len(oras_calls) == 2  # mac + windows
     assert (comp_dir / "unsigned_mac_digest.txt").read_text() == "sha256:fakedigest"
     assert (comp_dir / "unsigned_windows_digest.txt").read_text() == "sha256:fakedigest"
+
+
+def test_run_raises_when_has_mac_flag_but_no_unpacked_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run() raises loudly instead of pushing an empty artifact for a stale has_mac flag.
+
+    Regression test: previously a prior extraction step that silently failed to
+    populate unsigned/macos/ (e.g. archive not found) would still be pushed via
+    oras with no content, rather than failing clearly.
+    """
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps(SNAPSHOT))
+    monkeypatch.setattr(push_unsigned, "CONTENT_DIR", tmp_path / "artifacts")
+    _make_quay_secret(tmp_path, monkeypatch)
+
+    # has_mac flag present, but no darwin archive on disk to unpack -> empty unsigned/macos/
+    _make_component_dir(tmp_path / "artifacts", "testproduct", has_mac=True)
+
+    oras_push_calls = []
+
+    def fake_check_output(cmd, **kwargs):
+        if cmd[0] == "oras" and cmd[1] == "push":
+            oras_push_calls.append(cmd)
+            return "Digest: sha256:x\n"
+        return b""
+
+    with (
+        mock.patch("release_service_utils.helpers.oras_utils.oras_login"),
+        mock.patch("subprocess.check_output", side_effect=fake_check_output),
+        pytest.raises(RuntimeError, match="No unpacked macOS content"),
+    ):
+        push_unsigned.run("quay.io/org", "uid-123")
+
+    assert oras_push_calls == []
 
 
 def test_run_no_mac_or_windows_skips_pushes(

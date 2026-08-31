@@ -158,7 +158,7 @@ def collect_signing_params(
         configmap = kubectl.get_configmap(config_map_name, namespace=config_map_namespace)
         params = extract_signing_params_from_configmap(configmap)
         logger.info("ConfigMap found, extracted signing parameters")
-    except RuntimeError as e:
+    except kubectl.ConfigMapNotFoundError as e:
         logger.warning("ConfigMap not found: %s", e)
         logger.info("Using empty signing parameters with keyless signing disabled")
         params = get_empty_signing_params()
