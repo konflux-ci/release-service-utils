@@ -13,6 +13,7 @@ from release_service_utils.helpers import (
     push_oci_unsigned,
     sign_mac,
     sign_windows,
+    tekton,
 )
 
 _WRAPPER_PATH = Path(__file__).parent.parent / "sign_and_push_to_internal_oci.py"
@@ -175,6 +176,26 @@ def test_main_without_signing_scripts(tmp_path: Path, monkeypatch: pytest.Monkey
     )
 
 
+def test_main_preserves_check_step_error_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CheckStepError from a phase is re-wrapped with the outer action, preserving cause."""
+    rpath = _setup_result_env(tmp_path, monkeypatch)
+
+    inner = RuntimeError("ssh connection refused")
+    with mock.patch.object(
+        extract_oci_artifacts,
+        "run",
+        side_effect=tekton.CheckStepError("connecting to registry", inner),
+    ):
+        rc = wrapper.main(REQUIRED_ARGS)
+
+    assert rc == 0
+    result_text = rpath.read_text()
+    assert "Failed while" in result_text
+    assert "ssh connection refused" in result_text
+
+
 def test_main_writes_error_on_exception(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -189,5 +210,5 @@ def test_main_writes_error_on_exception(
         rc = wrapper.main(REQUIRED_ARGS)
 
     assert rc == 0
-    assert "ERROR" in rpath.read_text()
+    assert "Failed while" in rpath.read_text()
     assert "extract boom" in rpath.read_text()

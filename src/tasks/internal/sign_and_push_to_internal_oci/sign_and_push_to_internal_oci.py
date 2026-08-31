@@ -6,9 +6,9 @@ reside on the remote signing VMs.  Credentials are forwarded to the scripts
 as environment variables over SSH.
 
 Any exception raised by a stage is caught here: the Tekton result file
-receives a short error description and the script exits with code 0 so
-Tekton records the result text rather than masking it with a generic
-step-failure message.
+receives a short error description that names the failing phase and the
+underlying cause, and the script exits with code 0 so Tekton records the
+result text rather than masking it with a generic step-failure message.
 """
 
 from __future__ import annotations
@@ -16,6 +16,9 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import TypeVar
 
 from release_service_utils.helpers import (
     extract_oci_artifacts,
@@ -24,8 +27,13 @@ from release_service_utils.helpers import (
     sign_windows,
     tekton,
 )
+from release_service_utils.helpers.redact import redact_secrets
 
 PROG = "sign-and-push-to-internal-oci.py"
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -69,6 +77,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _call_phase(action: str, fn: Callable[..., T], *args: object, **kwargs: object) -> T:
+    """Run one pipeline phase and attach *action* to any failure."""
+    logger.info("Starting: %s", action)
+    try:
+        result = fn(*args, **kwargs)
+    except tekton.CheckStepError as exc:
+        raise tekton.CheckStepError(action, exc.cause) from exc
+    except Exception as exc:
+        raise tekton.CheckStepError(action, exc) from exc
+    logger.info("Finished: %s", action)
+    return result
+
+
+def _write_failure(rpath: Path, exc: BaseException) -> None:
+    """Write the Tekton result body for a failed run and log a redacted summary."""
+    action = (
+        exc.action
+        if isinstance(exc, tekton.CheckStepError)
+        else "signing and pushing to internal OCI"
+    )
+    logger.error("%s failed while %s: %s", PROG, action, redact_secrets(str(exc)))
+    tekton.write_failure_result(rpath, PROG, exc, workflow_action=action)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point: run every step in order and write Tekton results."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -78,16 +110,27 @@ def main(argv: list[str] | None = None) -> int:
     (rpath,) = tekton.result_paths_from_env("RESULT_RESULT")
 
     try:
-        extract_oci_artifacts.run(args.concurrent_limit)
-        push_oci_unsigned.run(args.quay_url, args.pipeline_run_uid)
-        sign_mac.run_custom_signing(
+        _call_phase(
+            "extracting OCI artifacts", extract_oci_artifacts.run, args.concurrent_limit
+        )
+        _call_phase(
+            "pushing unsigned artifacts",
+            push_oci_unsigned.run,
+            args.quay_url,
+            args.pipeline_run_uid,
+        )
+        _call_phase(
+            "signing Mac artifacts",
+            sign_mac.run_custom_signing,
             args.quay_url,
             args.pipeline_run_uid,
             signing_script=args.mac_signing_script,
             dest_quay_url=args.dest_quay_url,
             origin=args.origin,
         )
-        sign_windows.run_custom_signing(
+        _call_phase(
+            "signing Windows artifacts",
+            sign_windows.run_custom_signing,
             args.quay_url,
             args.pipeline_run_uid,
             signing_script=args.windows_signing_script,
@@ -95,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
             origin=args.origin,
         )
     except Exception as exc:
-        rpath.write_text(f"{PROG}: ERROR {exc}", encoding="utf-8")
+        _write_failure(rpath, exc)
         return 0
 
     rpath.write_text("Success", encoding="utf-8")

@@ -46,6 +46,41 @@ CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 logger = logging.getLogger(__name__)
 
 
+def skopeo_copy_to_dir(
+    pullspec: str, dest_dir: Path, *, extra_args: list[str] | None = None
+) -> None:
+    """Pull a container or OCI artifact image into *dest_dir* using ``skopeo copy``.
+
+    Authenticates via ``select-oci-auth`` and cleans up the temporary auth file
+    afterwards, even on failure.
+    """
+    auth_file: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as auth_fp:
+            auth_file = Path(auth_fp.name)
+            auth_data = subprocess.check_output(
+                ["select-oci-auth", pullspec], stderr=subprocess.PIPE
+            )
+            auth_fp.write(auth_data)
+
+        subprocess.check_call(
+            [
+                "skopeo",
+                "copy",
+                "--retry-times",
+                "3",
+                "--authfile",
+                str(auth_file),
+                *(extra_args or []),
+                f"docker://{pullspec}",
+                f"dir:{dest_dir}",
+            ]
+        )
+    finally:
+        if auth_file is not None:
+            auth_file.unlink(missing_ok=True)
+
+
 def parse_args(argv: list[str] | None = None, prog: str = PROG) -> argparse.Namespace:
     """Parse and return CLI arguments."""
     p = argparse.ArgumentParser(prog=prog)
@@ -209,30 +244,7 @@ def process_component(component: dict) -> None:
 
     tmp_dir = Path(tempfile.mkdtemp())
     try:
-        auth_file: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(mode="wb", delete=False) as auth_fp:
-                auth_file = Path(auth_fp.name)
-                auth_data = subprocess.check_output(
-                    ["select-oci-auth", pullspec], stderr=subprocess.PIPE
-                )
-                auth_fp.write(auth_data)
-
-            subprocess.check_call(
-                [
-                    "skopeo",
-                    "copy",
-                    "--retry-times",
-                    "3",
-                    "--authfile",
-                    str(auth_file),
-                    f"docker://{pullspec}",
-                    f"dir:{tmp_dir}",
-                ]
-            )
-        finally:
-            if auth_file is not None:
-                auth_file.unlink(missing_ok=True)
+        skopeo_copy_to_dir(pullspec, tmp_dir)
 
         wanted_files, extract_dirs = _get_source_paths(component)
         logger.info("Files to extract from RPA: %s", wanted_files)

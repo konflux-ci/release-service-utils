@@ -4,7 +4,7 @@
 Unlike container images where files are embedded in filesystem layers,
 OCI artifacts store each file as a standalone layer identified by its
 ``org.opencontainers.image.title`` annotation.  This module matches
-layers by title against the RPA's ``source`` / ``filename`` fields and
+layers by title against the RPA's ``source`` fields and
 copies the matching blobs directly to the component output directory.
 
 Components are processed in parallel, bounded by ``--concurrent-limit``.
@@ -26,7 +26,6 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -35,6 +34,7 @@ from release_service_utils.helpers.extract_artifacts.extract_artifacts import (
     create_os_flag_files,
     parse_args,
     setup_docker_config,
+    skopeo_copy_to_dir,
 )
 
 PROG = "extract_oci_artifacts.py"
@@ -70,9 +70,6 @@ def _get_wanted_filenames(component: dict) -> set[str]:
         source = entry.get("source", "")
         if source:
             wanted.add(Path(source).name)
-        filename = entry.get("filename", "")
-        if filename:
-            wanted.add(filename)
         entitlements_artifact = entry.get("entitlementsArtifact", "")
         if entitlements_artifact:
             wanted.add(entitlements_artifact)
@@ -136,31 +133,7 @@ def process_component(component: dict) -> None:
 
     tmp_dir = Path(tempfile.mkdtemp())
     try:
-        auth_file: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(mode="wb", delete=False) as auth_fp:
-                auth_file = Path(auth_fp.name)
-                auth_data = subprocess.check_output(
-                    ["select-oci-auth", pullspec], stderr=subprocess.PIPE
-                )
-                auth_fp.write(auth_data)
-
-            subprocess.check_call(
-                [
-                    "skopeo",
-                    "copy",
-                    "--retry-times",
-                    "3",
-                    "--authfile",
-                    str(auth_file),
-                    *_get_platform_overrides(component),
-                    f"docker://{pullspec}",
-                    f"dir:{tmp_dir}",
-                ]
-            )
-        finally:
-            if auth_file is not None:
-                auth_file.unlink(missing_ok=True)
+        skopeo_copy_to_dir(pullspec, tmp_dir, extra_args=_get_platform_overrides(component))
 
         manifest = json.loads((tmp_dir / "manifest.json").read_text())
         _extract_oci_component(component, manifest, tmp_dir, destination)

@@ -97,12 +97,12 @@ def test_get_wanted_filenames_from_source() -> None:
     assert wanted == {"app-bundle.tar.gz"}
 
 
-def test_get_wanted_filenames_from_filename_field() -> None:
-    """Explicit filename fields are also collected."""
+def test_get_wanted_filenames_ignores_filename_field() -> None:
+    """filename field is not included in wanted set."""
     component = {"files": [{"source": "foo/bar.tar.gz", "filename": "renamed.tar.gz"}]}
     wanted = extract_oci_artifacts._get_wanted_filenames(component)
     assert "bar.tar.gz" in wanted
-    assert "renamed.tar.gz" in wanted
+    assert "renamed.tar.gz" not in wanted
 
 
 def test_get_wanted_filenames_deduplicates() -> None:
@@ -223,27 +223,20 @@ def test_process_component_happy_path(tmp_path: Path, monkeypatch: pytest.Monkey
         },
     }
 
-    def fake_check_output(cmd, **kwargs):
-        return b'{"auths":{}}'
+    def fake_skopeo_copy(pullspec, dest_dir, *, extra_args=None):
+        (dest_dir / "aabbcc").write_bytes(b"bundle-data")
+        manifest = {
+            "layers": [
+                {
+                    "digest": "sha256:aabbcc",
+                    "annotations": {"org.opencontainers.image.title": "app-bundle.tar.gz"},
+                }
+            ]
+        }
+        (dest_dir / "manifest.json").write_text(json.dumps(manifest))
 
-    def fake_check_call(cmd, **kwargs):
-        if cmd[0] == "skopeo":
-            dest = next(a for a in cmd if a.startswith("dir:")).removeprefix("dir:")
-            dest_path = Path(dest)
-            (dest_path / "aabbcc").write_bytes(b"bundle-data")
-            manifest = {
-                "layers": [
-                    {
-                        "digest": "sha256:aabbcc",
-                        "annotations": {"org.opencontainers.image.title": "app-bundle.tar.gz"},
-                    }
-                ]
-            }
-            (dest_path / "manifest.json").write_text(json.dumps(manifest))
-
-    with (
-        mock.patch("subprocess.check_output", side_effect=fake_check_output),
-        mock.patch("subprocess.check_call", side_effect=fake_check_call),
+    with mock.patch.object(
+        extract_oci_artifacts, "skopeo_copy_to_dir", side_effect=fake_skopeo_copy
     ):
         extract_oci_artifacts.process_component(component)
 

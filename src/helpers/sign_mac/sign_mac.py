@@ -163,8 +163,8 @@ def _push_entitlements_artifact(
 ) -> str:
     """Push the entitlements OCI artifact to Quay and return the oras reference.
 
-    Returns an empty string if the component has no entitlements artifact configured
-    or the artifact file is not found locally.
+    Returns an empty string if the component has no entitlements artifact configured.
+    Raises ``RuntimeError`` if the artifact is configured but the file is not found.
     """
     artifact_name = _get_entitlements_artifact_name(component)
     if not artifact_name:
@@ -172,12 +172,10 @@ def _push_entitlements_artifact(
 
     artifact_path = component_dir / artifact_name
     if not artifact_path.exists():
-        logger.warning(
-            "Entitlements artifact '%s' not found at %s, skipping",
-            artifact_name,
-            artifact_path,
+        raise RuntimeError(
+            f"Entitlements artifact '{artifact_name}' is configured for component "
+            f"'{name}' but was not found at {artifact_path}"
         )
-        return ""
 
     logger.info("Pushing entitlements artifact '%s' for component %s...", artifact_name, name)
     tag = f"{quay_url}/unsigned/{name}:{pipeline_run_uid}-entitlements"
@@ -229,8 +227,10 @@ def _run_custom_script(
         env_vars["ENTITLEMENTS_REF"] = entitlements_ref
     args_str = " ".join(shlex.quote(a) for a in signing_args)
     stdin_script = "#!/bin/bash\nset -eu\n"
+    stdin_script += "set +x\n"
     for k, v in env_vars.items():
         stdin_script += f"export {k}={shlex.quote(v)}\n"
+    stdin_script += "set -x\n"
     stdin_script += f"exec bash {shlex.quote(signing_script)} {args_str}\n"
 
     ssh_exit = 0

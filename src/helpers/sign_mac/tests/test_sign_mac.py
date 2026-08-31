@@ -96,21 +96,18 @@ def test_push_entitlements_artifact_success(tmp_path: Path) -> None:
     )
 
 
-def test_push_entitlements_artifact_file_not_found(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_push_entitlements_artifact_raises_when_configured_but_missing(
+    tmp_path: Path,
 ) -> None:
-    """Empty string returned with warning when artifact file does not exist."""
+    """RuntimeError is raised when entitlements artifact is configured but file is absent."""
     component = {"staged": {"files": [{"entitlementsArtifact": "missing.plist"}]}}
     comp_dir = tmp_path / "comp"
     comp_dir.mkdir()
 
-    with caplog.at_level("WARNING"):
-        ref = sign_mac._push_entitlements_artifact(
+    with pytest.raises(RuntimeError, match="not found"):
+        sign_mac._push_entitlements_artifact(
             component, comp_dir, "quay.io/org", "mycomp", "uid-123"
         )
-
-    assert ref == ""
-    assert "not found" in caplog.text
 
 
 def test_push_entitlements_artifact_no_artifact() -> None:

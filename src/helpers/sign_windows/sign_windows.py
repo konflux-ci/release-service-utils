@@ -159,10 +159,11 @@ def _run_custom_script(
         "WIN_CERT_THUMBPRINT": win_cert_thumbprint,
     }
     args_str = " ".join(f"'{a.replace(chr(39), chr(39)*2)}'" for a in signing_args)
-    stdin_script = ""
+    stdin_script = "Set-PSDebug -Off\n"
     for k, v in env_vars.items():
         escaped_v = v.replace("'", "''")
         stdin_script += f"$env:{k}='{escaped_v}'\n"
+    stdin_script += "Set-PSDebug -Trace 0\n"
     stdin_script += f"& '{signing_script}' {args_str}\n"
 
     ssh_exit = 0
