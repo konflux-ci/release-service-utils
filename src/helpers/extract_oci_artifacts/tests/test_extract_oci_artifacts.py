@@ -98,7 +98,7 @@ def test_get_wanted_filenames_from_source() -> None:
 
 
 def test_get_wanted_filenames_ignores_filename_field() -> None:
-    """filename field is not included in wanted set."""
+    """Filename field is not included in wanted set."""
     component = {"files": [{"source": "foo/bar.tar.gz", "filename": "renamed.tar.gz"}]}
     wanted = extract_oci_artifacts._get_wanted_filenames(component)
     assert "bar.tar.gz" in wanted
