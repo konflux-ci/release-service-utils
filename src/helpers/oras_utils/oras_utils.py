@@ -16,6 +16,7 @@ def oras_resolve(
     reference: str,
     *,
     auth_ref: str | None = None,
+    auth_file: Path | None = None,
     check: bool = True,
 ) -> str | None:
     """Resolve the digest of an OCI image reference using oras.
@@ -28,21 +29,32 @@ def oras_resolve(
     auth credentials should be obtained for the bare repository URL.
     Defaults to *reference* when not given.
 
+    *auth_file*, when provided, skips the ``select-oci-auth`` call and
+    uses the given path as the ``--registry-config`` file directly.
+    This is useful when the caller manages auth files externally (e.g.
+    reusing one file across many resolve/copy operations).
+
     When *check* is ``True`` (the default), ``RuntimeError`` is raised on
     a non-zero exit code.  When ``False``, ``None`` is returned instead,
     which is convenient for "try to resolve, treat failure as not-found"
     callers.
     """
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as auth_file:
-        select_auth = run_cmd(["select-oci-auth", auth_ref or reference], check=False)
-        auth_content = select_auth.stdout.strip()
-        auth_file.write(auth_content if auth_content else "{}")
-        auth_file.flush()
-
+    if auth_file is not None:
         result = run_cmd(
-            ["oras", "resolve", "--registry-config", auth_file.name, reference],
+            ["oras", "resolve", "--registry-config", str(auth_file), reference],
             check=False,
         )
+    else:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as tmp_auth:
+            select_auth = run_cmd(["select-oci-auth", auth_ref or reference], check=False)
+            auth_content = select_auth.stdout.strip()
+            tmp_auth.write(auth_content if auth_content else "{}")
+            tmp_auth.flush()
+
+            result = run_cmd(
+                ["oras", "resolve", "--registry-config", tmp_auth.name, reference],
+                check=False,
+            )
 
     if result.returncode != 0:
         if check:
@@ -176,6 +188,27 @@ def oras_push(tag: str, directory: Path, subdirectory: str, component_name: str)
             f"Could not extract digest from oras push output for {component_name}:\n{result}"
         )
     return match.group(1)
+
+
+def oras_cp(
+    source: str,
+    dest: str,
+    *,
+    from_auth: Path,
+    to_auth: Path,
+    recursive: bool = False,
+    platform: str = "",
+) -> None:
+    """Run ``oras cp`` with the specified auth files."""
+    cmd: list[str | Path] = ["oras", "cp"]
+    if recursive:
+        cmd.append("-r")
+    cmd.extend(["--from-registry-config", str(from_auth)])
+    cmd.extend(["--to-registry-config", str(to_auth)])
+    if platform:
+        cmd.extend(["--platform", platform])
+    cmd.extend([source, dest])
+    subprocess_cmd.run_cmd(cmd, check=True)
 
 
 def os_arch_dir(

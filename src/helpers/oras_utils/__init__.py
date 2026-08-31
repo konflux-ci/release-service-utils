@@ -2,6 +2,7 @@
 
 from .oras_utils import (  # noqa: F401
     oras_blob_fetch,
+    oras_cp,
     oras_login,
     oras_manifest_fetch,
     oras_pull,
