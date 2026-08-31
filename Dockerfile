@@ -195,6 +195,7 @@ RUN ln -s /home/src/tasks/managed/cleanup_workspace/cleanup_workspace.py /home/s
     ln -s /home/src/tasks/managed/get_ocp_version/get_ocp_version.py /home/scripts/python/tasks/managed/get_ocp_version.py && \
     ln -s /home/src/tasks/managed/populate_release_notes/populate_release_notes.py /home/scripts/python/tasks/managed/populate_release_notes.py && \
     ln -s /home/src/tasks/managed/push_disk_images/push_disk_images.py /home/scripts/python/tasks/managed/push_disk_images.py && \
+    ln -s /home/src/tasks/managed/push_snapshot/push_snapshot.py /home/scripts/python/tasks/managed/push_snapshot.py && \
     ln -s /home/src/tasks/managed/reduce_snapshot/reduce_snapshot.py /home/scripts/python/tasks/managed/reduce_snapshot.py && \
     ln -s /home/src/tasks/managed/send_slack_notification/send_slack_notification.py /home/scripts/python/tasks/managed/send_slack_notification.py && \
     ln -s /home/src/tasks/managed/apply_mapping/apply_mapping.py /home/scripts/python/tasks/managed/apply_mapping.py && \
