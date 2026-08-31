@@ -16,6 +16,7 @@ from create_container_image import (
     create_container_image,
     update_container_image_repositories,
     construct_repository,
+    create_or_update,
     _rh_push_registry,
     main,
 )
@@ -132,11 +133,12 @@ def test_create_container_image(mock_datetime, mock_post):
     tags = ["some_version"]
 
     # Act
-    create_container_image(
+    result = create_container_image(
         args,
         {"architecture": "ok"},
         tags,
     )
+    assert result == 0
 
     # Assert
     mock_post.assert_called_with(
@@ -297,6 +299,26 @@ def test_create_container_image__rh_push_multiple_tags(mock_datetime, mock_post)
     )
 
 
+@patch("create_container_image.pyxis.post")
+@patch("create_container_image.datetime")
+def test_create_container_image__no_id_in_response(mock_datetime, mock_post) -> None:
+    """Raise when Pyxis create response has no ``_id``."""
+    mock_post.return_value.json.return_value = {}
+    mock_datetime.now = MagicMock(return_value=datetime(1970, 10, 10, 10, 10, 10))
+
+    args = MagicMock()
+    args.pyxis_url = PYXIS_URL
+    args.certified = "false"
+    args.rh_push = "false"
+    args.architecture_digest = "arch specific digest"
+    args.digest = "some_digest"
+    args.media_type = "single architecture"
+    args.name = "quay.io/some_repo"
+
+    with pytest.raises(Exception, match="not successfully added"):
+        create_container_image(args, {"architecture": "ok"}, ["some_version"])
+
+
 def test_create_container_image__no_digest():
     """Test create container image  no digest."""
     args = MagicMock()
@@ -366,6 +388,15 @@ def test_update_container_image_repositories(mock_patch):
         PYXIS_URL + "v1/images/id/0000",
         {"repositories": repositories},
     )
+
+
+@patch("create_container_image.pyxis.patch")
+def test_update_container_image_repositories__no_id_in_response(mock_patch) -> None:
+    """Raise when Pyxis patch response has no ``_id``."""
+    mock_patch.return_value.json.return_value = {}
+
+    with pytest.raises(Exception, match="not successfully added"):
+        update_container_image_repositories(PYXIS_URL, "0000", [])
 
 
 @patch("builtins.open")
@@ -836,6 +867,143 @@ def test_construct_tags__append_mode_empty_existing(mock_datetime):
     ]
 
 
+@patch("create_container_image.create_container_image")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+def test_create_or_update__new_image(mock_prepare, mock_find, mock_create) -> None:
+    """Test create_or_update creates a new image when none exists."""
+    mock_prepare.return_value = {"architecture": "amd64"}
+    mock_find.return_value = None
+    mock_create.return_value = "new123"
+
+    args = MagicMock()
+    args.rh_push = "false"
+    args.name = "quay.io/org/img"
+    args.tags = "v1.0"
+    args.is_latest = "false"
+    args.architecture_digest = "sha256:abc"
+    args.pyxis_url = PYXIS_URL
+    args.append_tags = "false"
+
+    result = create_or_update(args)
+
+    assert result == "new123"
+    mock_create.assert_called_once()
+
+
+@patch("create_container_image.create_container_image")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+def test_create_or_update__is_latest_appends_tag(mock_prepare, mock_find, mock_create) -> None:
+    """Test create_or_update appends 'latest' tag when is_latest is true."""
+    mock_prepare.return_value = {"architecture": "amd64"}
+    mock_find.return_value = None
+    mock_create.return_value = "lat123"
+
+    args = MagicMock()
+    args.rh_push = "false"
+    args.name = "quay.io/org/img"
+    args.tags = "v1.0"
+    args.is_latest = "true"
+    args.architecture_digest = "sha256:abc"
+    args.pyxis_url = PYXIS_URL
+    args.append_tags = "false"
+
+    result = create_or_update(args)
+
+    assert result == "lat123"
+    tags_arg = mock_create.call_args.args[2]
+    assert "latest" in tags_arg
+
+
+@patch("create_container_image.update_container_image_repositories")
+@patch("create_container_image.construct_repository")
+@patch("create_container_image.construct_tags")
+@patch("create_container_image.find_repo_in_image")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+def test_create_or_update__adds_repo(
+    mock_prepare, mock_find, mock_find_repo, mock_ctags, mock_crepo, mock_update
+) -> None:
+    """Test create_or_update adds repo to existing image."""
+    mock_prepare.return_value = {"architecture": "amd64"}
+    mock_find.return_value = {"_id": "exist123", "repositories": []}
+    mock_find_repo.return_value = None
+    mock_ctags.return_value = [{"name": "v1.0"}]
+    mock_crepo.return_value = {"repository": "org/img"}
+
+    args = MagicMock()
+    args.rh_push = "false"
+    args.name = "quay.io/org/img"
+    args.tags = "v1.0"
+    args.is_latest = "false"
+    args.architecture_digest = "sha256:abc"
+    args.pyxis_url = PYXIS_URL
+    args.append_tags = "false"
+
+    result = create_or_update(args)
+
+    assert result == "exist123"
+    mock_update.assert_called_once()
+
+
+@patch("create_container_image.find_repo_in_image")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+def test_create_or_update__skips_matching(mock_prepare, mock_find, mock_find_repo) -> None:
+    """Test create_or_update skips when image and tags match."""
+    mock_prepare.return_value = {"architecture": "amd64"}
+    mock_find.return_value = {
+        "_id": "exist123",
+        "repositories": [{"repository": "org/img", "tags": [{"name": "v1.0"}]}],
+    }
+    mock_find_repo.return_value = 0
+
+    args = MagicMock()
+    args.rh_push = "false"
+    args.name = "quay.io/org/img"
+    args.tags = "v1.0"
+    args.is_latest = "false"
+    args.architecture_digest = "sha256:abc"
+    args.pyxis_url = PYXIS_URL
+    args.append_tags = "false"
+
+    result = create_or_update(args)
+
+    assert result == "exist123"
+
+
+@patch("create_container_image.find_repo_in_image")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+def test_create_or_update__rh_push_uses_proxymap(
+    mock_prepare, mock_find, mock_find_repo
+) -> None:
+    """Test create_or_update uses proxymap for rh_push repo derivation."""
+    mock_prepare.return_value = {"architecture": "amd64"}
+    mock_find.return_value = {
+        "_id": "exist123",
+        "repositories": [
+            {"repository": "product/image", "tags": [{"name": "v1.0"}]},
+        ],
+    }
+    mock_find_repo.return_value = 0
+
+    args = MagicMock()
+    args.rh_push = "true"
+    args.name = "quay.io/redhat-prod/product----image"
+    args.tags = "v1.0"
+    args.is_latest = "false"
+    args.architecture_digest = "sha256:abc"
+    args.pyxis_url = PYXIS_URL
+    args.append_tags = "false"
+
+    result = create_or_update(args)
+
+    assert result == "exist123"
+    mock_find_repo.assert_called_once_with("product/image", mock_find.return_value)
+
+
 @patch("create_container_image.update_container_image_repositories")
 @patch("create_container_image.find_image")
 @patch("create_container_image.prepare_parsed_data")
@@ -847,7 +1015,7 @@ def test_main__append_tags_false_replaces_tags(
     mock_prepare_parsed_data,
     mock_find_image,
     mock_update,
-):
+) -> None:
     """Test that without --append-tags, tags are replaced (existing behavior)."""
     mock_datetime.now = MagicMock(return_value=datetime(2026, 5, 21, 12, 0, 0))
     mock_prepare_parsed_data.return_value = {"architecture": "amd64"}
@@ -919,7 +1087,7 @@ def test_main__append_tags_true_preserves_tags(
     mock_prepare_parsed_data,
     mock_find_image,
     mock_update,
-):
+) -> None:
     """Test that with --append-tags true, existing tags are preserved."""
     mock_datetime.now = MagicMock(return_value=datetime(2026, 5, 21, 12, 0, 0))
     mock_prepare_parsed_data.return_value = {"architecture": "amd64"}
@@ -1002,7 +1170,7 @@ def test_main__append_tags_true_updates_reapplied_tag_date(
     mock_prepare_parsed_data,
     mock_find_image,
     mock_update,
-):
+) -> None:
     """Test that with --append-tags true, re-applied tags get updated dates."""
     mock_datetime.now = MagicMock(return_value=datetime(2026, 5, 21, 12, 0, 0))
     mock_prepare_parsed_data.return_value = {"architecture": "amd64"}
