@@ -83,9 +83,18 @@ CurrentTimestampFn = Callable[[], str]
 
 
 def _skopeo_list_repo_tags(repo: str) -> list[str]:
-    """List a repository's tags via ``skopeo list-tags``."""
+    """List a repository's tags via ``skopeo list-tags``.
+
+    A repository that has never been pushed to (e.g. the first release to a
+    brand-new destination) is treated the same as an existing-but-empty
+    repository, returning ``[]`` instead of raising, so ``{{ incrementer }}``
+    and ``{{ component-incrementer }}`` can still resolve to their starting
+    value.
+    """
     result = skopeo.list_tags(repo)
     if result.returncode != 0:
+        if skopeo.is_repo_not_found(result):
+            return []
         raise RuntimeError(
             f"skopeo list-tags failed for {repo}: {(result.stderr or '').strip()}"
         )
