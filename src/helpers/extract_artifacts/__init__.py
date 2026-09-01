@@ -23,6 +23,7 @@ from .extract_artifacts import (  # noqa: F401
     CONTENT_DIR,
     PROG,
     REDHAT_WORKLOADS_TOKEN_MOUNT,
+    extract_binaries_from_layers,
     main,
     process_component,
     run,

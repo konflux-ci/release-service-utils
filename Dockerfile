@@ -1,6 +1,6 @@
 FROM quay.io/konflux-ci/oras:latest@sha256:6cea0b9e142c2e18429f5cd30d716715d932047cbf1631334c5c31f7e47c3a19 as oras
 
-FROM --platform=linux/amd64 registry.redhat.io/rhtas/ec-rhel9:0.7@sha256:1fc7c6171d5a6058fa4df1c791906fdbd94df06df048b8230a4d11d1cf9da489 as conforma-cli
+FROM --platform=linux/amd64 registry.redhat.io/rhtas/ec-rhel9:0.7@sha256:bed04e826cd8b2638f14704b1b06ea5d99771f146cab0d5b46bdacdf48756c3c as conforma-cli
 
 FROM --platform=linux/amd64 registry.redhat.io/rhtas/cosign-rhel9:1.3.3-1773309431 as cosign
 
@@ -8,7 +8,7 @@ FROM --platform=linux/amd64 registry.redhat.io/rhtas/cosign-rhel9:1.3.3-17733094
 # itself, not an arch-bundled blob, so this must resolve to the target build platform.
 FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.4-1 as roxctl
 
-FROM registry.access.redhat.com/ubi10/ubi:10.2-1782277716
+FROM registry.access.redhat.com/ubi10/ubi:10.2-1788218897
 
 ARG COSIGN_VERSION=2.4.1
 ARG COSIGN3_VERSION=3.0.4

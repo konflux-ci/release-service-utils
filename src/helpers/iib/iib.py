@@ -37,6 +37,7 @@ class IIBBuild(TypedDict, total=False):
     index_image: str | None
     index_image_resolved: str | None
     internal_index_image_copy: str | None
+    internal_index_image_copy_resolved: str | None
     fbc_fragments: list[str] | None
     build_tags: list[str] | None
     distribution_scope: str | None

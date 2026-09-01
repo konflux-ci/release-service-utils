@@ -9,10 +9,8 @@ from . import extract_checksums_from_image  # noqa: F401
 from .extract_checksums_from_image import (  # noqa: F401
     BINARIES_DIR,
     copy_to_binaries,
-    extract_binaries_from_layers,
     extract_checksums,
     load_components,
-    load_snapshot,
     main,
     remove_non_checksum_files,
 )
