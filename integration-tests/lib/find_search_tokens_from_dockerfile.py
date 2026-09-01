@@ -1,15 +1,20 @@
-"""Find catalog Task search tokens from utils repo paths using the image Dockerfile.
+"""Find catalog Task search tokens from utils repo paths.
 
 release-service-catalog Tekton Tasks reference files and commands that exist inside the
 ``release-service-utils`` container. Those paths are defined by ``COPY <src> <dest>`` lines
 (targeting ``/home/...``) and by ``ENV PATH`` entries. This module parses a Dockerfile and
 maps changed repository paths (e.g. from ``git diff --name-only``) to strings that can be
 searched for in Task YAML — without a hand-maintained table.
+
+Additionally, Tasks may invoke scripts via ``python -m release_service_utils.tasks.managed.…``
+instead of absolute container paths. This module reads ``[tool.setuptools] package-dir`` from
+``pyproject.toml`` to generate dotted module-path tokens for those invocations.
 """
 
 from __future__ import annotations
 
 import re
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -132,4 +137,57 @@ def search_tokens_for_changed_paths(
     acc: set[str] = set()
     for line in changed_paths:
         acc.update(search_tokens_for_repo_path(line, layout))
+    return frozenset(acc)
+
+
+def parse_pyproject_package_dirs(pyproject_path: Path) -> dict[str, str]:
+    """Read ``[tool.setuptools] package-dir`` from ``pyproject.toml``.
+
+    Return a mapping of source directory to package name, e.g.
+    ``{"src": "release_service_utils"}``.
+    """
+    with pyproject_path.open("rb") as f:
+        data = tomllib.load(f)
+    pkg_dir = data.get("tool", {}).get("setuptools", {}).get("package-dir", {})
+    return {v: k for k, v in pkg_dir.items()}
+
+
+def module_tokens_for_repo_path(
+    rel_path: str, source_to_package: dict[str, str]
+) -> frozenset[str]:
+    """Return dotted module-path search tokens for a repo-relative path.
+
+    For ``src/tasks/managed/check_labels/check_labels.py`` with mapping
+    ``{"src": "release_service_utils"}``, yield
+    ``{"release_service_utils.tasks.managed.check_labels"}``.
+
+    Only ``.py`` files produce tokens. The token is the parent package path
+    (the directory containing the file), which matches ``python -m`` invocations.
+    Bare package names (e.g. from ``src/__init__.py``) are skipped.
+    """
+    raw = rel_path.strip().strip("./")
+    if not raw or raw.endswith("/") or not raw.endswith(".py"):
+        return frozenset()
+
+    parts = raw.split("/")
+    root = parts[0]
+    pkg_name = source_to_package.get(root)
+    if not pkg_name:
+        return frozenset()
+
+    module_parts = parts[1:-1]
+    if not module_parts:
+        return frozenset()
+
+    return frozenset({f"{pkg_name}.{'.'.join(module_parts)}"})
+
+
+def module_tokens_for_changed_paths(
+    changed_paths: list[str],
+    source_to_package: dict[str, str],
+) -> frozenset[str]:
+    """Union of :func:`module_tokens_for_repo_path` over all changed paths."""
+    acc: set[str] = set()
+    for line in changed_paths:
+        acc.update(module_tokens_for_repo_path(line, source_to_package))
     return frozenset(acc)
