@@ -191,20 +191,25 @@ def _push_component_to_pulp(
                 continue
 
             source_filename = Path(source_path).name
-            # Windows sources are declared as .tar.gz, but this pipeline repackages
-            # Windows binaries as .zip after signing (see compress_artifacts.py). Use the
-            # real .zip name on disk instead of the declared name so we copy the correct
-            # file and publish it to Pulp/Customer Portal under its actual extension.
-            if "windows" in source_filename:
-                zip_filename = content_gateway.windows_zip_filename(source_filename)
-                zip_on_disk = component_dir / zip_filename
-                if zip_filename != source_filename and zip_on_disk.is_file():
-                    source_filename = zip_filename
-                    if dest_filename:
-                        dest_name = Path(dest_filename).name
-                        dest_zip = content_gateway.windows_zip_filename(dest_name)
-                        if dest_zip != dest_name:
-                            dest_filename = dest_zip
+            # Sources are declared with their pre-compression name, but this
+            # pipeline repackages content (see compress_artifacts.py): macOS/Linux
+            # raw binaries become .tar.gz and Windows becomes .zip. Resolve the
+            # delivered archive name that is actually on disk so we copy the correct
+            # file and publish it to Pulp/Customer Portal under its real extension.
+            operating_system = "windows" if "windows" in source_filename else ""
+            delivered_filename = content_gateway.delivered_archive_basename(
+                source_filename, operating_system
+            )
+            delivered_on_disk = component_dir / delivered_filename
+            if delivered_filename != source_filename and delivered_on_disk.is_file():
+                source_filename = delivered_filename
+                if dest_filename:
+                    dest_name = Path(dest_filename).name
+                    dest_delivered = content_gateway.delivered_archive_basename(
+                        dest_name, operating_system
+                    )
+                    if dest_delivered != dest_name:
+                        dest_filename = dest_delivered
 
             if not dest_filename:
                 dest_filename = source_filename

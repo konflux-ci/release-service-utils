@@ -123,6 +123,52 @@ def test_compress_file_entry_windows(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert result is not None and result.endswith(".zip")
 
 
+def test_compress_file_entry_linux_raw_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raw Linux binary source is delivered as .tar.gz and its source is updated."""
+    monkeypatch.setattr(compress_artifacts, "CONTENT_DIR", tmp_path)
+    comp_dir = tmp_path / "prod"
+    ready_dir = comp_dir / "ready_for_distribution"
+    ready_dir.mkdir(parents=True)
+
+    _make_arch_dir(comp_dir, "linux", "amd64", "roxctl-linux-amd64")
+
+    result = compress_artifacts._compress_file_entry(
+        {"source": "/releases/roxctl-linux-amd64", "os": "linux", "arch": "amd64"},
+        "files",
+        comp_dir,
+        ready_dir,
+    )
+    archive = ready_dir / "roxctl-linux-amd64.tar.gz"
+    assert archive.exists()
+    assert tarfile.is_tarfile(str(archive))
+    assert result == "/releases/roxctl-linux-amd64.tar.gz"
+
+
+def test_compress_file_entry_windows_raw_exe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raw Windows .exe source is delivered as a .zip and its source is updated."""
+    monkeypatch.setattr(compress_artifacts, "CONTENT_DIR", tmp_path)
+    comp_dir = tmp_path / "prod"
+    ready_dir = comp_dir / "ready_for_distribution"
+    ready_dir.mkdir(parents=True)
+
+    _make_arch_dir(comp_dir / "signed", "windows", "amd64", "roxctl.exe")
+
+    result = compress_artifacts._compress_file_entry(
+        {"source": "/releases/roxctl-windows-amd64.exe", "os": "windows", "arch": "amd64"},
+        "files",
+        comp_dir,
+        ready_dir,
+    )
+    zip_file = ready_dir / "roxctl-windows-amd64.zip"
+    assert zip_file.exists()
+    assert zipfile.is_zipfile(str(zip_file))
+    assert result == "/releases/roxctl-windows-amd64.zip"
+
+
 def test_compress_file_entry_qcow2_passthrough(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
