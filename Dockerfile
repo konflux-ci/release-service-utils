@@ -141,7 +141,12 @@ COPY . ./
 RUN pip install . && \
     # Remove PyPI's python-qpid-proton so the system RPM (python3-qpid-proton) takes precedence.
     # The PyPI wheel bundles its own OpenSSL which doesn't use the system CA trust store.
-    pip uninstall -y python-qpid-proton
+    pip uninstall -y python-qpid-proton && \
+    # pip install/uninstall above can clobber the RPM's files on disk (no manylinux wheel
+    # exists for python-qpid-proton, so pip's behavior here is inconsistent build-to-build).
+    # Reinstall the RPM to guarantee its files are actually present afterward, regardless
+    # of what pip did to the shared site-packages path.
+    dnf reinstall -y python3-qpid-proton
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
 RUN dnf -y remove gcc

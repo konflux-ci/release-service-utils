@@ -20,6 +20,8 @@ UD cache flush credentials: pass ``--udcache-user`` / ``--udcache-password``
 via CLI args, or set ``UDCACHE_CERT`` and ``UDCACHE_KEY`` env vars.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -29,7 +31,7 @@ import ssl
 import subprocess
 import sys
 import time
-from urllib import parse, request
+from urllib import error, parse, request
 
 LOG = logging.getLogger("pubtools-pulp-wrapper")
 DEFAULT_LOG_FMT = "%(asctime)s [%(levelname)-8s] %(message)s"
@@ -290,6 +292,7 @@ def prune_matching_content_before_push(parsed):
         repo_path = parse.quote(repo_name, safe="")
         search_url = f"{pulp_base}/pulp/api/v2/repositories/{repo_path}/search/units/"
 
+        repo_is_new = False
         for file_name in sorted(files):
             for pattern in build_timestamp_search_patterns(file_name):
                 payload = {
@@ -303,11 +306,31 @@ def prune_matching_content_before_push(parsed):
                         }
                     },
                 }
-                response = pulp_request(search_url, context=context, payload=payload) or []
+                try:
+                    response = pulp_request(search_url, context=context, payload=payload) or []
+                except error.HTTPError as exc:
+                    if exc.code == 404:
+                        # First-ever push to this destination: the repo doesn't exist in
+                        # Pulp yet, so there's nothing to search or prune. pubtools-pulp-push
+                        # creates the repo itself; let it, instead of failing the whole push
+                        # here over a repo that legitimately has no prior content.
+                        LOG.info(
+                            "Repo %s not found in Pulp (404); treating as a first-time "
+                            "push with nothing to prune.",
+                            repo_name,
+                        )
+                        repo_is_new = True
+                        break
+                    raise
                 for unit in response:
                     name = unit.get("metadata", {}).get("name")
                     if name:
                         matched_existing.add(name)
+            if repo_is_new:
+                break
+
+        if repo_is_new:
+            continue
 
         # Remove all matched units first so re-push is deterministic.
         names_to_remove = sorted(matched_existing)
