@@ -59,15 +59,14 @@ spec:
       type: string
       default: e2e-test-service-account-kubeconfig
       description: >-
-        Secret name (key kubeconfig) for the child catalog e2e-tests-staging-pipeline (same param name
-        as catalog ITS). Use the kubeconfig that reaches the stage/test cluster where catalog integration
-        steps run.
+        Secret name (key kubeconfig) passed to the child catalog e2e-tests-staging-pipeline (same param
+        name as catalog ITS). Missing Secret: the child pipeline uses in-cluster auth.
     - name: orchestrationKubeconfigSecretName
       type: string
       default: e2e-test-konflux-api-kubeconfig
       description: >-
-        Secret name (key kubeconfig) used only by run-catalog-e2e to run kubectl against the Konflux
-        cluster where this PipelineRun exists.
+        Secret name (key kubeconfig) used by run-catalog-e2e for kubectl.
+        Optional: if the Secret is missing, kubectl uses in-cluster config.
     - name: e2eWaitTimeout
       type: string
       default: "14400"
@@ -406,20 +405,27 @@ spec:
         steps:
           - name: run-catalog-e2e
             image: $(params.utilImage)
+            volumeMounts:
+              - name: orchestration-kubeconfig
+                mountPath: /etc/secrets/orchestration-kubeconfig
+                readOnly: true
             env:
               - name: ORCHESTRATOR_PIPELINE_RUN_UID
                 value: $(context.pipelineRun.uid)
-              - name: KUBECONFIG_SECRET_CONTENT
+              - name: CATALOG_E2E_NAMESPACE
                 valueFrom:
-                  secretKeyRef:
-                    name: $(params.orchestrationKubeconfigSecretName)
-                    key: kubeconfig
+                  fieldRef:
+                    fieldPath: metadata.namespace
             script: |
               #!/usr/bin/env bash
               set -euo pipefail
-              kubeconfig_path=$(mktemp)
-              echo "${KUBECONFIG_SECRET_CONTENT:?}" > "${kubeconfig_path}"
-              export KUBECONFIG="${kubeconfig_path}"
+              # Mounted Secret key "kubeconfig"; empty/missing file means in-cluster kubectl.
+              kubeconfig_file="/etc/secrets/orchestration-kubeconfig/kubeconfig"
+              if [ -s "${kubeconfig_file}" ]; then
+                export KUBECONFIG="${kubeconfig_file}"
+              else
+                unset KUBECONFIG
+              fi
               export CATALOG_E2E_RUNNER_IMAGE="$(params.catalogE2eRunnerImage)"
               export CATALOG_GIT_URL="$(params.catalogGitUrl)"
               export CATALOG_GIT_REVISION="$(params.catalogGitRevision)"
@@ -434,6 +440,11 @@ spec:
               exec python3 /home/integration-tests/lib/run_single_catalog_e2e_suite.py
             securityContext:
               runAsUser: 1001
+        volumes:
+          - name: orchestration-kubeconfig
+            secret:
+              secretName: $(params.orchestrationKubeconfigSecretName)
+              optional: true
 
   finally:
     - name: cleanup-temp-repo
