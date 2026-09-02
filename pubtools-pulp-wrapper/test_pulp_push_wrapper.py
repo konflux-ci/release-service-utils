@@ -1,9 +1,12 @@
 """Tests for the pulp_push_wrapper CDN push wrapper script."""
 
+from __future__ import annotations
+
 import logging
 import os
 import sys
 from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError
 
 import pytest
 
@@ -491,3 +494,70 @@ def test_prune_matching_content_before_push_threads_timeout(
     mock_wait.assert_called_once_with(
         "https://pulp-test.dev/pulp/api/v2/tasks/abc/", context="ctx", timeout=77
     )
+
+
+@patch("pulp_push_wrapper.wait_for_task")
+@patch("pulp_push_wrapper.make_ssl_context", return_value="ctx")
+@patch("pulp_push_wrapper.pulp_request")
+def test_prune_matching_content_before_push_tolerates_new_repo(
+    mock_pulp_request, _mock_ctx, mock_wait, tmp_path
+) -> None:
+    """Treat a 404 unit search (repo doesn't exist yet) as nothing-to-prune, not a crash."""
+    repo = "push-disk-images-e2e-test"
+    files_dir = tmp_path / repo / "FILES"
+    files_dir.mkdir(parents=True)
+    (files_dir / "test-disk-image.raw").write_text("raw")
+
+    mock_pulp_request.side_effect = HTTPError(
+        "https://pulp-test.dev/pulp/api/v2/repositories/%s/search/units/" % repo,
+        404,
+        "Not Found",
+        {},
+        None,
+    )
+
+    parsed = MagicMock()
+    parsed.no_clean = False
+    parsed.source = pulp_push_wrapper.get_source_url([str(tmp_path)])
+    parsed.pulp_cert = "/tmp/test.crt"
+    parsed.pulp_key = "/tmp/test.key"
+    parsed.pulp_url = "https://pulp-test.dev"
+    parsed.pulp_task_timeout_seconds = 77
+
+    pulp_push_wrapper.prune_matching_content_before_push(parsed)
+
+    mock_wait.assert_not_called()
+
+
+@patch("pulp_push_wrapper.wait_for_task")
+@patch("pulp_push_wrapper.make_ssl_context", return_value="ctx")
+@patch("pulp_push_wrapper.pulp_request")
+def test_prune_matching_content_before_push_reraises_non_404(
+    mock_pulp_request, _mock_ctx, mock_wait, tmp_path
+) -> None:
+    """Propagate non-404 HTTP errors from the unit search instead of swallowing them."""
+    repo = "konflux-release-e2e-1_DOT_0-for-rhel-10-x86_64-files"
+    files_dir = tmp_path / repo / "FILES"
+    files_dir.mkdir(parents=True)
+    (files_dir / "boot.iso.gz").write_text("boot")
+
+    mock_pulp_request.side_effect = HTTPError(
+        "https://pulp-test.dev/pulp/api/v2/repositories/%s/search/units/" % repo,
+        500,
+        "Internal Server Error",
+        {},
+        None,
+    )
+
+    parsed = MagicMock()
+    parsed.no_clean = False
+    parsed.source = pulp_push_wrapper.get_source_url([str(tmp_path)])
+    parsed.pulp_cert = "/tmp/test.crt"
+    parsed.pulp_key = "/tmp/test.key"
+    parsed.pulp_url = "https://pulp-test.dev"
+    parsed.pulp_task_timeout_seconds = 77
+
+    with pytest.raises(HTTPError):
+        pulp_push_wrapper.prune_matching_content_before_push(parsed)
+
+    mock_wait.assert_not_called()

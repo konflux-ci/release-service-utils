@@ -96,9 +96,11 @@ def test_build_payload_includes_required_fields() -> None:
     )
 
 
-def _completed_process(stdout: str, returncode: int = 0) -> mock.MagicMock:
+def _completed_process(stdout: str, returncode: int = 0, stderr: str = "") -> mock.MagicMock:
+    """Build a fake subprocess.CompletedProcess with the given outputs."""
     result = mock.MagicMock()
     result.stdout = stdout
+    result.stderr = stderr
     result.returncode = returncode
     return result
 
@@ -300,6 +302,30 @@ def test_create_waits_when_sync_is_true() -> None:
     wait.assert_called_once_with(name="create-advisory-abc", timeout=3600)
 
 
+def test_create_skips_cleanup_when_cleanup_is_false() -> None:
+    """Do not delete prior InternalRequests when cleanup is False."""
+    with (
+        mock.patch.object(ir_module, "cleanup_existing_requests") as cleanup,
+        mock.patch.object(
+            ir_module,
+            "create_internal_request",
+            return_value="create-advisory-abc",
+        ),
+        mock.patch.object(ir_module, "wait_for_completion"),
+    ):
+        ir_module.create(
+            "create-advisory",
+            params={
+                "taskGitUrl": "https://example.test/catalog",
+                "taskGitRevision": "main",
+            },
+            sync=True,
+            cleanup=False,
+        )
+
+    cleanup.assert_not_called()
+
+
 def test_wait_for_completion_requires_exactly_one_selector() -> None:
     """Reject calls that provide both or neither selector."""
     with pytest.raises(ValueError, match="exactly one"):
@@ -474,3 +500,41 @@ def test_fetch_results_ignores_non_dict_json() -> None:
         return_value=_completed_process('["not","dict"]'),
     ):
         assert ir_module.fetch_results("ir-1") == {}
+
+
+def test_log_subprocess_output_logs_stderr_and_stdout() -> None:
+    """Log both stdout and stderr when present."""
+    result = _completed_process(stdout="created ok", stderr="some warning")
+    with mock.patch.object(ir_module.logger, "log") as log:
+        ir_module._log_subprocess_output(result, label="kubectl create")
+
+    assert log.call_count == 2
+    stdout_call, stderr_call = log.call_args_list
+    assert "stdout" in stdout_call[0][1]
+    assert "stderr" in stderr_call[0][1]
+
+
+def test_log_subprocess_output_skips_empty() -> None:
+    """Do not log when stdout and stderr are empty."""
+    result = _completed_process(stdout="", stderr="")
+    with mock.patch.object(ir_module.logger, "log") as log:
+        ir_module._log_subprocess_output(result, label="kubectl create")
+
+    log.assert_not_called()
+
+
+def test_create_internal_request_logs_subprocess_output() -> None:
+    """Log kubectl stderr after creating an InternalRequest."""
+    body = {"metadata": {"name": "ir-abc"}}
+    result = _completed_process(
+        stdout=json.dumps(body), stderr="Warning: resource version changed"
+    )
+    with (
+        mock.patch.object(ir_module, "run_cmd", return_value=result),
+        mock.patch.object(ir_module.logger, "log") as log,
+    ):
+        name = ir_module.create_internal_request({"kind": "InternalRequest"})
+
+    assert name == "ir-abc"
+    stderr_logged = any("stderr" in str(call) for call in log.call_args_list)
+    assert stderr_logged

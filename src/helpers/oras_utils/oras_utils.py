@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import posixpath
 import re
+import shutil
 import subprocess
+import tarfile
 import tempfile
 import tarfile
 from pathlib import Path
@@ -11,6 +15,34 @@ from pathlib import Path
 from release_service_utils.helpers import file
 from release_service_utils.helpers import subprocess_cmd
 from release_service_utils.helpers.subprocess_cmd import run_cmd
+
+FLAT_ARTIFACT_CONFIG_MEDIA_TYPE = "application/vnd.oci.empty.v1+json"
+
+# OCI/Docker layer whiteout conventions: a file deleted by a later layer is
+# represented by a same-named sibling entry prefixed with ".wh.", and an
+# opaque directory marker (deleting everything a lower layer had underneath)
+# is named ".wh..wh..opq".
+_WHITEOUT_PREFIX = ".wh."
+_WHITEOUT_OPAQUE_MARKER = ".wh..wh..opq"
+
+
+def safe_relative_path(source: str) -> str:
+    """Strip a leading slash from *source*, rejecting any ``..`` segment.
+
+    Guards against a staged-file ``source``/``filename`` value escaping its
+    intended destination directory (e.g. ``../../etc/passwd``).
+    """
+    stripped = source.lstrip("/")
+    if ".." in stripped.split("/"):
+        raise ValueError(f"path must not contain '..' segments: {source!r}")
+    return stripped
+
+
+def _normalize_member_name(name: str) -> str:
+    stripped = name.lstrip("/")
+    while stripped.startswith("./"):
+        stripped = stripped[2:]
+    return stripped
 
 
 def oras_resolve(
@@ -110,6 +142,7 @@ def oras_pull(
     try:
         auth_out = subprocess_cmd.run_cmd(
             ["select-oci-auth", str(pull_spec)],
+            stderr_path=stderr_path,
             check=True,
         ).stdout
         auth_file.write_text(auth_out, encoding="utf-8")
@@ -124,10 +157,155 @@ def oras_pull(
             cwd=download_dir,
             stderr_path=stderr_path,
             check=True,
+            stream_stdout=True,
         )
     finally:
         # Always remove the auth file; subprocess failures still propagate to callers.
         auth_file.unlink(missing_ok=True)
+
+
+def extract_disk_image_files(
+    pull_spec: str,
+    wanted_sources: list[str],
+    destination: Path,
+    *,
+    stderr_path: Path | None = None,
+) -> None:
+    """Pull *pull_spec* and copy each entry of *wanted_sources* into *destination*.
+
+    Complements ``oras_pull`` for callers that also need to handle disk-image
+    references shaped like a normal (potentially multi-layer) container image,
+    e.g. a ``docker-build-oci-ta`` test fixture, rather than the flat, single-blob
+    OCI artifact ``oras pull`` expects (what ``bootc-image-builder``'s
+    ``buildah manifest add --artifact`` produces in production).
+
+    Pulls the manifest+blobs via ``skopeo copy`` and branches on
+    ``config.mediaType``:
+    - Flat OCI artifacts: files are matched to layers by basename via the
+      ``org.opencontainers.image.title`` annotation (equivalent to what
+      ``oras pull`` does).
+    - Normal layered images: files are extracted from the tar layers by their
+      full path, in manifest order, so a later layer's copy of a path wins
+      (matching standard union-filesystem layering semantics).
+
+    For each entry in *wanted_sources*, ``destination / entry.lstrip("/")`` is
+    created if a match is found; entries not found in the image are silently
+    skipped, same as a mismatched ``oras pull`` title -- callers are expected
+    to detect and warn/handle missing files themselves.
+    """
+    stripped_sources = {source: safe_relative_path(source) for source in wanted_sources}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        auth_file = file.make_tempfile_path("oci-auth-")
+        try:
+            auth_out = subprocess_cmd.run_cmd(
+                ["select-oci-auth", str(pull_spec)],
+                stderr_path=stderr_path,
+                check=True,
+            ).stdout
+            auth_file.write_text(auth_out, encoding="utf-8")
+            subprocess_cmd.run_cmd(
+                [
+                    "skopeo",
+                    "copy",
+                    "--retry-times",
+                    "3",
+                    "--authfile",
+                    str(auth_file),
+                    f"docker://{pull_spec}",
+                    f"dir:{tmp_dir}",
+                ],
+                stderr_path=stderr_path,
+                check=True,
+                stream_stdout=True,
+            )
+        finally:
+            auth_file.unlink(missing_ok=True)
+
+        manifest = json.loads((tmp_dir / "manifest.json").read_text())
+        config_media_type = manifest.get("config", {}).get("mediaType", "")
+
+        if config_media_type == FLAT_ARTIFACT_CONFIG_MEDIA_TYPE:
+            _copy_flat_artifact_files(manifest, tmp_dir, stripped_sources, destination)
+        else:
+            _copy_layered_image_files(manifest, tmp_dir, stripped_sources, destination)
+
+
+def _copy_flat_artifact_files(
+    manifest: dict,
+    tmp_dir: Path,
+    stripped_sources: dict[str, str],
+    destination: Path,
+) -> None:
+    """Copy blobs from a flat OCI artifact's layers, matched by title basename."""
+    title_to_blob: dict[str, Path] = {}
+    for layer in manifest.get("layers", []):
+        title = (layer.get("annotations") or {}).get("org.opencontainers.image.title")
+        digest = layer.get("digest", "")
+        if title and digest:
+            title_to_blob[title] = tmp_dir / digest.removeprefix("sha256:")
+
+    for stripped in stripped_sources.values():
+        blob = title_to_blob.get(Path(stripped).name)
+        if blob is None or not blob.is_file():
+            continue
+        dest = destination / stripped
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(blob), str(dest))
+
+
+def _copy_layered_image_files(
+    manifest: dict,
+    tmp_dir: Path,
+    stripped_sources: dict[str, str],
+    destination: Path,
+) -> None:
+    """Extract wanted paths from a normal layered image's tar layers.
+
+    Iterates layers in manifest order so a later layer's copy of a path
+    overwrites an earlier one, and a later layer's whiteout entry
+    (``.wh.<name>`` or the ``.wh..wh..opq`` opaque-directory marker) removes
+    an earlier layer's already-extracted copy, matching standard OCI/Docker
+    union-filesystem layer semantics.
+    """
+    wanted_paths = set(stripped_sources.values())
+    for layer in manifest.get("layers", []):
+        layer_file = tmp_dir / layer.get("digest", "").removeprefix("sha256:")
+        if not layer_file.exists():
+            continue
+        with tarfile.open(str(layer_file)) as tf:
+            for member in tf.getmembers():
+                name = _normalize_member_name(member.name)
+                dirname, base = posixpath.split(name)
+
+                if base == _WHITEOUT_OPAQUE_MARKER:
+                    prefix = f"{dirname}/" if dirname else ""
+                    for wanted in wanted_paths:
+                        if wanted == dirname or wanted.startswith(prefix):
+                            (destination / wanted).unlink(missing_ok=True)
+                    continue
+
+                if base.startswith(_WHITEOUT_PREFIX):
+                    deleted_name = base[len(_WHITEOUT_PREFIX) :]
+                    deleted = (
+                        posixpath.join(dirname, deleted_name) if dirname else deleted_name
+                    )
+                    if deleted in wanted_paths:
+                        (destination / deleted).unlink(missing_ok=True)
+                    continue
+
+                if name not in wanted_paths or member.issym() or member.islnk():
+                    continue
+                if member.isdev():
+                    continue
+                extracted = tf.extractfile(member)
+                if extracted is None:
+                    continue
+                dest = destination / name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with dest.open("wb") as out_f:
+                    shutil.copyfileobj(extracted, out_f)
 
 
 def oras_manifest_fetch(

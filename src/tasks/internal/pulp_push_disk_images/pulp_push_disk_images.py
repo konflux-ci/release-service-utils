@@ -4,9 +4,16 @@
 Reads snapshot JSON and credentials from mounted secrets, pulls OCI artifacts with
 oras, stages files, invokes pulp_push_wrapper and developer_portal_wrapper.
 
+Disk-image references are usually flat, single-blob OCI artifacts (what
+bootc-image-builder's ``buildah manifest add --artifact`` produces in production),
+which ``oras pull`` handles directly. If the wanted file isn't found that way (e.g.
+a normal, potentially multi-layer container image such as a docker-build-oci-ta
+test fixture), falls back to ``oras_utils.extract_disk_image_files`` to pull via
+``skopeo`` and extract the file from the image's tar layers instead.
+
 Environment variables (set by the pulp-push-disk-images Tekton task):
   SNAPSHOT_JSON, CERT_EXPIRATION_WARN_DAYS, CONCURRENT_LIMIT, EXODUS_GW_ENV,
-  CGW_HOSTNAME, RESULT_RESULT
+  CGW_HOSTNAME, PULP_TASK_TIMEOUT, RESULT_RESULT
 
 Mount paths default to /mnt/exodusGwSecret, /mnt/pulpSecret, /mnt/udcacheSecret,
 /mnt/redhat-workloads-token, /mnt/cgwSecret and can be overridden in tests.
@@ -16,7 +23,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -62,11 +68,6 @@ def _validate_certificates(
         logger.info("Checking %s certificate", label)
         push_artifacts._check_cert_expiration(str(cert_path), warn_days)
     logger.info("=== All certificates are valid ===")
-
-
-def normalize_docker_config(raw: str) -> str:
-    """Strip extra quoted fields from a dockerconfigjson secret payload."""
-    return re.sub(r"(^|\})[^{}]+(\{|$)", r"\1\2", raw)
 
 
 def build_staged_payload(
@@ -126,28 +127,50 @@ def process_component(
     destination = disk_image_dir / str(destination_name) / "FILES"
     destination.mkdir(parents=True, exist_ok=True)
 
+    staged_files = component.get("staged", {}).get("files", [])
+    if not isinstance(staged_files, list):
+        raise ValueError("staged.files must be a list")
+    for entry in staged_files:
+        if not isinstance(entry, dict):
+            raise ValueError("staged.files entries must be objects")
+
     with tempfile.TemporaryDirectory() as download_dir:
         download = Path(download_dir)
-        oras_utils.oras_pull(
-            str(pull_spec),
-            download,
-            stderr_path=stderr_path,
-        )
+        wanted_sources = [
+            require_staged_files_field(entry, "source") for entry in staged_files
+        ]
 
-        staged_files = component.get("staged", {}).get("files", [])
-        if not isinstance(staged_files, list):
-            raise ValueError("staged.files must be a list")
+        def _is_staged(src: str) -> bool:
+            path = download / oras_utils.safe_relative_path(str(src))
+            # A file may be gzip-compressed on disk; that's resolved later, but it
+            # still counts as "found" here.
+            return path.is_file() or Path(str(path) + ".gz").is_file()
+
+        try:
+            oras_utils.oras_pull(str(pull_spec), download, stderr_path=stderr_path)
+            missing = [src for src in wanted_sources if not _is_staged(src)]
+        except subprocess.CalledProcessError:
+            # Not a flat, single-blob OCI artifact (what `oras pull` expects and what
+            # production gets from bootc-image-builder) -- try it as a normal, potentially
+            # multi-layer container image instead (e.g. a docker-build-oci-ta e2e fixture).
+            missing = wanted_sources
+
+        if missing:
+            oras_utils.extract_disk_image_files(
+                str(pull_spec),
+                missing,
+                download,
+                stderr_path=stderr_path,
+            )
 
         for entry in staged_files:
-            if not isinstance(entry, dict):
-                raise ValueError("staged.files entries must be objects")
             source = require_staged_files_field(entry, "source")
             filename = require_staged_files_field(entry, "filename")
-            source_path = download / str(source)
+            source_path = download / oras_utils.safe_relative_path(str(source))
             gz_path = Path(str(source_path) + ".gz")
             if gz_path.is_file():
                 run_cmd(["gzip", "-d", str(gz_path)], cwd=download, check=True)
-            dest_file = destination / str(filename)
+            dest_file = destination / oras_utils.safe_relative_path(str(filename))
             if dest_file.exists():
                 raise ValueError(
                     "Multiple files use the same destination value: "
@@ -204,6 +227,7 @@ def process_component_for_developer_portal(
         env=cmd_env,
         stderr_path=stderr_path,
         check=True,
+        stream_stdout=True,
     )
 
 
@@ -214,6 +238,7 @@ def run_push(
     exodus_gw_env: str,
     cgw_hostname: str,
     cert_warn_days: int,
+    pulp_task_timeout: int,
     exodus_mount: Path,
     pulp_mount: Path,
     udcache_mount: Path,
@@ -238,7 +263,6 @@ def run_push(
     udc_url = authentication.read_mounted_text(udcache_mount, "url")
     udc_cert = authentication.read_mounted_text(udcache_mount, "cert")
     udc_key = authentication.read_mounted_text(udcache_mount, "key")
-    docker_config = authentication.read_mounted_text(workloads_mount, ".dockerconfigjson")
     cgw_username = authentication.read_mounted_text(cgw_mount, "username")
     cgw_password = authentication.read_mounted_text(cgw_mount, "token")
 
@@ -268,11 +292,9 @@ def run_push(
         "EXODUS_GW_TIMEOUT": "7200",
     }
 
-    docker_dir = Path.home() / ".docker"
-    docker_dir.mkdir(parents=True, exist_ok=True)
-    (docker_dir / "config.json").write_text(
-        normalize_docker_config(docker_config),
-        encoding="utf-8",
+    authentication.setup_docker_config(
+        workloads_mount / ".dockerconfigjson",
+        strip_noise=True,
     )
 
     components = snapshot.get("components")
@@ -338,10 +360,13 @@ def run_push(
                 str(pulp_key_file),
                 "--udcache-url",
                 udc_url,
+                "--pulp-task-timeout-seconds",
+                str(pulp_task_timeout),
             ],
             env=env,
             stderr_path=stderr_path,
             check=True,
+            stream_stdout=True,
         )
 
         for component in components:
@@ -371,11 +396,15 @@ def main() -> int:
     concurrent_limit = int(os.environ.get("CONCURRENT_LIMIT", "3"))
     exodus_gw_env = os.environ.get("EXODUS_GW_ENV", "").strip()
     cgw_hostname = os.environ.get("CGW_HOSTNAME", "").strip()
+    pulp_task_timeout = int(os.environ.get("PULP_TASK_TIMEOUT", "7200"))
     if not exodus_gw_env:
         print(f"{PROG}: EXODUS_GW_ENV must be set", file=sys.stderr)
         raise SystemExit(1)
     if not cgw_hostname:
         print(f"{PROG}: CGW_HOSTNAME must be set", file=sys.stderr)
+        raise SystemExit(1)
+    if pulp_task_timeout <= 0:
+        print(f"{PROG}: PULP_TASK_TIMEOUT must be a positive integer", file=sys.stderr)
         raise SystemExit(1)
 
     exodus_mount = file.path_from_env_variable("EXODUS_GW_SECRET_MOUNT", DEFAULT_EXODUS_MOUNT)
@@ -399,13 +428,14 @@ def main() -> int:
             exodus_gw_env=exodus_gw_env,
             cgw_hostname=cgw_hostname,
             cert_warn_days=cert_warn_days,
+            pulp_task_timeout=pulp_task_timeout,
             exodus_mount=exodus_mount,
             pulp_mount=pulp_mount,
             udcache_mount=udcache_mount,
             workloads_mount=workloads_mount,
             cgw_mount=cgw_mount,
         )
-    except (ValueError, OSError, subprocess.CalledProcessError, tekton.CheckStepError) as exc:
+    except Exception as exc:  # always report failures via the Tekton result, not a traceback
         tekton.write_failure_result(
             rpath,
             PROG,
