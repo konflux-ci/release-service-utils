@@ -46,14 +46,16 @@ def derive_name_from_url(url: str) -> str:
 def get_label_value(component: dict[str, Any], label_name: str) -> str | None:
     """Extract a label value from a component's metadata labels list.
 
-    Return ``None`` when the label is absent or has no value.
+    Return ``None`` when the label key is absent from the metadata. Return
+    an empty string when the label is present but its value is empty or
+    whitespace-only, so callers can distinguish an unset label from one
+    that was set to an empty value.
     """
     labels = component.get("metadata", {}).get("labels") or []
     for label in labels:
         if label.get("name") == label_name:
             val = label.get("value")
-            if val is not None and str(val).strip():
-                return str(val)
+            return str(val).strip() if val is not None else ""
     return None
 
 
@@ -122,11 +124,21 @@ def _check_cpe_label(component: dict[str, Any], cpe_data: str, enforce: bool) ->
     comp_name = component["name"]
     cpe_label = get_label_value(component, "cpe")
 
-    if not cpe_label:
+    if cpe_label is None:
         logger.info(
             "Component '%s' is missing the 'cpe' label. Skipping enforcement.",
             comp_name,
         )
+        return
+
+    if not cpe_label:
+        msg = (
+            f"Component '{comp_name}' 'cpe' label is set to an empty value. "
+            f"Expected the value '{cpe_data}'."
+        )
+        if enforce:
+            raise LabelValidationError(msg)
+        logger.warning(msg)
         return
 
     if cpe_label != cpe_data:
