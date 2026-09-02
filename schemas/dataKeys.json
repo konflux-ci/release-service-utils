@@ -518,7 +518,11 @@
     },
     "infra-deployment-update-script": {
       "type": "string",
-      "description": "A script that can alter files in the infra-deployment repo before a PR is created"
+      "description": "Deprecated: a bash script that can alter files in the infra-deployment repo before a PR is created. Use infraDeploymentUpdates instead."
+    },
+    "infraDeploymentUpdates": {
+      "type": "string",
+      "description": "A sandboxed Python script that can alter files in the infra-deployment repo before a PR is created"
     },
     "intention": {
       "type": "string",
