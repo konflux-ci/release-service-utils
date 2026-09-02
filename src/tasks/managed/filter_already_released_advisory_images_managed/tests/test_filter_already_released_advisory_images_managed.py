@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import filter_already_released_advisory_images_managed as task
+from filter_already_released_advisory_images_managed import (
+    filter_already_released_advisory_images_managed as task,
+)
 import pytest
 
 
@@ -191,8 +193,9 @@ class TestResolveImageArchitectures:
             + "\n"
             + json.dumps({"digest": "sha256:b", "platform": {"architecture": "ppc64le"}})
         )
-        with patch(
-            "filter_already_released_advisory_images_managed.subprocess_cmd.run_cmd_text",
+        with patch.object(
+            task.subprocess_cmd,
+            "run_cmd_text",
             return_value=output,
         ):
             result = task._resolve_image_architectures("reg.io/img@sha256:abc")
@@ -203,8 +206,9 @@ class TestResolveImageArchitectures:
 
     def test_propagates_subprocess_error(self) -> None:
         """A failing get-image-architectures call propagates CalledProcessError."""
-        with patch(
-            "filter_already_released_advisory_images_managed.subprocess_cmd.run_cmd_text",
+        with patch.object(
+            task.subprocess_cmd,
+            "run_cmd_text",
             side_effect=subprocess.CalledProcessError(1, "get-image-architectures"),
         ):
             with pytest.raises(subprocess.CalledProcessError):
@@ -224,8 +228,9 @@ class TestTransformComponent:
                 {"rh-registry-repo": "registry.io/repo-b", "tags": ["v2"]},
             ],
         )
-        with patch(
-            "filter_already_released_advisory_images_managed._resolve_image_architectures",
+        with patch.object(
+            task,
+            "_resolve_image_architectures",
             return_value=[{"digest": "sha256:d1"}, {"digest": "sha256:d2"}],
         ):
             entries = task.transform_component(comp)
@@ -240,8 +245,9 @@ class TestTransformComponent:
     def test_no_repositories_yields_no_entries(self) -> None:
         """A component without repositories yields an empty list."""
         comp = _component("c1")
-        with patch(
-            "filter_already_released_advisory_images_managed._resolve_image_architectures",
+        with patch.object(
+            task,
+            "_resolve_image_architectures",
             return_value=[{"digest": "sha256:d1"}],
         ):
             assert task.transform_component(comp) == []
@@ -258,8 +264,9 @@ class TestTransformSnapshot:
                 _component("c2", repositories=[{"rh-registry-repo": "r.io/b"}]),
             ]
         )
-        with patch(
-            "filter_already_released_advisory_images_managed.transform_component",
+        with patch.object(
+            task,
+            "transform_component",
             side_effect=[[{"name": "c1"}], [{"name": "c2"}]],
         ):
             entries, failed = task.transform_snapshot(snapshot)
@@ -274,8 +281,9 @@ class TestTransformSnapshot:
                 _component("c2", repositories=[{"rh-registry-repo": "r.io/b"}]),
             ]
         )
-        with patch(
-            "filter_already_released_advisory_images_managed.transform_component",
+        with patch.object(
+            task,
+            "transform_component",
             side_effect=[
                 subprocess.CalledProcessError(1, "get-image-architectures"),
                 [{"name": "c2"}],
@@ -325,8 +333,9 @@ class TestRunFilterRequest:
         """internal_request.create is called with expected pipeline/params/labels."""
         config = _config(tmp_path)
         with (
-            patch(
-                "filter_already_released_advisory_images_managed.internal_request.create",
+            patch.object(
+                task.internal_request,
+                "create",
                 return_value="ir-1",
             ) as mock_create,
             patch.object(
@@ -357,8 +366,9 @@ class TestRunFilterRequest:
         """config.synchronously=False is forwarded as internal_request.create(sync=False)."""
         config = _config(tmp_path, synchronously=False)
         with (
-            patch(
-                "filter_already_released_advisory_images_managed.internal_request.create",
+            patch.object(
+                task.internal_request,
+                "create",
                 return_value="ir-1",
             ) as mock_create,
             patch.object(
@@ -377,8 +387,9 @@ class TestRunFilterRequest:
         config = _config(tmp_path)
         entries = [{"name": "c1"}]
         with (
-            patch(
-                "filter_already_released_advisory_images_managed.internal_request.create",
+            patch.object(
+                task.internal_request,
+                "create",
                 return_value="ir-1",
             ) as mock_create,
             patch.object(
@@ -398,8 +409,9 @@ class TestRunFilterRequest:
         """A non-Success result field raises RuntimeError."""
         config = _config(tmp_path)
         with (
-            patch(
-                "filter_already_released_advisory_images_managed.internal_request.create",
+            patch.object(
+                task.internal_request,
+                "create",
                 return_value="ir-1",
             ),
             patch.object(
@@ -488,13 +500,12 @@ class TestRun:
             data={"skipFilter": True},
         )
         with (
-            patch(
-                "filter_already_released_advisory_images_managed.transform_snapshot",
+            patch.object(
+                task,
+                "transform_snapshot",
                 return_value=([{"name": "c1"}], []),
             ),
-            patch(
-                "filter_already_released_advisory_images_managed.run_filter_request"
-            ) as mock_run_filter_request,
+            patch.object(task, "run_filter_request") as mock_run_filter_request,
         ):
             task.run(config, results)
         mock_run_filter_request.assert_not_called()
@@ -511,20 +522,23 @@ class TestRun:
             components=[_component("c1", repositories=[{"url": "quay.io/redhat-prod/foo"}])],
         )
         with (
-            patch(
-                "filter_already_released_advisory_images_managed.transform_snapshot",
+            patch.object(
+                task,
+                "transform_snapshot",
                 return_value=([{"name": "c1"}], []),
             ),
-            patch(
-                "filter_already_released_advisory_images_managed.run_filter_request",
+            patch.object(
+                task,
+                "run_filter_request",
                 return_value={
                     "advisory_url": "http://advisory",
                     "advisory_internal_url": "http://internal",
                     "unreleased_components": "",
                 },
             ),
-            patch(
-                "filter_already_released_advisory_images_managed.decode_unreleased_components",
+            patch.object(
+                task,
+                "decode_unreleased_components",
                 return_value=[],
             ),
         ):
@@ -553,16 +567,19 @@ class TestRun:
             components=[_component("c1", repositories=[{"url": "quay.io/redhat-prod/foo"}])],
         )
         with (
-            patch(
-                "filter_already_released_advisory_images_managed.transform_snapshot",
+            patch.object(
+                task,
+                "transform_snapshot",
                 return_value=([{"name": "c1"}], []),
             ),
-            patch(
-                "filter_already_released_advisory_images_managed.run_filter_request",
+            patch.object(
+                task,
+                "run_filter_request",
                 return_value={"unreleased_components": ""},
             ),
-            patch(
-                "filter_already_released_advisory_images_managed.decode_unreleased_components",
+            patch.object(
+                task,
+                "decode_unreleased_components",
                 return_value=[],
             ),
         ):
@@ -581,20 +598,23 @@ class TestRun:
             ],
         )
         with (
-            patch(
-                "filter_already_released_advisory_images_managed.transform_snapshot",
+            patch.object(
+                task,
+                "transform_snapshot",
                 return_value=([{"name": "released"}, {"name": "kept"}], []),
             ),
-            patch(
-                "filter_already_released_advisory_images_managed.run_filter_request",
+            patch.object(
+                task,
+                "run_filter_request",
                 return_value={
                     "advisory_url": "http://advisory",
                     "advisory_internal_url": "http://internal",
                     "unreleased_components": "encoded",
                 },
             ),
-            patch(
-                "filter_already_released_advisory_images_managed.decode_unreleased_components",
+            patch.object(
+                task,
+                "decode_unreleased_components",
                 return_value=["kept"],
             ),
         ):
@@ -619,16 +639,19 @@ class TestRun:
             ],
         )
         with (
-            patch(
-                "filter_already_released_advisory_images_managed.transform_snapshot",
+            patch.object(
+                task,
+                "transform_snapshot",
                 return_value=([{"name": "normal"}], ["failed-arch"]),
             ),
-            patch(
-                "filter_already_released_advisory_images_managed.run_filter_request",
+            patch.object(
+                task,
+                "run_filter_request",
                 return_value={"unreleased_components": "encoded"},
             ),
-            patch(
-                "filter_already_released_advisory_images_managed.decode_unreleased_components",
+            patch.object(
+                task,
+                "decode_unreleased_components",
                 return_value=[],
             ),
         ):
@@ -646,8 +669,9 @@ class TestRun:
             components=[_component("c1", repositories=[{"url": "quay.io/redhat-prod/foo"}])],
             origin="",
         )
-        with patch(
-            "filter_already_released_advisory_images_managed.transform_snapshot",
+        with patch.object(
+            task,
+            "transform_snapshot",
             return_value=([{"name": "c1"}], []),
         ):
             with pytest.raises(ValueError, match="origin"):
@@ -661,8 +685,9 @@ class TestRun:
             json.dumps(_snapshot([_component("c1")])), encoding="utf-8"
         )
         config.rpa_file.write_text(json.dumps({"spec": {}}), encoding="utf-8")
-        with patch(
-            "filter_already_released_advisory_images_managed.transform_snapshot",
+        with patch.object(
+            task,
+            "transform_snapshot",
             return_value=([], []),
         ):
             with pytest.raises(KeyError):
@@ -683,8 +708,9 @@ class TestRun:
             json.dumps(_snapshot([_component("c1")])), encoding="utf-8"
         )
         with (
-            patch(
-                "filter_already_released_advisory_images_managed.transform_snapshot",
+            patch.object(
+                task,
+                "transform_snapshot",
                 return_value=([], []),
             ),
             pytest.raises(FileNotFoundError),
@@ -720,7 +746,7 @@ class TestMain:
     def test_success(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """main() wires config/results from env vars and returns 0."""
         self._set_env(monkeypatch, tmp_path)
-        with patch("filter_already_released_advisory_images_managed.run") as mock_run:
+        with patch.object(task, "run") as mock_run:
             assert task.main() == 0
         config, results = mock_run.call_args.args
         assert config.snapshot_file == tmp_path / "snapshot.json"
@@ -734,7 +760,7 @@ class TestMain:
         """SYNCHRONOUSLY=false is parsed to config.synchronously=False."""
         self._set_env(monkeypatch, tmp_path)
         monkeypatch.setenv("SYNCHRONOUSLY", "false")
-        with patch("filter_already_released_advisory_images_managed.run") as mock_run:
+        with patch.object(task, "run") as mock_run:
             assert task.main() == 0
         config, _results = mock_run.call_args.args
         assert config.synchronously is False
