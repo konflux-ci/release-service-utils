@@ -66,13 +66,20 @@ def _setup_docker_config() -> None:
     )
 
 
-def _get_source_paths(component: dict) -> tuple[list[str], list[str]]:
-    """Return (wanted_files, layer_extract_dirs) from files[] and staged.files[] entries."""
+def _get_source_paths(component: dict) -> tuple[list[str], list[str], list[str]]:
+    """Return (wanted_files, layer_extract_dirs, layer_extract_files).
+
+    ``layer_extract_dirs`` are parent prefixes extracted with directory matching
+    (``releases/`` for ``/releases/foo.tar.gz``). ``layer_extract_files`` are
+    root-level names matched exactly so ``agent.iso`` does not also select a
+    same-named directory tree.
+    """
     wanted: list[str] = []
     # Parent directories to extract from container image layers via `tar`. We extract
     # whole directories rather than individual files because tar requires the full path
     # prefix to be present in the layer for selective extraction to work.
     layer_extract_dirs: list[str] = []
+    layer_extract_files: list[str] = []
 
     for entry in list(component.get("files") or []) + list(
         (component.get("staged") or {}).get("files") or []
@@ -84,17 +91,21 @@ def _get_source_paths(component: dict) -> tuple[list[str], list[str]]:
         wanted.append(stripped)
         parent = str(Path(stripped).parent)
         if parent and parent != ".":
+            # source: /releases/foo.tar.gz → extract members under releases/
             layer_extract_dirs.append(parent)
+        else:
+            # source: /agent-ove.x86_64.iso → exact file at image root, not a prefix
+            layer_extract_files.append(stripped)
 
-    if not layer_extract_dirs:
-        # No explicit parent directories from the RPA entries (e.g. source paths are bare
-        # filenames with no directory component).  Fall back to "releases/", which is the
-        # conventional top-level directory used in Red Hat release container images.
+    if not layer_extract_dirs and not layer_extract_files:
+        # No source paths produced a location (entries had empty source). Keep the
+        # historical default so extract still looks under releases/.
         layer_extract_dirs = ["releases"]
 
-    unique_files = sorted(set(wanted))
+    unique_wanted = sorted(set(wanted))
     unique_dirs = sorted(set(layer_extract_dirs))
-    return unique_files, unique_dirs
+    unique_root_files = sorted(set(layer_extract_files))
+    return unique_wanted, unique_dirs, unique_root_files
 
 
 def _normalize_tar_member_name(name: str) -> str:
@@ -110,8 +121,16 @@ def _safe_extract_layer(
     image_path: str,
     target_dir: Path,
     layer_name: str,
+    *,
+    match_prefix: bool = True,
 ) -> bool:
-    """Extract members under image_path/ from a layer tarfile with path safety checks.
+    """Extract members matching image_path from a layer tarfile with path safety checks.
+
+    When ``match_prefix`` is True (directory sources), members equal to
+    ``image_path`` or nested under ``image_path/`` are selected. When False
+    (root-level files), only the exact path is selected, so a same-named
+    directory tree is not extracted. Directory members at an exact file path
+    are skipped so a later layer can replace them with a regular file.
 
     Symlink, hardlink, and device entries are always skipped (not extracted). Later
     layers may replace a skipped special with a regular file; final wanted-path
@@ -124,12 +143,23 @@ def _safe_extract_layer(
     found = False
     for member in tf.getmembers():
         normalized = _normalize_tar_member_name(member.name)
-        if not (normalized == image_path or normalized.startswith(f"{image_path}/")):
+        if match_prefix:
+            matched = normalized == image_path or normalized.startswith(f"{image_path}/")
+        else:
+            matched = normalized == image_path
+        if not matched:
             continue
         found = True
         if member.issym() or member.islnk() or member.isdev():
             logger.debug(
                 "Skipping unsupported entry type in layer %s: %s",
+                layer_name,
+                member.name,
+            )
+            continue
+        if not match_prefix and member.isdir():
+            logger.debug(
+                "Skipping directory at exact path in layer %s: %s",
                 layer_name,
                 member.name,
             )
@@ -247,7 +277,8 @@ def process_component(component: dict) -> None:
     logger.info("Extracting component '%s' to: %s", name, destination)
     destination.mkdir(parents=True, exist_ok=True)
 
-    tmp_dir = Path(tempfile.mkdtemp())
+    # Keep the skopeo copy and layer extract on CONTENT_DIR (the task PVC), not node /tmp.
+    tmp_dir = Path(tempfile.mkdtemp(dir=str(CONTENT_DIR)))
     try:
         auth_file: Path | None = None
         try:
@@ -274,7 +305,7 @@ def process_component(component: dict) -> None:
             if auth_file is not None:
                 auth_file.unlink(missing_ok=True)
 
-        wanted_files, extract_dirs = _get_source_paths(component)
+        wanted_files, extract_dirs, extract_files = _get_source_paths(component)
         logger.info("Files to extract from RPA: %s", wanted_files)
 
         manifest = json.loads((tmp_dir / "manifest.json").read_text())
@@ -304,6 +335,23 @@ def process_component(component: dict) -> None:
                                 layer_file.name,
                                 image_path,
                             )
+                    for image_path in extract_files:
+                        if _safe_extract_layer(
+                            tf,
+                            image_path,
+                            tmp_dir,
+                            layer_file.name,
+                            match_prefix=False,
+                        ):
+                            logger.info(
+                                "Extracting %s from %s...", image_path, layer_file.name
+                            )
+                        else:
+                            logger.info(
+                                "skipping %s. It doesn't contain %s",
+                                layer_file.name,
+                                image_path,
+                            )
 
             for wanted in wanted_files:
                 src = tmp_dir / wanted
@@ -319,7 +367,9 @@ def process_component(component: dict) -> None:
                         f"File '{wanted}' declared in RPA was not found in any "
                         "container layer"
                     )
-                shutil.copy2(str(src), str(destination / src.name))
+                # Rename on the same volume instead of copying, so a large ISO is not
+                # duplicated on disk after extract.
+                src.replace(destination / src.name)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
