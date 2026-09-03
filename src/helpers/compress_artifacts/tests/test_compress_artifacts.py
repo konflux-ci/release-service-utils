@@ -335,10 +335,10 @@ def test_pull_signed_content_skips_when_no_flags(
     comp_dir = tmp_path / "prod"
     comp_dir.mkdir()
 
-    with mock.patch("subprocess.check_call") as mock_cc:
+    with mock.patch("subprocess.run") as mock_run:
         compress_artifacts._pull_signed_content("quay.io/org", "prod", comp_dir)
 
-    mock_cc.assert_not_called()
+    mock_run.assert_not_called()
 
 
 def test_pull_signed_content_pulls_mac_and_windows(
@@ -352,16 +352,68 @@ def test_pull_signed_content_pulls_mac_and_windows(
     (comp_dir / "signed_mac_digest.txt").write_text("sha256:mac")
     (comp_dir / "signed_windows_digest.txt").write_text("sha256:win ")
 
-    calls = []
-
-    def fake_check_call(cmd, **kwargs):
-        calls.append(cmd[0:3])
-
-    with mock.patch("subprocess.check_call", side_effect=fake_check_call):
+    with mock.patch("subprocess.run", return_value=mock.MagicMock(returncode=0)) as mock_run:
         compress_artifacts._pull_signed_content("quay.io/org", "prod", comp_dir)
 
-    assert len(calls) == 2
-    assert all(c[0] == "oras" for c in calls)
+    assert mock_run.call_count == 2
+    refs = [c.args[0][0:2] for c in mock_run.call_args_list]
+    assert all(ref == ["oras", "pull"] for ref in refs)
+
+
+# ---------------------------------------------------------------------------
+# _oras_pull
+# ---------------------------------------------------------------------------
+
+
+def test_oras_pull_succeeds_on_first_attempt(tmp_path: Path) -> None:
+    """A zero exit code succeeds without retrying."""
+    with mock.patch("subprocess.run", return_value=mock.MagicMock(returncode=0)) as mock_run:
+        compress_artifacts._oras_pull("quay.io/org/repo@sha256:abc", tmp_path)
+
+    mock_run.assert_called_once()
+
+
+def test_oras_pull_retries_and_succeeds(tmp_path: Path) -> None:
+    """A failed attempt is retried and succeeds without raising."""
+    results = iter(
+        [
+            mock.MagicMock(returncode=1, stderr="manifest unknown", stdout=""),
+            mock.MagicMock(returncode=0, stderr="", stdout=""),
+        ]
+    )
+    with (
+        mock.patch("subprocess.run", side_effect=results) as mock_run,
+        mock.patch("time.sleep"),
+    ):
+        compress_artifacts._oras_pull("quay.io/org/repo@sha256:abc", tmp_path)
+
+    assert mock_run.call_count == 2
+
+
+def test_oras_pull_raises_with_captured_stderr_after_max_retries(tmp_path: Path) -> None:
+    """The raised error includes the real oras stderr, not just the exit status."""
+    with (
+        mock.patch(
+            "subprocess.run",
+            return_value=mock.MagicMock(returncode=1, stderr="manifest unknown", stdout=""),
+        ),
+        mock.patch("time.sleep"),
+        pytest.raises(compress_artifacts._OrasPullError, match="manifest unknown"),
+    ):
+        compress_artifacts._oras_pull("quay.io/org/repo@sha256:abc", tmp_path, max_attempts=2)
+
+
+def test_oras_pull_falls_back_to_stdout_when_stderr_empty(tmp_path: Path) -> None:
+    """When stderr is empty, the captured stdout is used in the error message instead."""
+    with (
+        mock.patch(
+            "subprocess.run",
+            return_value=mock.MagicMock(returncode=1, stderr="", stdout="unauthorized"),
+        ),
+        mock.patch("time.sleep"),
+        pytest.raises(compress_artifacts._OrasPullError, match="unauthorized"),
+    ):
+        compress_artifacts._oras_pull("quay.io/org/repo@sha256:abc", tmp_path, max_attempts=1)
 
 
 # ---------------------------------------------------------------------------

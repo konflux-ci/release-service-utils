@@ -2,7 +2,8 @@
 """Pull signed binaries from Quay, restore supplementary files, and compress artifacts.
 
 For each component:
-* Pulls signed macOS and Windows OCI artifacts from Quay into a ``signed/`` directory.
+* Pulls signed macOS and Windows OCI artifacts from Quay into a ``signed/`` directory,
+  retrying a few times with backoff and surfacing the real ``oras`` error on failure.
 * Restores supplementary files (readme, license, changelog) that were held during signing.
 * Compresses each file entry into the final deliverable format:
   - macOS / Linux (non-disk-image) → ``.tar.gz`` (from ``os/arch/`` directory)
@@ -39,6 +40,7 @@ from pathlib import Path
 from release_service_utils.helpers import disk_image_utils
 from release_service_utils.helpers import oras_utils
 from release_service_utils.helpers import content_gateway
+from release_service_utils.helpers import retry
 
 PROG = "compress_artifacts.py"
 
@@ -48,6 +50,38 @@ CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 SHARED_DIR = Path(os.environ.get("SHARED_DIR", "/shared"))
 
 logger = logging.getLogger(__name__)
+
+
+class _OrasPullError(Exception):
+    """oras pull failed; retried in case it is transient registry propagation lag."""
+
+
+def _oras_pull(ref: str, cwd: Path, *, max_attempts: int = 3) -> None:
+    """Pull an OCI artifact by digest into ``cwd``, capturing output and retrying failures.
+
+    ``subprocess.check_call`` swallows stdout/stderr, so a failed pull only ever
+    reported a bare "non-zero exit status" with no indication of the actual
+    registry response (e.g. "manifest unknown", "unauthorized"). This captures
+    the output and includes it in the raised error, and retries a few times in
+    case the failure is due to registry-side propagation lag shortly after the
+    corresponding push (e.g. right after Mac/Windows signing completes).
+    """
+
+    def _attempt() -> None:
+        result = subprocess.run(
+            ["oras", "pull", ref], cwd=str(cwd), capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            output = (result.stderr or result.stdout).strip()
+            raise _OrasPullError(
+                f"oras pull failed for {ref} (exit {result.returncode}): {output}"
+            )
+
+    retry.retry_with_exponential_backoff(
+        _attempt,
+        max_attempts=max_attempts,
+        retry_on=_OrasPullError,
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -64,20 +98,14 @@ def _pull_signed_content(quay_url: str, component_name: str, component_dir: Path
 
     if (component_dir / "has_mac").exists():
         signed_mac_digest = (component_dir / "signed_mac_digest.txt").read_text().strip()
-        subprocess.check_call(
-            ["oras", "pull", f"{quay_url}/signed/{component_name}@{signed_mac_digest}"],
-            cwd=str(signed_dir),
-        )
+        _oras_pull(f"{quay_url}/signed/{component_name}@{signed_mac_digest}", signed_dir)
 
     if (component_dir / "has_windows").exists():
         signed_windows_digest = (
             (component_dir / "signed_windows_digest.txt").read_text().strip()
         )
         signed_windows_digest = signed_windows_digest.strip()
-        subprocess.check_call(
-            ["oras", "pull", f"{quay_url}/signed/{component_name}@{signed_windows_digest}"],
-            cwd=str(signed_dir),
-        )
+        _oras_pull(f"{quay_url}/signed/{component_name}@{signed_windows_digest}", signed_dir)
 
 
 def _restore_supplementary(component_dir: Path) -> None:
