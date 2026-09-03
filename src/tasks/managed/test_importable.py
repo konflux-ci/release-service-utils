@@ -15,6 +15,7 @@ _TASKS_DIR = Path(__file__).parent
 _REPO_ROOT = _TASKS_DIR.parent.parent.parent
 _MODULE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _SKIP = {"__pycache__", "tests"}
+_TASKS_MODULE = "release_service_utils.tasks.managed"
 
 
 def _discover_subpackages() -> list[str]:
@@ -41,7 +42,7 @@ def test_managed_task_runnable_as_module(name: str) -> None:
 
     without import errors
     """
-    module_name = f"release_service_utils.tasks.managed.{name}"
+    module_name = f"{_TASKS_MODULE}.{name}"
 
     # Set PYTHONPATH to include utils/ and other directories, matching the container setup
     env = os.environ.copy()
@@ -65,6 +66,9 @@ def test_managed_task_runnable_as_module(name: str) -> None:
     )
     # Accept exit code 0 (success), 1 (custom error), or 2 (argparse error)
     # The key is that there should be no import/module errors
+    assert (
+        f"No module named {_TASKS_MODULE}.{name}.__main__" not in result.stderr
+    ), f"Module import failed for {module_name}:\n{result.stderr}"
     assert (
         "ModuleNotFoundError" not in result.stderr
     ), f"Module import failed for {module_name}:\n{result.stderr}"
