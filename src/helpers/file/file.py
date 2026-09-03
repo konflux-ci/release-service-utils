@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
+import base64
 import gzip
+import hashlib
 import io
+import json
 import os
 import re
 import subprocess
@@ -101,6 +102,12 @@ def make_tempfile_path(
     finally:
         os.close(fd)
     return Path(name)
+
+
+def encode_json_gzip_b64(value: Any) -> str:
+    """Serialize *value* as compact JSON, gzip-compress, and standard-base64 encode."""
+    raw = json.dumps(value, separators=(",", ":")).encode("utf-8")
+    return base64.standard_b64encode(gzip.compress(raw)).decode("ascii")
 
 
 def decompress_gzip_bounded(data: bytes, *, max_bytes: int) -> bytes:

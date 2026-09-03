@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
+import base64
 import gzip
+import json
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -107,6 +108,21 @@ def test_make_tempfile_path_with_bytes() -> None:
         assert p.read_bytes() == b"hello"
     finally:
         p.unlink(missing_ok=True)
+
+
+def test_encode_json_gzip_b64_roundtrip() -> None:
+    """Compact JSON survives gzip+base64 encoding."""
+    payload = [{"repository": "foo", "cves": {"fixed": {"CVE-1": {}}}}]
+    encoded = file.encode_json_gzip_b64(payload)
+    decoded = json.loads(gzip.decompress(base64.standard_b64decode(encoded)))
+    assert decoded == payload
+
+
+def test_encode_json_gzip_b64_uses_compact_separators() -> None:
+    """Encoded JSON does not include spaces after separators."""
+    encoded = file.encode_json_gzip_b64({"a": 1, "b": [2]})
+    raw = gzip.decompress(base64.standard_b64decode(encoded)).decode("utf-8")
+    assert raw == '{"a":1,"b":[2]}'
 
 
 def test_decompress_gzip_bounded_roundtrip() -> None:
