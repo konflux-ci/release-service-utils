@@ -310,6 +310,48 @@ def test_substitute_value_missing_returns_empty_string() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _parse_additional_tags_label
+# ---------------------------------------------------------------------------
+
+
+def test_parse_additional_tags_label_space_separated() -> None:
+    """Space separated tags in the label are split into a list."""
+    labels = {"konflux.additional-tags": "tag1 tag2"}
+    assert apply_mapping._parse_additional_tags_label(labels) == ["tag1", "tag2"]
+
+
+def test_parse_additional_tags_label_comma_separated() -> None:
+    """Comma separated tags in the label are split into a list."""
+    labels = {"konflux.additional-tags": "tag1,tag2"}
+    assert apply_mapping._parse_additional_tags_label(labels) == ["tag1", "tag2"]
+
+
+def test_parse_additional_tags_label_comma_and_space_separated() -> None:
+    """Tags separated by a comma followed by whitespace are split into a list."""
+    labels = {"konflux.additional-tags": "tag1, tag2"}
+    assert apply_mapping._parse_additional_tags_label(labels) == ["tag1", "tag2"]
+
+
+def test_parse_additional_tags_label_missing_raises() -> None:
+    """No additional-tags label raises ValueError."""
+    with pytest.raises(ValueError, match="Substitution variable unknown or empty"):
+        apply_mapping._parse_additional_tags_label({})
+
+
+def test_parse_additional_tags_label_drops_empty_segments() -> None:
+    """Trailing/leading/doubled separators don't produce empty string tags."""
+    labels = {"konflux.additional-tags": ", tag1,, tag2, "}
+    assert apply_mapping._parse_additional_tags_label(labels) == ["tag1", "tag2"]
+
+
+def test_parse_additional_tags_label_rejects_invalid_characters() -> None:
+    """A split out tags with characters outside the tag charset raises ValueError."""
+    labels = {"konflux.additional-tags": "tag1 bad!tag"}
+    with pytest.raises(ValueError, match="Invalid tag format"):
+        apply_mapping._parse_additional_tags_label(labels)
+
+
+# ---------------------------------------------------------------------------
 # translate_one_tag / translate_tags
 # ---------------------------------------------------------------------------
 
@@ -420,6 +462,34 @@ def test_translate_tags_deduplicates_preserving_order() -> None:
 def test_translate_tags_empty_list_returns_empty_list() -> None:
     """An empty tags list returns an empty list."""
     assert apply_mapping.translate_tags([], {}, {}, "repo", [], {}, _fake_list_tags({})) == []
+
+
+def test_translate_tags_additional_tags_label_embedded_still_validates() -> None:
+    """Embedding the label mid-tag isn't special cased, so a multi-value label still errors."""
+    with pytest.raises(ValueError, match="Invalid tag format"):
+        apply_mapping.translate_tags(
+            ["v-{{ labels.konflux.additional-tags }}"],
+            {},
+            {"konflux.additional-tags": "1.58.2 1.58"},
+            "repo",
+            [],
+            {},
+            _fake_list_tags({}),
+        )
+
+
+def test_translate_tags_additional_tags_label_deduplicates_with_literal_tag() -> None:
+    """A label value that duplicates an existing literal tag isn't added twice."""
+    result = apply_mapping.translate_tags(
+        ["v1", "{{ labels.konflux.additional-tags }}"],
+        {},
+        {"konflux.additional-tags": "v1 v2"},
+        "repo",
+        [],
+        {},
+        _fake_list_tags({}),
+    )
+    assert result == ["v1", "v2"]
 
 
 # ---------------------------------------------------------------------------
@@ -894,6 +964,82 @@ def test_process_component_tag_layering_defaults_component_repo() -> None:
     ]
 
 
+def test_process_component_additional_tags_label_expands_to_each_tag() -> None:
+    """A referenced ``konflux.additional-tags`` label expands into each of its tags."""
+    component = _base_component(
+        repositories=[
+            {
+                "url": "registry.io/dest",
+                "tags": ["repo-tag", "{{ labels.konflux.additional-tags }}"],
+            }
+        ]
+    )
+    raw_manifest = {"config": {"mediaType": "application/vnd.oci.image.config.v1+json"}}
+    standard = {"Labels": {"konflux.additional-tags": "tag1, tag2"}}
+    apply_mapping.process_component(
+        component,
+        default_tags=[],
+        default_timestamp_format="%s",
+        current_timestamp="20240101 00:00:00",
+        default_cgw_settings={},
+        add_implicit_timestamp_tag=False,
+        inspect_fn=_fake_inspect(raw_manifest, standard),
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+    )
+    assert sorted(component["repositories"][0]["tags"]) == ["repo-tag", "tag1", "tag2"]
+
+
+def test_process_component_additional_tags_label_empty_raises() -> None:
+    """A referenced but empty or absent additional-tags label raises ValueError."""
+    component = _base_component(
+        repositories=[
+            {
+                "url": "registry.io/dest",
+                "tags": ["repo-tag", "{{ labels.konflux.additional-tags }}"],
+            }
+        ]
+    )
+    raw_manifest = {"config": {"mediaType": "application/vnd.oci.image.config.v1+json"}}
+    standard = {"Labels": {"other": "value"}}
+    with pytest.raises(ValueError, match="Substitution variable unknown or empty"):
+        apply_mapping.process_component(
+            component,
+            default_tags=[],
+            default_timestamp_format="%s",
+            current_timestamp="20240101 00:00:00",
+            default_cgw_settings={},
+            add_implicit_timestamp_tag=False,
+            inspect_fn=_fake_inspect(raw_manifest, standard),
+            list_tags_fn=_fake_list_tags({}),
+            get_arch_fn=_fake_get_arch(),
+            format_date_fn=_fake_format_date,
+        )
+
+
+def test_process_component_additional_tags_label_ignored_when_not_referenced() -> None:
+    """The label is ignored (not auto-added) when no tag template references it."""
+    component = _base_component(
+        repositories=[{"url": "registry.io/dest", "tags": ["repo-tag"]}]
+    )
+    raw_manifest = {"config": {"mediaType": "application/vnd.oci.image.config.v1+json"}}
+    standard = {"Labels": {"konflux.additional-tags": "tag1, tag2"}}
+    apply_mapping.process_component(
+        component,
+        default_tags=[],
+        default_timestamp_format="%s",
+        current_timestamp="20240101 00:00:00",
+        default_cgw_settings={},
+        add_implicit_timestamp_tag=False,
+        inspect_fn=_fake_inspect(raw_manifest, standard),
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+    )
+    assert component["repositories"][0]["tags"] == ["repo-tag"]
+
+
 def test_process_component_no_tags_leaves_repository_tags_untouched() -> None:
     """When there are no tags to set at all, the repository's tags key is left alone."""
     component = _base_component(repositories=[{"url": "registry.io/dest"}])
@@ -1143,6 +1289,48 @@ def test_process_components_applies_mapping_defaults() -> None:
     component = snapshot["components"][0]
     assert component["repositories"][0]["tags"] == ["default-tag"]
     assert component["contentGateway"] == {"publish": True}
+
+
+def test_process_components_additional_tags_label_expands_per_component() -> None:
+    """A ``defaults.tags`` reference expands per-component, using each image's own label."""
+    snapshot = {
+        "components": [
+            _base_component(
+                name="comp1",
+                containerImage="registry.io/repo1@sha256:abcdef1234567890",
+                repositories=[{"url": "repo-a", "tags": []}],
+            ),
+            _base_component(
+                name="comp2",
+                containerImage="registry.io/repo2@sha256:abcdef1234567890",
+                repositories=[{"url": "repo-b", "tags": []}],
+            ),
+        ]
+    }
+    mapping = {"defaults": {"tags": ["{{ labels.konflux.additional-tags }}"]}}
+
+    def inspect_fn(ref: str, **kwargs: Any) -> Any:
+        if kwargs.get("raw"):
+            raw_manifest = {
+                "config": {"mediaType": "application/vnd.oci.image.config.v1+json"}
+            }
+            return _completed(json.dumps(raw_manifest))
+        tags = "1.0 1.0-latest" if "repo1" in ref else "2.0"
+        return _completed(json.dumps({"Labels": {"konflux.additional-tags": tags}}))
+
+    apply_mapping.process_components(
+        snapshot,
+        mapping,
+        False,
+        inspect_fn=inspect_fn,
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+        current_timestamp_fn=lambda: "NOW",
+    )
+    comp1, comp2 = snapshot["components"]
+    assert sorted(comp1["repositories"][0]["tags"]) == ["1.0", "1.0-latest"]
+    assert comp2["repositories"][0]["tags"] == ["2.0"]
 
 
 def test_process_components_incrementer_cache_reset_per_component() -> None:
