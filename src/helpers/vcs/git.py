@@ -518,3 +518,107 @@ def push(
         if isinstance(cause, subprocess.CalledProcessError):
             raise cause from retry_error
         raise
+
+
+def diff_files(
+    repo_dir: Path,
+    before: str,
+    after: str,
+    diff_filter: str,
+    *,
+    stderr_path: Path | None = None,
+) -> list[str]:
+    """Return list of file paths changed between *before* and *after* commits.
+
+    *diff_filter* is passed to `git diff --diff-filter` (e.g., 'A' for added,
+    'M' for modified, 'AM' for added or modified).
+    """
+    result = _run_git_cmd(
+        ["git", "diff", "--name-only", f"--diff-filter={diff_filter}", before, after],
+        cwd=repo_dir,
+        stderr_path=stderr_path,
+    )
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def show_file(
+    repo_dir: Path,
+    revision: str,
+    path: str,
+    *,
+    stderr_path: Path | None = None,
+) -> str:
+    """Return file content at *revision*:*path* via `git show`."""
+    result = _run_git_cmd(
+        ["git", "show", f"{revision}:{path}"],
+        cwd=repo_dir,
+        stderr_path=stderr_path,
+    )
+    return result.stdout or ""
+
+
+def file_change_log(
+    repo_dir: Path,
+    path: str,
+    from_commit: str,
+    to_commit: str,
+    *,
+    stderr_path: Path | None = None,
+) -> str:
+    """Return formatted git log of changes to *path* between commits.
+
+    Returns log output with format: commit-hash date author <email>
+    followed by diff hunks. Excludes diff metadata lines (diff --git, index, ---, +++).
+    """
+    result = _run_git_cmd(
+        [
+            "git",
+            "log",
+            "-p",
+            "--no-merges",
+            "--format=%h %ad %an <%ae>",
+            "--date=iso",
+            "--no-show-signature",
+            f"{from_commit}..{to_commit}",
+            "--",
+            path,
+        ],
+        cwd=repo_dir,
+        stderr_path=stderr_path,
+    )
+    log_text = result.stdout or ""
+    lines = []
+    for line in log_text.splitlines():
+        if line.startswith(("diff --git", "index ", "--- ", "+++ ")) or not line:
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def last_commit_date(
+    repo_dir: Path,
+    path: str,
+    revision: str,
+    date_format: str,
+    *,
+    stderr_path: Path | None = None,
+) -> str:
+    """Return date of last commit that modified *path* at or before *revision*.
+
+    *date_format* is a git --date=format: string (e.g., '%Y-%m-%dT%H:%M:%SZ').
+    """
+    result = _run_git_cmd(
+        [
+            "git",
+            "log",
+            "-1",
+            f"--date=format:{date_format}",
+            "--pretty=format:%ad",
+            revision,
+            "--",
+            path,
+        ],
+        cwd=repo_dir,
+        stderr_path=stderr_path,
+    )
+    return result.stdout.strip()

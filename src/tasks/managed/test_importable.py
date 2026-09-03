@@ -67,9 +67,9 @@ def test_managed_task_runnable_as_module(name: str) -> None:
     # Accept exit code 0 (success), 1 (custom error), or 2 (argparse error)
     # The key is that there should be no import/module errors
     print(f"{_TASKS_MODULE}.{name}, stdout: \n{result.stdout}\n stderr: \n{result.stderr}\n")
-    assert (f"No module named {_TASKS_MODULE}.{name}.__main__"  not in result.stderr), (
-        f"Module import failed for {module_name}:\n{result.stderr}"
-    )
+    assert (
+        f"No module named {_TASKS_MODULE}.{name}.__main__" not in result.stderr
+    ), f"Module import failed for {module_name}:\n{result.stderr}"
     assert (
         "ModuleNotFoundError" not in result.stderr
     ), f"Module import failed for {module_name}:\n{result.stderr}"
