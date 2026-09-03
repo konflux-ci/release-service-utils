@@ -45,19 +45,6 @@ CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 logger = logging.getLogger(__name__)
 
 
-def _is_staging_quay_url(quay_url: str) -> bool:
-    """Return True if quay_url targets the nonprod (staging) artifact path.
-
-    Staging releases route through the nonprod Quay path (set based on
-    release intention in release-service-catalog's
-    tasks/managed/push-artifacts-to-cdn/push-artifacts-to-cdn.yaml) and sign
-    with a certificate in the Local Machine store, so signtool needs the
-    /sm flag only for those. Production keeps using its HSM-backed cert in
-    the Current User store.
-    """
-    return "/nonprod" in quay_url
-
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse and return CLI arguments."""
     p = argparse.ArgumentParser(prog=PROG)
@@ -75,7 +62,7 @@ def _build_batch_script(
     unsigned_digest: str,
     pipeline_run_uid: str,
     windows_temp_dir: str,
-    use_machine_store: bool = False,
+    use_machine_store: bool = True,
 ) -> str:
     """Build the remote batch script that pulls, signs, verifies, and pushes binaries."""
     sm_flag = " /sm" if use_machine_store else ""
@@ -93,7 +80,7 @@ for /r unsigned\\windows %%f in (*) do (
     /tr http://timestamp.digicert.com /td SHA256 "%%f"
   if errorlevel 1 (
     echo Signing of %%f failed
-    exit /B %ERRORLEVEL%
+    exit /B 1
   )
 )
 
@@ -102,7 +89,7 @@ for /r unsigned\\windows %%f in (*) do (
   signtool verify /v /pa "%%f"
   if errorlevel 1 (
     echo Verification of %%f failed
-    exit /B %ERRORLEVEL%
+    exit /B 1
   )
 )
 
@@ -113,9 +100,9 @@ oras push ^
   --annotation=quay.expires-after=1d ^
   {quay_url}/signed/{component_name}:{pipeline_run_uid}-windows ^
   windows
-if %ERRORLEVEL% neq 0 (
+if errorlevel 1 (
   echo ERROR: oras push failed with error %ERRORLEVEL%
-  exit /B %ERRORLEVEL%
+  exit /B 1
 )
 """
 
@@ -188,7 +175,7 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
             unsigned_digest=unsigned_digest,
             pipeline_run_uid=pipeline_run_uid,
             windows_temp_dir=windows_temp_dir,
-            use_machine_store=_is_staging_quay_url(quay_url),
+            use_machine_store=True,
         )
 
         fd, script_path = tempfile.mkstemp(suffix=".bat")
