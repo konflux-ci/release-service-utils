@@ -21,6 +21,7 @@ directory with the same file layout.
 from __future__ import annotations
 
 import argparse
+import enum
 import json
 import os
 import re
@@ -37,6 +38,7 @@ from release_service_utils.helpers import file
 from release_service_utils.helpers import http_client  # noqa: F401
 from release_service_utils.helpers import osidb
 from release_service_utils.helpers import tekton
+from release_service_utils.helpers.logger import logger
 
 PROG = "check_embargoed_cves.py"
 USAGE = (
@@ -50,23 +52,43 @@ def parse_cve_list(value: str) -> list[str]:
     return [c for c in re.split(r"\s+", value.strip()) if c]
 
 
-def is_embargoed_flaw_response(data: dict[str, Any]) -> bool:
-    """Return True if the first flaw in the list response is not clearly not embargoed.
+class EmbargoReason(enum.Enum):
+    """Classification of an OSIDB flaw response for embargo decisions."""
 
-    Only ``results[0].embargoed`` with JSON value ``false`` is treated as
-    not embargoed. Empty ``results``, a missing first row, a non-dict first row,
-    a missing key, or ``null``/``true`` is treated as embargoed or not visible.
+    EMBARGOED = "embargoed in OSIDB"
+    NO_FLAW_DATA = "OSIDB returned no results for this CVE"
+    INVALID_FLAW_DATA = "OSIDB flaw entry is not a JSON object"
+    MISSING_EMBARGO_FIELD = "OSIDB flaw entry missing 'embargoed' field"
+    STATUS_UNKNOWN = "OSIDB returned null embargo status"
+    NOT_EMBARGOED = "not embargoed"
+
+
+def classify_flaw_response(data: dict[str, Any]) -> EmbargoReason:
+    """Classify the embargo status from an OSIDB flaw list response.
+
+    Only ``results[0].embargoed`` with JSON value ``false`` yields
+    ``NOT_EMBARGOED``.  Every other shape (empty results, missing key,
+    ``null``, ``true``, non-dict row) maps to a specific reason so
+    callers can log actionable messages.
     """
     results = data.get("results")
     if not isinstance(results, list) or not results:
-        return True
+        return EmbargoReason.NO_FLAW_DATA
+
     first = results[0]
     if not isinstance(first, dict):
-        return True
-    em = first.get("embargoed", None)
+        return EmbargoReason.INVALID_FLAW_DATA
+
+    if "embargoed" not in first:
+        return EmbargoReason.MISSING_EMBARGO_FIELD
+
+    em = first["embargoed"]
     if em is False:
-        return False
-    return True
+        return EmbargoReason.NOT_EMBARGOED
+    if em is True:
+        return EmbargoReason.EMBARGOED
+
+    return EmbargoReason.STATUS_UNKNOWN
 
 
 def _embargo_finding_result_text(program_name: str) -> str:
@@ -186,10 +208,11 @@ def run_check(
         # token mid-loop).
         found: list[str] = []
         for cve in cve_ids:
-            print(f"Checking CVE {cve}", flush=True)
+            logger.info("Checking CVE %s", cve)
             try:
                 tok = get_token(osidb_url)
             except (OSError, requests.RequestException, ValueError) as e:
+                logger.error("Failed to get OSIDB access token: %s", e)
                 raise tekton.CheckStepError(
                     "getting an OSIDB access token (HTTP request)", e
                 ) from e
@@ -202,11 +225,25 @@ def run_check(
                 json.JSONDecodeError,
                 ValueError,
             ) as e:
+                logger.error(
+                    "Failed to query OSIDB flaws API for %s: %s",
+                    cve,
+                    e,
+                )
                 raise tekton.CheckStepError(
                     "querying the OSIDB flaws API (HTTP request)", e
                 ) from e
-            if is_embargoed_flaw_response(data):
-                print(f"CVE {cve} is embargoed", flush=True)
+            reason = classify_flaw_response(data)
+            if reason is not EmbargoReason.NOT_EMBARGOED:
+                if reason is EmbargoReason.EMBARGOED:
+                    logger.warning("CVE %s is %s", cve, reason.value)
+                else:
+                    logger.error(
+                        "CVE %s cannot be confirmed as public: %s" " (results: %s)",
+                        cve,
+                        reason.value,
+                        data.get("results"),
+                    )
                 found.append(cve)
 
         # Return code 0/1 is logical outcome only; main() maps it to the Tekton result files.

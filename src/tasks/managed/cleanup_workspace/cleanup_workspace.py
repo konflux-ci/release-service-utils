@@ -8,7 +8,9 @@ import shutil
 import time
 from pathlib import Path
 
-import cleanup_internal_requests
+from release_service_utils.tasks.managed.cleanup_internal_requests import (
+    cleanup_internal_requests,
+)
 from release_service_utils.helpers.logger import logger
 
 PROG = "cleanup_workspace.py"
