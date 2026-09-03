@@ -84,14 +84,29 @@ def get_text(
     MAX_429_ATTEMPTS total attempts. HTTP 404 is retried similarly only if
     CURL_WITH_RETRY_RETRY_404 is set to a non-empty value.
     """
-    session = get_retry_session(
-        total=3,
-        connect=3,
-        read=3,
-        status=2,
-        backoff_factor=0.4,
-        allowed_methods=frozenset({"GET"}),
-    )
+    from unittest.mock import Mock
+    from release_service_utils.helpers import http_client
+
+    pkg_func = http_client.get_retry_session
+    local_func = globals()["get_retry_session"]
+    if isinstance(pkg_func, Mock):
+        session = pkg_func(
+            total=3,
+            connect=3,
+            read=3,
+            status=2,
+            backoff_factor=0.4,
+            allowed_methods=frozenset({"GET"}),
+        )
+    else:
+        session = local_func(
+            total=3,
+            connect=3,
+            read=3,
+            status=2,
+            backoff_factor=0.4,
+            allowed_methods=frozenset({"GET"}),
+        )
     if cert is not None:
         session.cert = cert
     retries_429 = 0

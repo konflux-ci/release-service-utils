@@ -23,6 +23,7 @@ duplicating auth, HTTP, file I/O, or Tekton plumbing.
 |-----------|--------------|-------------------|
 | **Managed** (runs on managed cluster, secrets available) | `tasks/managed/<name>/` | `scripts/python/tasks/managed/<snake_name>.py` |
 | **Internal** (runs via internal-request on another cluster) | `tasks/internal/<name>/` | `scripts/python/tasks/internal/<snake_name>.py` |
+| **Auxiliary** (helper Tekton task not used in regular pipelines) | `tasks/aux/<name>/` | `scripts/python/tasks/aux/<snake_name>.py` |
 
 Naming: catalog uses kebab-case (`check-data-keys`); utils uses snake_case
 (`check_data_keys.py`). Co-located test: `test_<snake_name>.py` in the same directory.
