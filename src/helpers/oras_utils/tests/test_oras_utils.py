@@ -407,6 +407,8 @@ def test_oras_push_raises_on_missing_digest(tmp_path: Path) -> None:
     with patch("subprocess.check_output", return_value="no digest here\n"):
         with pytest.raises(RuntimeError, match="Could not extract digest"):
             oras_utils.oras_push("quay.io/org/repo:tag", tmp_path, "macos", "mycomp")
+
+
 def _fake_skopeo_copy(
     manifest: dict, blobs: dict[str, bytes], *, calls: list[dict[str, object]] | None = None
 ):  # type: ignore[no-untyped-def]

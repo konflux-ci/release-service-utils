@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-import tarfile
 from pathlib import Path
 
 from release_service_utils.helpers import file
