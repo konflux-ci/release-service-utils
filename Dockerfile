@@ -174,6 +174,7 @@ RUN ln -s /home/src/tasks/managed/cleanup_workspace/cleanup_workspace.py /home/s
     ln -s /home/src/tasks/managed/collect_index_images/collect_index_images.py /home/scripts/python/tasks/managed/collect_index_images.py && \
     ln -s /home/src/tasks/managed/collect_slack_notification_params/collect_slack_notification_params.py /home/scripts/python/tasks/managed/collect_slack_notification_params.py && \
     ln -s /home/src/tasks/managed/extract_index_image/extract_index_image.py /home/scripts/python/tasks/managed/extract_index_image.py && \
+    ln -s /home/src/tasks/managed/filter_already_released_advisory_images_managed/filter_already_released_advisory_images_managed.py /home/scripts/python/tasks/managed/filter_already_released_advisory_images_managed.py && \
     ln -s /home/src/tasks/managed/filter_already_released_images/filter_already_released_images.py /home/scripts/python/tasks/managed/filter_already_released_images.py && \
     ln -s /home/src/tasks/managed/make_repo_public/make_repo_public.py /home/scripts/python/tasks/managed/make_repo_public.py && \
     ln -s /home/src/tasks/managed/publish_pyxis_repository/publish_pyxis_repository.py /home/scripts/python/tasks/managed/publish_pyxis_repository.py && \
