@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from shutil import rmtree
 
 from release_service_utils.helpers import file
 from release_service_utils.helpers import oras_utils
@@ -14,27 +15,20 @@ from release_service_utils.helpers.subprocess_cmd import run_cmd
 
 DEFAULT_DATA_DIR = "/var/workdir/release"
 ROK_ACCESS_PATH = Path("/etc/rok-access")
-RESULTS_DIR = Path("/var/workdir/results")
+TEMP_DIR = Path("/var/workdir/temp")
 
 
 def pull_component_artifacts(
-    snapshot: dict[str, Any],
+    component: dict[str, Any],
     results_dir: Path,
 ) -> None:
     """Pull OCI artifacts for every component in the snapshot."""
-    components = snapshot.get("components", [])
-    logger.info("Pulling artifacts for %d component(s)", len(components))
-
-    results_dir.mkdir(parents=True, exist_ok=True)
-
-    for component in components:
-        container_image = component["containerImage"]
-        logger.info("Pulling %s", container_image)
-        oras_utils.oras_pull(container_image, results_dir)
+    container_image = component["containerImage"]
+    logger.info("Pulling %s", container_image)
+    oras_utils.oras_pull(container_image, results_dir)
 
 
 def push_to_storage(
-    snapshot: dict[str, Any],
     data: dict[str, Any],
     rok_access_path: Path,
     results_dir: Path,
@@ -56,7 +50,6 @@ def push_to_storage(
         logger.info("Draft build — skipping Artifact Storage (koji_import_draft is False)")
         return
 
-    component_group = snapshot.get("componentGroup", "")
     logger.info(
         "Uploading artifacts for build %s in namespace %s",
         snapshot_build_id,
@@ -78,8 +71,6 @@ def push_to_storage(
         ]
     )
 
-    logger.info('Completed push-artifacts-to-storage for "%s"', component_group)
-
 
 def run(
     *,
@@ -98,16 +89,23 @@ def run(
     snapshot = file.load_json_dict(snapshot_file)
     data = file.load_json_dict(data_file)
 
-    pull_component_artifacts(snapshot, results_dir)
+    components = snapshot.get("components", [])
+    logger.info("Pulling artifacts for %d component(s)", len(components))
 
-    push_to_storage(
-        snapshot,
-        data,
-        rok_access_path,
-        results_dir,
-        snapshot_build_id,
-        snapshot_namespace,
-    )
+    for component in components:
+        results_dir.mkdir(parents=True, exist_ok=True)
+        pull_component_artifacts(component, results_dir)
+        push_to_storage(
+            data,
+            rok_access_path,
+            results_dir,
+            snapshot_build_id,
+            snapshot_namespace,
+        )
+        rmtree(results_dir)
+
+    component_group = snapshot.get("componentGroup", "")
+    logger.info('Completed push-artifacts-to-storage for "%s"', component_group)
 
 
 def main() -> int:
@@ -125,7 +123,7 @@ def main() -> int:
         snapshot_build_id=snapshot_build_id,
         snapshot_namespace=snapshot_namespace,
         rok_access_path=ROK_ACCESS_PATH,
-        results_dir=RESULTS_DIR,
+        results_dir=TEMP_DIR,
     )
 
     return 0
