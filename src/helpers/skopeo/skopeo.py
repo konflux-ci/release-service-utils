@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 
 _REPO_NOT_FOUND_RE = re.compile(r"name unknown|repository not found", re.IGNORECASE)
 
@@ -63,7 +64,17 @@ def copy(
     *,
     retry_times: int = 3,
     check: bool = False,
+    all: bool = False,
+    source_auth_file: Path | None = None,
+    dest_auth_file: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``skopeo copy`` to copy an image between transports."""
-    cmd = ["skopeo", "copy", "--retry-times", str(retry_times), source, dest]
+    cmd = ["skopeo", "copy", "--retry-times", str(retry_times)]
+    if all:
+        cmd.append("--all")
+    if source_auth_file:
+        cmd += ["--src-authfile", str(source_auth_file)]
+    if dest_auth_file:
+        cmd += ["--dest-authfile", str(dest_auth_file)]
+    cmd += [source, dest]
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
