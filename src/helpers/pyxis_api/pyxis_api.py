@@ -161,3 +161,172 @@ def patch_repository_json(
         raise requests.RequestException(
             f"Pyxis PATCH failed for {url}: {response.status_code} {response.text}"
         ) from exc
+
+
+def get_advisory(
+    advisory_api_url: str,
+    advisory_id: str,
+    *,
+    cert: tuple[str, str],
+) -> dict[str, Any] | None:
+    """GET a Pyxis advisory by ID, return JSON or None if not found."""
+    url = f"{advisory_api_url.rstrip('/')}/id/{advisory_id}"
+    try:
+        text = http_client.get_text(
+            url,
+            cert=cert,
+            timeout=120,
+        )
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            return None
+        raise requests.RequestException(f"Pyxis advisory GET failed for {url}") from exc
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        preview = text[:100] if text else "(empty)"
+        msg = f"invalid JSON from Pyxis advisory GET {url}: {preview}"
+        raise ValueError(msg) from exc
+
+
+def create_or_update_advisory(
+    advisory_api_url: str,
+    advisory_id: str,
+    payload: dict[str, Any],
+    *,
+    cert: tuple[str, str],
+) -> None:
+    """Create or update Pyxis advisory (GET to check, then POST or PATCH).
+
+    Retries the GET-then-POST/PATCH sequence up to 3 times so idempotent
+    upserts recover from transient failures.
+    """
+    existing = get_advisory(advisory_api_url, advisory_id, cert=cert)
+    session = http_client.get_retry_session(
+        total=3,
+        connect=3,
+        read=3,
+        status=3,
+        backoff_factor=2.0,
+        allowed_methods=frozenset({"POST", "PATCH"}),
+    )
+    session.cert = cert
+    if existing is not None:
+        url = f"{advisory_api_url.rstrip('/')}/id/{advisory_id}"
+        response = session.patch(
+            url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=120,
+        )
+        response.raise_for_status()
+    else:
+        url = advisory_api_url.rstrip("/")
+        response = session.post(
+            url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=120,
+        )
+        response.raise_for_status()
+
+
+def get_image_by_digest(
+    images_api_url: str,
+    digest: str,
+    *,
+    cert: tuple[str, str],
+) -> dict[str, Any]:
+    """GET Pyxis image by manifest digest (sha256, no prefix)."""
+    url = (
+        f"{images_api_url.rstrip('/')}?page_size=1&"
+        f"filter=repositories.manifest_schema2_digest%3D%3D%22sha256%3A{digest}%22%3B"
+        f"not%28deleted%3D%3Dtrue%29"
+    )
+    try:
+        text = http_client.get_text(
+            url,
+            cert=cert,
+            timeout=120,
+        )
+    except requests.HTTPError as exc:
+        raise requests.RequestException(f"Pyxis image GET failed for {url}") from exc
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        preview = text[:100] if text else "(empty)"
+        msg = f"invalid JSON from Pyxis image GET {url}: {preview}"
+        raise ValueError(msg) from exc
+
+    images = data.get("data", [])
+    if not images:
+        msg = f"No Pyxis image found for digest sha256:{digest}"
+        raise ValueError(msg)
+    return images[0]
+
+
+def link_image_to_advisory(
+    images_api_url: str,
+    image_id: str,
+    repo_path: str,
+    advisory_id: str,
+    *,
+    cert: tuple[str, str],
+) -> None:
+    """PATCH Pyxis image to link advisory ID to repository entry."""
+    url = f"{images_api_url.rstrip('/')}/id/{image_id}"
+    try:
+        text = http_client.get_text(
+            url=url,
+            timeout=120,
+        )
+    except requests.HTTPError as exc:
+        raise requests.RequestException(f"Pyxis image GET failed for {url}") from exc
+
+    try:
+        image_data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        preview = text[:100] if text else "(empty)"
+        msg = f"invalid JSON from Pyxis image GET {url}: {preview}"
+        raise ValueError(msg) from exc
+
+    # Update image_advisory_id for matching repository
+    repositories = image_data.get("repositories", [])
+    for repo in repositories:
+        if (
+            repo.get("registry") == "registry.access.redhat.com"
+            and repo.get("repository") == repo_path
+        ):
+            repo["image_advisory_id"] = advisory_id
+            break
+    else:
+        msg = (
+            f"Pyxis image {image_id} has no repository entry for "
+            f"registry.access.redhat.com/{repo_path}"
+        )
+        raise ValueError(msg)
+
+    patch_session = http_client.get_retry_session(
+        total=3,
+        connect=3,
+        read=3,
+        status=3,
+        backoff_factor=2.0,
+        allowed_methods=frozenset({"PATCH"}),
+    )
+    patch_session.cert = cert
+    patch_response = patch_session.patch(
+        url,
+        json=image_data,
+        headers={"Content-Type": "application/json"},
+        timeout=120,
+    )
+    try:
+        patch_response.raise_for_status()
+    except requests.HTTPError as exc:
+        raise requests.RequestException(
+            f"Pyxis image PATCH failed for {url}: "
+            f"{patch_response.status_code} {patch_response.text}"
+        ) from exc
