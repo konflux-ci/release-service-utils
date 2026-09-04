@@ -14,6 +14,8 @@ import os
 import shutil
 import tempfile
 import time
+import re
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from dataclasses import dataclass
@@ -178,10 +180,12 @@ def oras_discover_referrers(reference: str, auth_file: Path) -> list[dict[str, A
     return data.get("referrers", [])
 
 
-def cosign_copy(source: str, dest: str, docker_config_dir: Path) -> None:
+def cosign_copy(
+    source: str, dest: str, docker_config_dir: Path, only: str | None = None
+) -> None:
     """Run ``cosign copy -f`` with the specified Docker config."""
     subprocess_cmd.run_cmd(
-        ["cosign", "copy", "-f", source, dest],
+        ["cosign", "copy", "-f"] + (["--only", only] if only else []) + [source, dest],
         env={"DOCKER_CONFIG": str(docker_config_dir)},
         check=True,
     )
@@ -191,7 +195,7 @@ def _discover_artifacts_with_retry(
     reference: str,
     source_auth_file: Path,
     retries: int,
-) -> int:
+) -> list[dict[str, Any]]:
     """Discover attached artifacts with retries; return count.
 
     On persistent failure falls back to 0 (caller uses cosign copy).
@@ -202,12 +206,11 @@ def _discover_artifacts_with_retry(
             max_attempts=retries + 1,
             base_sleep_seconds=0,
         )
-        count = len(referrers)
-        logger.info("Found %d artifacts", count)
-        return count
+        logger.info("Found %d artifacts", len(referrers))
+        return referrers
     except Exception:
         logger.warning("Max retries exceeded for oras discover. Falling back to cosign copy.")
-        return 0
+        return []
 
 
 def push_image(job: PushJob) -> dict[str, str]:
@@ -235,25 +238,73 @@ def push_image(job: PushJob) -> dict[str, str]:
 
         docker_config_dir = create_combined_docker_config(job.source_auth_file, dest_auth_file)
         try:
-            artifact_count = 0
+            artifacts = []
             if job.copy_bundle_migrations:
                 logger.info("Checking for attached artifacts on %s", job.container_image)
-                artifact_count = _discover_artifacts_with_retry(
+                raw_artifacts = _discover_artifacts_with_retry(
                     job.container_image, job.source_auth_file, job.retries
                 )
+                for item in raw_artifacts:
+                    artifact_type = item.get("artifactType") or item.get("mediaType") or ""
+                    if re.search(r"cosign.*signature|cosign/signature", artifact_type):
+                        logger.info(
+                            "Skipping attached artifact (cosign signature): %s", artifact_type
+                        )
+                    else:
+                        artifacts.append(item)
 
             def do_copy() -> None:
-                if job.copy_bundle_migrations and artifact_count > 0:
+                if job.copy_bundle_migrations and len(artifacts) > 0:
                     oras_utils.oras_cp(
                         job.container_image,
                         dest_ref,
                         from_auth=job.source_auth_file,
                         to_auth=dest_auth_file,
-                        recursive=True,
+                        recursive=False,
                         platform=job.platform,
                     )
+                    if artifacts:
+                        logger.info(
+                            "Copying %d attached artifacts for %s to %s",
+                            len(artifacts),
+                            job.container_image,
+                            dest_ref,
+                        )
+                        for artifact in artifacts:
+                            artifact_digest = artifact.get("digest")
+                            if not artifact_digest:
+                                logger.warning(
+                                    "Skipping artifact with missing digest: %s", artifact
+                                )
+                                continue
+                            artifact_ref = (
+                                f"{job.container_image.split('@')[0]}@{artifact_digest}"
+                            )
+                            dest_artifact_ref = f"{dest_ref}"
+                            logger.info(
+                                "Copying attached artifact: %s to %s",
+                                artifact_ref,
+                                dest_artifact_ref,
+                            )
+                            oras_utils.oras_cp(
+                                artifact_ref,
+                                dest_artifact_ref,
+                                from_auth=job.source_auth_file,
+                                to_auth=dest_auth_file,
+                                recursive=False,
+                            )
                 else:
-                    cosign_copy(job.container_image, dest_ref, docker_config_dir)
+                    skopeo.copy(
+                        f"docker://{job.container_image}",
+                        f"docker://{dest_ref}",
+                        source_auth_file=job.source_auth_file,
+                        dest_auth_file=dest_auth_file,
+                        all=True,
+                        check=True,
+                    )
+                    cosign_copy(
+                        job.container_image, dest_ref, docker_config_dir, only="att,sbom"
+                    )
 
             retry.retry_with_exponential_backoff(
                 do_copy,
