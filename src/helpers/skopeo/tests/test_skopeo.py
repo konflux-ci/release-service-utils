@@ -395,3 +395,35 @@ def test_copy_check_true_raises_on_failure() -> None:
     ):
         with pytest.raises(subprocess.CalledProcessError):
             skopeo.copy("docker://img:v1", "dir:/tmp/out", check=True)
+
+
+def test_copy_all_and_auth_files() -> None:
+    """``all=True`` and auth files parameters are correctly added to cmd."""
+    from pathlib import Path
+
+    with mock.patch(
+        "subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.copy(
+            "docker://img:v1",
+            "dir:/tmp/out",
+            all=True,
+            source_auth_file=Path("/tmp/src_auth.json"),
+            dest_auth_file=Path("/tmp/dst_auth.json"),
+        )
+
+    cmd = run_mock.call_args[0][0]
+    assert cmd == [
+        "skopeo",
+        "copy",
+        "--retry-times",
+        "3",
+        "--all",
+        "--src-authfile",
+        "/tmp/src_auth.json",
+        "--dest-authfile",
+        "/tmp/dst_auth.json",
+        "docker://img:v1",
+        "dir:/tmp/out",
+    ]
