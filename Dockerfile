@@ -4,7 +4,7 @@ FROM --platform=linux/amd64 registry.redhat.io/rhtas/ec-rhel9:0.7@sha256:bed04e8
 
 FROM --platform=linux/amd64 registry.redhat.io/rhtas/cosign-rhel9:1.3.3-1773309431 as cosign
 
-# No --platform pin here (unlike cosign/ec-rhel9 above): we copy the roxctl binary
+# No --platform pin here (unlike cosign/ec-rhel9 above): we copy the roxctl binary foo
 # itself, not an arch-bundled blob, so this must resolve to the target build platform.
 FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.4-1 as roxctl
 
