@@ -169,7 +169,7 @@ def test_get_source_paths_no_source_skipped() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _create_os_flag_files
+# create_os_flag_files
 # ---------------------------------------------------------------------------
 
 
@@ -191,7 +191,7 @@ def test_create_os_flag_files_darwin(tmp_path: Path, monkeypatch: pytest.MonkeyP
             }
         ]
     }
-    extract_artifacts._create_os_flag_files(snapshot)
+    extract_artifacts.create_os_flag_files(snapshot)
     assert (tmp_path / "prod" / "has_mac").exists()
     assert not (tmp_path / "prod" / "has_windows").exists()
     assert not (tmp_path / "prod" / "has_linux").exists()
@@ -211,7 +211,7 @@ def test_create_os_flag_files_windows_by_source_name(
             }
         ]
     }
-    extract_artifacts._create_os_flag_files(snapshot)
+    extract_artifacts.create_os_flag_files(snapshot)
     assert (tmp_path / "prod" / "has_windows").exists()
 
 
@@ -227,7 +227,7 @@ def test_create_os_flag_files_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             }
         ]
     }
-    extract_artifacts._create_os_flag_files(snapshot)
+    extract_artifacts.create_os_flag_files(snapshot)
     assert (tmp_path / "prod" / "has_linux").exists()
 
 
@@ -247,7 +247,7 @@ def test_create_os_flag_files_from_staged(
             }
         ]
     }
-    extract_artifacts._create_os_flag_files(snapshot)
+    extract_artifacts.create_os_flag_files(snapshot)
     assert (tmp_path / "prod" / "has_mac").exists()
 
 
@@ -258,7 +258,7 @@ def test_create_os_flag_files_skips_missing_component_dir(
     monkeypatch.setattr(extract_artifacts, "CONTENT_DIR", tmp_path)
     # No directory created for "missing"
     snapshot = {"components": [{"name": "missing", "files": [{"os": "linux"}]}]}
-    extract_artifacts._create_os_flag_files(snapshot)  # should not raise
+    extract_artifacts.create_os_flag_files(snapshot)  # should not raise
 
 
 def test_validate_disk_image_components_non_linux_raises() -> None:
@@ -808,7 +808,7 @@ def test_extract_from_oras_raises_when_title_missing(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _setup_docker_config
+# setup_docker_config
 # ---------------------------------------------------------------------------
 
 
@@ -823,7 +823,7 @@ def test_setup_docker_config_strips_noise(
     home = tmp_path / "home"
     home.mkdir()
     with mock.patch("pathlib.Path.home", return_value=home):
-        extract_artifacts._setup_docker_config()
+        extract_artifacts.setup_docker_config()
     assert (home / ".docker" / "config.json").exists()
 
 

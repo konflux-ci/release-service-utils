@@ -27,4 +27,5 @@ from .extract_artifacts import (  # noqa: F401
     main,
     process_component,
     run,
+    skopeo_copy_to_dir,
 )
