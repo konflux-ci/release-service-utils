@@ -1118,6 +1118,235 @@ def test_process_component_inspect_failure_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Component-wide Jinja variable substitution
+# ---------------------------------------------------------------------------
+
+
+def test_process_component_jinja_substitution_in_version_field() -> None:
+    """Jinja variables in the version field are substituted."""
+    component = _base_component(
+        source={"git": {"revision": "abcdef1234567890"}},
+        version="{{ git_short_sha }}",
+    )
+    apply_mapping.process_component(
+        component,
+        default_tags=[],
+        default_timestamp_format="%s",
+        current_timestamp="20240101 00:00:00",
+        default_cgw_settings={},
+        add_implicit_timestamp_tag=False,
+        inspect_fn=_fake_inspect({}, {}),
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+    )
+    assert component["version"] == "abcdef1"
+
+
+def test_process_component_jinja_substitution_in_source_context() -> None:
+    """Jinja variables in source.git.context are substituted."""
+    component = _base_component(
+        source={"git": {"revision": "abc123", "context": "path/{{ git_short_sha }}"}},
+    )
+    apply_mapping.process_component(
+        component,
+        default_tags=[],
+        default_timestamp_format="%s",
+        current_timestamp="20240101 00:00:00",
+        default_cgw_settings={},
+        add_implicit_timestamp_tag=False,
+        inspect_fn=_fake_inspect({}, {}),
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+    )
+    assert component["source"]["git"]["context"] == "path/abc123"
+
+
+def test_process_component_jinja_substitution_multiple_variables() -> None:
+    """Multiple variable types are all substituted correctly."""
+    component = _base_component(
+        source={"git": {"revision": "def456"}},
+        version="{{ git_short_sha }}-{{ digest_sha }}",
+    )
+    apply_mapping.process_component(
+        component,
+        default_tags=[],
+        default_timestamp_format="%s",
+        current_timestamp="20240101 00:00:00",
+        default_cgw_settings={},
+        add_implicit_timestamp_tag=False,
+        inspect_fn=_fake_inspect({}, {}),
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+    )
+    assert component["version"] == "def456-abcdef1234567890"
+
+
+def test_process_component_jinja_substitution_oci_version_in_version_field() -> None:
+    """OCI version variable is substituted in version field."""
+    component = _base_component(
+        version="v{{ oci_version }}",
+    )
+    raw_manifest = {
+        "annotations": {"org.opencontainers.image.version": "1.2.3+build"},
+        "config": {"mediaType": "application/vnd.oci.image.config.v1+json"},
+    }
+    apply_mapping.process_component(
+        component,
+        default_tags=[],
+        default_timestamp_format="%s",
+        current_timestamp="20240101 00:00:00",
+        default_cgw_settings={},
+        add_implicit_timestamp_tag=False,
+        inspect_fn=_fake_inspect(raw_manifest, {}),
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+    )
+    assert component["version"] == "v1.2.3_build"
+
+
+def test_process_component_jinja_substitution_timestamp_in_unstable_fields() -> None:
+    """Timestamp variable can be used in unstableFields."""
+    component = _base_component()
+    component["unstableFields"] = {"buildTime": "{{ timestamp }}"}
+    raw_manifest = {
+        "annotations": {"org.opencontainers.image.created": "2024-01-15"},
+        "config": {"mediaType": "application/vnd.oci.image.config.v1+json"},
+    }
+    standard = {"Labels": {"build-date": "2024-01-15T10:00:00Z"}}
+    apply_mapping.process_component(
+        component,
+        default_tags=[],
+        default_timestamp_format="%Y-%m-%d",
+        current_timestamp="20240101 00:00:00",
+        default_cgw_settings={},
+        add_implicit_timestamp_tag=False,
+        inspect_fn=_fake_inspect(raw_manifest, standard),
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+    )
+    assert component["unstableFields"]["buildTime"] == "2024-01-15T10:00:00Z|%Y-%m-%d"
+
+
+def test_process_component_jinja_substitution_release_timestamp_in_contentgateway() -> None:
+    """Release timestamp variable is substituted in contentGateway fields."""
+    component = _base_component(
+        contentGateway={"releaseId": "release-{{ release_timestamp }}"},
+    )
+    apply_mapping.process_component(
+        component,
+        default_tags=[],
+        default_timestamp_format="%Y%m%d",
+        current_timestamp="20250831 12:34:56",
+        default_cgw_settings={},
+        add_implicit_timestamp_tag=False,
+        inspect_fn=_fake_inspect({}, {}),
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+    )
+    assert component["contentGateway"]["releaseId"] == "release-20250831 12:34:56|%Y%m%d"
+
+
+def test_process_component_jinja_substitution_all_substitute_map_variables() -> None:
+    """All substitute_map variables are available in component fields."""
+    component = _base_component(
+        source={"git": {"revision": "abcdef1234567890"}},
+    )
+    component["unstableFields"] = {
+        "gitSha": "{{ git_sha }}",
+        "gitShortSha": "{{ git_short_sha }}",
+        "digestSha": "{{ digest_sha }}",
+        "ociVersion": "{{ oci_version }}",
+        "buildTimestamp": "{{ timestamp }}",
+        "releaseTimestamp": "{{ release_timestamp }}",
+    }
+    raw_manifest = {
+        "annotations": {
+            "org.opencontainers.image.version": "2.0.0",
+            "org.opencontainers.image.created": "2024-01-15T00:00:00Z",
+        },
+        "config": {"mediaType": "application/vnd.oci.image.config.v1+json"},
+    }
+    standard = {"Labels": {"build-date": "2024-01-15T10:30:00Z"}}
+    apply_mapping.process_component(
+        component,
+        default_tags=[],
+        default_timestamp_format="%Y-%m-%d",
+        current_timestamp="20250831 12:00:00",
+        default_cgw_settings={},
+        add_implicit_timestamp_tag=False,
+        inspect_fn=_fake_inspect(raw_manifest, standard),
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+    )
+    assert component["unstableFields"]["gitSha"] == "abcdef1234567890"
+    assert component["unstableFields"]["gitShortSha"] == "abcdef1"
+    assert component["unstableFields"]["digestSha"] == "abcdef1234567890"
+    assert component["unstableFields"]["ociVersion"] == "2.0.0"
+    assert component["unstableFields"]["buildTimestamp"] == "2024-01-15T10:30:00Z|%Y-%m-%d"
+    assert component["unstableFields"]["releaseTimestamp"] == "20250831 12:00:00|%Y-%m-%d"
+
+
+def test_process_component_jinja_substitution_preserves_non_template_fields() -> None:
+    """Fields without Jinja variables are left unchanged."""
+    component = _base_component(
+        source={"git": {"revision": "abc123", "url": "https://github.com/org/repo.git"}},
+        version="1.0.0",
+    )
+    # Add a field with Jinja to verify substitution still works
+    component["unstableFields"] = {"custom": "release-{{ git_sha }}"}
+
+    apply_mapping.process_component(
+        component,
+        default_tags=[],
+        default_timestamp_format="%s",
+        current_timestamp="20240101 00:00:00",
+        default_cgw_settings={},
+        add_implicit_timestamp_tag=False,
+        inspect_fn=_fake_inspect({}, {}),
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+    )
+    # Non-template fields preserved
+    assert component["source"]["git"]["url"] == "https://github.com/org/repo.git"
+    assert component["version"] == "1.0.0"
+    # Template field substituted
+    assert component["unstableFields"]["custom"] == "release-abc123"
+
+
+def test_process_component_jinja_substitution_combined_with_tags_and_staged() -> None:
+    """Jinja substitution works alongside tag and staged file translation."""
+    component = _base_component(
+        source={"git": {"revision": "commit123"}},
+        repositories=[{"url": "registry.io/dest", "tags": ["tag-{{ git_short_sha }}"]}],
+        staged={"files": [{"filename": "release-{{ git_short_sha }}.yaml"}]},
+        version="{{ git_short_sha }}",
+    )
+    apply_mapping.process_component(
+        component,
+        default_tags=[],
+        default_timestamp_format="%s",
+        current_timestamp="20240101 00:00:00",
+        default_cgw_settings={},
+        add_implicit_timestamp_tag=False,
+        inspect_fn=_fake_inspect({}, {}),
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+    )
+    assert component["repositories"][0]["tags"] == ["tag-commit1"]
+    assert component["staged"]["files"][0]["filename"] == "release-commit1.yaml"
+    assert component["version"] == "commit1"
+
+
+# ---------------------------------------------------------------------------
 # process_components
 # ---------------------------------------------------------------------------
 
