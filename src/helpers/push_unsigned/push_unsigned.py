@@ -28,6 +28,7 @@ import logging
 import os
 import shutil
 import tarfile
+from collections import Counter
 from pathlib import Path
 
 from release_service_utils.helpers import disk_image_utils
@@ -88,8 +89,17 @@ def _unpack_file_entries(
     unsigned_dir: Path,
     *,
     is_disk_image_component: bool = False,
+    os_arch_counts: Counter[tuple[str, str]] | None = None,
 ) -> None:
     """Extract each archive from entries into its OS/arch subdirectory under unsigned_dir.
+
+    When multiple entries share the same ``(os, arch)`` (e.g. rhel8 and rhel9
+    variants), each archive is extracted into a per-source subdirectory
+    (``<os>/<arch>/<archive_stem>/``) to prevent files from colliding.
+
+    *os_arch_counts* should be pre-computed over the **combined** ``files[]`` and
+    ``staged.files[]`` entries so that collisions spanning both arrays are detected.
+    When ``None``, a local count is computed from *entries* alone (backward compat).
 
     Files are moved directly (without unpacking) when either:
     - *is_disk_image_component* is True (set when contentType: disk-image), or
@@ -97,6 +107,13 @@ def _unpack_file_entries(
       .raw.gz, .vhd.gz).
     All other files are treated as tar archives and extracted.
     """
+    if os_arch_counts is None:
+        os_arch_counts = Counter()
+        for entry in entries:
+            key = (entry.get("os", ""), entry.get("arch", ""))
+            if key[0] and key[1]:
+                os_arch_counts[key] += 1
+
     for entry in entries:
         source = entry.get("source", "")
         os_name = entry.get("os", "")
@@ -116,6 +133,12 @@ def _unpack_file_entries(
         )
         if target_dir is None:
             continue
+
+        if os_arch_counts[(os_name, arch)] > 1:
+            target_dir = target_dir / oras_utils.archive_stem(archive_name)
+            logger.info(
+                "  Multiple entries for (%s, %s); isolating to %s", os_name, arch, target_dir
+            )
 
         target_dir.mkdir(parents=True, exist_ok=True)
         if is_disk_image_component or disk_image_utils.is_disk_image_file(archive_name):
@@ -190,17 +213,28 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
             (component_dir / "linux").mkdir(parents=True, exist_ok=True)
 
         is_disk_image = disk_image_utils.is_disk_image_component(component)
+
+        files_entries = component.get("files") or []
+        staged_entries = (component.get("staged") or {}).get("files") or []
+        os_arch_counts: Counter[tuple[str, str]] = Counter()
+        for entry in files_entries + staged_entries:
+            key = (entry.get("os", ""), entry.get("arch", ""))
+            if key[0] and key[1]:
+                os_arch_counts[key] += 1
+
         _unpack_file_entries(
-            component.get("files") or [],
+            files_entries,
             component_dir,
             unsigned_dir,
             is_disk_image_component=is_disk_image,
+            os_arch_counts=os_arch_counts,
         )
         _unpack_file_entries(
-            (component.get("staged") or {}).get("files") or [],
+            staged_entries,
             component_dir,
             unsigned_dir,
             is_disk_image_component=is_disk_image,
+            os_arch_counts=os_arch_counts,
         )
 
         supp_hold = component_dir / "supplementary"

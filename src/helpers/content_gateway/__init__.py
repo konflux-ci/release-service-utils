@@ -8,6 +8,7 @@ from .content_gateway import (
     cdn_env,
     component_file_entries,
     filename_for_binary_or_generic,
+    filenames_for_binary_or_generic,
     windows_archive_basename,
     windows_zip_filename,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "cdn_env",
     "component_file_entries",
     "filename_for_binary_or_generic",
+    "filenames_for_binary_or_generic",
     "windows_archive_basename",
     "windows_zip_filename",
 ]
