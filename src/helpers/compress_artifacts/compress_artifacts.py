@@ -5,10 +5,11 @@ For each component:
 * Pulls signed macOS and Windows OCI artifacts from Quay into a ``signed/`` directory.
 * Restores supplementary files (readme, license, changelog) that were held during signing.
 * Compresses each file entry into the final deliverable format:
-  - macOS / Linux (non-disk-image) → ``.tar.gz`` (from ``os/arch/`` directory)
+  - macOS / Linux (non-disk-image) → ``.tar.gz`` (from ``os/arch/`` directory;
+    suffix added for raw binaries whose source has no archive extension)
   - Linux disk images (``.qcow2``, ``.iso``) → copied as-is to ``ready_for_distribution/``
   - Windows → ``.zip`` (from ``os/arch/`` directory, extension corrected from
-    ``.tar.gz``/``.tar``)
+    ``.tar.gz``/``.tar`` or added for raw binaries such as a bare ``.exe``)
 * Updates ``SNAPSHOT_JSON`` to reflect corrected Windows filenames in ``files[]``.
 * Saves the modified snapshot to ``/shared/snapshot.json`` for downstream use.
 
@@ -107,9 +108,11 @@ def _compress_file_entry(
 ) -> str:
     """Compress one file entry into ready_dir and return the (possibly normalized) source path.
 
-    For macOS and Linux entries the source path is returned unchanged. For Windows entries
-    the archive is created as a ``.zip`` instead of ``.tar.gz``/``.tar``, and the returned
-    source path reflects the corrected filename so the snapshot can be updated accordingly.
+    The returned source path reflects the delivered archive name so the snapshot can be
+    updated accordingly: macOS/Linux archives use ``.tar.gz`` and Windows uses ``.zip``
+    (corrected from ``.tar.gz``/``.tar``). For raw binaries whose source carries no archive
+    extension the OS-appropriate suffix is added; sources that already name an archive are
+    returned unchanged.
 
     Files are copied directly to ``ready_dir`` (without archiving) when either:
     - *is_disk_image_component* is True (set when contentType: disk-image), or
@@ -142,25 +145,28 @@ def _compress_file_entry(
     # because that is the standard expected by Windows users and Developer Portal tooling.
     # Disk images are an exception: they are delivered as-is without any archiving.
     if os_name in ("darwin", "linux"):
-        out_path = ready_dir / source_filename
         if is_disk_image_component or disk_image_utils.is_disk_image_file(source_filename):
             # Use the known filename directly — multiple disk images may share
             # the same arch directory, so scanning the whole dir is incorrect.
+            out_path = ready_dir / source_filename
             src_file = arch_dir / source_filename
             if not src_file.is_file():
                 raise RuntimeError(
                     f"Disk image file '{source_filename}' not found in {arch_dir}"
                 )
             shutil.copy2(str(src_file), str(out_path))
-        else:
-            with tarfile.open(str(out_path), "w:gz") as tf:
-                for item in sorted(arch_dir.rglob("*")):
-                    if item.is_file():
-                        tf.add(str(item), arcname=str(item.relative_to(arch_dir)))
-        logger.info("  Created (%s): %s", array_name, source_filename)
-        return source
+            logger.info("  Created (%s): %s", array_name, source_filename)
+            return source
+        out_filename = content_gateway.delivered_archive_basename(source_filename, os_name)
+        out_path = ready_dir / out_filename
+        with tarfile.open(str(out_path), "w:gz") as tf:
+            for item in sorted(arch_dir.rglob("*")):
+                if item.is_file():
+                    tf.add(str(item), arcname=str(item.relative_to(arch_dir)))
+        logger.info("  Created (%s): %s", array_name, out_filename)
+        return str(Path(source).parent / out_filename)
 
-    win_filename = content_gateway.windows_zip_filename(source_filename)
+    win_filename = content_gateway.delivered_archive_basename(source_filename, os_name)
     out_path = ready_dir / win_filename
     with zipfile.ZipFile(str(out_path), "w", zipfile.ZIP_DEFLATED) as zf:
         for item in sorted(arch_dir.rglob("*")):
@@ -202,7 +208,8 @@ def compress_component(component: dict, snapshot: dict) -> dict:
                 is_disk_image_component=is_disk_image,
             )
             normalized_entry = dict(entry)
-            # no-op for mac/linux, .zip correction for windows
+            # no-op when the source already names an archive; otherwise the
+            # delivered suffix (.tar.gz / .zip) is applied for raw binaries
             normalized_entry["source"] = normalized_source
             normalized_files.append(normalized_entry)
 

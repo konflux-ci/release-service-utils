@@ -262,8 +262,9 @@ def _updated_binary_or_generic_entries(
             architecture=architecture,
             operating_system=operating_system,
         )
-        # compress-artifacts renames Windows .tar.gz to .zip; checksum map keys use .zip.
-        filename_basename = content_gateway.windows_archive_basename(
+        # compress-artifacts wraps raw binaries and renames Windows archives to
+        # .zip; use the delivered archive name so it matches the checksum map keys.
+        filename_basename = content_gateway.delivered_archive_basename(
             filename,
             operating_system,
         )

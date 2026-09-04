@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from release_service_utils.helpers import disk_image_utils
+
 _CGW_PRODUCTS_PROD = "https://developers.redhat.com/products"
 _CDN_DOWNLOADS_PROD = "https://access.redhat.com/downloads"
 _CGW_PRODUCTS_PREPROD = "https://developers.qa.redhat.com/products"
@@ -66,9 +68,39 @@ def windows_zip_filename(filename: str) -> str:
     return filename
 
 
-def windows_archive_basename(filename: str, operating_system: str) -> str:
-    """Return basename with Windows archive extensions normalized to ``.zip``."""
+# Recognised archive suffixes for already-packaged deliverables. A source ending
+# in one of these is left as-is (Windows ``.tar.gz``/``.tar`` rewritten to
+# ``.zip``); anything else is a raw binary that compress-artifacts wraps.
+_ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".tar", ".zip")
+
+
+def _has_archive_suffix(filename: str) -> bool:
+    """Return True if *filename* already carries a recognised archive suffix."""
+    return filename.endswith(_ARCHIVE_SUFFIXES)
+
+
+def delivered_archive_basename(filename: str, operating_system: str) -> str:
+    """Return the archive name compress-artifacts produces for a source file.
+
+    macOS/Linux artifacts are delivered as ``.tar.gz`` and Windows as ``.zip``.
+    Sources that already carry an archive suffix keep it (Windows ``.tar.gz`` /
+    ``.tar`` rewritten to ``.zip``). Raw binaries with no archive suffix (e.g. a
+    bare Linux binary ``roxctl-linux-amd64`` or a Windows ``roxctl.exe``) get the
+    OS-appropriate suffix added, so the delivered name, advisory PURL, and Pulp
+    filename all match the archive that is actually shipped. Disk images are
+    delivered as-is and returned unchanged.
+
+    Idempotent: re-applying it to an already-normalized name is a no-op.
+    """
     basename = Path(filename).name
+    if disk_image_utils.is_disk_image_file(basename):
+        return basename
     if operating_system == "windows":
-        return windows_zip_filename(basename)
-    return basename
+        if _has_archive_suffix(basename):
+            return windows_zip_filename(basename)
+        if basename.endswith(".exe"):
+            basename = basename[: -len(".exe")]
+        return basename + ".zip"
+    if _has_archive_suffix(basename):
+        return basename
+    return basename + ".tar.gz"
