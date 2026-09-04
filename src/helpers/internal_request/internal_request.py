@@ -144,6 +144,14 @@ def duration_to_seconds(duration: str) -> int:
     return (hours * 3600) + (minutes * 60) + seconds
 
 
+def seconds_to_duration(seconds: int) -> str:
+    """Format an integer number of seconds as an ``XhYmZs`` Tekton duration."""
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    return f"{h:02d}h{m:02d}m{s:02d}s"
+
+
 def validate_timeouts(
     *,
     timeout: int,

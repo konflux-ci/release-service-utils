@@ -31,6 +31,20 @@ def test_duration_to_seconds_rejects_invalid_format() -> None:
         ir_module.duration_to_seconds("60m")
 
 
+def test_seconds_to_duration_formats_hms() -> None:
+    """Format seconds as zero-padded XhYmZs Tekton durations."""
+    assert ir_module.seconds_to_duration(3600) == "01h00m00s"
+    assert ir_module.seconds_to_duration(3900) == "01h05m00s"
+    assert ir_module.seconds_to_duration(0) == "00h00m00s"
+    assert ir_module.seconds_to_duration(3661) == "01h01m01s"
+
+
+def test_seconds_to_duration_roundtrips_with_duration_to_seconds() -> None:
+    """Verify seconds_to_duration is the inverse of duration_to_seconds."""
+    assert ir_module.duration_to_seconds(ir_module.seconds_to_duration(3600)) == 3600
+    assert ir_module.duration_to_seconds(ir_module.seconds_to_duration(3300)) == 3300
+
+
 def test_validate_timeouts_rejects_task_plus_finally_exceeding_pipeline() -> None:
     """Reject when task and finally timeouts exceed the pipeline timeout."""
     with pytest.raises(ValueError, match="cannot exceed the pipeline timeout"):
