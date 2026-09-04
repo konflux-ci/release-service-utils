@@ -43,29 +43,50 @@ Files under `integration-tests/lib/` are copied into the utils image at `/home/i
 
 - GitHub access for the temp fork: token with `repo` and `delete_repo`, and permissions to create repos under the org used by **`destRepoPrefix`** (see pipeline param).
 
-- **`VAULT_PASSWORD_SECRET_NAME`**, **`GITHUB_TOKEN_SECRET_NAME`**, **`KUBECONFIG_SECRET_NAME`**: pipeline parameters (same names as catalog ITS); values are **Kubernetes Secret names** passed through to the **child** catalog **`e2e-tests-staging-pipeline`** (keys `password`, `token`, `kubeconfig`).
+- **Child namespace.** `run_single_catalog_e2e_suite.py` creates the catalog `PipelineRun` in
+  **`CATALOG_E2E_NAMESPACE`** if set; otherwise the in-cluster service-account namespace; otherwise
+  **`konflux-release-service-tenant`**. The pipeline sets **`CATALOG_E2E_NAMESPACE`** from the
+  parent PipelineRun's `metadata.namespace`, so Konflux ITS in
+  `konflux-release-service-tenant` spawn the child in the same tenant.
 
-  Those Secrets must exist in **`rhtap-release-2-tenant`** where the child `PipelineRun` runs. The parent **`run-catalog-e2e`** step does **not** mount a kubeconfig Secret; it uses **in-cluster** `kubectl` like any other Tekton task.
+- **Parent kubectl (`run-catalog-e2e`).** The step optionally mounts Secret
+  **`orchestrationKubeconfigSecretName`** (key `kubeconfig`) at
+  `/etc/secrets/orchestration-kubeconfig/kubeconfig`. If that file is present and non-empty, it
+  sets **`KUBECONFIG`** to it; if the Secret is missing, kubectl uses **in-cluster** auth (the
+  PipelineRun service account).
+
+- **`VAULT_PASSWORD_SECRET_NAME`**, **`GITHUB_TOKEN_SECRET_NAME`**, **`KUBECONFIG_SECRET_NAME`**:
+  pipeline parameters (same names as catalog ITS); values are **Kubernetes Secret names** passed
+  through to the **child** catalog **`e2e-tests-staging-pipeline`** (keys `password`, `token`,
+  `kubeconfig`). Those Secrets must exist in the **child namespace**. The child catalog pipeline
+  treats a missing kubeconfig Secret as in-cluster auth.
 
 - **`PIPELINE_TEST_SUITE`** / **`PIPELINE_USED`**: must match a real `integration-tests/<dir>/` and RPA `pipelines/managed/<name>/` pairing, as for catalog’s own integration tests.
 
 - **`e2eWaitTimeout`**, **`catalogE2eRunnerImage`**: optional pipeline params; defaults are in `utils-e2e-catalog-pipeline.yaml` (same pattern as other optional Tekton params).
 
-- Child catalog `PipelineRun` is created in **`rhtap-release-2-tenant`** on the **same cluster** as the parent PLR (in-cluster `kubectl`), alongside catalog **`simple-e2e-test`** and e2e ExternalSecrets.
-
 ---
 
 ## How this runs
 
-**Production:** Konflux **IntegrationTestScenario** on **release-service-utils** with `pathInRepo: integration-tests/pipelines/utils-e2e-catalog-pipeline.yaml`, supplying the same param names as catalog ITS (**`PIPELINE_TEST_SUITE`**, **`PIPELINE_USED`**, **`VAULT_PASSWORD_SECRET_NAME`**, **`PIPELINE_TEST_SUITE_VARS`**, …), plus **`SNAPSHOT`**. Omit optional params to use pipeline defaults.
+**Konflux:** IntegrationTestScenario on **release-service-utils** with
+`pathInRepo: integration-tests/pipelines/utils-e2e-catalog-pipeline.yaml`, supplying the same param
+names as catalog ITS (**`PIPELINE_TEST_SUITE`**, **`PIPELINE_USED`**,
+**`VAULT_PASSWORD_SECRET_NAME`**, **`PIPELINE_TEST_SUITE_VARS`**, …), plus **`SNAPSHOT`**. Omit
+optional params to use pipeline defaults.
 
 ### Run locally (`run-test.sh`)
 
 1. **Cluster**
 
-   `kubectl` context targets the right cluster. **`NAMESPACE`** must exist (default `rhtap-release-2-tenant`). In that namespace, ensure the GitHub token Secret named by **`GITHUB_TOKEN_SECRET_NAME`** (default `e2e-test-github-token`) exists for clone/push/`finally`.
+   `kubectl` context targets the staging cluster. **`NAMESPACE`** is where the parent PipelineRun
+   (and child catalog run) live; set it to `konflux-release-service-tenant`. In that namespace,
+   ensure the GitHub token Secret named by **`GITHUB_TOKEN_SECRET_NAME`** (default
+   `e2e-test-github-token`) exists for clone/push/`finally`.
 
-   In **`rhtap-release-2-tenant`**, ensure the three e2e Secrets exist (defaults `e2e-test-vault-password`, `e2e-test-github-token`, `e2e-test-service-account-kubeconfig`) for the **child** catalog run, or override the corresponding env vars when invoking **`run-test.sh`**.
+   Also ensure the e2e Secrets the child needs exist there (defaults `e2e-test-vault-password`,
+   `e2e-test-github-token`; kubeconfig Secret is optional for in-cluster catalog steps), or
+   override the corresponding env vars when invoking **`run-test.sh`**.
 
 2. **Catalog fork/branch for this pipeline** (clone for find-affected + patch/push)
 
