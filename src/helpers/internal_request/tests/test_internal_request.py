@@ -1,10 +1,8 @@
-"""Test internal_request_results helpers."""
+"""Test internal_request helpers."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any
 from unittest import mock
 
 import pytest
@@ -17,6 +15,14 @@ from release_service_utils.helpers.internal_request import (
     InternalRequestWaitError,
     wait_for_completion,
 )
+
+
+@pytest.fixture()
+def k8s_api():
+    """Provide a mock Kubernetes CustomObjects API client."""
+    api = mock.MagicMock()
+    with mock.patch.object(ir_module, "_get_namespace", return_value="test-ns"):
+        yield api
 
 
 def test_duration_to_seconds_parses_hms() -> None:
@@ -96,163 +102,128 @@ def test_build_payload_includes_required_fields() -> None:
     )
 
 
-def _completed_process(stdout: str, returncode: int = 0, stderr: str = "") -> mock.MagicMock:
-    """Build a fake subprocess.CompletedProcess with the given outputs."""
-    result = mock.MagicMock()
-    result.stdout = stdout
-    result.stderr = stderr
-    result.returncode = returncode
-    return result
-
-
-def test_cleanup_existing_requests_deletes_matching_irs() -> None:
+def test_cleanup_existing_requests_deletes_matching_irs(k8s_api: mock.MagicMock) -> None:
     """Delete existing InternalRequests before creating a new one."""
-    calls: list[list[str]] = []
+    k8s_api.list_namespaced_custom_object.return_value = {
+        "items": [{"metadata": {"name": "old-ir-1"}}],
+    }
 
-    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> mock.MagicMock:
-        calls.append(cmd)
-        if cmd[0:3] == ["kubectl", "get", "internalrequest"]:
-            body = {"items": [{"metadata": {"name": "old-ir-1"}}]}
-            return _completed_process(json.dumps(body))
-        return _completed_process("")
-
-    with (
-        mock.patch.object(ir_module, "run_cmd", side_effect=fake_run_cmd),
-        mock.patch.object(ir_module.time, "sleep"),
-    ):
+    with mock.patch.object(ir_module.time, "sleep"):
         ir_module.cleanup_existing_requests(
             pipeline="create-advisory",
             labels={ir_module.PIPELINERUN_UID_LABEL: "uid-123"},
+            k8s_api=k8s_api,
         )
 
-    assert calls[0] == [
-        "kubectl",
-        "get",
-        "internalrequest",
-        "-l",
-        (
-            f"{ir_module.PIPELINERUN_UID_LABEL}=uid-123,"
-            f"{ir_module.PIPELINE_NAME_LABEL}=create-advisory"
-        ),
-        "-o",
-        "json",
-    ]
-    assert calls[1][:4] == ["kubectl", "delete", "internalrequest", "old-ir-1"]
+    list_call = k8s_api.list_namespaced_custom_object.call_args
+    assert list_call.kwargs["label_selector"] == (
+        f"{ir_module.PIPELINERUN_UID_LABEL}=uid-123,"
+        f"{ir_module.PIPELINE_NAME_LABEL}=create-advisory"
+    )
+
+    del_call = k8s_api.delete_namespaced_custom_object.call_args
+    assert del_call.kwargs["name"] == "old-ir-1"
+    assert del_call.kwargs["namespace"] == "test-ns"
 
 
-def test_cleanup_existing_requests_skips_without_pipelinerun_uid() -> None:
+def test_cleanup_existing_requests_skips_without_pipelinerun_uid(
+    k8s_api: mock.MagicMock,
+) -> None:
     """Skip cleanup when the pipelinerun-uid label is absent."""
-    with mock.patch.object(ir_module, "run_cmd") as fake_run_cmd:
-        ir_module.cleanup_existing_requests(
-            pipeline="create-advisory",
-            labels={"other": "value"},
-        )
-    fake_run_cmd.assert_not_called()
+    ir_module.cleanup_existing_requests(
+        pipeline="create-advisory",
+        labels={"other": "value"},
+        k8s_api=k8s_api,
+    )
+    k8s_api.list_namespaced_custom_object.assert_not_called()
 
 
-def test_cleanup_existing_requests_skips_when_no_matching_items() -> None:
+def test_cleanup_existing_requests_skips_when_no_matching_items(
+    k8s_api: mock.MagicMock,
+) -> None:
     """Skip deletion when no existing InternalRequests are found."""
-    with mock.patch.object(ir_module, "run_cmd") as fake_run_cmd:
-        fake_run_cmd.return_value = _completed_process(json.dumps({"items": []}))
-        ir_module.cleanup_existing_requests(
-            pipeline="create-advisory",
-            labels={ir_module.PIPELINERUN_UID_LABEL: "uid-123"},
-        )
+    k8s_api.list_namespaced_custom_object.return_value = {"items": []}
 
-    fake_run_cmd.assert_called_once()
+    ir_module.cleanup_existing_requests(
+        pipeline="create-advisory",
+        labels={ir_module.PIPELINERUN_UID_LABEL: "uid-123"},
+        k8s_api=k8s_api,
+    )
+
+    k8s_api.list_namespaced_custom_object.assert_called_once()
+    k8s_api.delete_namespaced_custom_object.assert_not_called()
 
 
-def test_cleanup_existing_requests_skips_non_dict_items() -> None:
+def test_cleanup_existing_requests_skips_non_dict_items(k8s_api: mock.MagicMock) -> None:
     """Ignore list entries that are not InternalRequest objects."""
-    calls: list[list[str]] = []
+    k8s_api.list_namespaced_custom_object.return_value = {
+        "items": ["not-a-dict", {"metadata": {"name": "old-ir-1"}}],
+    }
 
-    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> mock.MagicMock:
-        calls.append(cmd)
-        if cmd[0:3] == ["kubectl", "get", "internalrequest"]:
-            body = {"items": ["not-a-dict", {"metadata": {"name": "old-ir-1"}}]}
-            return _completed_process(json.dumps(body))
-        return _completed_process("")
-
-    with (
-        mock.patch.object(ir_module, "run_cmd", side_effect=fake_run_cmd),
-        mock.patch.object(ir_module.time, "sleep"),
-    ):
+    with mock.patch.object(ir_module.time, "sleep"):
         ir_module.cleanup_existing_requests(
             pipeline="create-advisory",
             labels={ir_module.PIPELINERUN_UID_LABEL: "uid-123"},
+            k8s_api=k8s_api,
         )
 
-    assert calls[1][:4] == ["kubectl", "delete", "internalrequest", "old-ir-1"]
+    del_call = k8s_api.delete_namespaced_custom_object.call_args
+    assert del_call.kwargs["name"] == "old-ir-1"
 
 
-def test_cleanup_existing_requests_skips_invalid_ir_name() -> None:
+def test_cleanup_existing_requests_skips_invalid_ir_name(k8s_api: mock.MagicMock) -> None:
     """Ignore InternalRequests whose metadata name is missing or not a string."""
-    calls: list[list[str]] = []
+    k8s_api.list_namespaced_custom_object.return_value = {
+        "items": [
+            {"metadata": {}},
+            {"metadata": {"name": ""}},
+            {"metadata": {"name": 123}},
+        ],
+    }
 
-    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> mock.MagicMock:
-        calls.append(cmd)
-        if cmd[0:3] == ["kubectl", "get", "internalrequest"]:
-            body = {
-                "items": [
-                    {"metadata": {}},
-                    {"metadata": {"name": ""}},
-                    {"metadata": {"name": 123}},
-                ],
-            }
-            return _completed_process(json.dumps(body))
-        return _completed_process("")
-
-    with (
-        mock.patch.object(ir_module, "run_cmd", side_effect=fake_run_cmd),
-        mock.patch.object(ir_module.time, "sleep"),
-    ):
+    with mock.patch.object(ir_module.time, "sleep"):
         ir_module.cleanup_existing_requests(
             pipeline="create-advisory",
             labels={ir_module.PIPELINERUN_UID_LABEL: "uid-123"},
+            k8s_api=k8s_api,
         )
 
-    assert len(calls) == 1
+    k8s_api.delete_namespaced_custom_object.assert_not_called()
 
 
-def test_create_creates_internal_request_without_waiting() -> None:
+def test_create_creates_internal_request_without_waiting(k8s_api: mock.MagicMock) -> None:
     """Create an InternalRequest and return its name when sync is false."""
-    calls: list[list[str]] = []
+    k8s_api.list_namespaced_custom_object.return_value = {"items": []}
+    k8s_api.create_namespaced_custom_object.return_value = {
+        "metadata": {"name": "create-advisory-abc"},
+    }
 
-    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> mock.MagicMock:
-        calls.append(cmd)
-        if cmd[0:2] == ["kubectl", "create"]:
-            body = {"metadata": {"name": "create-advisory-abc"}}
-            return _completed_process(json.dumps(body))
-        return _completed_process(json.dumps({"items": []}))
-
-    with (
-        mock.patch.object(ir_module, "run_cmd", side_effect=fake_run_cmd),
-        mock.patch.object(ir_module.time, "sleep"),
-    ):
-        name = ir_module.create(
-            "create-advisory",
-            params={
-                "taskGitUrl": "https://example.test/catalog",
-                "taskGitRevision": "main",
-            },
-            sync=False,
-        )
+    name = ir_module.create(
+        "create-advisory",
+        params={
+            "taskGitUrl": "https://example.test/catalog",
+            "taskGitRevision": "main",
+        },
+        sync=False,
+        k8s_api=k8s_api,
+    )
 
     assert name == "create-advisory-abc"
-    assert any(cmd[0:2] == ["kubectl", "create"] for cmd in calls)
+    k8s_api.create_namespaced_custom_object.assert_called_once()
 
 
-def test_create_requires_task_git_params() -> None:
+def test_create_requires_task_git_params(k8s_api: mock.MagicMock) -> None:
     """Reject creation when git resolver params are missing."""
     with pytest.raises(ValueError, match="taskGitUrl and taskGitRevision"):
         ir_module.create(
             "create-advisory",
             params={"componentGroup": "myapp"},
             sync=False,
+            k8s_api=k8s_api,
         )
 
 
-def test_create_requires_pipeline() -> None:
+def test_create_requires_pipeline(k8s_api: mock.MagicMock) -> None:
     """Reject creation when the pipeline name is empty."""
     with pytest.raises(ValueError, match="pipeline is required"):
         ir_module.create(
@@ -262,23 +233,19 @@ def test_create_requires_pipeline() -> None:
                 "taskGitRevision": "main",
             },
             sync=False,
+            k8s_api=k8s_api,
         )
 
 
-def test_create_internal_request_raises_when_name_missing() -> None:
-    """Raise when kubectl create does not return an InternalRequest name."""
-    with (
-        mock.patch.object(
-            ir_module,
-            "run_cmd",
-            return_value=_completed_process(json.dumps({"metadata": {}})),
-        ),
-        pytest.raises(RuntimeError, match="did not return an InternalRequest name"),
-    ):
-        ir_module.create_internal_request({"kind": "InternalRequest"})
+def test_create_internal_request_raises_when_name_missing(k8s_api: mock.MagicMock) -> None:
+    """Raise when the API does not return an InternalRequest name."""
+    k8s_api.create_namespaced_custom_object.return_value = {"metadata": {}}
+
+    with pytest.raises(RuntimeError, match="did not return an InternalRequest name"):
+        ir_module.create_internal_request({"kind": "InternalRequest"}, k8s_api=k8s_api)
 
 
-def test_create_waits_when_sync_is_true() -> None:
+def test_create_waits_when_sync_is_true(k8s_api: mock.MagicMock) -> None:
     """Wait for completion after creating the InternalRequest."""
     with (
         mock.patch.object(ir_module, "cleanup_existing_requests"),
@@ -296,13 +263,14 @@ def test_create_waits_when_sync_is_true() -> None:
                 "taskGitRevision": "main",
             },
             sync=True,
+            k8s_api=k8s_api,
         )
 
     assert name == "create-advisory-abc"
-    wait.assert_called_once_with(name="create-advisory-abc", timeout=3600)
+    wait.assert_called_once_with(name="create-advisory-abc", timeout=3600, k8s_api=k8s_api)
 
 
-def test_create_skips_cleanup_when_cleanup_is_false() -> None:
+def test_create_skips_cleanup_when_cleanup_is_false(k8s_api: mock.MagicMock) -> None:
     """Do not delete prior InternalRequests when cleanup is False."""
     with (
         mock.patch.object(ir_module, "cleanup_existing_requests") as cleanup,
@@ -321,18 +289,21 @@ def test_create_skips_cleanup_when_cleanup_is_false() -> None:
             },
             sync=True,
             cleanup=False,
+            k8s_api=k8s_api,
         )
 
     cleanup.assert_not_called()
 
 
-def test_wait_for_completion_requires_exactly_one_selector() -> None:
+def test_wait_for_completion_requires_exactly_one_selector(
+    k8s_api: mock.MagicMock,
+) -> None:
     """Reject calls that provide both or neither selector."""
     with pytest.raises(ValueError, match="exactly one"):
-        wait_for_completion()
+        wait_for_completion(k8s_api=k8s_api)
 
     with pytest.raises(ValueError, match="exactly one"):
-        wait_for_completion(name="ir-1", label_selector="foo=bar")
+        wait_for_completion(name="ir-1", label_selector="foo=bar", k8s_api=k8s_api)
 
 
 def _patch_ir_output_path(tmp_path: Path, ir_name: str = "ir-1") -> tuple[mock._patch, Path]:
@@ -342,7 +313,9 @@ def _patch_ir_output_path(tmp_path: Path, ir_name: str = "ir-1") -> tuple[mock._
     return patch, output_path
 
 
-def test_wait_for_completion_handles_running_before_success(tmp_path: Path) -> None:
+def test_wait_for_completion_handles_running_before_success(
+    tmp_path: Path, k8s_api: mock.MagicMock
+) -> None:
     """Poll again when an InternalRequest is still running."""
     running_body = {
         "metadata": {"name": "ir-1"},
@@ -358,19 +331,15 @@ def test_wait_for_completion_handles_running_before_success(tmp_path: Path) -> N
             "pipelineRun": "pr-1",
         },
     }
-    responses = [running_body, succeeded_body]
+    k8s_api.get_namespaced_custom_object.side_effect = [running_body, succeeded_body]
     output_patch, output_path = _patch_ir_output_path(tmp_path)
-
-    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> mock.MagicMock:
-        return _completed_process(json.dumps(responses.pop(0)))
 
     with (
         output_patch,
-        mock.patch.object(ir_module, "run_cmd", side_effect=fake_run_cmd),
         mock.patch.object(retry.retry.time, "sleep") as sleep,
         mock.patch.object(ir_module.time, "time", side_effect=[0, 1]),
     ):
-        wait_for_completion(name="ir-1", timeout=600)
+        wait_for_completion(name="ir-1", timeout=600, k8s_api=k8s_api)
 
     sleep.assert_called_once_with(5)
     assert output_path.read_text(encoding="utf-8") == (
@@ -378,7 +347,9 @@ def test_wait_for_completion_handles_running_before_success(tmp_path: Path) -> N
     )
 
 
-def test_wait_for_completion_writes_output_json_on_success(tmp_path: Path) -> None:
+def test_wait_for_completion_writes_output_json_on_success(
+    tmp_path: Path, k8s_api: mock.MagicMock
+) -> None:
     """Write name and pipelineRun to the IR output file on success."""
     ir_body = {
         "metadata": {"name": "ir-1"},
@@ -387,24 +358,23 @@ def test_wait_for_completion_writes_output_json_on_success(tmp_path: Path) -> No
             "pipelineRun": "pr-1",
         },
     }
+    k8s_api.get_namespaced_custom_object.return_value = ir_body
     output_patch, output_path = _patch_ir_output_path(tmp_path)
-
-    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> mock.MagicMock:
-        return _completed_process(json.dumps(ir_body))
 
     with (
         output_patch,
-        mock.patch.object(ir_module, "run_cmd", side_effect=fake_run_cmd),
         mock.patch.object(retry.retry.time, "sleep"),
     ):
-        wait_for_completion(name="ir-1", timeout=600)
+        wait_for_completion(name="ir-1", timeout=600, k8s_api=k8s_api)
 
     assert output_path.read_text(encoding="utf-8") == (
         '{"name": "ir-1", "pipelineRun": "pr-1"}\n'
     )
 
 
-def test_wait_for_completion_raises_on_failure(tmp_path: Path) -> None:
+def test_wait_for_completion_raises_on_failure(
+    tmp_path: Path, k8s_api: mock.MagicMock
+) -> None:
     """Raise InternalRequestWaitError when an IR completes unsuccessfully."""
     ir_body = {
         "metadata": {"name": "ir-1"},
@@ -413,18 +383,15 @@ def test_wait_for_completion_raises_on_failure(tmp_path: Path) -> None:
             "pipelineRun": "pr-1",
         },
     }
+    k8s_api.get_namespaced_custom_object.return_value = ir_body
     output_patch, output_path = _patch_ir_output_path(tmp_path)
-
-    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> mock.MagicMock:
-        return _completed_process(json.dumps(ir_body))
 
     with (
         output_patch,
-        mock.patch.object(ir_module, "run_cmd", side_effect=fake_run_cmd),
         mock.patch.object(retry.retry.time, "sleep"),
         pytest.raises(InternalRequestWaitError) as exc_info,
     ):
-        wait_for_completion(name="ir-1", timeout=600)
+        wait_for_completion(name="ir-1", timeout=600, k8s_api=k8s_api)
 
     assert exc_info.value.exit_code == EXIT_FAILED
     assert output_path.read_text(encoding="utf-8") == (
@@ -432,109 +399,134 @@ def test_wait_for_completion_raises_on_failure(tmp_path: Path) -> None:
     )
 
 
-def test_wait_for_completion_raises_on_timeout() -> None:
+def test_wait_for_completion_raises_on_timeout(k8s_api: mock.MagicMock) -> None:
     """Raise InternalRequestWaitError when the wait timeout elapses."""
     ir_body = {
         "metadata": {"name": "ir-1"},
         "status": {"conditions": []},
     }
-
-    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> mock.MagicMock:
-        return _completed_process(json.dumps(ir_body))
+    k8s_api.get_namespaced_custom_object.return_value = ir_body
 
     with (
-        mock.patch.object(ir_module, "run_cmd", side_effect=fake_run_cmd),
         mock.patch.object(retry.retry.time, "sleep"),
         mock.patch.object(ir_module.time, "time", side_effect=[0, 601]),
         pytest.raises(InternalRequestWaitError) as exc_info,
     ):
-        wait_for_completion(name="ir-1", timeout=600)
+        wait_for_completion(name="ir-1", timeout=600, k8s_api=k8s_api)
 
     assert exc_info.value.exit_code == EXIT_TIMEOUT
 
 
-def test_wait_for_completion_keeps_polling_when_label_selector_matches_nothing() -> None:
+def test_wait_for_completion_keeps_polling_when_label_selector_matches_nothing(
+    k8s_api: mock.MagicMock,
+) -> None:
     """Keep polling until timeout when a label selector matches no InternalRequests."""
-    empty_list_body = {"items": []}
-
-    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> mock.MagicMock:
-        return _completed_process(json.dumps(empty_list_body))
+    k8s_api.list_namespaced_custom_object.return_value = {"items": []}
 
     with (
-        mock.patch.object(ir_module, "run_cmd", side_effect=fake_run_cmd),
         mock.patch.object(retry.retry.time, "sleep"),
         mock.patch.object(ir_module.time, "time", side_effect=[0, 601]),
         pytest.raises(InternalRequestWaitError) as exc_info,
     ):
-        wait_for_completion(label_selector="foo=bar", timeout=600)
+        wait_for_completion(label_selector="foo=bar", timeout=600, k8s_api=k8s_api)
 
     assert exc_info.value.exit_code == EXIT_TIMEOUT
 
 
-def test_fetch_results_handles_empty_stdout() -> None:
-    """Return an empty dict when kubectl prints no results."""
-    with mock.patch.object(
-        ir_module,
-        "run_cmd",
-        return_value=_completed_process(""),
-    ):
-        assert ir_module.fetch_results("ir-1") == {}
+def test_fetch_results_returns_empty_when_no_results(k8s_api: mock.MagicMock) -> None:
+    """Return an empty dict when the InternalRequest has no results."""
+    k8s_api.get_namespaced_custom_object.return_value = {
+        "metadata": {"name": "ir-1"},
+        "status": {},
+    }
+
+    assert ir_module.fetch_results("ir-1", k8s_api=k8s_api) == {}
 
 
-def test_fetch_results_parses_json() -> None:
-    """Parse InternalRequest status.results JSON from kubectl."""
-    payload = {"result": "Success", "advisory_url": "url"}
-    with mock.patch.object(
-        ir_module,
-        "run_cmd",
-        return_value=_completed_process(json.dumps(payload)),
-    ):
-        assert ir_module.fetch_results("ir-1") == payload
+def test_fetch_results_parses_results(k8s_api: mock.MagicMock) -> None:
+    """Return the status.results dict from the InternalRequest."""
+    results = {"result": "Success", "advisory_url": "url"}
+    k8s_api.get_namespaced_custom_object.return_value = {
+        "metadata": {"name": "ir-1"},
+        "status": {"results": results},
+    }
+
+    assert ir_module.fetch_results("ir-1", k8s_api=k8s_api) == results
 
 
-def test_fetch_results_ignores_non_dict_json() -> None:
-    """Return an empty dict when kubectl output is not a JSON object."""
-    with mock.patch.object(
-        ir_module,
-        "run_cmd",
-        return_value=_completed_process('["not","dict"]'),
-    ):
-        assert ir_module.fetch_results("ir-1") == {}
+def test_fetch_results_ignores_non_dict_results(k8s_api: mock.MagicMock) -> None:
+    """Return an empty dict when status.results is not a dict."""
+    k8s_api.get_namespaced_custom_object.return_value = {
+        "metadata": {"name": "ir-1"},
+        "status": {"results": ["not", "dict"]},
+    }
+
+    assert ir_module.fetch_results("ir-1", k8s_api=k8s_api) == {}
 
 
-def test_log_subprocess_output_logs_stderr_and_stdout() -> None:
-    """Log both stdout and stderr when present."""
-    result = _completed_process(stdout="created ok", stderr="some warning")
-    with mock.patch.object(ir_module.logger, "log") as log:
-        ir_module._log_subprocess_output(result, label="kubectl create")
+def test_create_internal_request_logs_created_name(k8s_api: mock.MagicMock) -> None:
+    """Log the name of the created InternalRequest."""
+    k8s_api.create_namespaced_custom_object.return_value = {
+        "metadata": {"name": "ir-abc"},
+    }
 
-    assert log.call_count == 2
-    stdout_call, stderr_call = log.call_args_list
-    assert "stdout" in stdout_call[0][1]
-    assert "stderr" in stderr_call[0][1]
-
-
-def test_log_subprocess_output_skips_empty() -> None:
-    """Do not log when stdout and stderr are empty."""
-    result = _completed_process(stdout="", stderr="")
-    with mock.patch.object(ir_module.logger, "log") as log:
-        ir_module._log_subprocess_output(result, label="kubectl create")
-
-    log.assert_not_called()
-
-
-def test_create_internal_request_logs_subprocess_output() -> None:
-    """Log kubectl stderr after creating an InternalRequest."""
-    body = {"metadata": {"name": "ir-abc"}}
-    result = _completed_process(
-        stdout=json.dumps(body), stderr="Warning: resource version changed"
-    )
-    with (
-        mock.patch.object(ir_module, "run_cmd", return_value=result),
-        mock.patch.object(ir_module.logger, "log") as log,
-    ):
-        name = ir_module.create_internal_request({"kind": "InternalRequest"})
+    with mock.patch.object(ir_module.logger, "info") as log_info:
+        name = ir_module.create_internal_request({"kind": "InternalRequest"}, k8s_api=k8s_api)
 
     assert name == "ir-abc"
-    stderr_logged = any("stderr" in str(call) for call in log.call_args_list)
-    assert stderr_logged
+    logged = any("ir-abc" in str(call) for call in log_info.call_args_list)
+    assert logged
+
+
+def test_get_namespace_reads_from_service_account_file(tmp_path: Path) -> None:
+    """Read namespace from the in-cluster service account file."""
+    ns_file = tmp_path / "namespace"
+    ns_file.write_text("my-ns\n")
+    with mock.patch.object(ir_module, "_NAMESPACE_FILE", ns_file):
+        assert ir_module._get_namespace() == "my-ns"
+
+
+def test_get_namespace_falls_back_to_kubeconfig(tmp_path: Path) -> None:
+    """Fall back to kubeconfig context when the SA file is missing."""
+    ns_file = tmp_path / "namespace"
+    context = {"context": {"namespace": "dev-ns"}}
+    with (
+        mock.patch.object(ir_module, "_NAMESPACE_FILE", ns_file),
+        mock.patch.object(
+            ir_module.k8s_config, "list_kube_config_contexts", return_value=([], context)
+        ),
+    ):
+        assert ir_module._get_namespace() == "dev-ns"
+
+
+def test_default_k8s_api_loads_incluster_config() -> None:
+    """Load in-cluster config and return a CustomObjectsApi."""
+    with (
+        mock.patch.object(ir_module.k8s_config, "load_incluster_config") as incluster,
+        mock.patch.object(ir_module.k8s_client, "CustomObjectsApi") as api_cls,
+    ):
+        result = ir_module._default_k8s_api()
+
+    incluster.assert_called_once()
+    api_cls.assert_called_once()
+    assert result is api_cls.return_value
+
+
+def test_default_k8s_api_falls_back_to_kubeconfig() -> None:
+    """Fall back to kubeconfig when in-cluster config is unavailable."""
+    from kubernetes.config import ConfigException
+
+    with (
+        mock.patch.object(
+            ir_module.k8s_config,
+            "load_incluster_config",
+            side_effect=ConfigException,
+        ),
+        mock.patch.object(ir_module.k8s_config, "load_kube_config") as kubeconfig,
+        mock.patch.object(ir_module.k8s_client, "CustomObjectsApi") as api_cls,
+    ):
+        result = ir_module._default_k8s_api()
+
+    kubeconfig.assert_called_once()
+    api_cls.assert_called_once()
+    assert result is api_cls.return_value

@@ -1,7 +1,8 @@
 """Create and wait for InternalRequest resources in Kubernetes.
 
 This module creates an InternalRequest resource in a Kubernetes cluster using
-`kubectl`. Parameters are passed as Python mappings rather than CLI flags.
+the Kubernetes Python client. Parameters are passed as Python mappings rather
+than CLI flags.
 
 
 Sync and async behavior
@@ -86,7 +87,9 @@ Usage
 Prerequisites
 -------------
 
-* `kubectl` must be installed and configured to communicate with the cluster.
+* The ``kubernetes`` Python package must be installed.
+* When running in-cluster, a service account with permissions to manage
+  ``InternalRequest`` resources must be mounted.
 
 
 Note:
@@ -99,17 +102,17 @@ Intended for clusters whose API includes the `InternalRequest` resource type
 from __future__ import annotations
 
 import json
-import logging
 import re
-import subprocess
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from kubernetes import client as k8s_client
+from kubernetes import config as k8s_config
+
 from release_service_utils.helpers import retry
 from release_service_utils.helpers.logger import logger
-from release_service_utils.helpers.subprocess_cmd import run_cmd
 
 PIPELINE_NAME_LABEL = "internal-services.appstudio.openshift.io/pipeline-name"
 PIPELINERUN_UID_LABEL = "internal-services.appstudio.openshift.io/pipelinerun-uid"
@@ -119,6 +122,11 @@ SPAWN_OVERHEAD_SECONDS = 300
 EXIT_FAILED = 21
 EXIT_TIMEOUT = 124
 _DURATION_RE = re.compile(r"^(\d+)h(\d+)m(\d+)s$")
+
+_IR_GROUP = "appstudio.redhat.com"
+_IR_VERSION = "v1alpha1"
+_IR_PLURAL = "internalrequests"
+_NAMESPACE_FILE = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 
 
 class InternalRequestWaitError(RuntimeError):
@@ -132,6 +140,29 @@ class InternalRequestWaitError(RuntimeError):
 
 class _InternalRequestNotComplete(Exception):
     """Raised when InternalRequests have not yet reached a terminal state."""
+
+
+def _default_k8s_api() -> k8s_client.CustomObjectsApi:
+    """Create a Kubernetes CustomObjects API client with auto-detected config.
+
+    Two config loaders are tried in order:
+    - load_incluster_config(): for code running inside a Kubernetes pod.
+    - load_kube_config(): fallback for local development, testing and CI.
+    """
+    try:
+        k8s_config.load_incluster_config()
+    except k8s_config.ConfigException:
+        k8s_config.load_kube_config()
+    return k8s_client.CustomObjectsApi()
+
+
+def _get_namespace() -> str:
+    """Return the Kubernetes namespace for InternalRequest operations."""
+    try:
+        return _NAMESPACE_FILE.read_text().strip()
+    except FileNotFoundError:
+        _, context = k8s_config.list_kube_config_contexts()
+        return context.get("context", {}).get("namespace", "default")
 
 
 def duration_to_seconds(duration: str) -> int:
@@ -231,20 +262,6 @@ def build_payload(
     return payload
 
 
-def _log_subprocess_output(
-    result: subprocess.CompletedProcess[str],
-    *,
-    label: str,
-    stdout_level: int = logging.DEBUG,
-    stderr_level: int = logging.INFO,
-) -> None:
-    """Log captured stdout/stderr from a subprocess result."""
-    if result.stdout and result.stdout.strip():
-        logger.log(stdout_level, "%s stdout: %s", label, result.stdout.strip())
-    if result.stderr and result.stderr.strip():
-        logger.log(stderr_level, "%s stderr: %s", label, result.stderr.strip())
-
-
 def _pipelinerun_uid_from_labels(labels: Mapping[str, str]) -> str:
     """Return the pipelinerun-uid label value when present."""
     return labels.get(PIPELINERUN_UID_LABEL, "")
@@ -254,30 +271,29 @@ def _fetch_internal_requests(
     *,
     name: str | None,
     label_selector: str | None,
+    k8s_api: k8s_client.CustomObjectsApi,
 ) -> list[dict[str, Any]]:
     """Return InternalRequest objects as a list of parsed JSON dicts."""
+    namespace = _get_namespace()
+
     if name is not None:
-        result = run_cmd(
-            ["kubectl", "get", "internalrequest", name, "-o", "json"],
-            check=True,
+        item = k8s_api.get_namespaced_custom_object(
+            group=_IR_GROUP,
+            version=_IR_VERSION,
+            namespace=namespace,
+            plural=_IR_PLURAL,
+            name=name,
         )
-        item = json.loads(result.stdout)
         return [item]
 
-    result = run_cmd(
-        [
-            "kubectl",
-            "get",
-            "internalrequest",
-            "-l",
-            label_selector or "",
-            "-o",
-            "json",
-        ],
-        check=True,
+    result = k8s_api.list_namespaced_custom_object(
+        group=_IR_GROUP,
+        version=_IR_VERSION,
+        namespace=namespace,
+        plural=_IR_PLURAL,
+        label_selector=label_selector or "",
     )
-    data = json.loads(result.stdout)
-    items = data.get("items")
+    items = result.get("items")
     return items if isinstance(items, list) else []
 
 
@@ -309,6 +325,7 @@ def wait_for_completion(
     name: str | None = None,
     label_selector: str | None = None,
     timeout: int = 600,
+    k8s_api: k8s_client.CustomObjectsApi | None = None,
 ) -> None:
     """Block until InternalRequests complete or *timeout* seconds elapse.
 
@@ -319,6 +336,9 @@ def wait_for_completion(
         InternalRequestWaitError: When an IR fails or the wait times out.
 
     """
+    if k8s_api is None:
+        k8s_api = _default_k8s_api()
+
     has_name = bool(name)
     has_labels = bool(label_selector)
     if has_name == has_labels:
@@ -333,6 +353,7 @@ def wait_for_completion(
         internal_requests = _fetch_internal_requests(
             name=name,
             label_selector=label_selector,
+            k8s_api=k8s_api,
         )
         logger.info(
             "Found %d InternalRequests matching the name or label",
@@ -401,8 +422,12 @@ def cleanup_existing_requests(
     *,
     pipeline: str,
     labels: Mapping[str, str],
+    k8s_api: k8s_client.CustomObjectsApi | None = None,
 ) -> None:
     """Delete prior InternalRequests for the same pipeline run and pipeline name."""
+    if k8s_api is None:
+        k8s_api = _default_k8s_api()
+
     pipelinerun_uid = _pipelinerun_uid_from_labels(labels)
     if not pipelinerun_uid:
         return
@@ -410,9 +435,11 @@ def cleanup_existing_requests(
     label_selector = (
         f"{PIPELINERUN_UID_LABEL}={pipelinerun_uid}," f"{PIPELINE_NAME_LABEL}={pipeline}"
     )
-    items = _fetch_internal_requests(name=None, label_selector=label_selector)
+    items = _fetch_internal_requests(name=None, label_selector=label_selector, k8s_api=k8s_api)
     if not items:
         return
+
+    namespace = _get_namespace()
 
     logger.info("Found existing InternalRequests from prior attempts. Cleaning up...")
     for item in items:
@@ -422,18 +449,14 @@ def cleanup_existing_requests(
         if not isinstance(ir_name, str) or not ir_name:
             continue
         logger.info("Deleting InternalRequest %s...", ir_name)
-        result = run_cmd(
-            [
-                "kubectl",
-                "delete",
-                "internalrequest",
-                ir_name,
-                "--wait=true",
-                "--timeout=60s",
-            ],
-            check=True,
+        k8s_api.delete_namespaced_custom_object(
+            group=_IR_GROUP,
+            version=_IR_VERSION,
+            namespace=namespace,
+            plural=_IR_PLURAL,
+            name=ir_name,
         )
-        _log_subprocess_output(result, label=f"kubectl delete {ir_name}")
+        logger.info("Deleted InternalRequest %s", ir_name)
 
     logger.info(
         "Cleanup complete. Waiting %ds for PipelineRun cancellation to propagate...",
@@ -442,39 +465,50 @@ def cleanup_existing_requests(
     time.sleep(CLEANUP_PROPAGATION_SLEEP_SECONDS)
 
 
-def create_internal_request(payload: dict[str, Any]) -> str:
+def create_internal_request(
+    payload: dict[str, Any],
+    *,
+    k8s_api: k8s_client.CustomObjectsApi | None = None,
+) -> str:
     """Create an InternalRequest from *payload* and return its name."""
-    result = run_cmd(
-        ["kubectl", "create", "-f", "-", "-o", "json"],
-        stdin=json.dumps(payload),
-        check=True,
+    if k8s_api is None:
+        k8s_api = _default_k8s_api()
+
+    namespace = _get_namespace()
+    resource = k8s_api.create_namespaced_custom_object(
+        group=_IR_GROUP,
+        version=_IR_VERSION,
+        namespace=namespace,
+        plural=_IR_PLURAL,
+        body=payload,
     )
-    _log_subprocess_output(result, label="kubectl create")
-    resource = json.loads(result.stdout)
     name = resource.get("metadata", {}).get("name")
     if not isinstance(name, str) or not name:
-        msg = "kubectl create did not return an InternalRequest name"
+        msg = "API did not return an InternalRequest name"
         raise RuntimeError(msg)
+    logger.info("Created InternalRequest: %s", name)
     return name
 
 
-def fetch_results(internal_request_name: str) -> dict[str, Any]:
-    """Read InternalRequest ``status.results`` via kubectl."""
-    result = run_cmd(
-        [
-            "kubectl",
-            "get",
-            "internalrequest",
-            internal_request_name,
-            "-o=jsonpath={.status.results}",
-        ],
-        check=True,
+def fetch_results(
+    internal_request_name: str,
+    *,
+    k8s_api: k8s_client.CustomObjectsApi | None = None,
+) -> dict[str, Any]:
+    """Read InternalRequest ``status.results`` from the API."""
+    if k8s_api is None:
+        k8s_api = _default_k8s_api()
+
+    namespace = _get_namespace()
+    resource = k8s_api.get_namespaced_custom_object(
+        group=_IR_GROUP,
+        version=_IR_VERSION,
+        namespace=namespace,
+        plural=_IR_PLURAL,
+        name=internal_request_name,
     )
-    raw = (result.stdout or "").strip()
-    if not raw:
-        return {}
-    parsed = json.loads(raw)
-    return parsed if isinstance(parsed, dict) else {}
+    results = resource.get("status", {}).get("results")
+    return results if isinstance(results, dict) else {}
 
 
 def create(
@@ -489,6 +523,7 @@ def create(
     task_timeout: str = "0h55m0s",
     finally_timeout: str = "0h5m0s",
     cleanup: bool = True,
+    k8s_api: k8s_client.CustomObjectsApi | None = None,
 ) -> str:
     """Create an InternalRequest and optionally wait for it to complete.
 
@@ -499,6 +534,9 @@ def create(
     pipeline run. Set this when multiple InternalRequests are created
     concurrently with the same labels.
     """
+    if k8s_api is None:
+        k8s_api = _default_k8s_api()
+
     if not pipeline:
         msg = "pipeline is required"
         raise ValueError(msg)
@@ -521,7 +559,7 @@ def create(
         finally_timeout=finally_timeout,
     )
     if cleanup:
-        cleanup_existing_requests(pipeline=pipeline, labels=merged_labels)
+        cleanup_existing_requests(pipeline=pipeline, labels=merged_labels, k8s_api=k8s_api)
 
     payload = build_payload(
         pipeline=pipeline,
@@ -534,11 +572,11 @@ def create(
         finally_timeout=finally_timeout,
         service_account=service_account,
     )
-    internal_request_name = create_internal_request(payload)
+    internal_request_name = create_internal_request(payload, k8s_api=k8s_api)
     logger.info("InternalRequest '%s' created.", internal_request_name)
 
     if sync:
         logger.info("Sync flag set to true. Waiting for the InternalRequest to complete.")
-        wait_for_completion(name=internal_request_name, timeout=timeout)
+        wait_for_completion(name=internal_request_name, timeout=timeout, k8s_api=k8s_api)
 
     return internal_request_name
