@@ -6,44 +6,40 @@
 #              overriding keys from the first JSON with keys from the second
 #              JSON if there's a collision.
 #
-# Usage: merge_json.sh <json1> <json2>
+# Usage: merge_json.sh <file1> <file2>
 #
 # Parameters:
-#   <json1> - First JSON string
-#   <json2> - Second JSON string
+#   <file1> - Path to a file containing the first JSON object
+#   <file2> - Path to a file containing the second JSON object
 #
 # Requirements:
 #   - This script requires the 'jq' command-line JSON processor.
 #     Ensure that 'jq' is installed on your system.
 #
 # Notes:
-#   - Both JSON strings must be valid JSON.
-#   - If either JSON string is not valid, the script will exit with an error.
+#   - Both JSON files must contain valid JSON.
+#   - If either JSON file is not valid, the script will exit with an error.
 
 
-# Check if both JSON strings are provided as arguments
+# Check if both files are provided as arguments
 if [ $# -ne 2 ]; then
-  echo "Usage: $0 <json1> <json2>"
+  echo "Usage: $0 <file1> <file2>"
   exit 1
 fi
 
-# Store the JSON strings in variables
-json1="$1"
-json2="$2"
-
 # Validate JSON input
-if ! echo "$json1" | jq -e . >/dev/null 2>&1; then
+if ! jq -e . "$1" >/dev/null 2>&1; then
   echo "Error: Invalid JSON in parameter 1"
   exit 1
 fi
 
-if ! echo "$json2" | jq -e . >/dev/null 2>&1; then
+if ! jq -e . "$2" >/dev/null 2>&1; then
   echo "Error: Invalid JSON in parameter 2"
   exit 1
 fi
 
 # Merge the JSON objects recursively, combining arrays and replacing other values
-merged_json=$(printf '%s\n%s' "$json1" "$json2" | jq -cs '
+jq -cs '
 def merge_objects(a; b):
   a as $a | b as $b |
   ($a | keys) + ($b | keys) | unique | map({
@@ -54,13 +50,11 @@ def merge_objects(a; b):
       elif ($a[.] | type) == "array" and ($b[.] | type) == "array" then
         ($a[.] + $b[.]) | unique
       else
-        # Use check to preserve boolean false values instead of // 
+        # Use check to preserve boolean false values instead of //
         if ($b[.] != null) then $b[.] else $a[.] end
       end
     )
   }) | from_entries;
 
 .[0] as $first | .[1] as $second | merge_objects($first; $second)
-')
-# Print the merged JSON
-echo "$merged_json"
+' "$1" "$2"
