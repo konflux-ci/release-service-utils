@@ -18,10 +18,11 @@ directory with the same file layout.
 """
 
 from .check_embargoed_cves import (  # noqa: F401
+    EmbargoReason,
+    classify_flaw_response,
+    fetch_flaw_state,
+    main,
     parse_args,
     parse_cve_list,
-    is_embargoed_flaw_response,
-    fetch_flaw_state,
     run_check,
-    main,
 )

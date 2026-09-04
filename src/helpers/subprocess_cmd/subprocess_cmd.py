@@ -22,8 +22,18 @@ def run_cmd(
     stdin: str | bytes | None = None,
     stderr_path: Path | None = None,
     check: bool = True,
+    stream_stdout: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run *cmd*; capture stdout as text; optionally append stderr to *stderr_path*."""
+    """Run *cmd*; capture stdout as text; optionally append stderr to *stderr_path*.
+
+    By default stdout is captured (piped) and only becomes available once the
+    child exits, matching the historical behavior callers rely on for parsing
+    output (e.g. ``yq``/``jq``). Set *stream_stdout* to ``True`` for long-running,
+    high-output commands (e.g. upload wrappers that print live progress) so
+    stdout is inherited from this process instead of buffered, letting it
+    stream straight to the Tekton step log in real time like the old bash
+    tasks did. ``result.stdout`` is ``None`` when *stream_stdout* is set.
+    """
     # Child must inherit pod env (PATH, KUBECONFIG, etc.); only overlay *env*.
     merged: dict[str, str] = {**os.environ, **dict(env or {})}
     err_f: Any = subprocess.PIPE
@@ -44,7 +54,7 @@ def run_cmd(
                 cwd=cwd,
                 env=merged,
                 input=stdin,
-                stdout=subprocess.PIPE,
+                stdout=None if stream_stdout else subprocess.PIPE,
                 stderr=err_f,
                 text=True,
                 check=check,
