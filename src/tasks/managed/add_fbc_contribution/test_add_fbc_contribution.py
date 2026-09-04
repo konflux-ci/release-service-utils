@@ -7,10 +7,12 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-import add_fbc_contribution
-import iib
 import pytest
-from add_fbc_contribution import (
+
+from release_service_utils.helpers import iib
+from release_service_utils.helpers.internal_request import InternalRequestWaitError
+from release_service_utils.tasks.managed.add_fbc_contribution import (
+    add_fbc_contribution as afc,
     AddFBCContributionConfig,
     BatchResult,
     OCPGroup,
@@ -23,6 +25,7 @@ from add_fbc_contribution import (
     process_batch_results,
     validate_snapshot,
 )
+from release_service_utils.tasks.managed import add_fbc_contribution
 
 
 def make_config(
@@ -571,8 +574,8 @@ class TestExecuteBatch:
             }
         )
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
 
         batch_result = add_fbc_contribution.execute_batch(
             batch_num=0,
@@ -589,8 +592,6 @@ class TestExecuteBatch:
 
     def test_failed_batch_execution(self, tmp_path: Path, monkeypatch: Any) -> None:
         """Batch failure is handled correctly."""
-        from internal_request import InternalRequestWaitError
-
         config = make_config(tmp_path)
         group = OCPGroup(
             ocp_version="4.12",
@@ -602,7 +603,7 @@ class TestExecuteBatch:
 
         mock_create = mock.MagicMock(side_effect=InternalRequestWaitError("IIB error", 21))
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
+        monkeypatch.setattr(afc, "create", mock_create)
 
         batch_result = add_fbc_contribution.execute_batch(
             batch_num=0,
@@ -634,8 +635,8 @@ class TestExecuteBatch:
             }
         )
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
 
         batch_result = add_fbc_contribution.execute_batch(
             batch_num=0,
@@ -684,8 +685,8 @@ class TestProcessOcpGroup:
             }
         )
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
 
         success = add_fbc_contribution.process_ocp_group(
             group=group,
@@ -699,8 +700,6 @@ class TestProcessOcpGroup:
 
     def test_handles_batch_failure_with_retry(self, tmp_path: Path, monkeypatch: Any) -> None:
         """Failed batches are retried."""
-        from internal_request import InternalRequestWaitError
-
         config = make_config(tmp_path, max_batch_size=1, max_retries=2)
         group = OCPGroup(
             ocp_version="4.12",
@@ -733,8 +732,8 @@ class TestProcessOcpGroup:
             }
         )
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
 
         success = add_fbc_contribution.process_ocp_group(
             group=group,
@@ -780,8 +779,8 @@ class TestRun:
             }
         )
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
 
         results_data, timestamp = add_fbc_contribution.run(config)
 
@@ -830,8 +829,8 @@ class TestMain:
             }
         )
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
 
         result = add_fbc_contribution.main(
             [
@@ -897,8 +896,8 @@ class TestEdgeCases:
         mock_create = mock.MagicMock(return_value="test-ir")
         mock_fetch = mock.MagicMock(return_value={})
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
 
         batch_result = add_fbc_contribution.execute_batch(
             batch_num=0,
@@ -925,8 +924,8 @@ class TestEdgeCases:
         mock_create = mock.MagicMock(return_value="test-ir")
         mock_fetch = mock.MagicMock(return_value={"indexImageDigests": "sha256:a"})
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
 
         batch_result = add_fbc_contribution.execute_batch(
             batch_num=0,
@@ -1013,7 +1012,7 @@ class TestEdgeCases:
 
         mock_create = mock.MagicMock(side_effect=Exception("Generic error"))
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
+        monkeypatch.setattr(afc, "create", mock_create)
 
         batch_result = add_fbc_contribution.execute_batch(
             batch_num=0,
@@ -1045,8 +1044,8 @@ class TestEdgeCases:
             }
         )
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
 
         batch_result = add_fbc_contribution.execute_batch(
             batch_num=0,
@@ -1111,8 +1110,6 @@ class TestEdgeCases:
         self, tmp_path: Path, monkeypatch: Any
     ) -> None:
         """Returns False when all batches fail after all retries."""
-        from internal_request import InternalRequestWaitError
-
         config = make_config(tmp_path, max_batch_size=1, max_retries=1)
         group = OCPGroup(
             ocp_version="4.12",
@@ -1127,7 +1124,7 @@ class TestEdgeCases:
             side_effect=InternalRequestWaitError("Permanent failure", 21)
         )
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
+        monkeypatch.setattr(afc, "create", mock_create)
 
         success = add_fbc_contribution.process_ocp_group(
             group=group,
@@ -1200,8 +1197,8 @@ class TestEdgeCases:
         mock_create = mock.MagicMock(side_effect=mock_create_side_effect)
         mock_fetch = mock.MagicMock(side_effect=mock_fetch_side_effect)
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
 
         success = add_fbc_contribution.process_ocp_group(
             group=group,
@@ -1217,8 +1214,6 @@ class TestEdgeCases:
 
     def test_run_failure_returns_error(self, tmp_path: Path, monkeypatch: Any) -> None:
         """Run raises RuntimeError when OCP group fails."""
-        from internal_request import InternalRequestWaitError
-
         snapshot = make_snapshot([make_component("comp1", "4.12", container_image="img1")])
         data = make_data()
 
@@ -1236,15 +1231,13 @@ class TestEdgeCases:
 
         mock_create = mock.MagicMock(side_effect=InternalRequestWaitError("IIB failure", 21))
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
+        monkeypatch.setattr(afc, "create", mock_create)
 
         with pytest.raises(RuntimeError, match="One or more OCP groups failed"):
             add_fbc_contribution.run(config)
 
     def test_main_raises_on_failure(self, tmp_path: Path, monkeypatch: Any) -> None:
         """Main raises exception when run fails (managed task pattern)."""
-        from internal_request import InternalRequestWaitError
-
         snapshot = make_snapshot([make_component("comp1", "4.12", container_image="img1")])
         data = make_data()
 
@@ -1258,7 +1251,7 @@ class TestEdgeCases:
 
         mock_create = mock.MagicMock(side_effect=InternalRequestWaitError("IIB failure", 21))
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
+        monkeypatch.setattr(afc, "create", mock_create)
 
         with pytest.raises(RuntimeError, match="One or more OCP groups failed"):
             add_fbc_contribution.main(
@@ -1294,8 +1287,6 @@ class TestEdgeCases:
         self, tmp_path: Path, monkeypatch: Any
     ) -> None:
         """Failed batches are retried at the end, not immediately."""
-        from internal_request import InternalRequestWaitError
-
         config = make_config(
             tmp_path,
             max_batch_size=1,
@@ -1338,9 +1329,9 @@ class TestEdgeCases:
             }
         )
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
-        monkeypatch.setattr("add_fbc_contribution.time.sleep", mock_sleep)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
+        monkeypatch.setattr(afc.time, "sleep", mock_sleep)
 
         success = add_fbc_contribution.process_ocp_group(
             group=group,
@@ -1358,8 +1349,6 @@ class TestEdgeCases:
         self, tmp_path: Path, monkeypatch: Any
     ) -> None:
         """Returns False when a batch fails after all retry attempts."""
-        from internal_request import InternalRequestWaitError
-
         config = make_config(
             tmp_path,
             max_batch_size=1,
@@ -1382,8 +1371,8 @@ class TestEdgeCases:
         def mock_sleep(seconds: float) -> None:
             pass
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.time.sleep", mock_sleep)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc.time, "sleep", mock_sleep)
 
         success = add_fbc_contribution.process_ocp_group(
             group=group,
@@ -1478,8 +1467,8 @@ class TestEdgeCases:
             }
         )
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
 
         results_data, timestamp = add_fbc_contribution.run(config)
 
@@ -1551,9 +1540,9 @@ class TestEdgeCases:
         mock_create = mock.MagicMock(side_effect=mock_create_side_effect)
         mock_fetch = mock.MagicMock(side_effect=mock_fetch_side_effect)
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
-        monkeypatch.setattr("add_fbc_contribution.time.sleep", mock_sleep)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
+        monkeypatch.setattr(afc.time, "sleep", mock_sleep)
 
         success = add_fbc_contribution.process_ocp_group(
             group=group,
@@ -1620,9 +1609,9 @@ class TestEdgeCases:
         mock_create = mock.MagicMock(return_value="test-ir")
         mock_fetch = mock.MagicMock(side_effect=mock_fetch_side_effect)
 
-        monkeypatch.setattr("add_fbc_contribution.create", mock_create)
-        monkeypatch.setattr("add_fbc_contribution.fetch_results", mock_fetch)
-        monkeypatch.setattr("add_fbc_contribution.time.sleep", mock_sleep)
+        monkeypatch.setattr(afc, "create", mock_create)
+        monkeypatch.setattr(afc, "fetch_results", mock_fetch)
+        monkeypatch.setattr(afc.time, "sleep", mock_sleep)
 
         success = add_fbc_contribution.process_ocp_group(
             group=group,
