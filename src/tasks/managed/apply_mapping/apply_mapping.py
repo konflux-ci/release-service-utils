@@ -24,6 +24,9 @@ Supported tag template variables:
 * ``{{ component-incrementer }}`` -- like ``incrementer``, but computed
   uniformly across every repository the component is pushed to.
 * ``{{ labels.mylabel }}`` -- the value of image label ``mylabel``.
+* ``{{ labels.konflux.additional-tags }}`` -- Build lets a Containerfile
+  have extra tags via ``LABEL konflux.additional-tags="tag1 tag2"``;
+  expands to one tag per space and/or comma separated value.
 """
 
 from __future__ import annotations
@@ -74,6 +77,8 @@ _INCREMENTER_PLACEHOLDER = re.compile(r"\{\{\s*incrementer\s*\}\}")
 _COMPONENT_INCREMENTER_PLACEHOLDER = re.compile(r"\{\{\s*component-incrementer\s*\}\}")
 _VALID_TAG_RE = re.compile(r"[a-zA-Z0-9._-]+")
 _VAR_REF_RE = re.compile(r"\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}")
+_ADDITIONAL_TAGS_LABEL = "konflux.additional-tags"
+_ADDITIONAL_TAGS_SPLIT_RE = re.compile(r"[,\s]+")
 
 ListTagsFn = Callable[[str], list[str]]
 InspectFn = Callable[..., Any]
@@ -226,6 +231,25 @@ def component_increment_tag(
     return tag
 
 
+def _parse_additional_tags_label(labels: dict) -> list[str]:
+    """Split the ``konflux.additional-tags`` image label into individual tags.
+
+    Build lets a Containerfile have extra tags via
+    ``LABEL konflux.additional-tags="tag1 tag2"`` or ``"tag1, tag2"``,
+    space and/or comma separated. Raises ``ValueError`` if the label is
+    absent or empty, or one of its tags is invalid.
+    """
+    raw = labels.get(_ADDITIONAL_TAGS_LABEL) or ""
+    tags = [tag for tag in _ADDITIONAL_TAGS_SPLIT_RE.split(raw.strip()) if tag]
+    if not tags:
+        raise ValueError(
+            f"Substitution variable unknown or empty: labels.{_ADDITIONAL_TAGS_LABEL}"
+        )
+    for tag in tags:
+        _validate_tag(tag)
+    return tags
+
+
 def _substitute_value(var_name: str, substitute_map: dict[str, str], labels: dict) -> str:
     """Look up a tag template variable's replacement value.
 
@@ -278,11 +302,20 @@ def translate_tags(
     """Translate each tag template in ``tags``, dropping duplicates (first occurrence wins)."""
     translated: list[str] = []
     for tag in tags:
-        result = translate_one_tag(
-            tag, substitute_map, labels, repo, all_repos, inc_cache, list_tags_fn
-        )
-        if result not in translated:
-            translated.append(result)
+        match = _VAR_REF_RE.fullmatch(tag.strip())
+        if match and match.group(1) == f"labels.{_ADDITIONAL_TAGS_LABEL}":
+            # Unlike other tag template variables, the _ADDITIONAL_TAGS_LABEL
+            # one can expand to multiple tags.
+            results = _parse_additional_tags_label(labels)
+        else:
+            results = [
+                translate_one_tag(
+                    tag, substitute_map, labels, repo, all_repos, inc_cache, list_tags_fn
+                )
+            ]
+        for result in results:
+            if result not in translated:
+                translated.append(result)
     return translated
 
 
