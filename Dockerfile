@@ -118,10 +118,12 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     krb5-devel \
     krb5-workstation \
     openssl \
+    gnupg2 \
     rsync \
     gcc \
     python3-qpid-proton \
     zip \
+    && gpg --version \
     && dnf clean all
 
 # exodus-rsync only publishes an amd64 binary upstream (no arm64 build exists:
@@ -181,6 +183,8 @@ RUN ln -s /home/src/tasks/managed/cleanup_workspace/cleanup_workspace.py /home/s
     ln -s /home/src/tasks/managed/update_trusted_tasks/update_trusted_tasks.py /home/scripts/python/tasks/managed/update_trusted_tasks.py && \
     ln -s /home/src/tasks/managed/validate_single_component/validate_single_component.py /home/scripts/python/tasks/managed/validate_single_component.py && \
     ln -s /home/src/tasks/managed/extract_checksums_from_image/extract_checksums_from_image.py /home/scripts/python/tasks/managed/extract_checksums_from_image.py && \
+    ln -s /home/src/tasks/managed/direct_sign_generic/direct_sign_generic.py /home/scripts/python/tasks/managed/direct_sign_generic.py && \
+    ln -s /home/src/tasks/managed/sign_checksum_blob/sign_checksum_blob.py /home/scripts/python/tasks/managed/sign_checksum_blob.py && \
     ln -s /home/src/tasks/managed/publish_to_nrrc/publish_to_nrrc.py /home/scripts/python/tasks/managed/publish_to_nrrc.py && \
     ln -s /home/src/tasks/managed/rh_direct_sign_image/rh_direct_sign_image.py /home/scripts/python/tasks/managed/rh_direct_sign_image.py && \
     ln -s /home/src/tasks/managed/direct_sign_index_image/direct_sign_index_image.py /home/scripts/python/tasks/managed/direct_sign_index_image.py && \
