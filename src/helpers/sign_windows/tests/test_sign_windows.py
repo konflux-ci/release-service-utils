@@ -78,7 +78,7 @@ def test_build_batch_script_contains_signtool() -> None:
     assert "oras push" in script
     assert "sha256:unsigned" in script
     assert "uid-123-windows" in script
-    assert "Red Hat" in script
+    assert "44FF893224056016A7D8E326E327D59803724695" in script
     assert "/sm" not in script
 
 
