@@ -89,7 +89,7 @@ REM The content is extracted to unsigned\\windows with os/arch/ subdirectories
 
 REM Recursively sign all files in unsigned\\windows directory tree
 for /r unsigned\\windows %%f in (*) do (
-  signtool sign{sm_flag} /v /n "Red Hat" /fd SHA256 ^
+  signtool sign{sm_flag} /v /sha1 44FF893224056016A7D8E326E327D59803724695 /fd SHA256 ^
     /tr http://timestamp.digicert.com /td SHA256 "%%f"
   if errorlevel 1 (
     echo Signing of %%f failed
