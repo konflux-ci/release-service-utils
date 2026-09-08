@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Map ``scripts/python/helpers/*.py`` to task scripts that import them.
+"""Map ``src/helpers/`` modules to task scripts that import them.
 
-Task scripts live under ``scripts/python/tasks/**/*.py``. Imports are resolved with
-the ``ast`` module: bare imports like ``import file`` match ``helpers/file.py``;
-``from helpers.foo import ...`` is also recognized when present.
+Task scripts live under ``src/tasks/**/*.py``. Imports are resolved with the ``ast``
+module. Recognizes both nested helper packages (``helpers/sign_windows/sign_windows.py``)
+and top-level modules (``helpers/foo.py``), matching imports like:
+
+- ``from release_service_utils.helpers import sign_windows``
+- ``from release_service_utils.helpers.sign_windows import ...``
+- Legacy: ``from helpers.foo import ...``
 
 Used by `find_catalog_suite_from_utils_diff` so a helper-only diff still
 propagates to dependent ``tasks/`` paths for Dockerfile token generation.
@@ -16,12 +20,27 @@ from pathlib import Path
 
 
 def _helper_stems(helpers_root: Path) -> frozenset[str]:
-    """Stem names for each ``*.py`` directly under ``helpers_root``."""
-    # Only top-level modules (``helpers/foo.py``). Nested packages are out of scope
-    # for this lightweight scanner.
+    """Stem names for each helper package under ``helpers_root``.
+
+    Returns directory names that contain a Python module with matching name,
+    e.g., ``helpers/sign_windows/`` directory yields ``sign_windows``.
+    Also includes top-level ``.py`` files (legacy pattern).
+    """
     if not helpers_root.is_dir():
         return frozenset()
-    return frozenset(p.stem for p in helpers_root.glob("*.py") if p.is_file())
+    stems: set[str] = set()
+    # Top-level .py files (e.g., helpers/foo.py)
+    for p in helpers_root.glob("*.py"):
+        if p.is_file() and p.stem != "__init__":
+            stems.add(p.stem)
+    # Nested packages (e.g., helpers/sign_windows/sign_windows.py)
+    for d in helpers_root.iterdir():
+        if d.is_dir() and not d.name.startswith("_") and d.name != "tests":
+            # Check if package contains a module with matching name
+            module_file = d / f"{d.name}.py"
+            if module_file.is_file():
+                stems.add(d.name)
+    return frozenset(stems)
 
 
 def _is_task_script(path: Path) -> bool:
@@ -35,34 +54,66 @@ def _is_task_script(path: Path) -> bool:
 
 
 def _collect_imported_helper_names(tree: ast.AST, helper_stems: frozenset[str]) -> set[str]:
-    """Return helper module stems referenced by *tree* that exist under helpers."""
+    """Return helper module stems referenced by *tree* that exist under helpers.
+
+    Handles both legacy patterns (``from helpers.foo import ...``) and current
+    patterns (``from release_service_utils.helpers import sign_windows``).
+    """
     found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             # ``import foo`` / ``import foo.bar`` — first segment must match a helper stem.
+            # ``import release_service_utils.helpers.sign_windows``
             for alias in node.names:
-                stem = alias.name.split(".", 1)[0]
-                if stem in helper_stems:
-                    found.add(stem)
+                parts = alias.name.split(".")
+                # Check if it's release_service_utils.helpers.<helper>
+                if (
+                    len(parts) >= 3
+                    and parts[0] == "release_service_utils"
+                    and parts[1] == "helpers"
+                    and parts[2] in helper_stems
+                ):
+                    found.add(parts[2])
+                # Legacy: direct import of helper stem
+                elif parts[0] in helper_stems:
+                    found.add(parts[0])
         elif isinstance(node, ast.ImportFrom):
             if node.module is None:
                 continue
             parts = node.module.split(".")
-            # ``from helpers.foo import ...`` → ``foo.py`` under helpers/.
-            if parts[0] == "helpers" and len(parts) >= 2:
+            # ``from release_service_utils.helpers import sign_windows`` → check imported names
+            if (
+                len(parts) >= 2
+                and parts[0] == "release_service_utils"
+                and parts[1] == "helpers"
+            ):
+                # The helper name is in node.names, not in the module path
+                for alias in node.names:
+                    if alias.name in helper_stems:
+                        found.add(alias.name)
+            # ``from release_service_utils.helpers.sign_windows import ...``
+            elif (
+                len(parts) >= 3
+                and parts[0] == "release_service_utils"
+                and parts[1] == "helpers"
+                and parts[2] in helper_stems
+            ):
+                found.add(parts[2])
+            # Legacy: ``from helpers.foo import ...`` → ``foo.py`` under helpers/.
+            elif parts[0] == "helpers" and len(parts) >= 2:
                 inner = parts[1]
                 if inner in helper_stems:
                     found.add(inner)
+            # Legacy: ``from file import ...`` with ``file`` as the package prefix.
             elif parts[0] in helper_stems:
-                # Rare: ``from file import ...`` with ``file`` as the package prefix.
                 found.add(parts[0])
     return found
 
 
 def build_helper_to_task_paths(repo_root: Path) -> dict[str, set[str]]:
     """Build reverse map: helper stem -> repo-relative paths of importing tasks."""
-    helpers_root = repo_root / "scripts" / "python" / "helpers"
-    tasks_root = repo_root / "scripts" / "python" / "tasks"
+    helpers_root = repo_root / "src" / "helpers"
+    tasks_root = repo_root / "src" / "tasks"
     stems = _helper_stems(helpers_root)
     if not stems or not tasks_root.is_dir():
         return {}
@@ -91,14 +142,15 @@ def expand_changed_paths_for_helper_deps(
 ) -> list[str]:
     """Append task paths that import changed helpers; preserve order, dedupe.
 
-    Paths under ``scripts/python/helpers/*.py`` add any task files that import that
-    helper module. Other paths pass through unchanged.
+    Paths under ``src/helpers/`` (both ``helpers/*.py`` and ``helpers/foo/foo.py``)
+    add any task files that import that helper module. Other paths pass through
+    unchanged.
     """
     reverse = _reverse if _reverse is not None else build_helper_to_task_paths(repo_root)
     if not reverse:
         return list(changed_paths)
 
-    helper_prefix = "scripts/python/helpers/"
+    helper_prefix = "src/helpers/"
     seen: set[str] = set()
     out: list[str] = []
 
@@ -117,7 +169,22 @@ def expand_changed_paths_for_helper_deps(
         add(s)
         if not s.startswith(helper_prefix) or not s.endswith(".py"):
             continue
-        stem = Path(s).stem
+
+        # Extract helper stem from path
+        # src/helpers/sign_windows/sign_windows.py → sign_windows
+        # src/helpers/foo.py → foo
+        rel_path = s[len(helper_prefix) :]
+        parts = rel_path.split("/")
+        if len(parts) == 1:
+            # Top-level: src/helpers/foo.py
+            stem = Path(rel_path).stem
+        elif len(parts) >= 2:
+            # Nested package: src/helpers/sign_windows/sign_windows.py
+            # Use the package directory name as the stem
+            stem = parts[0]
+        else:
+            continue
+
         if stem == "__init__":
             # We only index plain modules; package ``__init__`` has no stem mapping.
             continue
