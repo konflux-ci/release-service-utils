@@ -764,11 +764,11 @@ wheels = [
 
 [[package]]
 name = "diffused-lib"
-version = "0.3.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c7/9e/d3fc024efb6d4603db0fbb2e90a976cf5f54205784c554e3c7a9ce724731/diffused_lib-0.3.0.tar.gz", hash = "sha256:31dfbf644d4676c43af1f9deaf730c652059c19b656fec5df201fa8a99de451c", size = 15140, upload-time = "2026-01-19T19:44:53.106Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ad/1d/09199541975d433752454cedea68d871c8b5e68f39f5f9d4ee36a9e55d3a/diffused_lib-0.5.0.tar.gz", hash = "sha256:678d79b7a799977f8ba6eaae681637ed50b5da24b30779ac1423ec6ca7dafee6", size = 19038, upload-time = "2026-09-08T15:08:10.445Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/48/30/cd7eb9172e2e4254d4dce4a04086b710e2104a45dfdfb00757a696eab18a/diffused_lib-0.3.0-py3-none-any.whl", hash = "sha256:930df735d31ac2464197e65a2fa42b479d0b2dbc6b235341869ca4b81116de08", size = 9328, upload-time = "2026-01-19T19:44:51.926Z" },
+    { url = "https://files.pythonhosted.org/packages/be/ed/8ebaac25a2cc7cc65e860f163c26d0fd385d67dfffd0b84046a8c31822f7/diffused_lib-0.5.0-py3-none-any.whl", hash = "sha256:1c01e65551532c08eee69a45a4f864d191db152cb327a623b73b341095d8697b", size = 11906, upload-time = "2026-09-08T15:08:09.086Z" },
 ]
 
 [[package]]
@@ -2207,7 +2207,7 @@ dev = [
 requires-dist = [
     { name = "check-jsonschema" },
     { name = "confluent-kafka" },
-    { name = "diffused-lib", specifier = "==0.3.0" },
+    { name = "diffused-lib", specifier = "==0.5.0" },
     { name = "gitpython", specifier = ">=3.1.40" },
     { name = "jinja2" },
     { name = "jinja2-ansible-filters" },
