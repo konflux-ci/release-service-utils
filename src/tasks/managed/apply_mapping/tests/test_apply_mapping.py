@@ -708,6 +708,36 @@ def test_process_component_no_architectures_raises() -> None:
         )
 
 
+def test_process_component_missing_platform_defaults_to_amd64() -> None:
+    """An OCI artifact whose arch info lacks ``platform`` defaults to linux/amd64.
+
+    Disk-image artifacts may not carry platform information. The component must
+    still be processed instead of raising ``KeyError: 'platform'``. See
+    AIPCC-1307.
+    """
+    component = _base_component()
+    raw_manifest = {"config": {"mediaType": "application/vnd.oci.image.config.v1+json"}}
+    apply_mapping.process_component(
+        component,
+        default_tags=[],
+        default_timestamp_format="%s",
+        current_timestamp="20240101 00:00:00",
+        default_cgw_settings={},
+        add_implicit_timestamp_tag=False,
+        inspect_fn=_fake_inspect(raw_manifest, {}),
+        list_tags_fn=_fake_list_tags({}),
+        # arch info with no "platform" key, as emitted for platform-less artifacts
+        get_arch_fn=lambda image_ref: [{"digest": "sha256:aaa"}],
+        format_date_fn=_fake_format_date,
+    )
+
+    # Component was processed without raising KeyError; metadata is populated.
+    assert (
+        component["metadata"]["media_type"]
+        == "application/vnd.oci.image.config.v1+json"
+    )
+
+
 def test_process_component_standard_image_metadata() -> None:
     """Standard OCI image metadata (labels, env, build-date) is attached to the component."""
     component = _base_component()
