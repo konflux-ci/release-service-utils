@@ -54,13 +54,24 @@ class TestIsQuayRegistry:
         session = _mock_session(get_status=200)
         cache: dict[str, bool] = {}
         assert make_repo_public.is_quay_registry("quay.io", session, cache) is True
-        session.get.assert_called_once_with("https://quay.io/api/v1/discovery", timeout=30)
+        session.get.assert_called_once_with(
+            "https://quay.io/api/v1/discovery", timeout=30, allow_redirects=False
+        )
 
     def test_returns_false_on_non_200(self) -> None:
         """Non-200 on discovery means not a Quay registry."""
         session = _mock_session(get_status=404)
         cache: dict[str, bool] = {}
         assert make_repo_public.is_quay_registry("other.io", session, cache) is False
+
+    def test_returns_false_on_redirect(self) -> None:
+        """A redirect (e.g. gcr.io's 302) is not treated as a Quay registry."""
+        session = _mock_session(get_status=302)
+        cache: dict[str, bool] = {}
+        assert make_repo_public.is_quay_registry("gcr.io", session, cache) is False
+        session.get.assert_called_once_with(
+            "https://gcr.io/api/v1/discovery", timeout=30, allow_redirects=False
+        )
 
     def test_returns_false_on_request_exception(self) -> None:
         """Request exceptions return False and are cached."""

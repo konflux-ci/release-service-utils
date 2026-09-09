@@ -44,16 +44,17 @@ def is_quay_registry(
 ) -> bool:
     """Return True if ``registry`` exposes a Quay-compatible discovery endpoint.
 
-    Issue a GET to ``https://{registry}/api/v1/discovery``; HTTP 200 means
-    Quay, any other status means not Quay. Results are cached in ``cache``
-    so each registry is probed only once.
+    Issue a GET to ``https://{registry}/api/v1/discovery`` without following
+    redirects; HTTP 200 means Quay, any other status (including a redirect
+    such as gcr.io's 302) means not Quay. Results are cached in ``cache`` so
+    each registry is probed only once.
     """
     if registry in cache:
         return cache[registry]
 
     url = f"https://{registry}/api/v1/discovery"
     try:
-        resp = session.get(url, timeout=30)
+        resp = session.get(url, timeout=30, allow_redirects=False)
         result = resp.status_code == 200
     except requests.RequestException as exc:
         logger.warning(
