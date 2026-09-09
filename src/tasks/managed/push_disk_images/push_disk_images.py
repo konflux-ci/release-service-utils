@@ -13,7 +13,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from release_service_utils.helpers import file, internal_request, tekton
+from release_service_utils.helpers import cdn, file, internal_request, tekton
+from release_service_utils.helpers import snapshot as snapshot_helper
 from release_service_utils.helpers.internal_request.internal_request import (
     PIPELINERUN_UID_LABEL,
 )
@@ -27,47 +28,13 @@ _IR_WAIT_TIMEOUT_SECONDS = (
     + internal_request.SPAWN_OVERHEAD_SECONDS
 )
 
-# The Exodus GW secret is the same for production and stage — only the env
-# (live vs pre) and the Pulp URL differ.  The stage CGW uses the 'qa' host:
-# developers.qa.redhat.com.
-_CDN_ENV_CONFIGS: dict[str, dict[str, str]] = {
-    "production": {
-        "exodusGwSecret": "exodus-prod-secret",
-        "exodusGwEnv": "live",
-        "pulpSecret": "rhsm-pulp-prod-secret",
-        "udcacheSecret": "udcache-prod-secret",
-        "cgwHostname": "https://developers.redhat.com/content-gateway/rest/admin",
-        "cgwSecret": "cgw-service-account-prod-secret",
-    },
-    "stage": {
-        "exodusGwSecret": "exodus-prod-secret",
-        "exodusGwEnv": "pre",
-        "pulpSecret": "rhsm-pulp-stage-secret",
-        "udcacheSecret": "udcache-stage-secret",
-        "cgwHostname": "https://developers.qa.redhat.com/content-gateway/rest/admin",
-        "cgwSecret": "cgw-service-account-stage-secret",
-    },
-    "qa": {
-        "exodusGwSecret": "exodus-stage-secret",
-        "exodusGwEnv": "live",
-        "pulpSecret": "rhsm-pulp-qa-secret",
-        "udcacheSecret": "udcache-qa-secret",
-        "cgwHostname": "https://developers.qa.redhat.com/content-gateway/rest/admin",
-        "cgwSecret": "cgw-service-account-stage-secret",
-    },
-}
-
 
 def resolve_cdn_env_config(env: str) -> dict[str, str]:
     """Return secret and gateway config for the given CDN environment.
 
     Raise ``ValueError`` when *env* is not one of production, stage, or qa.
     """
-    config = _CDN_ENV_CONFIGS.get(env)
-    if config is None:
-        msg = f"cdn.env in the data file must be one of [production, stage, qa], got {env!r}"
-        raise ValueError(msg)
-    return dict(config)
+    return cdn.cdn_env_secrets(env)
 
 
 def extract_disk_image_files(
@@ -88,12 +55,7 @@ def extract_disk_image_files(
 def prepare_snapshot(snapshot_path: Path) -> dict[str, Any]:
     """Load snapshot JSON and strip ``.metadata`` from each component."""
     snapshot = file.load_json_dict(snapshot_path)
-    # The internal task doesn't need metadata (env_variables, labels, etc.)
-    # and stripping it avoids "arg list too long" when the snapshot JSON
-    # is passed as an InternalRequest parameter.
-    for component in snapshot.get("components", []):
-        component.pop("metadata", None)
-    return snapshot
+    return snapshot_helper.strip_component_metadata(snapshot)
 
 
 def write_results_file(
