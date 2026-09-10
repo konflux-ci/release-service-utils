@@ -164,6 +164,22 @@ def fetch(
         )
 
 
+def remote_branch_exists(
+    repo_dir: Path,
+    branch: str,
+    *,
+    remote: str = "origin",
+    stderr_path: Path | None = None,
+) -> bool:
+    """Return True when *remote* has a head named *branch*."""
+    result = _run_git_cmd(
+        ["git", "ls-remote", "--heads", remote, branch],
+        cwd=repo_dir,
+        stderr_path=stderr_path,
+    )
+    return bool((result.stdout or "").strip())
+
+
 def _local_branch_exists(
     repo_dir: Path,
     branch: str,

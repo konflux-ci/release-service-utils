@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import gitlab
+from gitlab import Gitlab
 from gitlab.exceptions import GitlabError
 
 from release_service_utils.helpers import file
@@ -120,36 +120,26 @@ def gitlab_create_mr(
     target_branch: str,
     description: str,
     upstream_repo: str,
-    gitlab_client: gitlab.Gitlab,
+    gitlab_client: Gitlab,
 ) -> str:
     """Create a merge request; return JSON ``{"merge_request": url}`` for Tekton results."""
-    project_path = vcs_gitlab.gitlab_project_path(upstream_repo)
     try:
-        project = gitlab_client.projects.get(project_path)
-        mr = project.mergerequests.create(
-            {
-                "source_branch": head,
-                "target_branch": target_branch,
-                "title": title,
-                "description": description,
-            }
+        merge_request = vcs_gitlab.create_merge_request(
+            gitlab_client,
+            upstream_repo,
+            source_branch=head,
+            target_branch=target_branch,
+            title=title,
+            description=description,
         )
-    except GitlabError as e:
+    except (GitlabError, ValueError) as e:
         raise tekton.CheckStepError("creating GitLab merge request", e) from e
-
-    url = getattr(mr, "web_url", None) or ""
-    if url:
-        return json.dumps({"merge_request": url})
-
-    raise tekton.CheckStepError(
-        "creating GitLab merge request",
-        ValueError("merge request created but web_url was empty"),
-    )
+    return json.dumps({"merge_request": merge_request.web_url})
 
 
 def iter_konflux_open_mrs(
     upstream_repo: str,
-    gitlab_client: gitlab.Gitlab,
+    gitlab_client: Gitlab,
     component_group: str,
 ) -> Iterator[Any]:
     """Yield open MRs in *upstream_repo* matching the component group.
@@ -163,33 +153,23 @@ def iter_konflux_open_mrs(
 
     Yields lazily so callers can stop early when a match is found.
     """
-    project_path = vcs_gitlab.gitlab_project_path(upstream_repo)
-    try:
-        project = gitlab_client.projects.get(project_path)
-    except GitlabError as e:
-        raise tekton.CheckStepError("getting GitLab project", e) from e
-
     # Include the colon delimiter used in created MR titles so a shorter group
     # name cannot match a longer one that shares the same prefix.
     title_prefix = f"[Konflux release] {component_group}:"
-    page = 1
-    while True:
-        try:
-            batch = project.mergerequests.list(
-                state="opened",
-                search=title_prefix,
-                per_page=100,
-                page=page,
-            )
-        except GitlabError as e:
-            raise tekton.CheckStepError("listing GitLab merge requests", e) from e
-        if not batch:
-            break
-        for mr in batch:
-            mr_title = getattr(mr, "title", "") or ""
+    try:
+        project = vcs_gitlab.get_project(gitlab_client, upstream_repo)
+    except GitlabError as e:
+        raise tekton.CheckStepError("getting GitLab project", e) from e
+    try:
+        for merge_request in vcs_gitlab.iter_open_merge_requests(
+            project,
+            search=title_prefix,
+        ):
+            mr_title = getattr(merge_request, "title", "") or ""
             if mr_title.startswith(title_prefix):
-                yield mr
-        page += 1
+                yield merge_request
+    except GitlabError as e:
+        raise tekton.CheckStepError("listing GitLab merge requests", e) from e
 
 
 def blank_lines_before_yaml(target_file: Path) -> int:
@@ -567,7 +547,7 @@ def find_existing_mr_with_same_diff(
     upstream_repo: str,
     repo_cwd: Path,
     temp_dir: Path,
-    gitlab_client: gitlab.Gitlab,
+    gitlab_client: Gitlab,
     component_group: str,
 ) -> str | None:
     """Return result info when an open MR already has the same staged diff.
@@ -598,7 +578,7 @@ def commit_and_create_mr(
     revision: str,
     upstream_repo: str,
     repo_cwd: Path,
-    gitlab_client: gitlab.Gitlab,
+    gitlab_client: Gitlab,
 ) -> tuple[str, str, int]:
     """Commit staged changes, push a branch, and open a new GitLab merge request."""
     working_branch = uuid.uuid4().hex[:8]
@@ -628,7 +608,7 @@ def run_file_updates(
     component_group: str,
     temp_dir: Path,
     secrets: dict[str, str],
-    gitlab_client: gitlab.Gitlab | None = None,
+    gitlab_client: Gitlab | None = None,
 ) -> tuple[str, str, int]:
     """Run clone, path updates, and MR dedup or create.
 
@@ -640,7 +620,7 @@ def run_file_updates(
 
     token = configure_git_environment(secrets)
     if gitlab_client is None:
-        gitlab_client = gitlab.Gitlab(secrets["gitlab_host"], private_token=token)
+        gitlab_client = vcs_gitlab.client(secrets["gitlab_host"], token)
     git_functions_init(secrets["git_author_name"], secrets["git_author_email"], token)
 
     update_paths_file, paths_data = write_paths_manifest(paths_json, temp_dir)

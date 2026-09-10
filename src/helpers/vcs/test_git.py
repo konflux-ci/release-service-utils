@@ -184,6 +184,31 @@ def test_fetch(tmp_path: Path) -> None:
     ]
 
 
+def test_remote_branch_exists_true(tmp_path: Path) -> None:
+    """A populated ls-remote listing means the remote branch exists."""
+    with mock.patch.object(
+        git,
+        "_run_git_cmd",
+        return_value=mock.MagicMock(stdout="abc123\trefs/heads/feat\n"),
+    ) as run_cmd:
+        assert git.remote_branch_exists(tmp_path, "feat") is True
+    run_cmd.assert_called_once_with(
+        ["git", "ls-remote", "--heads", "origin", "feat"],
+        cwd=tmp_path,
+        stderr_path=None,
+    )
+
+
+def test_remote_branch_exists_false(tmp_path: Path) -> None:
+    """An empty ls-remote listing means the remote branch is missing."""
+    with mock.patch.object(
+        git,
+        "_run_git_cmd",
+        return_value=mock.MagicMock(stdout=""),
+    ):
+        assert git.remote_branch_exists(tmp_path, "feat") is False
+
+
 def test_checkout_existing_branch(tmp_path: Path) -> None:
     """Check out a branch that already exists locally."""
     with (
