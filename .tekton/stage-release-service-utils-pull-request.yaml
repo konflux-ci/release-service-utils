@@ -34,6 +34,10 @@ spec:
     value: .
   - name: revision
     value: '{{revision}}'
+  - name: build-platforms
+    value:
+    - linux/x86_64
+    - linux/arm64
   pipelineSpec:
     params:
     - description: Source Repository URL
@@ -82,9 +86,6 @@ spec:
       type: string
       description: The format for the resulting image's mediaType. Valid values are oci or docker.
     - name: build-platforms
-      default:
-      - linux/x86_64
-      - linux/arm64
       type: array
       description: List of platforms to build the container images on.
     - name: enable-package-registry-proxy
