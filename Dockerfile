@@ -195,6 +195,7 @@ RUN ln -s /home/src/tasks/managed/cleanup_workspace/cleanup_workspace.py /home/s
     ln -s /home/src/tasks/managed/filter_already_released_advisory_rpms/filter_already_released_advisory_rpms.py /home/scripts/python/tasks/managed/filter_already_released_advisory_rpms.py && \
     ln -s /home/src/tasks/managed/collect_data/collect_data.py /home/scripts/python/tasks/managed/collect_data.py && \
     ln -s /home/src/tasks/managed/extract_oot_kmods/extract_oot_kmods.py /home/scripts/python/tasks/managed/extract_oot_kmods.py && \
+    ln -s /home/src/tasks/managed/extract_sboms_from_wheels/extract_sboms_from_wheels.py /home/scripts/python/tasks/managed/extract_sboms_from_wheels.py && \
     ln -s /home/src/tasks/managed/marketplacesvm_push_disk_images/marketplacesvm_push_disk_images.py /home/scripts/python/tasks/managed/marketplacesvm_push_disk_images.py && \
     ln -s /home/src/tasks/managed/push_artifacts_to_storage/push_artifacts_to_storage.py /home/scripts/python/tasks/managed/push_artifacts_to_storage.py && \
     ln -s /home/src/tasks/managed/get_ocp_version/get_ocp_version.py /home/scripts/python/tasks/managed/get_ocp_version.py && \
