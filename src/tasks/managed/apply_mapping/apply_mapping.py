@@ -461,8 +461,12 @@ def process_component(
         raise RuntimeError(
             f"No architectures were discovered for component {name} ({container_image})"
         )
-    arch = arch_infos[0]["platform"]["architecture"]
-    os_name = arch_infos[0]["platform"]["os"]
+    # OCI artifacts (e.g. disk images) may not carry platform information. Default
+    # to linux/amd64 rather than raising KeyError so such components can still be
+    # released. See AIPCC-1307.
+    platform = arch_infos[0].get("platform") or {}
+    arch = platform.get("architecture", "amd64")
+    os_name = platform.get("os", "linux")
     first_digest = arch_infos[0]["digest"]
     image_with_digest = f"{container_image.rsplit('@', 1)[0]}@{first_digest}"
 

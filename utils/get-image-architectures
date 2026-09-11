@@ -85,7 +85,23 @@ elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.docker.distribu
         '{"platform": {"architecture": $ARGS.named["architecture"], "os": $ARGS.named["os"]}, "digest": $ARGS.named["digest"], "multiarch": false}'
 else
     # Multi arch
-    manifests=$(jq '.manifests[] += {multiarch: true}' <<< "$RAW_OUTPUT")
+    # Normalize entries that are OCI artifacts or otherwise carry no platform.
+    # Some image indexes (e.g. disk-image artifacts built with `buildah manifest
+    # add --artifact`) reference child manifests that expose `artifactType` and
+    # have no `platform` field. Default those to linux/amd64 so downstream
+    # consumers always receive a populated `platform`, matching the behaviour of
+    # the top-level OCI-artifact branch above.
+    manifests=$(jq '
+        .manifests[] += {multiarch: true}
+        | .manifests |= map(
+            if (.platform == null or .artifactType != null)
+            then . + {platform: ((.platform // {}) + {
+                architecture: (.platform.architecture // "amd64"),
+                os: (.platform.os // "linux")
+            })}
+            else . end
+        )
+    ' <<< "$RAW_OUTPUT")
     # Deduplicate: when an image index contains both gzip and zstd:chunked
     # manifests per architecture (dual-compression), keep only the non-zstd
     # entry per (architecture, os). If all entries for a platform are zstd,
