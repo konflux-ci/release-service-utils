@@ -19,10 +19,8 @@ Failed batches are retried at the end to allow timed out requests to finish.
 
 from __future__ import annotations
 
-import argparse
 import gzip
 import json
-import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -30,11 +28,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import file as file_helpers
-import iib
-from iib import IIBBuild
-from internal_request import InternalRequestWaitError, create, fetch_results
-from logger import logger as LOGGER
+from release_service_utils.helpers import file as file_helpers, iib, tekton
+from release_service_utils.helpers.iib import IIBBuild
+from release_service_utils.helpers.internal_request import (
+    InternalRequestWaitError,
+    create,
+    fetch_results,
+)
+from release_service_utils.helpers.logger import logger
 
 TASK_LABEL = "internal-services.appstudio.openshift.io/group-id"
 PIPELINERUN_LABEL = "internal-services.appstudio.openshift.io/pipelinerun-uid"
@@ -84,110 +85,9 @@ class BatchResult:
     error_message: str = ""
 
 
-def setup_argparser() -> argparse.ArgumentParser:
-    """Build and return the CLI argument parser."""
-    parser = argparse.ArgumentParser(
-        description="Add FBC contributions to index images via InternalRequests.",
-        prog=os.path.basename(__file__),
-    )
-    parser.add_argument(
-        "--snapshot-path",
-        required=True,
-        type=Path,
-        help="Path to the JSON string of the mapped Snapshot spec",
-    )
-    parser.add_argument(
-        "--data-path",
-        required=True,
-        type=Path,
-        help="Path to the JSON string of the merged data",
-    )
-    parser.add_argument(
-        "--data-dir",
-        required=True,
-        type=Path,
-        help="The location where data is stored",
-    )
-    parser.add_argument(
-        "--results-dir-path",
-        required=True,
-        type=Path,
-        help="Path to the results directory",
-    )
-    parser.add_argument(
-        "--pipeline-run-uid",
-        required=True,
-        help="The UID of the current PipelineRun",
-    )
-    parser.add_argument(
-        "--task-run-uid",
-        required=True,
-        help="The UID of the current TaskRun",
-    )
-    parser.add_argument(
-        "--max-batch-size",
-        type=int,
-        default=5,
-        help="Maximum number of FBC fragments to process in a single batch",
-    )
-    parser.add_argument(
-        "--must-publish-index-image",
-        default="false",
-        help="Whether the index image should be published",
-    )
-    parser.add_argument(
-        "--must-overwrite-from-index-image",
-        default="false",
-        help="Whether to overwrite the from index image",
-    )
-    parser.add_argument(
-        "--iib-service-account-secret",
-        required=True,
-        help="IIB service account secret name",
-    )
-    parser.add_argument(
-        "--max-retries",
-        type=int,
-        default=3,
-        help="Maximum number of retry attempts for failed internal requests",
-    )
-    parser.add_argument(
-        "--batch-retry-delay-seconds",
-        type=int,
-        default=60,
-        help="Delay between batch retry attempts in seconds",
-    )
-    parser.add_argument(
-        "--task-git-url",
-        required=True,
-        help="The URL to the git repo where the release-service-catalog tasks are stored",
-    )
-    parser.add_argument(
-        "--task-git-revision",
-        required=True,
-        help="The revision in the taskGitUrl repo to be used",
-    )
-    parser.add_argument(
-        "--build-timestamp-result",
-        type=Path,
-        help="Path to write the build timestamp result",
-    )
-    parser.add_argument(
-        "--request-results-file-result",
-        type=Path,
-        help="Path to write the request results file path result",
-    )
-    parser.add_argument(
-        "--internal-request-results-file-result",
-        type=Path,
-        help="Path to write the internal request results file path result",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable debug logging",
-    )
-    return parser
+def get_optional_env(name: str, default: str = "") -> str:
+    """Get an optional environment variable with a default value."""
+    return os.environ.get(name, default).strip()
 
 
 def validate_snapshot(snapshot: dict[str, Any]) -> None:
@@ -287,7 +187,7 @@ def group_components_by_ocp_version(
                 build_tags=build_tags,
             )
         )
-        LOGGER.info(
+        logger.info(
             "OCP version %s has %d component instance(s)",
             ocp_version,
             len(expanded_components),
@@ -340,7 +240,7 @@ def execute_batch(
     data: dict[str, Any],
 ) -> BatchResult:
     """Execute a single batch and return the result."""
-    LOGGER.info(
+    logger.info(
         "Executing batch %d for OCP %s: fromIndex=%s",
         batch_num + 1,
         group.ocp_version,
@@ -352,7 +252,7 @@ def execute_batch(
         batch_num,
         config.max_batch_size,
     )
-    LOGGER.info("Batch %d fragments: %s", batch_num + 1, fragments)
+    logger.info("Batch %d fragments: %s", batch_num + 1, fragments)
 
     fbc_config = data.get("fbc", {})
     publishing_credentials = fbc_config.get(
@@ -401,25 +301,25 @@ def execute_batch(
             finally_timeout=finally_timeout,
         )
     except InternalRequestWaitError as e:
-        LOGGER.error("Batch %d internal request failed: %s", batch_num + 1, e)
+        logger.error("Batch %d internal request failed: %s", batch_num + 1, e)
         return BatchResult(
             batch_num=batch_num,
             success=False,
             error_message=str(e),
         )
     except Exception as e:
-        LOGGER.error("Batch %d failed to create request: %s", batch_num + 1, e)
+        logger.error("Batch %d failed to create request: %s", batch_num + 1, e)
         return BatchResult(
             batch_num=batch_num,
             success=False,
             error_message=str(e),
         )
 
-    LOGGER.info("Created InternalRequest: %s", request_name)
+    logger.info("Created InternalRequest: %s", request_name)
 
     results = fetch_results(request_name)
     if not results:
-        LOGGER.error("Batch %d succeeded but returned empty results", batch_num + 1)
+        logger.error("Batch %d succeeded but returned empty results", batch_num + 1)
         return BatchResult(
             batch_num=batch_num,
             success=False,
@@ -434,7 +334,7 @@ def execute_batch(
 
     if exit_code != 0:
         result_message = results.get("resultMessage", "Unknown error")
-        LOGGER.error(
+        logger.error(
             "Batch %d InternalRequest failed with exit code %d: %s",
             batch_num + 1,
             exit_code,
@@ -468,7 +368,7 @@ def execute_batch(
     index_image_digests = [d for d in index_image_digests_str.split(" ") if d]
     iib_log = results.get("iibLog", "")
 
-    LOGGER.info("Batch %d completed successfully", batch_num + 1)
+    logger.info("Batch %d completed successfully", batch_num + 1)
     return BatchResult(
         batch_num=batch_num,
         success=True,
@@ -511,18 +411,18 @@ def process_batch_results(
 
     completion_time_raw = build_info.get("updated", "")
     if not completion_time_raw or completion_time_raw == "null":
-        LOGGER.error("completion_time not found in IIB build info")
+        logger.error("completion_time not found in IIB build info")
         return False
 
     try:
         dt = datetime.fromisoformat(completion_time_raw.replace("Z", "+00:00"))
         completion_time = str(int(dt.timestamp()))
     except (ValueError, OSError):
-        LOGGER.error("Failed to parse completion_time: %s", completion_time_raw)
+        logger.error("Failed to parse completion_time: %s", completion_time_raw)
         return False
 
     if len(completion_time) != 10 or not completion_time.isdigit():
-        LOGGER.error(
+        logger.error(
             "Invalid completion_time format (expected 10 digits): %s", completion_time
         )
         return False
@@ -567,12 +467,12 @@ def process_ocp_group(
 
     Returns True if all batches succeeded, False otherwise.
     """
-    LOGGER.info("Processing OCP group %s", group.ocp_version)
+    logger.info("Processing OCP group %s", group.ocp_version)
 
     num_components = len(group.components)
     num_batches = (num_components + config.max_batch_size - 1) // config.max_batch_size
 
-    LOGGER.info(
+    logger.info(
         "Creating %d batch(es) for %d components in OCP group %s",
         num_batches,
         num_components,
@@ -596,7 +496,7 @@ def process_ocp_group(
         return latest_iib_index_image
 
     for batch_num in range(num_batches):
-        LOGGER.info(
+        logger.info(
             "Processing batch %d/%d for OCP %s",
             batch_num + 1,
             num_batches,
@@ -624,17 +524,17 @@ def process_ocp_group(
                 successful_batches.append(batch_num)
                 if not config.must_overwrite_from_index_image and batch_result.index_image:
                     latest_iib_index_image = batch_result.index_image
-                    LOGGER.info("Updated fromIndex for next batch: %s", latest_iib_index_image)
+                    logger.info("Updated fromIndex for next batch: %s", latest_iib_index_image)
             else:
                 failed_batches.append(batch_num)
-                LOGGER.warning(
+                logger.warning(
                     "Batch %d results invalid, will retry later for OCP %s",
                     batch_num + 1,
                     group.ocp_version,
                 )
         else:
             failed_batches.append(batch_num)
-            LOGGER.warning(
+            logger.warning(
                 "Batch %d failed, will retry later for OCP %s",
                 batch_num + 1,
                 group.ocp_version,
@@ -642,10 +542,10 @@ def process_ocp_group(
 
     for retry_attempt in range(1, config.max_retries + 1):
         if not failed_batches:
-            LOGGER.info("All batches completed successfully for OCP %s", group.ocp_version)
+            logger.info("All batches completed successfully for OCP %s", group.ocp_version)
             break
 
-        LOGGER.info(
+        logger.info(
             "Retry attempt %d: %d batches to retry for OCP %s",
             retry_attempt,
             len(failed_batches),
@@ -673,7 +573,7 @@ def process_ocp_group(
                     results_data,
                 )
                 if results_ok:
-                    LOGGER.info(
+                    logger.info(
                         "Batch %d succeeded on retry attempt %d for OCP %s",
                         batch_num + 1,
                         retry_attempt,
@@ -682,12 +582,12 @@ def process_ocp_group(
                     successful_batches.append(batch_num)
                     if not config.must_overwrite_from_index_image and batch_result.index_image:
                         latest_iib_index_image = batch_result.index_image
-                        LOGGER.info(
+                        logger.info(
                             "Updated fromIndex for next batch: %s", latest_iib_index_image
                         )
                 else:
                     still_failed.append(batch_num)
-                    LOGGER.warning(
+                    logger.warning(
                         "Batch %d results invalid on retry attempt %d for OCP %s",
                         batch_num + 1,
                         retry_attempt,
@@ -695,7 +595,7 @@ def process_ocp_group(
                     )
             else:
                 still_failed.append(batch_num)
-                LOGGER.warning(
+                logger.warning(
                     "Batch %d failed retry attempt %d for OCP %s",
                     batch_num + 1,
                     retry_attempt,
@@ -705,14 +605,14 @@ def process_ocp_group(
         failed_batches = still_failed
 
         if failed_batches and retry_attempt < config.max_retries:
-            LOGGER.info(
+            logger.info(
                 "Waiting %d seconds before next retry attempt...",
                 config.batch_retry_delay_seconds,
             )
             time.sleep(config.batch_retry_delay_seconds)
 
     if failed_batches:
-        LOGGER.error(
+        logger.error(
             "%d batches failed after all retries for OCP %s: %s",
             len(failed_batches),
             group.ocp_version,
@@ -720,7 +620,7 @@ def process_ocp_group(
         )
         return False
 
-    LOGGER.info(
+    logger.info(
         "All %d batches completed successfully for OCP %s",
         num_batches,
         group.ocp_version,
@@ -747,19 +647,19 @@ def deduplicate_results(results_data: dict[str, Any], is_staged: bool) -> dict[s
             unique_count = len(set(c.get("ocp_version", "") for c in components))
 
     if len(components) <= unique_count:
-        LOGGER.info(
+        logger.info(
             "No deduplication needed (%d components, %d unique targets)",
             len(components),
             unique_count,
         )
         return results_data
 
-    LOGGER.info(
+    logger.info(
         "Found %d components for %d unique targets",
         len(components),
         unique_count,
     )
-    LOGGER.info("Keeping only the last (most recent) index for each OCP target")
+    logger.info("Keeping only the last (most recent) index for each OCP target")
 
     groups: dict[str, list[dict[str, Any]]] = {}
     for component in components:
@@ -774,7 +674,7 @@ def deduplicate_results(results_data: dict[str, Any], is_staged: bool) -> dict[s
 
     deduplicated = [group[-1] for group in groups.values()]
 
-    LOGGER.info(
+    logger.info(
         "Deduplicated from %d to %d components",
         len(components),
         len(deduplicated),
@@ -805,12 +705,12 @@ def run(config: AddFBCContributionConfig) -> tuple[dict[str, Any], str]:
     timestamp = now.strftime(timestamp_format)
 
     ocp_versions = get_ocp_versions(snapshot)
-    LOGGER.info("Found OCP versions: %s", " ".join(ocp_versions))
+    logger.info("Found OCP versions: %s", " ".join(ocp_versions))
 
-    LOGGER.info("Using pre-determined values from prepare-fbc-parameters:")
-    LOGGER.info("  - mustPublishIndexImage: %s", config.must_publish_index_image)
-    LOGGER.info("  - mustOverwriteFromIndexImage: %s", config.must_overwrite_from_index_image)
-    LOGGER.info("  - iibServiceAccountSecret: %s", config.iib_service_account_secret)
+    logger.info("Using pre-determined values from prepare-fbc-parameters:")
+    logger.info("  - mustPublishIndexImage: %s", config.must_publish_index_image)
+    logger.info("  - mustOverwriteFromIndexImage: %s", config.must_overwrite_from_index_image)
+    logger.info("  - iibServiceAccountSecret: %s", config.iib_service_account_secret)
 
     results_data: dict[str, Any] = {"components": []}
 
@@ -821,11 +721,11 @@ def run(config: AddFBCContributionConfig) -> tuple[dict[str, Any], str]:
     )
 
     total_components = len(snapshot.get("components", []))
-    LOGGER.info("Processing %d components", total_components)
+    logger.info("Processing %d components", total_components)
 
     all_succeeded = True
     for group in groups:
-        LOGGER.info("Processing OCP group: %s", group.ocp_version)
+        logger.info("Processing OCP group: %s", group.ocp_version)
         success = process_ocp_group(
             group,
             config,
@@ -841,77 +741,107 @@ def run(config: AddFBCContributionConfig) -> tuple[dict[str, Any], str]:
 
     results_data = deduplicate_results(results_data, is_staged)
 
-    LOGGER.info(
+    logger.info(
         "Multi-OCP batch processing completed successfully with %d components "
         "across %d OCP versions",
         total_components,
         len(ocp_versions),
     )
 
-    return results_data, timestamp
+    # Extract the latest IIB completion timestamp from processed components
+    # Each component has a 'completion_time' field (epoch timestamp as string)
+    build_timestamp = ""
+    for component in results_data.get("components", []):
+        comp_time = component.get("completion_time", "")
+        if comp_time and comp_time > build_timestamp:
+            build_timestamp = comp_time
+
+    # Fall back to local timestamp if no IIB completion time found
+    if not build_timestamp:
+        logger.warning("No IIB completion time found, using local timestamp")
+        build_timestamp = timestamp
+
+    return results_data, build_timestamp
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Entry point for add-fbc-contribution."""
-    parser = setup_argparser()
-    args = parser.parse_args(argv)
+def main() -> None:
+    """Entry point for add-fbc-contribution. Reads configuration from environment variables."""
+    # Required environment variables
+    data_dir = Path(tekton.require_env("DATA_DIR"))
+    data_path = tekton.require_env("DATA_PATH")
+    snapshot_path = tekton.require_env("SNAPSHOT_PATH")
+    pipeline_run_uid = tekton.require_env("PIPELINE_RUN_UID")
+    task_run_uid = tekton.require_env("TASK_RUN_UID")
+    results_dir_path = tekton.require_env("RESULTS_DIR_PATH")
+    task_git_url = tekton.require_env("TASK_GIT_URL")
+    task_git_revision = tekton.require_env("TASK_GIT_REVISION")
+    iib_service_account_secret = tekton.require_env("IIB_SERVICE_ACCOUNT_SECRET")
 
-    LOGGER.setLevel(logging.DEBUG if args.verbose else logging.INFO)
+    # Optional environment variables with defaults
+    max_batch_size = int(get_optional_env("MAX_BATCH_SIZE", "5"))
+    must_publish = get_optional_env("MUST_PUBLISH_INDEX_IMAGE", "false").lower() == "true"
+    must_overwrite = (
+        get_optional_env("MUST_OVERWRITE_FROM_INDEX_IMAGE", "false").lower() == "true"
+    )
+    max_retries = int(get_optional_env("MAX_RETRIES", "3"))
+    batch_retry_delay_seconds = int(get_optional_env("BATCH_RETRY_DELAY_SECONDS", "60"))
 
-    must_publish = args.must_publish_index_image.lower() == "true"
-    must_overwrite = args.must_overwrite_from_index_image.lower() == "true"
+    # Result file paths (optional)
+    request_results_file_result = get_optional_env("RESULT_REQUEST_RESULTS_FILE")
+    internal_request_results_file_result = get_optional_env(
+        "RESULT_INTERNAL_REQUEST_RESULTS_FILE"
+    )
+    build_timestamp_result = get_optional_env("RESULT_BUILD_TIMESTAMP")
 
     config = AddFBCContributionConfig(
-        snapshot_path=file_helpers.resolve_path_under_base(args.data_dir, args.snapshot_path),
-        data_path=file_helpers.resolve_path_under_base(args.data_dir, args.data_path),
-        data_dir=args.data_dir,
+        snapshot_path=file_helpers.resolve_path_under_base(data_dir, Path(snapshot_path)),
+        data_path=file_helpers.resolve_path_under_base(data_dir, Path(data_path)),
+        data_dir=data_dir,
         results_dir_path=file_helpers.resolve_path_under_base(
-            args.data_dir, args.results_dir_path
+            data_dir, Path(results_dir_path)
         ),
-        pipeline_run_uid=args.pipeline_run_uid,
-        task_run_uid=args.task_run_uid,
-        max_batch_size=args.max_batch_size,
+        pipeline_run_uid=pipeline_run_uid,
+        task_run_uid=task_run_uid,
+        max_batch_size=max_batch_size,
         must_publish_index_image=must_publish,
         must_overwrite_from_index_image=must_overwrite,
-        iib_service_account_secret=args.iib_service_account_secret,
-        max_retries=args.max_retries,
-        batch_retry_delay_seconds=args.batch_retry_delay_seconds,
-        task_git_url=args.task_git_url,
-        task_git_revision=args.task_git_revision,
+        iib_service_account_secret=iib_service_account_secret,
+        max_retries=max_retries,
+        batch_retry_delay_seconds=batch_retry_delay_seconds,
+        task_git_url=task_git_url,
+        task_git_revision=task_git_revision,
     )
 
-    results_file_rel = f"{args.results_dir_path}/internal-requests-results.json"
+    results_file_rel = f"{results_dir_path}/internal-requests-results.json"
     results_file = file_helpers.resolve_path_under_base(config.data_dir, results_file_rel)
     request_results_file = file_helpers.resolve_path_under_base(
         config.data_dir,
-        f"{args.pipeline_run_uid}/ir-{args.task_run_uid}-result.json",
+        f"{pipeline_run_uid}/ir-{task_run_uid}-result.json",
     )
 
-    if args.internal_request_results_file_result:
-        args.internal_request_results_file_result.write_text(
+    if internal_request_results_file_result:
+        Path(internal_request_results_file_result).write_text(
             results_file_rel, encoding="utf-8"
         )
 
-    if args.request_results_file_result:
-        args.request_results_file_result.write_text(
+    if request_results_file_result:
+        Path(request_results_file_result).write_text(
             str(request_results_file),
             encoding="utf-8",
         )
 
     results_data, timestamp = run(config)
 
-    if args.build_timestamp_result:
-        args.build_timestamp_result.write_text(timestamp, encoding="utf-8")
+    if build_timestamp_result:
+        Path(build_timestamp_result).write_text(timestamp, encoding="utf-8")
 
     config.results_dir_path.mkdir(parents=True, exist_ok=True)
     results_file.write_text(json.dumps(results_data) + "\n", encoding="utf-8")
 
-    LOGGER.info("Results file: %s", results_file)
-    LOGGER.info("Results:")
-    LOGGER.info(json.dumps(results_data, indent=2))
-
-    return 0
+    logger.info("Results file: %s", results_file)
+    logger.info("Results:")
+    logger.info(json.dumps(results_data, indent=2))
 
 
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    main()
