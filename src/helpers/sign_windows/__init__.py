@@ -8,4 +8,5 @@ from .sign_windows import (  # noqa: F401
     WINDOWS_SSH_KEY_MOUNT,
     main,
     run,
+    run_custom_signing,
 )

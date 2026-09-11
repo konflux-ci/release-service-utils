@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 import unittest.mock as mock
 
 import pytest
 from release_service_utils.helpers import skopeo
+from release_service_utils.helpers.skopeo import skopeo as skopeo_impl
 
 
 def _completed(
@@ -352,6 +354,30 @@ def test_copy_custom_retry_times() -> None:
     assert cmd[idx + 1] == "5"
 
 
+def test_copy_extra_args_are_inserted_before_transports() -> None:
+    """Additional copy flags are placed before the source and destination."""
+    with mock.patch(
+        "release_service_utils.helpers.skopeo.skopeo.subprocess.run",
+        return_value=_completed(),
+    ) as run_mock:
+        skopeo.copy(
+            "docker://img:v1",
+            "dir:/tmp/out",
+            extra_args=["--authfile", "/tmp/auth"],
+        )
+
+    assert run_mock.call_args[0][0] == [
+        "skopeo",
+        "copy",
+        "--retry-times",
+        "3",
+        "--authfile",
+        "/tmp/auth",
+        "docker://img:v1",
+        "dir:/tmp/out",
+    ]
+
+
 def test_copy_returns_completed_process() -> None:
     """The raw ``CompletedProcess`` is returned to the caller."""
     expected = _completed(stdout="copied successfully")
@@ -395,3 +421,83 @@ def test_copy_check_true_raises_on_failure() -> None:
     ):
         with pytest.raises(subprocess.CalledProcessError):
             skopeo.copy("docker://img:v1", "dir:/tmp/out", check=True)
+
+
+def test_copy_authenticated_directory_copy(tmp_path: Path) -> None:
+    """Authenticated copies obtain credentials and clean up the auth file."""
+    auth_path = tmp_path / "auth.json"
+
+    def fake_named_temporary_file(*args: object, **kwargs: object) -> mock.Mock:
+        auth_path.write_bytes(b"")
+        handle = mock.Mock()
+        handle.name = str(auth_path)
+        handle.__enter__ = mock.Mock(return_value=handle)
+        handle.__exit__ = mock.Mock(return_value=False)
+        return handle
+
+    with (
+        mock.patch.object(
+            skopeo_impl.tempfile,
+            "NamedTemporaryFile",
+            side_effect=fake_named_temporary_file,
+        ),
+        mock.patch.object(
+            skopeo_impl.subprocess,
+            "check_output",
+            return_value=b'{"auths": {}}',
+        ),
+        mock.patch.object(
+            skopeo_impl.subprocess, "run", return_value=_completed()
+        ) as run_mock,
+    ):
+        result = skopeo.copy(
+            "quay.io/org/image:tag",
+            tmp_path / "destination",
+            extra_args=["--all"],
+            check=True,
+            authenticated=True,
+        )
+
+    assert result.returncode == 0
+    assert not auth_path.exists()
+    assert run_mock.call_args[0][0] == [
+        "skopeo",
+        "copy",
+        "--retry-times",
+        "3",
+        "--authfile",
+        str(auth_path),
+        "--all",
+        "docker://quay.io/org/image:tag",
+        f"dir:{tmp_path / 'destination'}",
+    ]
+
+
+def test_copy_authenticated_cleans_auth_file_on_auth_failure(tmp_path: Path) -> None:
+    """Authenticated copies clean up credentials when authentication fails."""
+    auth_path = tmp_path / "auth.json"
+
+    def fake_named_temporary_file(*args: object, **kwargs: object) -> mock.Mock:
+        auth_path.write_bytes(b"")
+        handle = mock.Mock()
+        handle.name = str(auth_path)
+        handle.__enter__ = mock.Mock(return_value=handle)
+        handle.__exit__ = mock.Mock(return_value=False)
+        return handle
+
+    with (
+        mock.patch.object(
+            skopeo_impl.tempfile,
+            "NamedTemporaryFile",
+            side_effect=fake_named_temporary_file,
+        ),
+        mock.patch.object(
+            skopeo_impl.subprocess,
+            "check_output",
+            side_effect=RuntimeError("auth failed"),
+        ),
+        pytest.raises(RuntimeError, match="auth failed"),
+    ):
+        skopeo.copy("quay.io/org/image:tag", tmp_path / "destination", authenticated=True)
+
+    assert not auth_path.exists()

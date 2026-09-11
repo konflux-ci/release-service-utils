@@ -145,23 +145,8 @@ def _unpack_file_entries(
             shutil.move(str(archive_path), str(target_dir / archive_name))
         else:
             with tarfile.open(str(archive_path)) as tf:
-                _safe_extract_archive(tf, target_dir, archive_name)
+                oras_utils.safe_extract_archive(tf, target_dir, archive_name)
             archive_path.unlink()
-
-
-def _safe_extract_archive(tf: tarfile.TarFile, target_dir: Path, archive_name: str) -> None:
-    """Extract tar entries while preventing traversal and unsafe links/devices."""
-    target_real = target_dir.resolve()
-    for member in tf.getmembers():
-        member_path = target_dir / member.name
-        member_real = member_path.resolve()
-        if member_real != target_real and target_real not in member_real.parents:
-            raise RuntimeError(f"Archive {archive_name} contains unsafe path: {member.name}")
-        if member.issym() or member.islnk() or member.isdev():
-            raise RuntimeError(
-                f"Archive {archive_name} contains unsupported entry type: {member.name}"
-            )
-        tf.extract(member, path=str(target_dir), filter="data")
 
 
 def _verify_unpacked_content(directory: Path, os_label: str, component_name: str) -> None:

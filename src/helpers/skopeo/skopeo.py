@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tempfile
+from pathlib import Path
 
 _REPO_NOT_FOUND_RE = re.compile(r"name unknown|repository not found", re.IGNORECASE)
 
@@ -59,11 +61,42 @@ def is_repo_not_found(result: subprocess.CompletedProcess[str]) -> bool:
 
 def copy(
     source: str,
-    dest: str,
+    dest: str | Path,
     *,
     retry_times: int = 3,
+    extra_args: list[str] | None = None,
     check: bool = False,
+    authenticated: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``skopeo copy`` to copy an image between transports."""
-    cmd = ["skopeo", "copy", "--retry-times", str(retry_times), source, dest]
-    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+    """Run ``skopeo copy`` to copy an image between transports.
+
+    When *authenticated* is true, treat *source* as a registry pullspec and
+    *dest* as a local directory. Obtain credentials with ``select-oci-auth``
+    and remove the temporary auth file after the copy completes.
+    """
+    auth_file: Path | None = None
+    try:
+        if authenticated:
+            with tempfile.NamedTemporaryFile(mode="wb", delete=False) as auth_fp:
+                auth_file = Path(auth_fp.name)
+                auth_data = subprocess.check_output(
+                    ["select-oci-auth", source], stderr=subprocess.PIPE
+                )
+                auth_fp.write(auth_data)
+            source = f"docker://{source}"
+            dest = f"dir:{dest}"
+            extra_args = ["--authfile", str(auth_file), *(extra_args or [])]
+
+        cmd = [
+            "skopeo",
+            "copy",
+            "--retry-times",
+            str(retry_times),
+            *(extra_args or []),
+            source,
+            str(dest),
+        ]
+        return subprocess.run(cmd, capture_output=True, text=True, check=check)
+    finally:
+        if auth_file is not None:
+            auth_file.unlink(missing_ok=True)
