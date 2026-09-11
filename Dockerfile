@@ -186,6 +186,7 @@ RUN ln -s /home/src/tasks/managed/cleanup_workspace/cleanup_workspace.py /home/s
     ln -s /home/src/tasks/managed/direct_sign_index_image/direct_sign_index_image.py /home/scripts/python/tasks/managed/direct_sign_index_image.py && \
     ln -s /home/src/tasks/managed/request_advisory_creation/request_advisory_creation.py /home/scripts/python/tasks/managed/request_advisory_creation.py && \
     ln -s /home/src/tasks/managed/embargo_check/embargo_check.py /home/scripts/python/tasks/managed/embargo_check.py && \
+    ln -s /home/src/tasks/managed/set_advisory_severity/set_advisory_severity.py /home/scripts/python/tasks/managed/set_advisory_severity.py && \
     ln -s /home/src/tasks/managed/collect_registry_token_secret/collect_registry_token_secret.py /home/scripts/python/tasks/managed/collect_registry_token_secret.py && \
     ln -s /home/src/tasks/managed/collect_signing_params/collect_signing_params.py /home/scripts/python/tasks/managed/collect_signing_params.py && \
     ln -s /home/src/tasks/managed/collect_task_params/collect_task_params.py /home/scripts/python/tasks/managed/collect_task_params.py && \

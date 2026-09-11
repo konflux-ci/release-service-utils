@@ -144,6 +144,14 @@ def duration_to_seconds(duration: str) -> int:
     return (hours * 3600) + (minutes * 60) + seconds
 
 
+def seconds_to_duration(seconds: int) -> str:
+    """Format *seconds* as zero-padded XhYmZs (e.g. 3661 -> 01h01m01s)."""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    return f"{hours:02d}h{minutes:02d}m{secs:02d}s"
+
+
 def validate_timeouts(
     *,
     timeout: int,
