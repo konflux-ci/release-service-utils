@@ -4,6 +4,7 @@ __all__ = [
     "advisory_data",
     "authentication",
     "build_checksum_map",
+    "cdn",
     "charon_env",
     "compress_artifacts",
     "content_gateway",

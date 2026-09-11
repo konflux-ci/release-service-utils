@@ -180,3 +180,35 @@ def test_component_label_value_returns_none_when_label_missing() -> None:
 def test_component_label_value_returns_none_when_no_metadata() -> None:
     """Returns None when metadata is absent."""
     assert snapshot.component_label_value({}, "org.opencontainers.image.created") is None
+
+
+def test_strip_component_metadata_removes_metadata() -> None:
+    """Metadata is removed from every component."""
+    snap = {
+        "components": [
+            {"name": "comp1", "metadata": {"env_variables": {"FOO": "BAR"}}},
+            {"name": "comp2", "metadata": {"labels": [{"name": "k", "value": "v"}]}},
+        ]
+    }
+    result = snapshot.strip_component_metadata(snap)
+    for component in result["components"]:
+        assert "metadata" not in component
+
+
+def test_strip_component_metadata_no_metadata_is_unchanged() -> None:
+    """Components without metadata are left as-is."""
+    snap = {"components": [{"name": "comp1"}]}
+    result = snapshot.strip_component_metadata(snap)
+    assert result["components"][0] == {"name": "comp1"}
+
+
+def test_strip_component_metadata_empty_components() -> None:
+    """An empty components list is handled without error."""
+    assert snapshot.strip_component_metadata({"components": []}) == {"components": []}
+
+
+def test_strip_component_metadata_mutates_in_place() -> None:
+    """The same snapshot object is returned, mutated in place."""
+    snap = {"components": [{"metadata": {"a": 1}}]}
+    result = snapshot.strip_component_metadata(snap)
+    assert result is snap
