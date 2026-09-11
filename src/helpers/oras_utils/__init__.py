@@ -2,6 +2,7 @@
 
 from .oras_utils import (  # noqa: F401
     FLAT_ARTIFACT_CONFIG_MEDIA_TYPE,
+    archive_stem,
     extract_disk_image_files,
     oras_blob_fetch,
     oras_cp,
