@@ -354,6 +354,62 @@ def test_unpack_file_entries_tar_gz_passthrough_via_content_type(tmp_path: Path)
     assert not disk_image.exists()
 
 
+def test_unpack_file_entries_raw_binary_linux_passthrough(tmp_path: Path) -> None:
+    """A raw (non-tar) Linux binary is moved as-is, without tar extraction."""
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    raw = comp_dir / "roxctl-linux-amd64"
+    raw.write_bytes(b"\x7fELF raw executable, not a tar")
+
+    push_unsigned._unpack_file_entries(
+        [{"source": "/releases/roxctl-linux-amd64", "os": "linux", "arch": "amd64"}],
+        comp_dir,
+        comp_dir / "unsigned",
+    )
+    dest = comp_dir / "linux" / "amd64" / "roxctl-linux-amd64"
+    assert dest.exists()
+    assert dest.read_bytes() == b"\x7fELF raw executable, not a tar"
+    assert not raw.exists()
+
+
+def test_unpack_file_entries_raw_binary_windows_passthrough(tmp_path: Path) -> None:
+    """A raw (non-tar) Windows .exe is moved to unsigned/windows/ without extraction."""
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    unsigned_dir = comp_dir / "unsigned"
+    raw = comp_dir / "roxctl.exe"
+    raw.write_bytes(b"MZ raw windows executable")
+
+    push_unsigned._unpack_file_entries(
+        [{"source": "/releases/roxctl.exe", "os": "windows", "arch": "amd64"}],
+        comp_dir,
+        unsigned_dir,
+    )
+    dest = unsigned_dir / "windows" / "amd64" / "roxctl.exe"
+    assert dest.exists()
+    assert dest.read_bytes() == b"MZ raw windows executable"
+    assert not raw.exists()
+
+
+def test_unpack_file_entries_raw_binary_darwin_passthrough(tmp_path: Path) -> None:
+    """A raw (non-tar) macOS binary is moved into unsigned/macos/<arch> without extraction."""
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    unsigned_dir = comp_dir / "unsigned"
+    raw = comp_dir / "roxctl-darwin-arm64"
+    raw.write_bytes(b"\xcf\xfa\xed\xfe raw mach-o binary")
+
+    push_unsigned._unpack_file_entries(
+        [{"source": "/releases/roxctl-darwin-arm64", "os": "darwin", "arch": "arm64"}],
+        comp_dir,
+        unsigned_dir,
+    )
+    dest = unsigned_dir / "macos" / "arm64" / "roxctl-darwin-arm64"
+    assert dest.exists()
+    assert dest.read_bytes() == b"\xcf\xfa\xed\xfe raw mach-o binary"
+    assert not raw.exists()
+
+
 def test_unpack_file_entries_rejects_path_traversal(tmp_path: Path) -> None:
     """RuntimeError is raised when a tar entry contains an unsafe path traversal sequence."""
     comp_dir = tmp_path / "prod"

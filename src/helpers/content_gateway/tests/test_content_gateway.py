@@ -81,15 +81,57 @@ def test_windows_zip_filename_already_zip() -> None:
     assert content_gateway.windows_zip_filename("binary-amd64.zip") == "binary-amd64.zip"
 
 
-def test_windows_archive_basename_converts_windows_tar_gz() -> None:
-    """Windows archive basenames normalize tar.gz to zip for checksum lookup."""
-    out = content_gateway.windows_archive_basename("app.tar.gz", "windows")
-    assert out == "app.zip"
+def test_delivered_archive_basename_windows_tar_gz_to_zip() -> None:
+    """A Windows source that already names a tar.gz archive is rewritten to .zip."""
+    assert content_gateway.delivered_archive_basename("app.tar.gz", "windows") == "app.zip"
 
 
-def test_windows_archive_basename_skips_non_windows() -> None:
-    """Non-Windows operating systems keep the original basename."""
-    assert content_gateway.windows_archive_basename("app.tar.gz", "linux") == "app.tar.gz"
+def test_delivered_archive_basename_linux_archive_unchanged() -> None:
+    """A Linux source that already names an archive keeps its name."""
+    assert content_gateway.delivered_archive_basename("app.tar.gz", "linux") == "app.tar.gz"
+
+
+def test_delivered_archive_basename_linux_raw_binary_gets_tar_gz() -> None:
+    """A raw Linux binary with no archive suffix is delivered as .tar.gz."""
+    out = content_gateway.delivered_archive_basename("roxctl-linux-amd64", "linux")
+    assert out == "roxctl-linux-amd64.tar.gz"
+
+
+def test_delivered_archive_basename_darwin_raw_binary_gets_tar_gz() -> None:
+    """A raw macOS binary with no archive suffix is delivered as .tar.gz."""
+    out = content_gateway.delivered_archive_basename("roxctl-darwin-arm64", "darwin")
+    assert out == "roxctl-darwin-arm64.tar.gz"
+
+
+def test_delivered_archive_basename_windows_exe_gets_zip() -> None:
+    """A raw Windows .exe is delivered as a .zip archive (with .exe stripped)."""
+    out = content_gateway.delivered_archive_basename("roxctl-windows-amd64.exe", "windows")
+    assert out == "roxctl-windows-amd64.zip"
+
+
+def test_delivered_archive_basename_windows_raw_no_ext_gets_zip() -> None:
+    """A raw Windows binary with no extension is delivered as .zip."""
+    out = content_gateway.delivered_archive_basename("roxctl-windows-amd64", "windows")
+    assert out == "roxctl-windows-amd64.zip"
+
+
+def test_delivered_archive_basename_disk_image_unchanged() -> None:
+    """Disk images are delivered as-is and never gain an archive suffix."""
+    assert content_gateway.delivered_archive_basename("image.qcow2", "linux") == "image.qcow2"
+
+
+def test_delivered_archive_basename_is_idempotent() -> None:
+    """Re-applying the mapping to a normalized name is a no-op."""
+    linux = content_gateway.delivered_archive_basename("roxctl-linux-amd64", "linux")
+    assert content_gateway.delivered_archive_basename(linux, "linux") == linux
+    win = content_gateway.delivered_archive_basename("roxctl-windows-amd64.exe", "windows")
+    assert content_gateway.delivered_archive_basename(win, "windows") == win
+
+
+def test_delivered_archive_basename_strips_directory() -> None:
+    """A full source path is reduced to the delivered basename."""
+    out = content_gateway.delivered_archive_basename("/releases/roxctl-linux-amd64", "linux")
+    assert out == "roxctl-linux-amd64.tar.gz"
 
 
 def test_component_file_entries_empty_when_staged_not_dict() -> None:

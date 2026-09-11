@@ -91,11 +91,13 @@ def _unpack_file_entries(
 ) -> None:
     """Extract each archive from entries into its OS/arch subdirectory under unsigned_dir.
 
-    Files are moved directly (without unpacking) when either:
-    - *is_disk_image_component* is True (set when contentType: disk-image), or
+    Files are moved directly (without unpacking) when any of:
+    - *is_disk_image_component* is True (set when contentType: disk-image),
     - the filename has an unambiguous disk-image suffix (.qcow2, .iso, .iso.gz,
-      .raw.gz, .vhd.gz).
-    All other files are treated as tar archives and extracted.
+      .raw.gz, .vhd.gz), or
+    - the file is not a tar archive (e.g. a raw binary such as a bare .exe),
+      detected via tarfile.is_tarfile.
+    Everything else is treated as a tar archive and extracted.
     """
     for entry in entries:
         source = entry.get("source", "")
@@ -118,7 +120,11 @@ def _unpack_file_entries(
             continue
 
         target_dir.mkdir(parents=True, exist_ok=True)
-        if is_disk_image_component or disk_image_utils.is_disk_image_file(archive_name):
+        if (
+            is_disk_image_component
+            or disk_image_utils.is_disk_image_file(archive_name)
+            or not tarfile.is_tarfile(str(archive_path))
+        ):
             shutil.move(str(archive_path), str(target_dir / archive_name))
         else:
             with tarfile.open(str(archive_path)) as tf:
