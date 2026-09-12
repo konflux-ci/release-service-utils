@@ -6,7 +6,7 @@ FROM --platform=linux/amd64 registry.redhat.io/rhtas/cosign-rhel9:1.3.3-17733094
 
 # No --platform pin here (unlike cosign/ec-rhel9 above): we copy the roxctl binary
 # itself, not an arch-bundled blob, so this must resolve to the target build platform.
-FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.4-1 as roxctl
+FROM registry.redhat.io/advanced-cluster-security/rhacs-roxctl-rhel8:4.10.7-1 as roxctl
 
 FROM registry.access.redhat.com/ubi10/ubi:10.2-1788218897
 
