@@ -387,10 +387,10 @@ def test_resolve_expands_helper_import_to_dependent_task(
 ) -> None:
     """Helper-only diffs also consider ``tasks/*.py`` files that import that helper."""
     root = Path.cwd()
-    (root / "scripts" / "python" / "helpers").mkdir(parents=True)
-    (root / "scripts" / "python" / "tasks" / "internal").mkdir(parents=True)
-    (root / "scripts" / "python" / "helpers" / "file.py").write_text("#\n", encoding="utf-8")
-    (root / "scripts" / "python" / "tasks" / "internal" / "consumer.py").write_text(
+    (root / "src" / "helpers").mkdir(parents=True)
+    (root / "src" / "tasks" / "internal").mkdir(parents=True)
+    (root / "src" / "helpers" / "file.py").write_text("#\n", encoding="utf-8")
+    (root / "src" / "tasks" / "internal" / "consumer.py").write_text(
         "import file\n",
         encoding="utf-8",
     )
@@ -404,9 +404,9 @@ def test_resolve_expands_helper_import_to_dependent_task(
     monkeypatch.setattr(fc, "_collect_task_search_tokens", spy)
     _write_rpa(tmp_path, "e2e", "p: pipelines/managed/e2e/")
     with patch.object(fc, "_suites_from_catalog_script", return_value={"e2e"}):
-        fc.resolve(tmp_path, ["scripts/python/helpers/file.py"])
+        fc.resolve(tmp_path, ["src/helpers/file.py"])
     assert len(captured) == 1
-    assert "scripts/python/tasks/internal/consumer.py" in captured[0]
+    assert "src/tasks/internal/consumer.py" in captured[0]
 
 
 @pytest.mark.usefixtures("utils_repo_root")
