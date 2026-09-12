@@ -20,6 +20,7 @@ ARG GH_VERSION=2.82.1
 ARG SYFT_VERSION=1.19.0
 ARG KUBEARCHIVE_VERSION=1.17.3
 
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
         GO_ARCH="amd64"; \
@@ -51,7 +52,9 @@ RUN dnf install -y https://dl.fedoraproject.org/pub/epel/10/Everything/$(arch)/P
 COPY --from=oras /usr/bin/oras /usr/bin/oras
 COPY --from=oras /usr/local/bin/select-oci-auth /usr/local/bin/select-oci-auth
 COPY --from=oras /usr/local/bin/get-reference-base /usr/local/bin/get-reference-base
-RUN oras version
+RUN oras version && \
+    bash -n /usr/local/bin/select-oci-auth && \
+    bash -n /usr/local/bin/get-reference-base
 COPY --from=conforma-cli /usr/local/bin/ec_linux_*.gz /tmp/
 COPY --from=cosign /usr/local/bin/cosign-linux-*.gz /tmp/
 RUN ARCH=$(uname -m) && \

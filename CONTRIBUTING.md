@@ -140,6 +140,15 @@ This repository maintains a json schema for the data struct used in various scri
 
 If your change adds or removes a key to the data struct, the schema must be updated accordingly as part of your pull request.
 
+## Dockerfile
+
+When modifying the Dockerfile:
+
+- **curl `-f` flag**: All `curl` commands that download binaries must include `-f` (fail on HTTP errors). Without it, curl silently succeeds on 404/500 and can save an HTML error page as the "binary".
+- **Sanity checks**: Every binary installed in the Dockerfile (via curl download, multi-stage `COPY`, or gunzip) must have a post-install sanity check. This catches corrupt or wrong-architecture binaries at build time rather than in production.
+  - **Compiled binaries**: run `<binary> version`, `<binary> --version`, or `<binary> --help` — whichever the tool supports.
+  - **Shell scripts**: use `bash -n <path>` to syntax-check the script without executing it.
+
 ## Testing
 
 ### Running Tests Locally
