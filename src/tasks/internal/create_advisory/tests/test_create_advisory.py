@@ -446,7 +446,7 @@ def test_render_and_validate_advisory_yaml(tmp_path: Path) -> None:
         out_path.write_text(json.dumps(_valid_advisory_yaml_dict()), encoding="utf-8")
 
     with mock.patch(
-        f"{TASK}.create_advisory.apply_template.render_template_to_json_file",
+        f"{TASK}.create_advisory.render_template_to_json_file",
         side_effect=_fake_render,
     ):
         rel = create_advisory.create_advisory._render_and_validate_advisory_yaml(
@@ -477,7 +477,7 @@ def test_render_and_validate_schema_failure(tmp_path: Path) -> None:
         out_path.write_text(json.dumps({"spec": {"type": "WRONG"}}), encoding="utf-8")
 
     with mock.patch(
-        f"{TASK}.create_advisory.apply_template.render_template_to_json_file",
+        f"{TASK}.create_advisory.render_template_to_json_file",
         side_effect=_bad_render,
     ):
         with pytest.raises(ValueError, match="schema validation failed"):
@@ -1015,7 +1015,7 @@ def test_render_schema_failure_wrong_type_and_severity(tmp_path: Path) -> None:
         )
 
     with mock.patch(
-        f"{TASK}.create_advisory.apply_template.render_template_to_json_file",
+        f"{TASK}.create_advisory.render_template_to_json_file",
         side_effect=_bad_render,
     ):
         with pytest.raises(ValueError, match="schema validation failed"):
