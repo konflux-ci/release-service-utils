@@ -354,23 +354,31 @@ def oras_blob_fetch(
     )
 
 
-def oras_push(tag: str, directory: Path, subdirectory: str, component_name: str) -> str:
+def oras_push(
+    tag: str,
+    directory: Path,
+    subdirectory: str,
+    component_name: str,
+    *,
+    extra_args: list[str] | None = None,
+) -> str:
     """Push *subdirectory* inside *directory* to an OCI registry via oras.
 
     Runs ``oras push --annotation=quay.expires-after=1d <tag> <subdirectory>`` with
     *directory* as the working directory and returns the ``sha256:<hex>`` digest string.
 
+    *extra_args*, when provided, are inserted after ``push`` and before the
+    annotation flag (e.g. ``["--registry-config", "/path/to/auth.json"]``).
+
     Raises ``RuntimeError`` if the digest cannot be extracted from the oras output,
     which typically indicates a failed or incomplete push.
     """
+    cmd = ["oras", "push"]
+    if extra_args:
+        cmd.extend(extra_args)
+    cmd.extend(["--annotation=quay.expires-after=1d", tag, subdirectory])
     result = subprocess.check_output(
-        [
-            "oras",
-            "push",
-            "--annotation=quay.expires-after=1d",
-            tag,
-            subdirectory,
-        ],
+        cmd,
         cwd=str(directory),
         stderr=subprocess.STDOUT,
         text=True,
