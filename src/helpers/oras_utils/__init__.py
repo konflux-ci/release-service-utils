@@ -3,6 +3,8 @@
 from .oras_utils import (  # noqa: F401
     FLAT_ARTIFACT_CONFIG_MEDIA_TYPE,
     archive_stem,
+    copy_all_flat_artifact_files,
+    copy_all_layered_image_files,
     extract_disk_image_files,
     oras_blob_fetch,
     oras_cp,
