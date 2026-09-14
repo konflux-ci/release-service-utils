@@ -75,13 +75,23 @@ def _first_purl_content_type(data: dict[str, Any]) -> str:
 def _staged_files_by_component(
     snapshot: dict[str, Any],
 ) -> dict[str, list[dict[str, Any]]]:
-    """Build component-name → staged.files[] from the snapshot spec.
+    """Build component-name → staged.files[] (or files[]) from the snapshot spec.
 
-    apply-mapping substitutes ``{{ release_timestamp }}`` (and other template vars)
-    in the snapshot's components but does NOT write those substitutions back to the
-    data file. Reading staged.files from data.json would produce filenames like
-    ``foo-{{ release_timestamp }}-x86_64.iso`` which Jinja2 would then render as
-    empty, giving ``foo--x86_64.iso`` in the advisory.
+    ``staged`` only determines the Customer Portal (Pulp) destination for a
+    disk-image release, not whether the release has files at all: a component
+    delivered to the Content Gateway / Developer Portal only has no ``staged``
+    block and lists its files directly under the component's top-level
+    ``files[]`` instead. A component delivered to both destinations can
+    populate both arrays, in which case ``staged.files[]`` -- with its
+    authoritative published ``filename`` -- takes priority (see
+    ``content_gateway.disk_image_file_entries``).
+
+    Must read from the snapshot, not data.json: apply-mapping substitutes
+    ``{{ release_timestamp }}`` (and other template vars) in the snapshot's
+    ``staged.files[]`` entries but does NOT write those substitutions back to
+    the data file. Reading staged.files from data.json would produce filenames
+    like ``foo-{{ release_timestamp }}-x86_64.iso`` which Jinja2 would then
+    render as empty, giving ``foo--x86_64.iso`` in the advisory.
     """
     out: dict[str, list[dict[str, Any]]] = {}
     components = snapshot.get("components")
@@ -93,12 +103,7 @@ def _staged_files_by_component(
         name = component.get("name")
         if not isinstance(name, str) or not name:
             continue
-        staged = component.get("staged")
-        files = staged.get("files") if isinstance(staged, dict) else None
-        if not isinstance(files, list):
-            out[name] = []
-            continue
-        out[name] = [row for row in files if isinstance(row, dict)]
+        out[name] = content_gateway.disk_image_file_entries(component)
     return out
 
 
@@ -303,12 +308,17 @@ def _updated_disk_image_entries(
     cgw_base_url: str,
     cdn_base_url: str,
 ) -> list[dict[str, Any]]:
-    """Expand one advisory artifact row per snapshot staged file for a disk-image.
+    """Expand one advisory artifact row per snapshot file for a disk-image.
+
+    ``staged_files`` comes from ``_staged_files_by_component``, which reads
+    the component's ``staged.files[]`` (Customer Portal / CDN releases) when
+    present, falling back to the top-level ``files[]`` (CGW-only releases
+    with no ``staged`` block).
 
     Multiple files can share the same os+arch (e.g. ISO + QCOW2 both linux/x86_64),
     so iterating over advisory entries (one per os+arch) would produce malformed
     PURLs. Instead, use the first advisory entry as a metadata template and expand
-    it per staged file.
+    it per file.
     """
     component_name = str(component.get("name", ""))
     version_name = _component_version_name(component)
@@ -331,11 +341,11 @@ def _updated_disk_image_entries(
         return []
 
     # Fail loudly instead of silently leaving placeholder PURLs if the snapshot
-    # has no staged.files[] (e.g. snapshot/mapping mismatch).
+    # has no files[] or staged.files[] (e.g. snapshot/mapping mismatch).
     if not staged_files:
         msg = (
             f"disk-image component {component_name} has releaseNotes.content.artifacts "
-            "entries but no staged.files[] in the snapshot"
+            "entries but no files[] or staged.files[] in the snapshot"
         )
         raise ValueError(msg)
 
@@ -347,15 +357,15 @@ def _updated_disk_image_entries(
     )
     updated: list[dict[str, Any]] = []
     for staged_file in staged_files:
-        filename = staged_file.get("filename")
-        # Reject missing/empty values and the literal "null" string (JSON null mishandling).
-        if not isinstance(filename, str) or not filename or filename == "null":
+        # staged.files[] entries declare an explicit filename; files[] entries don't,
+        # so their filename is derived from source instead (see resolved_filename).
+        filename_basename = Path(content_gateway.resolved_filename(staged_file)).name
+        if not filename_basename:
             msg = (
-                f"staged.files[].filename is required for disk-image "
-                f"component {component_name}"
+                f"staged.files[]/files[] entry is missing a usable filename "
+                f"(filename or source) for disk-image component {component_name}"
             )
             raise ValueError(msg)
-        filename_basename = Path(filename).name
         # Disk-image architecture is encoded in the filename; os defaults to linux.
         architecture = disk_image_utils.architecture_from_filename(filename_basename)
         checksum = _checksum_for_file(

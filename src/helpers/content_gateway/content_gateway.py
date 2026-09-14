@@ -42,6 +42,55 @@ def component_file_entries(component: dict[str, Any]) -> list[dict[str, Any]]:
     return [row for row in staged_files if isinstance(row, dict)]
 
 
+def disk_image_file_entries(component: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return disk-image file rows from ``staged.files[]``, falling back to ``files[]``.
+
+    Unlike ``component_file_entries`` (files-first, used for binary/generic
+    content), disk-image components can populate both arrays on the same
+    component: ``staged.files[]`` for the Customer Portal (Pulp), with an
+    explicit published ``filename`` (e.g. after tag-template substitution),
+    and top-level ``files[]`` for the Content Gateway / Developer Portal.
+    When both are present, ``staged.files[]`` carries the authoritative
+    published filename and must take priority; ``files[]`` is only used as a
+    fallback for CGW-only releases that have no ``staged`` block at all.
+    """
+    staged = component.get("staged")
+    if isinstance(staged, dict):
+        staged_files = staged.get("files")
+        if isinstance(staged_files, list) and staged_files:
+            return [row for row in staged_files if isinstance(row, dict)]
+    files = component.get("files")
+    if isinstance(files, list):
+        return [row for row in files if isinstance(row, dict)]
+    return []
+
+
+def resolved_filename(entry: dict[str, Any]) -> str:
+    """Return a file entry's published filename.
+
+    ``staged.files[]`` entries declare an explicit ``filename`` (which can
+    differ from ``source``, e.g. after tag-template substitution). Top-level
+    ``files[]`` entries have no ``filename`` field at all -- the published
+    name is always the basename of ``source``.
+
+    Only entries with no ``filename`` key fall back to deriving a name from
+    ``source``. An explicit but invalid ``filename`` (missing, empty, or the
+    literal ``"null"`` string) is rejected instead of silently substituting
+    the source basename, so malformed staged data still fails loudly rather
+    than publishing under the wrong name. Returns ``""`` when no usable name
+    can be resolved.
+    """
+    if "filename" in entry:
+        filename = entry.get("filename")
+        if isinstance(filename, str) and filename and filename != "null":
+            return filename
+        return ""
+    source = entry.get("source")
+    if isinstance(source, str) and source:
+        return Path(source).name
+    return ""
+
+
 def filenames_for_binary_or_generic(
     component: dict[str, Any],
     *,
