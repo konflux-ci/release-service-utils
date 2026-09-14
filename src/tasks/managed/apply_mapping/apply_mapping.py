@@ -95,6 +95,12 @@ def _skopeo_list_repo_tags(repo: str) -> list[str]:
     repository, returning ``[]`` instead of raising, so ``{{ incrementer }}``
     and ``{{ component-incrementer }}`` can still resolve to their starting
     value.
+
+    When ``list-tags`` succeeds but returns an empty tag list, the repo is
+    verified via ``skopeo inspect``. An existing repo with zero tags likely
+    indicates a transient registry error, and silently falling back to
+    increment 1 could overwrite existing tags, so a ``CheckStepError`` is
+    raised instead.
     """
     result = skopeo.list_tags(repo)
     if result.returncode != 0:
@@ -103,7 +109,32 @@ def _skopeo_list_repo_tags(repo: str) -> list[str]:
         raise RuntimeError(
             f"skopeo list-tags failed for {repo}: {(result.stderr or '').strip()}"
         )
-    return json.loads(result.stdout).get("Tags") or []
+    tags = json.loads(result.stdout).get("Tags")
+
+    if tags is None:
+        cause = RuntimeError(
+            f"skopeo list-tags returned invalid response (missing Tags key) for {repo}"
+        )
+        raise tekton.CheckStepError("listing repository tags", cause) from cause
+
+    if not tags:
+        inspect_result = skopeo.inspect(repo, no_tags=True, raw=True)
+        if inspect_result.returncode == 0:
+            cause = RuntimeError(
+                f"Repository {repo} exists but skopeo list-tags returned an empty "
+                f"tag list. This may indicate a transient registry error. Failing "
+                f"to prevent overwriting existing tags by falling back to increment 1."
+            )
+            raise tekton.CheckStepError("listing repository tags", cause) from cause
+        if not skopeo.is_repo_not_found(inspect_result):
+            cause = RuntimeError(
+                f"skopeo inspect failed for {repo} and the error is not a "
+                f"'repository not found': {(inspect_result.stderr or '').strip()}"
+            )
+            raise tekton.CheckStepError("listing repository tags", cause) from cause
+        return []
+
+    return tags
 
 
 def _inspect_json(inspect_fn: InspectFn, ref: str, **kwargs: Any) -> dict:
