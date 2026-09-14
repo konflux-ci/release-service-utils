@@ -10,11 +10,13 @@ configuration repositories, creating an MR for human review.
   ``git_author_name``, ``git_author_email``.
 * Clones ``--repo`` at ``--ref``, rebases on ``--upstream-repo``, applies path
   seeds and YAML replacements (``yq`` for key lookup), then commits or reuses an MR.
+* Reads task inputs from CLI flags, falling back to environment variables.
 * Writes ``RESULT_FILE_UPDATES_*`` and internal-request name results.
 * After a valid run with result env vars, almost always exits ``0``; failures use
   ``RESULT_FILE_UPDATES_STATE``. Invalid YAML on a replacement target exits ``1``.
   Bad CLI flags exit before result handling (``1``; argparse uses ``2`` for
-  malformed argv).
+  malformed argv). Missing required task env vars (when flags are omitted)
+  write Failed state and exit ``0``.
 
 Pass ``gitlab_client`` to ``run_file_updates`` to inject a client in unit tests.
 Catalog Tekton tests mock ``git`` via ``tests/mocks/git`` on ``PATH``.
@@ -50,6 +52,20 @@ FILE_UPDATES_SECRET_MOUNT_ENV = "FILE_UPDATES_SECRET_MOUNT"
 _REPLACEMENT_EXPRESSION = re.compile(r"^\|([^|\n]*)\|([^|\n]*)\|$")
 
 
+@dataclass(frozen=True)
+class FileUpdatesConfig:
+    """Task inputs from CLI flags or the process environment."""
+
+    upstream_repo: str
+    repo: str
+    ref: str
+    paths: str
+    component_group: str
+    internal_request_pipeline_run_name: str
+    internal_request_task_run_name: str
+    temp_dir: Path
+
+
 def _usage_text() -> str:
     """Return the short usage summary printed to stderr on bad CLI usage."""
     return (
@@ -60,7 +76,11 @@ def _usage_text() -> str:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    """Parse required CLI flags; help or missing values exit ``1`` (extras exit ``2``)."""
+    """Parse CLI flags; help or missing values exit ``1`` (extras exit ``2``).
+
+    An empty *argv* leaves flag values unset so ``load_config_from_env`` can
+    fall back to environment variables.
+    """
     p = argparse.ArgumentParser(prog=PROG, add_help=False, usage=argparse.SUPPRESS)
     p.add_argument("-h", "--help", action="store_true")
     p.add_argument("--upstream-repo", metavar="REPO")
@@ -71,10 +91,13 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--internal-request-pipeline-run-name", metavar="NAME")
     p.add_argument("--internal-request-task-run-name", metavar="NAME")
     p.add_argument("--temp-dir", metavar="DIR")
-    ns = p.parse_args(argv or [])
+    supplied = list(argv or [])
+    ns = p.parse_args(supplied)
     if ns.help:
         print(_usage_text(), file=sys.stderr, end="")
         raise SystemExit(1)
+    if not supplied:
+        return ns
     required = (
         "upstream_repo",
         "repo",
@@ -88,6 +111,50 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         print(_usage_text(), file=sys.stderr, end="")
         raise SystemExit(1)
     return ns
+
+
+def load_config_from_env(args: argparse.Namespace | None = None) -> FileUpdatesConfig:
+    """Load task inputs from CLI args, falling back to environment variables.
+
+    Missing or blank required values raise ``tekton.CheckStepError`` so
+    ``main`` can write a failed Tekton result instead of exiting the process.
+    """
+    fields = (
+        ("upstream_repo", "UPSTREAM_REPO"),
+        ("repo", "REPO"),
+        ("ref", "REF"),
+        ("paths", "PATHS"),
+        ("component_group", "COMPONENT_GROUP"),
+        ("internal_request_pipeline_run_name", "INTERNAL_REQUEST_PIPELINE_RUN_NAME"),
+        ("internal_request_task_run_name", "INTERNAL_REQUEST_TASK_RUN_NAME"),
+    )
+    values: dict[str, str] = {}
+    for attr, env_name in fields:
+        cli = getattr(args, attr, None) if args is not None else None
+        if cli is not None and str(cli).strip():
+            values[env_name] = str(cli).strip()
+            continue
+        try:
+            values[env_name] = tekton.require_env(env_name)
+        except SystemExit as e:
+            raise tekton.CheckStepError(
+                "loading task configuration",
+                ValueError(f"{env_name} must be set"),
+            ) from e
+    if args is not None and args.temp_dir:
+        temp_dir = Path(args.temp_dir)
+    else:
+        temp_dir = os.environ.get("TEMP_DIR") or os.environ.get("TEMP") or "/tmp/file-updates"
+    return FileUpdatesConfig(
+        upstream_repo=values["UPSTREAM_REPO"],
+        repo=values["REPO"],
+        ref=values["REF"],
+        paths=values["PATHS"],
+        component_group=values["COMPONENT_GROUP"],
+        internal_request_pipeline_run_name=values["INTERNAL_REQUEST_PIPELINE_RUN_NAME"],
+        internal_request_task_run_name=values["INTERNAL_REQUEST_TASK_RUN_NAME"],
+        temp_dir=Path(temp_dir),
+    )
 
 
 def load_file_updates_secrets(mount: Path) -> dict[str, str]:
@@ -273,6 +340,21 @@ class PathProcessingState:
     diff_path: Path | None = None
     replacements_performed: int = 0
     key_not_found: bool = False
+
+
+def normalize_gitlab_url(gitlab_host: str) -> str:
+    """Return a python-gitlab URL, adding ``https://`` when *gitlab_host* has no scheme.
+
+    Production secrets store a hostname (e.g. ``gitlab.cee.redhat.com``). python-gitlab
+    expects a full URL, so hostname-only values fail before an MR can be found or
+    created. Already-complete URLs are returned unchanged.
+    """
+    host = gitlab_host.strip()
+    if not host:
+        raise ValueError("gitlab_host is required")
+    if "://" in host:
+        return host
+    return f"https://{host}"
 
 
 def configure_git_environment(secrets: dict[str, str]) -> str:
@@ -620,7 +702,7 @@ def run_file_updates(
 
     token = configure_git_environment(secrets)
     if gitlab_client is None:
-        gitlab_client = vcs_gitlab.client(secrets["gitlab_host"], token)
+        gitlab_client = vcs_gitlab.client(normalize_gitlab_url(secrets["gitlab_host"]), token)
     git_functions_init(secrets["git_author_name"], secrets["git_author_email"], token)
 
     update_paths_file, paths_data = write_paths_manifest(paths_json, temp_dir)
@@ -661,12 +743,6 @@ def main(argv: list[str] | None = None) -> int:
         code = e.code
         return code if isinstance(code, int) else 1
 
-    temp_dir = (
-        Path(args.temp_dir)
-        if args.temp_dir
-        else Path(os.environ.get("TEMP", "/tmp/file-updates"))
-    )
-
     (
         info_path,
         state_path,
@@ -679,23 +755,23 @@ def main(argv: list[str] | None = None) -> int:
         "RESULT_INTERNAL_REQUEST_TASK_RUN_NAME",
     )
 
-    ir_pr_path.write_text(args.internal_request_pipeline_run_name, encoding="utf-8")
-    ir_tr_path.write_text(args.internal_request_task_run_name, encoding="utf-8")
-
     mount = file.path_from_env_variable(
         FILE_UPDATES_SECRET_MOUNT_ENV, "/mnt/file-updates-secret"
     )
-    program = Path(raw_argv[0]).name
+    program = Path(raw_argv[0]).name if raw_argv else PROG
 
     try:
+        config = load_config_from_env(args)
+        ir_pr_path.write_text(config.internal_request_pipeline_run_name, encoding="utf-8")
+        ir_tr_path.write_text(config.internal_request_task_run_name, encoding="utf-8")
         secrets = load_file_updates_secrets(mount)
         info_body, state_or_error, exit_code = run_file_updates(
-            upstream_repo=args.upstream_repo,
-            repo=args.repo,
-            revision=args.ref,
-            paths_json=args.paths,
-            component_group=args.component_group,
-            temp_dir=temp_dir,
+            upstream_repo=config.upstream_repo,
+            repo=config.repo,
+            revision=config.ref,
+            paths_json=config.paths,
+            component_group=config.component_group,
+            temp_dir=config.temp_dir,
             secrets=secrets,
         )
     except tekton.CheckStepError as e:
