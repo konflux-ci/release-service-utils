@@ -114,6 +114,41 @@ def safe_extract_archive(tf: tarfile.TarFile, target_dir: Path, archive_name: st
         tf.extract(member, path=str(target_dir), filter="data")
 
 
+def copy_all_flat_artifact_files(manifest: dict, image_dir: Path, dest: Path) -> None:
+    """Copy all blobs from a flat ORAS artifact's layers into *dest*."""
+    dest_real = dest.resolve()
+    for layer in manifest.get("layers", []):
+        title = (layer.get("annotations") or {}).get("org.opencontainers.image.title")
+        if not title:
+            continue
+        digest = layer.get("digest", "")
+        if not digest:
+            continue
+        normalized = title.lstrip("/")
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        if not normalized or ".." in normalized.split("/"):
+            raise RuntimeError(f"ORAS blob has unsafe title: {title}")
+        target = (dest / normalized).resolve()
+        if dest_real not in target.parents and target != dest_real:
+            raise RuntimeError(f"ORAS blob has unsafe title: {title}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        blob_path = image_dir / digest.removeprefix("sha256:")
+        if blob_path.is_file():
+            shutil.copy2(str(blob_path), str(target))
+
+
+def copy_all_layered_image_files(manifest: dict, image_dir: Path, dest: Path) -> None:
+    """Copy all files from a standard container image's tar layers."""
+    for layer in manifest.get("layers", []):
+        digest = layer.get("digest", "")
+        layer_path = image_dir / digest.removeprefix("sha256:")
+        if not layer_path.exists():
+            continue
+        with tarfile.open(str(layer_path)) as tf:
+            safe_extract_archive(tf, dest, layer_path.name)
+
+
 def oras_login(registry: str, username: str, password: str) -> None:
     """Log in to an OCI registry via oras using username/password credentials.
 
@@ -354,23 +389,31 @@ def oras_blob_fetch(
     )
 
 
-def oras_push(tag: str, directory: Path, subdirectory: str, component_name: str) -> str:
+def oras_push(
+    tag: str,
+    directory: Path,
+    subdirectory: str,
+    component_name: str,
+    *,
+    extra_args: list[str] | None = None,
+) -> str:
     """Push *subdirectory* inside *directory* to an OCI registry via oras.
 
     Runs ``oras push --annotation=quay.expires-after=1d <tag> <subdirectory>`` with
     *directory* as the working directory and returns the ``sha256:<hex>`` digest string.
 
+    *extra_args*, when provided, are inserted after ``push`` and before the
+    annotation flag (e.g. ``["--registry-config", "/path/to/auth.json"]``).
+
     Raises ``RuntimeError`` if the digest cannot be extracted from the oras output,
     which typically indicates a failed or incomplete push.
     """
+    cmd = ["oras", "push"]
+    if extra_args:
+        cmd.extend(extra_args)
+    cmd.extend(["--annotation=quay.expires-after=1d", tag, subdirectory])
     result = subprocess.check_output(
-        [
-            "oras",
-            "push",
-            "--annotation=quay.expires-after=1d",
-            tag,
-            subdirectory,
-        ],
+        cmd,
         cwd=str(directory),
         stderr=subprocess.STDOUT,
         text=True,
