@@ -38,7 +38,6 @@ from .process_file_updates import (  # noqa: F401
     FileUpdatesConfig,
     parse_args,
     load_config_from_env,
-    normalize_gitlab_url,
     configure_git_environment,
     write_paths_manifest,
     sparse_dirs_from_paths,
