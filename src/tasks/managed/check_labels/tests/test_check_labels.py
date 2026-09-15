@@ -108,6 +108,18 @@ def test_get_label_value_no_labels_key() -> None:
     assert check_labels.get_label_value(comp, "name") is None
 
 
+def test_get_label_value_present_but_empty() -> None:
+    """Return an empty string when the label is present with an empty value."""
+    comp = _make_component(labels=[_name_label("")])
+    assert check_labels.get_label_value(comp, "name") == ""
+
+
+def test_get_label_value_present_but_whitespace() -> None:
+    """Return an empty string when the label value is whitespace-only."""
+    comp = _make_component(labels=[_name_label("   ")])
+    assert check_labels.get_label_value(comp, "name") == ""
+
+
 # --- is_image_media_type ---
 
 
@@ -193,6 +205,59 @@ def test_no_cpe_label_skips(tmp_path: Path, caplog: pytest.LogCaptureFixture) ->
     with caplog.at_level(logging.INFO, logger="release"):
         check_labels._check_labels(snap, data, enforce=True)
     assert "missing the 'cpe' label" in caplog.text
+
+
+def test_empty_cpe_label_enforce(tmp_path: Path) -> None:
+    """Fail when the CPE label is present but set to an empty string."""
+    snap = tmp_path / "snapshot.json"
+    data = tmp_path / "data.json"
+    _write_snapshot(
+        snap,
+        [
+            _make_component(
+                labels=[
+                    _name_label("openshift-gitops-1/gitops-rhel8-operator"),
+                    _cpe_label(""),
+                ],
+                repositories=[
+                    {
+                        "rh-registry-repo": "registry.redhat.io/openshift-gitops-1"
+                        "/gitops-rhel8-operator"
+                    }
+                ],
+            )
+        ],
+    )
+    _write_data(data)
+    with pytest.raises(check_labels.LabelValidationError, match="empty value"):
+        check_labels._check_labels(snap, data, enforce=True)
+
+
+def test_empty_cpe_label_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Warn but succeed when the CPE label is empty and enforce is False."""
+    snap = tmp_path / "snapshot.json"
+    data = tmp_path / "data.json"
+    _write_snapshot(
+        snap,
+        [
+            _make_component(
+                labels=[
+                    _name_label("openshift-gitops-1/gitops-rhel8-operator"),
+                    _cpe_label(""),
+                ],
+                repositories=[
+                    {
+                        "rh-registry-repo": "registry.redhat.io/openshift-gitops-1"
+                        "/gitops-rhel8-operator"
+                    }
+                ],
+            )
+        ],
+    )
+    _write_data(data)
+    with caplog.at_level(logging.WARNING, logger="release"):
+        check_labels._check_labels(snap, data, enforce=False)
+    assert "'cpe' label is set to an empty value" in caplog.text
 
 
 # --- check_labels (name label failures) ---
