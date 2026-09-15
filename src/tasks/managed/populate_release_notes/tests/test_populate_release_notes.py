@@ -793,6 +793,79 @@ def test_disk_image_aarch64_arch() -> None:
     assert data["releaseNotes"]["content"]["artifacts"][0]["architecture"] == "aarch64"
 
 
+def test_disk_image_content_gateway_only_no_staged() -> None:
+    """CGW-only disk-image (no staged block) still gets an artifact entry.
+
+    ``staged`` only determines the Customer Portal (Pulp) destination; a
+    disk-image delivered to the Content Gateway / Developer Portal only has
+    no ``staged`` block and lists its files under the mapping component's
+    top-level ``files[]`` instead. Regression test for a bug where this
+    component was silently dropped from the advisory content.
+
+    ``files[]`` entries have no ``filename`` field (unlike ``staged.files[]``);
+    the published filename is derived from the basename of ``source``.
+    """
+    data = _default_data(
+        mapping={
+            "components": [
+                {
+                    "name": "comp",
+                    "contentGateway": {"contentType": "disk-image"},
+                    "files": [{"source": "images/image-x86_64.qcow2"}],
+                }
+            ]
+        }
+    )
+    snapshot = _default_snapshot([{"name": "comp", "containerImage": "r@sha256:a"}])
+
+    populate_release_notes.populate_artifacts(data, snapshot)
+
+    artifacts = data["releaseNotes"]["content"]["artifacts"]
+    assert len(artifacts) == 1
+    assert artifacts[0]["architecture"] == "x86_64"
+    assert artifacts[0]["os"] == "linux"
+    assert artifacts[0]["purl"] == "placeholder"
+
+
+def test_disk_image_prefers_staged_files_when_both_present() -> None:
+    """A dual-delivery disk-image (both files[] and staged.files[]) uses staged.files[].
+
+    Regression test: components delivered to both the Content Gateway
+    (top-level files[], untemplated source) and the Customer Portal
+    (staged.files[], with the authoritative templated published filename)
+    must resolve the architecture from the staged/published filename, not
+    from the untemplated top-level files[] source.
+    """
+    data = _default_data(
+        mapping={
+            "components": [
+                {
+                    "name": "comp",
+                    "contentGateway": {"contentType": "disk-image"},
+                    "files": [{"source": "images/image.qcow2"}],
+                    "staged": {
+                        "version": "1.5",
+                        "files": [
+                            {
+                                "source": "images/image.qcow2",
+                                "filename": "image-1.5-x86_64.qcow2",
+                            },
+                        ],
+                    },
+                }
+            ]
+        }
+    )
+    snapshot = _default_snapshot([{"name": "comp", "containerImage": "r@sha256:a"}])
+
+    populate_release_notes.populate_artifacts(data, snapshot)
+
+    artifacts = data["releaseNotes"]["content"]["artifacts"]
+    assert len(artifacts) == 1
+    assert artifacts[0]["architecture"] == "x86_64"
+    assert artifacts[0]["os"] == "linux"
+
+
 def test_rpms() -> None:
     """RPM entries with signing key, SBOM and attestation URLs."""
     data = _default_data(
