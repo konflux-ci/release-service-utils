@@ -20,6 +20,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3 import Retry
 
+from release_service_utils.helpers import retry as retry_helper
+
 MAX_429_ATTEMPTS = 5
 MAX_404_ATTEMPTS = 3
 BASE_SLEEP_TIME_SECONDS = 1
@@ -129,3 +131,33 @@ def get_text(
 
         r.raise_for_status()
         return r.text
+
+
+def request_with_retry(
+    session: requests.Session,
+    *,
+    method: str,
+    url: str,
+    json: Any = None,
+    max_attempts: int = 1,
+    retry_on: type[BaseException] | tuple[type[BaseException], ...] = (
+        requests.exceptions.ConnectionError
+    ),
+) -> requests.Response:
+    """Perform a request on *session*, retrying transient failures.
+
+    Unlike ``get_retry_session``, which retries based on HTTP status codes via
+    a urllib3 adapter, this retries exceptions raised before a response is
+    received (for example a connection reset) using exponential backoff.
+    Callers are responsible for checking the returned response's status
+    themselves; non-2xx responses are returned as-is and are not retried.
+    """
+
+    def _do_request() -> requests.Response:
+        return session.request(method=method.upper(), url=url, json=json)
+
+    return retry_helper.retry_with_exponential_backoff(
+        _do_request,
+        max_attempts=max_attempts,
+        retry_on=retry_on,
+    )

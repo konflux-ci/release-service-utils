@@ -29,7 +29,7 @@ import hashlib
 import logging
 import requests
 from requests.auth import HTTPBasicAuth
-from utils import cgw_idempotency
+from release_service_utils.helpers.content_gateway import cgw_idempotency
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 

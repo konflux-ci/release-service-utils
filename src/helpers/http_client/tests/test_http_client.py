@@ -239,3 +239,62 @@ def test_get_text_cert_on_session() -> None:
     ):
         assert http_client.get_text("https://u/", cert=cert) == "ok"
     assert session.cert == cert
+
+
+def test_request_with_retry_retries_connection_error_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient connection failure is retried until the request succeeds."""
+    monkeypatch.setattr("time.sleep", lambda _: None)
+
+    session = mock.Mock()
+    response = mock.Mock()
+    session.request.side_effect = [
+        requests.exceptions.ConnectionError("Connection aborted."),
+        requests.exceptions.ConnectionError("Connection aborted."),
+        response,
+    ]
+
+    result = http_client.request_with_retry(
+        session,
+        method="get",
+        url="https://e/x",
+        max_attempts=3,
+        retry_on=requests.exceptions.ConnectionError,
+    )
+
+    assert result is response
+    assert session.request.call_count == 3
+    session.request.assert_called_with(method="GET", url="https://e/x", json=None)
+
+
+def test_request_with_retry_raises_after_exhausting_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once *max_attempts* is reached, the last matching exception propagates."""
+    monkeypatch.setattr("time.sleep", lambda _: None)
+
+    session = mock.Mock()
+    session.request.side_effect = requests.exceptions.ConnectionError("Connection aborted.")
+
+    with pytest.raises(requests.exceptions.ConnectionError):
+        http_client.request_with_retry(
+            session,
+            method="get",
+            url="https://e/x",
+            max_attempts=3,
+            retry_on=requests.exceptions.ConnectionError,
+        )
+
+    assert session.request.call_count == 3
+
+
+def test_request_with_retry_default_single_attempt() -> None:
+    """With the default *max_attempts*, a failure is not retried."""
+    session = mock.Mock()
+    session.request.side_effect = requests.exceptions.ConnectionError("Connection aborted.")
+
+    with pytest.raises(requests.exceptions.ConnectionError):
+        http_client.request_with_retry(session, method="post", url="https://e/x")
+
+    assert session.request.call_count == 1
