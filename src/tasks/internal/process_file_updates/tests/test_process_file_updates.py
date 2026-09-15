@@ -929,7 +929,7 @@ def test_main_rejects_unsafe_path_entry(
             return_value="t",
         ),
         mock.patch.object(process_file_updates.process_file_updates, "git_functions_init"),
-        mock.patch.object(process_file_updates.process_file_updates.gitlab, "Gitlab"),
+        mock.patch.object(process_file_updates.process_file_updates.vcs_gitlab, "client"),
         mock.patch.object(
             process_file_updates.process_file_updates, "prepare_repository", return_value=repo
         ),
@@ -1477,7 +1477,9 @@ def test_run_file_updates_builds_gitlab_client_when_not_provided(tmp_path: Path)
             return_value="t",
         ),
         mock.patch.object(
-            process_file_updates.process_file_updates.gitlab, "Gitlab", return_value=mock_gl
+            process_file_updates.process_file_updates.vcs_gitlab,
+            "client",
+            return_value=mock_gl,
         ) as mk,
         mock.patch.object(process_file_updates.process_file_updates, "git_functions_init"),
         mock.patch.object(
@@ -1505,7 +1507,7 @@ def test_run_file_updates_builds_gitlab_client_when_not_provided(tmp_path: Path)
             temp_dir=tmp_path,
             secrets=secrets,
         )
-    mk.assert_called_once_with("gitlab.example.com", private_token="t")
+    mk.assert_called_once_with("gitlab.example.com", "t")
 
 
 def test_apply_replacements_for_entry_skips_empty_replacements(
