@@ -14,7 +14,6 @@ from .filter_already_released_advisory_rpms import (  # noqa: F401
     LoadedContext,
     ResultPaths,
     RpmEntry,
-    RpmNevra,
     build_rpm_entries,
     create_internal_request,
     determine_environment,
@@ -24,10 +23,8 @@ from .filter_already_released_advisory_rpms import (  # noqa: F401
     filter_snapshot,
     load_and_validate,
     main,
-    make_pulp_client,
     pull_filter_results,
     run,
-    should_exclude_file,
     submit_advisory_filter,
     validate_pulp_digests,
 )
