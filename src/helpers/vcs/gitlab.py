@@ -9,12 +9,13 @@ import os
 import stat
 import tempfile
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from gitlab import Gitlab
+from gitlab.exceptions import GitlabConnectionError, GitlabError
 
 from release_service_utils.helpers import authentication
 from release_service_utils.helpers import retry
@@ -25,10 +26,41 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BRANCH = "main"
 _WAIT_MERGE_MAX_ATTEMPTS = 64
+_DEFAULT_GITLAB_REQUEST_TIMEOUT_SECONDS = 60.0
 
 
 class _MergeRequestNotMerged(Exception):
     """MR refresh succeeded but the merge has not completed yet."""
+
+
+class _MergeRequestNotFound(Exception):
+    """No open merge request matched the poll criteria yet."""
+
+
+class _TransientGitlabPollError(Exception):
+    """Transient GitLab error during merge-request polling."""
+
+
+_TRANSIENT_GITLAB_LOOKUP_CODES = frozenset({429, 500, 502, 503, 504})
+
+
+def is_transient_gitlab_error(exc: BaseException) -> bool:
+    """Return True when *exc* is a retryable GitLab API failure."""
+    if isinstance(exc, GitlabConnectionError):
+        return True
+    if isinstance(exc, GitlabError):
+        code = getattr(exc, "response_code", None)
+        return code in _TRANSIENT_GITLAB_LOOKUP_CODES
+    return False
+
+
+def is_insufficient_scope_error(exc: BaseException) -> bool:
+    """Return True when *exc* is a GitLab 403 from missing PAT API scopes."""
+    if not isinstance(exc, GitlabError):
+        return False
+    if getattr(exc, "response_code", None) != 403:
+        return False
+    return "insufficient_scope" in str(exc).lower()
 
 
 def _validate_positive_finite(name: str, value: float) -> None:
@@ -40,6 +72,62 @@ def _validate_positive_finite(name: str, value: float) -> None:
 def _merge_request_display_url(merge_request: Any) -> str:
     """Return a log- and error-friendly URL for *merge_request*."""
     return getattr(merge_request, "web_url", None) or str(getattr(merge_request, "iid", "?"))
+
+
+def _poll_remaining_seconds(
+    deadline: float,
+    *,
+    on_elapsed: Callable[[], None] | None = None,
+) -> float:
+    """Return seconds until *deadline*, calling *on_elapsed* when it has passed."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        if on_elapsed is not None:
+            on_elapsed()
+        return 0.0
+    return remaining
+
+
+def _deadline_aware_sleep_fn(deadline: float) -> Callable[[float], None]:
+    """Return a sleep function that never waits past *deadline*."""
+
+    def _sleep(backoff_seconds: float) -> None:
+        remaining = _poll_remaining_seconds(deadline)
+        if remaining <= 0:
+            return
+        time.sleep(min(backoff_seconds, remaining))
+
+    return _sleep
+
+
+def _reraise_transient_gitlab_poll_error(
+    exc: GitlabError,
+    *,
+    context: str,
+) -> None:
+    """Raise ``_TransientGitlabPollError`` when *exc* is retryable."""
+    if not is_transient_gitlab_error(exc):
+        return
+    logger.warning("transient GitLab error %s: %s", context, exc)
+    raise _TransientGitlabPollError() from exc
+
+
+def _refresh_merge_request(merge_request: Any, *, deadline: float) -> None:
+    """Refresh *merge_request*, retrying transient GitLab failures."""
+
+    def _on_timeout() -> None:
+        _raise_merge_request_timeout(merge_request)
+
+    request_timeout = _poll_remaining_seconds(deadline, on_elapsed=_on_timeout)
+    try:
+        merge_request.refresh(timeout=request_timeout)
+    except GitlabError as exc:
+        _reraise_transient_gitlab_poll_error(
+            exc,
+            context=f"refreshing merge request {_merge_request_display_url(merge_request)}",
+        )
+        raise
+    _poll_remaining_seconds(deadline, on_elapsed=_on_timeout)
 
 
 def _raise_merge_request_timeout(merge_request: Any) -> None:
@@ -155,9 +243,33 @@ def clone_project_sparse(
     )
 
 
-def client(host: str, private_token: str) -> Gitlab:
+def normalize_gitlab_url(gitlab_host: str) -> str:
+    """Return a python-gitlab URL, adding ``https://`` when *gitlab_host* has no scheme.
+
+    Production secrets store a hostname (e.g. ``gitlab.cee.redhat.com``). python-gitlab
+    expects a full URL, so hostname-only values fail before an MR can be found or
+    created. Already-complete URLs are returned unchanged.
+    """
+    host = gitlab_host.strip()
+    if not host:
+        raise ValueError("gitlab_host is required")
+    if "://" in host:
+        return host
+    return f"https://{host}"
+
+
+def client(
+    host: str,
+    private_token: str,
+    *,
+    timeout: float = _DEFAULT_GITLAB_REQUEST_TIMEOUT_SECONDS,
+) -> Gitlab:
     """Return a python-gitlab client for *host*."""
-    return Gitlab(host, private_token=private_token)
+    return Gitlab(
+        normalize_gitlab_url(host),
+        private_token=private_token,
+        timeout=timeout,
+    )
 
 
 def client_from_credentials(credentials: GitLabCredentials) -> Gitlab:
@@ -165,9 +277,9 @@ def client_from_credentials(credentials: GitLabCredentials) -> Gitlab:
     return client(credentials.gitlab_host, credentials.access_token)
 
 
-def get_project(gitlab_client: Gitlab, repository: str) -> Any:
+def get_project(gitlab_client: Gitlab, repository: str, **kwargs: Any) -> Any:
     """Return the python-gitlab project for *repository*."""
-    return gitlab_client.projects.get(gitlab_project_path(repository))
+    return gitlab_client.projects.get(gitlab_project_path(repository), **kwargs)
 
 
 def create_merge_request(
@@ -227,13 +339,19 @@ def find_open_merge_request_by_source_branch(
     gitlab_client: Gitlab,
     repository: str,
     source_branch: str,
+    *,
+    request_timeout: float | None = None,
 ) -> Any | None:
     """Return the open merge request for *source_branch*, if any."""
-    project = get_project(gitlab_client, repository)
+    request_kwargs: dict[str, Any] = {}
+    if request_timeout is not None:
+        request_kwargs["timeout"] = request_timeout
+    project = get_project(gitlab_client, repository, **request_kwargs)
     found = project.mergerequests.list(
         state="opened",
         source_branch=source_branch,
         per_page=1,
+        **request_kwargs,
     )
     if not found:
         return None
@@ -253,6 +371,244 @@ def enable_auto_merge(
     return merge_request
 
 
+def merge_request_has_conflict(merge_request: Any) -> bool:
+    """Return True when GitLab reports the MR cannot merge due to conflicts."""
+    merge_status = (getattr(merge_request, "merge_status", None) or "").lower()
+    detailed = (getattr(merge_request, "detailed_merge_status", None) or "").lower()
+    if merge_status == "cannot_be_merged":
+        return True
+    return detailed in {"conflict", "conflict_severity_blocked"}
+
+
+def merge_request_is_mergeable(merge_request: Any) -> bool:
+    """Return True when GitLab reports the MR can be merged."""
+    merge_status = (getattr(merge_request, "merge_status", None) or "").lower()
+    detailed = (getattr(merge_request, "detailed_merge_status", None) or "").lower()
+    if merge_status == "can_be_merged":
+        return True
+    return detailed == "mergeable"
+
+
+def close_merge_request(merge_request: Any) -> None:
+    """Close an open merge request."""
+    merge_request.state_event = "close"
+    merge_request.save()
+
+
+def delete_remote_branch(gitlab_client: Gitlab, repository: str, branch: str) -> None:
+    """Delete *branch* from *repository*."""
+    project = get_project(gitlab_client, repository)
+    project.branches.delete(branch)
+
+
+def cleanup_merge_request_branch(
+    gitlab_client: Gitlab,
+    repository: str,
+    merge_request: Any,
+    source_branch: str,
+) -> None:
+    """Close *merge_request* and delete *source_branch*, logging failures."""
+    url = _merge_request_display_url(merge_request)
+    try:
+        close_merge_request(merge_request)
+    except Exception:
+        logger.exception("failed to close merge request %s", url)
+    try:
+        delete_remote_branch(gitlab_client, repository, source_branch)
+    except Exception:
+        logger.exception("failed to delete branch %s", source_branch)
+
+
+def accept_merge_request(merge_request: Any) -> None:
+    """Merge *merge_request* immediately and remove its source branch."""
+    merge_request.merge(should_remove_source_branch=True)
+
+
+def get_or_create_merge_request(
+    gitlab_client: Gitlab,
+    repository: str,
+    *,
+    source_branch: str,
+    target_branch: str,
+    title: str,
+    description: str,
+) -> Any:
+    """Return an open MR for *source_branch*, creating one when missing."""
+    existing = find_open_merge_request_by_source_branch(
+        gitlab_client,
+        repository,
+        source_branch,
+    )
+    if existing is not None:
+        return existing
+    try:
+        return create_merge_request(
+            gitlab_client,
+            repository,
+            source_branch=source_branch,
+            target_branch=target_branch,
+            title=title,
+            description=description,
+            remove_source_branch=True,
+        )
+    except GitlabError:
+        existing = find_open_merge_request_by_source_branch(
+            gitlab_client,
+            repository,
+            source_branch,
+        )
+        if existing is not None:
+            return existing
+        raise
+
+
+def _poll_merge_request_until_merged(
+    merge_request: Any,
+    *,
+    timeout_seconds: float,
+    poll_interval_seconds: float,
+    when_mergeable: Callable[[Any], None] | None = None,
+    on_conflict: Callable[[], None] | None = None,
+) -> Any:
+    """Poll *merge_request* until merged, optionally merging when mergeable."""
+    _validate_positive_finite("timeout_seconds", timeout_seconds)
+    _validate_positive_finite("poll_interval_seconds", poll_interval_seconds)
+    deadline = time.monotonic() + timeout_seconds
+    base_sleep_seconds = max(1, math.ceil(poll_interval_seconds))
+    merge_poll_retry_errors = (_MergeRequestNotMerged, _TransientGitlabPollError)
+
+    def _poll_merge() -> Any:
+        _refresh_merge_request(merge_request, deadline=deadline)
+        url = _merge_request_display_url(merge_request)
+        state = getattr(merge_request, "state", "") or ""
+        if state == "merged":
+            logger.info("merge request %s is merged", url)
+            return merge_request
+        if state in ("closed", "locked"):
+            raise RuntimeError(f"merge request {url} is {state}")
+        if merge_request_has_conflict(merge_request):
+            if on_conflict is not None:
+                on_conflict()
+            raise RuntimeError(f"merge request {url} has a merge conflict")
+        if when_mergeable is not None and merge_request_is_mergeable(merge_request):
+            logger.info("merging merge request %s", url)
+            when_mergeable(merge_request)
+            _refresh_merge_request(merge_request, deadline=deadline)
+            if (getattr(merge_request, "state", "") or "") == "merged":
+                logger.info("merge request %s is merged", url)
+                return merge_request
+        logger.info(
+            "waiting for merge request %s (state=%s, merge_status=%s)",
+            url,
+            state,
+            getattr(merge_request, "merge_status", None),
+        )
+        raise _MergeRequestNotMerged()
+
+    try:
+        return retry.retry_with_exponential_backoff(
+            _poll_merge,
+            max_attempts=_WAIT_MERGE_MAX_ATTEMPTS,
+            retry_on=merge_poll_retry_errors,
+            base_sleep_seconds=base_sleep_seconds,
+            sleep_fn=_deadline_aware_sleep_fn(deadline),
+        )
+    except merge_poll_retry_errors:
+        _raise_merge_request_timeout(merge_request)
+
+
+def wait_for_open_merge_request_by_source_branch(
+    gitlab_client: Gitlab,
+    repository: str,
+    source_branch: str,
+    *,
+    timeout_seconds: float,
+    poll_interval_seconds: float = 10,
+) -> Any:
+    """Poll until an open merge request exists for *source_branch*."""
+    _validate_positive_finite("timeout_seconds", timeout_seconds)
+    _validate_positive_finite("poll_interval_seconds", poll_interval_seconds)
+    deadline = time.monotonic() + timeout_seconds
+    base_sleep_seconds = max(1, math.ceil(poll_interval_seconds))
+
+    def _open_merge_request_timeout() -> None:
+        raise TimeoutError(
+            f"timed out waiting for open merge request on branch {source_branch}"
+        )
+
+    def _poll_open_merge_request() -> Any:
+        request_timeout = _poll_remaining_seconds(
+            deadline,
+            on_elapsed=_open_merge_request_timeout,
+        )
+        try:
+            merge_request = find_open_merge_request_by_source_branch(
+                gitlab_client,
+                repository,
+                source_branch,
+                request_timeout=request_timeout,
+            )
+        except GitlabError as exc:
+            _reraise_transient_gitlab_poll_error(
+                exc,
+                context=f"looking up merge request for branch {source_branch}",
+            )
+            raise
+        _poll_remaining_seconds(deadline, on_elapsed=_open_merge_request_timeout)
+        if merge_request is not None:
+            return merge_request
+        logger.info(
+            "waiting for open merge request on branch %s",
+            source_branch,
+        )
+        raise _MergeRequestNotFound()
+
+    poll_retry_errors = (_MergeRequestNotFound, _TransientGitlabPollError)
+    try:
+        return retry.retry_with_exponential_backoff(
+            _poll_open_merge_request,
+            max_attempts=_WAIT_MERGE_MAX_ATTEMPTS,
+            retry_on=poll_retry_errors,
+            base_sleep_seconds=base_sleep_seconds,
+            sleep_fn=_deadline_aware_sleep_fn(deadline),
+        )
+    except poll_retry_errors:
+        raise TimeoutError(
+            f"timed out waiting for open merge request on branch {source_branch}"
+        ) from None
+
+
+def push_merge_request_to_main(
+    gitlab_client: Gitlab,
+    repository: str,
+    merge_request: Any,
+    source_branch: str,
+    *,
+    timeout_seconds: float,
+    poll_interval_seconds: float = 10,
+) -> Any:
+    """Merge *merge_request* when ready and wait until it lands on *target*.
+
+    On merge conflict, close the MR, delete *source_branch*, and raise.
+    """
+
+    def _on_conflict() -> None:
+        cleanup_merge_request_branch(
+            gitlab_client,
+            repository,
+            merge_request,
+            source_branch,
+        )
+
+    return _poll_merge_request_until_merged(
+        merge_request,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+        when_mergeable=accept_merge_request,
+        on_conflict=_on_conflict,
+    )
+
+
 def wait_until_merged(
     merge_request: Any,
     *,
@@ -266,44 +622,8 @@ def wait_until_merged(
     Raises ``RuntimeError`` if the MR is closed or locked. Raises ``TimeoutError``
     if it is still unmerged when the deadline is reached.
     """
-    _validate_positive_finite("timeout_seconds", timeout_seconds)
-    _validate_positive_finite("poll_interval_seconds", poll_interval_seconds)
-    deadline = time.monotonic() + timeout_seconds
-    base_sleep_seconds = max(1, math.ceil(poll_interval_seconds))
-
-    def _deadline_aware_sleep(backoff_seconds: float) -> None:
-        """Sleep for backoff, but never past *deadline*."""
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return
-        time.sleep(min(backoff_seconds, remaining))
-
-    def _poll_merge_status() -> Any:
-        if time.monotonic() >= deadline:
-            _raise_merge_request_timeout(merge_request)
-        merge_request.refresh()
-        state = getattr(merge_request, "state", "") or ""
-        url = _merge_request_display_url(merge_request)
-        if state == "merged":
-            logger.info("merge request %s is merged", url)
-            return merge_request
-        if state in ("closed", "locked"):
-            raise RuntimeError(f"merge request {url} is {state}")
-        logger.info(
-            "waiting for merge request %s (state=%s, merge_status=%s)",
-            url,
-            state,
-            getattr(merge_request, "merge_status", None),
-        )
-        raise _MergeRequestNotMerged()
-
-    try:
-        return retry.retry_with_exponential_backoff(
-            _poll_merge_status,
-            max_attempts=_WAIT_MERGE_MAX_ATTEMPTS,
-            retry_on=_MergeRequestNotMerged,
-            base_sleep_seconds=base_sleep_seconds,
-            sleep_fn=_deadline_aware_sleep,
-        )
-    except _MergeRequestNotMerged:
-        _raise_merge_request_timeout(merge_request)
+    return _poll_merge_request_until_merged(
+        merge_request,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+    )
