@@ -9,6 +9,8 @@ from unittest import mock
 import pytest
 
 from . import git
+from gitlab.exceptions import GitlabError
+
 from . import gitlab
 
 
@@ -127,7 +129,11 @@ def test_client_builds_python_gitlab_client() -> None:
     with mock.patch.object(gitlab, "Gitlab", return_value=mock_gl) as mk:
         out = gitlab.client("gitlab.example.com", "tok")
     assert out is mock_gl
-    mk.assert_called_once_with("gitlab.example.com", private_token="tok")
+    mk.assert_called_once_with(
+        "gitlab.example.com",
+        private_token="tok",
+        timeout=gitlab._DEFAULT_GITLAB_REQUEST_TIMEOUT_SECONDS,
+    )
 
 
 def test_client_from_credentials(tmp_path: Path) -> None:
@@ -263,7 +269,7 @@ def test_wait_until_merged_success() -> None:
     merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/1"
     merge_request.state = "opened"
 
-    def _refresh() -> None:
+    def _refresh(**_kwargs: object) -> None:
         merge_request.state = "merged"
 
     merge_request.refresh.side_effect = _refresh
@@ -381,4 +387,359 @@ def test_wait_until_merged_uses_exponential_backoff() -> None:
         with pytest.raises(TimeoutError, match="timed out waiting"):
             gitlab.wait_until_merged(merge_request, timeout_seconds=10)
     retry_backoff.assert_called_once()
-    assert retry_backoff.call_args.kwargs["retry_on"] is gitlab._MergeRequestNotMerged
+    assert retry_backoff.call_args.kwargs["retry_on"] == (
+        gitlab._MergeRequestNotMerged,
+        gitlab._TransientGitlabPollError,
+    )
+
+
+def test_poll_remaining_seconds_uses_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return the remaining poll time and raise when the deadline has passed."""
+    monkeypatch.setattr(gitlab.time, "monotonic", lambda: 2.0)
+    assert gitlab._poll_remaining_seconds(10.0) == 8.0
+    on_elapsed = mock.Mock(side_effect=TimeoutError("elapsed"))
+    with pytest.raises(TimeoutError, match="elapsed"):
+        gitlab._poll_remaining_seconds(1.0, on_elapsed=on_elapsed)
+    on_elapsed.assert_called_once()
+
+
+def test_wait_until_merged_passes_request_timeout_to_refresh() -> None:
+    """Pass a bounded request timeout through to merge-request refresh."""
+    merge_request = mock.Mock()
+    merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/1"
+    merge_request.state = "merged"
+    gitlab.wait_until_merged(
+        merge_request,
+        timeout_seconds=10,
+        poll_interval_seconds=1,
+    )
+    timeout = merge_request.refresh.call_args.kwargs["timeout"]
+    assert 0 < timeout <= 10
+
+
+def test_wait_until_merged_rejects_success_after_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat a refresh that completes after the deadline as a timeout."""
+    merge_request = mock.Mock()
+    merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/1"
+    merge_request.state = "merged"
+    clock = {"t": 0.0}
+
+    def _refresh(**_kwargs: object) -> None:
+        clock["t"] = 11.0
+
+    merge_request.refresh.side_effect = _refresh
+    monkeypatch.setattr(gitlab.time, "monotonic", lambda: clock["t"])
+
+    with pytest.raises(TimeoutError, match="timed out waiting"):
+        gitlab.wait_until_merged(
+            merge_request,
+            timeout_seconds=10,
+            poll_interval_seconds=1,
+        )
+
+
+def test_wait_until_merged_retries_transient_refresh_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retry transient GitLab failures while refreshing a merge request."""
+    merge_request = mock.Mock()
+    merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/1"
+    merge_request.state = "merged"
+    merge_request.refresh.side_effect = [
+        GitlabError("service unavailable", response_code=503),
+        None,
+    ]
+    clock = {"t": 0.0}
+
+    def _now() -> float:
+        return clock["t"]
+
+    def _sleep(seconds: float) -> None:
+        clock["t"] += seconds
+
+    monkeypatch.setattr(gitlab.time, "monotonic", _now)
+    monkeypatch.setattr(gitlab.time, "sleep", _sleep)
+    out = gitlab.wait_until_merged(
+        merge_request,
+        timeout_seconds=10,
+        poll_interval_seconds=1,
+    )
+    assert out is merge_request
+    assert merge_request.refresh.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("merge_status", "detailed", "expected"),
+    [
+        ("cannot_be_merged", "", True),
+        ("", "conflict", True),
+        ("can_be_merged", "", False),
+        ("", "mergeable", False),
+    ],
+)
+def test_merge_request_has_conflict(
+    merge_status: str,
+    detailed: str,
+    expected: bool,
+) -> None:
+    """Detect merge conflicts from GitLab merge status fields."""
+    merge_request = mock.Mock()
+    merge_request.merge_status = merge_status
+    merge_request.detailed_merge_status = detailed
+    assert gitlab.merge_request_has_conflict(merge_request) is expected
+
+
+@pytest.mark.parametrize(
+    ("merge_status", "detailed", "expected"),
+    [
+        ("can_be_merged", "", True),
+        ("", "mergeable", True),
+        ("cannot_be_merged", "", False),
+        ("", "conflict", False),
+    ],
+)
+def test_merge_request_is_mergeable(
+    merge_status: str,
+    detailed: str,
+    expected: bool,
+) -> None:
+    """Detect mergeable MRs from GitLab merge status fields."""
+    merge_request = mock.Mock()
+    merge_request.merge_status = merge_status
+    merge_request.detailed_merge_status = detailed
+    assert gitlab.merge_request_is_mergeable(merge_request) is expected
+
+
+def test_get_or_create_merge_request_retries_after_create_race() -> None:
+    """Return a concurrently created MR when create fails."""
+    existing = mock.Mock()
+    client = _mock_gitlab_client()
+    with (
+        mock.patch.object(
+            gitlab,
+            "find_open_merge_request_by_source_branch",
+            side_effect=[None, existing],
+        ),
+        mock.patch.object(
+            gitlab,
+            "create_merge_request",
+            side_effect=GitlabError("already exists"),
+        ),
+    ):
+        out = gitlab.get_or_create_merge_request(
+            client,
+            "g/r",
+            source_branch="feat",
+            target_branch="main",
+            title="t",
+            description="d",
+        )
+    assert out is existing
+
+
+def test_get_or_create_merge_request_returns_existing() -> None:
+    """Reuse an open MR for the source branch when one exists."""
+    existing = mock.Mock()
+    client = _mock_gitlab_client(list_return=[existing])
+    with mock.patch.object(
+        gitlab,
+        "find_open_merge_request_by_source_branch",
+        return_value=existing,
+    ) as find_mr:
+        out = gitlab.get_or_create_merge_request(
+            client,
+            "g/r",
+            source_branch="feat",
+            target_branch="main",
+            title="t",
+            description="d",
+        )
+    assert out is existing
+    find_mr.assert_called_once()
+    client.projects.get.return_value.mergerequests.create.assert_not_called()
+
+
+def test_wait_for_open_merge_request_passes_request_timeout_to_lookup() -> None:
+    """Pass a bounded request timeout through to merge-request lookup."""
+    found = mock.Mock()
+    found.iid = 3
+    client = _mock_gitlab_client(list_return=[found])
+    with mock.patch.object(
+        gitlab,
+        "find_open_merge_request_by_source_branch",
+        return_value=found,
+    ) as find_mr:
+        out = gitlab.wait_for_open_merge_request_by_source_branch(
+            client,
+            "g/r",
+            "feat",
+            timeout_seconds=10,
+            poll_interval_seconds=1,
+        )
+    assert out is found
+    request_timeout = find_mr.call_args.kwargs["request_timeout"]
+    assert 0 < request_timeout <= 10
+
+
+def test_wait_for_open_merge_request_rejects_success_after_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat a lookup that completes after the deadline as a timeout."""
+    found = mock.Mock()
+    found.iid = 3
+    client = _mock_gitlab_client()
+    clock = {"t": 0.0}
+
+    def _find_mr(*_args: object, **_kwargs: object) -> mock.Mock:
+        clock["t"] = 11.0
+        return found
+
+    monkeypatch.setattr(gitlab.time, "monotonic", lambda: clock["t"])
+    with mock.patch.object(
+        gitlab,
+        "find_open_merge_request_by_source_branch",
+        side_effect=_find_mr,
+    ):
+        with pytest.raises(TimeoutError, match="timed out waiting"):
+            gitlab.wait_for_open_merge_request_by_source_branch(
+                client,
+                "g/r",
+                "feat",
+                timeout_seconds=10,
+                poll_interval_seconds=1,
+            )
+
+
+def test_wait_for_open_merge_request_propagates_auth_errors() -> None:
+    """Do not retry authorization failures while polling for an open MR."""
+    client = _mock_gitlab_client()
+    with (
+        mock.patch.object(
+            gitlab,
+            "find_open_merge_request_by_source_branch",
+            side_effect=GitlabError("forbidden", response_code=403),
+        ),
+        pytest.raises(GitlabError),
+    ):
+        gitlab.wait_for_open_merge_request_by_source_branch(
+            client,
+            "g/r",
+            "feat",
+            timeout_seconds=10,
+            poll_interval_seconds=1,
+        )
+
+
+def test_wait_for_open_merge_request_retries_transient_lookup_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retry transient GitLab lookup failures while polling for an open MR."""
+    found = mock.Mock()
+    found.iid = 3
+    client = _mock_gitlab_client()
+    clock = {"t": 0.0}
+
+    def _now() -> float:
+        return clock["t"]
+
+    def _sleep(seconds: float) -> None:
+        clock["t"] += seconds
+
+    monkeypatch.setattr(gitlab.time, "monotonic", _now)
+    monkeypatch.setattr(gitlab.time, "sleep", _sleep)
+    with mock.patch.object(
+        gitlab,
+        "find_open_merge_request_by_source_branch",
+        side_effect=[
+            GitlabError("service unavailable", response_code=503),
+            found,
+        ],
+    ):
+        out = gitlab.wait_for_open_merge_request_by_source_branch(
+            client,
+            "g/r",
+            "feat",
+            timeout_seconds=10,
+            poll_interval_seconds=1,
+        )
+    assert out is found
+
+
+def test_wait_for_open_merge_request_by_source_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return once an open merge request appears for the source branch."""
+    found = mock.Mock()
+    found.iid = 3
+    client = _mock_gitlab_client()
+    clock = {"t": 0.0}
+
+    def _now() -> float:
+        return clock["t"]
+
+    def _sleep(seconds: float) -> None:
+        clock["t"] += seconds
+
+    monkeypatch.setattr(gitlab.time, "monotonic", _now)
+    monkeypatch.setattr(gitlab.time, "sleep", _sleep)
+    with mock.patch.object(
+        gitlab,
+        "find_open_merge_request_by_source_branch",
+        side_effect=[None, found],
+    ):
+        out = gitlab.wait_for_open_merge_request_by_source_branch(
+            client,
+            "g/r",
+            "feat",
+            timeout_seconds=10,
+            poll_interval_seconds=1,
+        )
+    assert out is found
+
+
+def test_push_merge_request_to_main_merges_when_ready() -> None:
+    """Merge immediately when GitLab reports the MR is mergeable."""
+    merge_request = mock.Mock()
+    merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/1"
+    merge_request.state = "opened"
+    merge_request.merge_status = "can_be_merged"
+
+    def _refresh(**_kwargs: object) -> None:
+        if merge_request.merge.called:
+            merge_request.state = "merged"
+
+    merge_request.refresh.side_effect = _refresh
+    client = _mock_gitlab_client()
+    out = gitlab.push_merge_request_to_main(
+        client,
+        "g/r",
+        merge_request,
+        "feat",
+        timeout_seconds=10,
+    )
+    assert out is merge_request
+    merge_request.merge.assert_called_once_with(should_remove_source_branch=True)
+
+
+def test_push_merge_request_to_main_conflict_cleans_up() -> None:
+    """Close the MR and delete the branch when a conflict is detected."""
+    merge_request = mock.Mock()
+    merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/1"
+    merge_request.state = "opened"
+    merge_request.merge_status = "cannot_be_merged"
+    merge_request.refresh.return_value = None
+    client = _mock_gitlab_client()
+    with mock.patch.object(gitlab, "cleanup_merge_request_branch") as cleanup:
+        with pytest.raises(RuntimeError, match="merge conflict"):
+            gitlab.push_merge_request_to_main(
+                client,
+                "g/r",
+                merge_request,
+                "feat",
+                timeout_seconds=10,
+            )
+    cleanup.assert_called_once_with(client, "g/r", merge_request, "feat")

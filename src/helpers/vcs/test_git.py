@@ -266,6 +266,143 @@ def test_sync_to_origin_main(tmp_path: Path) -> None:
     assert run_cmd.call_args_list[1].args[0] == ["git", "reset", "--hard", "origin/main"]
 
 
+def test_push_new_branch_uses_create_only_lease(tmp_path: Path) -> None:
+    """Create-only pushes use force-with-lease against an empty remote ref."""
+    with mock.patch.object(git, "_run_git_cmd") as run_cmd:
+        git.push_new_branch(tmp_path, "feat", stderr_path=None)
+    run_cmd.assert_called_once()
+    argv = run_cmd.call_args.args[0]
+    assert argv[:3] == ["git", "push", "--force-with-lease=refs/heads/feat:"]
+    assert argv[-1] == "HEAD:refs/heads/feat"
+
+
+def test_rev_parse_returns_stdout(tmp_path: Path) -> None:
+    """Return the stripped stdout from git rev-parse."""
+    with mock.patch.object(git, "_run_git_cmd") as run_cmd:
+        run_cmd.return_value = mock.Mock(stdout="abc123\n")
+        out = git.rev_parse(tmp_path, "HEAD", stderr_path=None)
+    assert out == "abc123"
+    run_cmd.assert_called_once_with(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        stderr_path=None,
+    )
+
+
+def test_remote_branch_sha_returns_none_when_missing(tmp_path: Path) -> None:
+    """Return None when the remote branch does not exist."""
+    with mock.patch.object(git, "remote_branch_exists", return_value=False):
+        out = git.remote_branch_sha(tmp_path, "missing", stderr_path=None)
+    assert out is None
+
+
+def _git_config_identity(repo_dir: Path) -> None:
+    """Set author and committer identity for commits in *repo_dir*."""
+    subprocess.run(
+        ["git", "config", "user.name", "test"],
+        cwd=repo_dir,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo_dir,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_remote_branch_sha_fetches_untracked_branch(tmp_path: Path) -> None:
+    """Fetch an untracked remote branch into refs/remotes and return its SHA."""
+    bare = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+    origin = tmp_path / "origin"
+    subprocess.run(
+        ["git", "clone", str(bare), str(origin)],
+        check=True,
+        capture_output=True,
+    )
+    _git_config_identity(origin)
+    (origin / "file.txt").write_text("one\n", encoding="utf-8")
+    subprocess.run(["git", "add", "file.txt"], cwd=origin, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=origin,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "branch", "-M", "main"],
+        cwd=origin,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "push", "-u", "origin", "main"],
+        cwd=origin,
+        check=True,
+        capture_output=True,
+    )
+
+    repo = tmp_path / "repo"
+    subprocess.run(
+        ["git", "clone", str(bare), str(repo)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "-b", "feat"],
+        cwd=origin,
+        check=True,
+        capture_output=True,
+    )
+    (origin / "file.txt").write_text("two\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "commit", "-am", "feat"],
+        cwd=origin,
+        check=True,
+        capture_output=True,
+    )
+    first_sha = subprocess.check_output(
+        ["git", "rev-parse", "feat"],
+        cwd=origin,
+        text=True,
+    ).strip()
+    subprocess.run(
+        ["git", "push", "origin", "feat"],
+        cwd=origin,
+        check=True,
+        capture_output=True,
+    )
+
+    tracking_ref = repo / ".git" / "refs" / "remotes" / "origin" / "feat"
+    assert not tracking_ref.exists()
+    assert git.remote_branch_sha(repo, "feat") == first_sha
+    assert tracking_ref.exists()
+
+    (origin / "file.txt").write_text("three\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "commit", "-am", "feat-2"],
+        cwd=origin,
+        check=True,
+        capture_output=True,
+    )
+    second_sha = subprocess.check_output(
+        ["git", "rev-parse", "feat"],
+        cwd=origin,
+        text=True,
+    ).strip()
+    subprocess.run(
+        ["git", "push", "origin", "feat"],
+        cwd=origin,
+        check=True,
+        capture_output=True,
+    )
+
+    assert git.remote_branch_sha(repo, "feat") == second_sha
+    assert second_sha != first_sha
+
+
 def test_push_force_branch(tmp_path: Path) -> None:
     """Force-push a named branch via the git CLI."""
     with mock.patch.object(git, "_run_git_cmd") as run_cmd:

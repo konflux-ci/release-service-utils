@@ -1,5 +1,7 @@
 """Version-control helpers: `git`, `gitlab`, and `github` submodules."""
 
+from __future__ import annotations
+
 from .git import (  # noqa: F401
     changed_paths_from_status,
     checkout,
@@ -11,9 +13,12 @@ from .git import (  # noqa: F401
     index_add_commit,
     origin_main_has_path_matching,
     push,
+    push_new_branch,
     rebase_onto_remote,
     remote_branch_exists,
+    remote_branch_sha,
     repository_workdir_name,
+    rev_parse,
     set_remote_url,
     sync_to_origin_main,
     working_tree_diff,
@@ -42,14 +47,23 @@ from .gitlab import (  # noqa: F401
     client_from_credentials,
     clone_project_sparse,
     configure_git_oauth2_auth,
+    accept_merge_request,
+    cleanup_merge_request_branch,
+    close_merge_request,
     create_merge_request,
+    delete_remote_branch,
     enable_auto_merge,
     export_env_for_image_helpers,
     find_open_merge_request_by_source_branch,
+    get_or_create_merge_request,
     get_project,
+    merge_request_has_conflict,
+    merge_request_is_mergeable,
+    push_merge_request_to_main,
     gitlab_project_path,
     iter_open_merge_requests,
     raw_file_url,
     read_credentials_from_mount,
+    wait_for_open_merge_request_by_source_branch,
     wait_until_merged,
 )

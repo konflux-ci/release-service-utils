@@ -180,6 +180,50 @@ def remote_branch_exists(
     return bool((result.stdout or "").strip())
 
 
+def rev_parse(
+    repo_dir: Path,
+    ref: str,
+    *,
+    stderr_path: Path | None = None,
+) -> str:
+    """Return the object name for *ref* in *repo_dir*."""
+    result = _run_git_cmd(
+        ["git", "rev-parse", ref],
+        cwd=repo_dir,
+        stderr_path=stderr_path,
+    )
+    return (result.stdout or "").strip()
+
+
+def remote_branch_sha(
+    repo_dir: Path,
+    branch: str,
+    *,
+    remote: str = "origin",
+    stderr_path: Path | None = None,
+) -> str | None:
+    """Return the commit SHA for *remote*/*branch*, or None when it is missing."""
+    if not remote_branch_exists(
+        repo_dir,
+        branch,
+        remote=remote,
+        stderr_path=stderr_path,
+    ):
+        return None
+    remote_tracking_ref = f"refs/remotes/{remote}/{branch}"
+    _run_git_cmd(
+        [
+            "git",
+            "fetch",
+            remote,
+            f"refs/heads/{branch}:{remote_tracking_ref}",
+        ],
+        cwd=repo_dir,
+        stderr_path=stderr_path,
+    )
+    return rev_parse(repo_dir, remote_tracking_ref, stderr_path=stderr_path)
+
+
 def _local_branch_exists(
     repo_dir: Path,
     branch: str,
@@ -464,6 +508,32 @@ def _push_argv(
     if branch is not None:
         argv.append(branch)
     return argv
+
+
+def push_new_branch(
+    repo_dir: Path,
+    branch: str,
+    *,
+    remote: str = "origin",
+    stderr_path: Path | None = None,
+) -> None:
+    """Create *branch* on *remote* using a create-only ref update.
+
+    Fails when *remote* already has ``refs/heads/<branch>``, including when it
+    points at the same commit as the local checkout.
+    """
+    ref_name = f"refs/heads/{branch}"
+    _run_git_cmd(
+        [
+            "git",
+            "push",
+            f"--force-with-lease={ref_name}:",
+            remote,
+            f"HEAD:refs/heads/{branch}",
+        ],
+        cwd=repo_dir,
+        stderr_path=stderr_path,
+    )
 
 
 def push(
