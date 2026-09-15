@@ -31,7 +31,7 @@ def test_cdn_base_urls_defaults_to_production() -> None:
     )
 
 
-def test_filename_for_binary_or_generic_prefers_files_array() -> None:
+def test_filenames_for_binary_or_generic_prefers_files_array() -> None:
     """Binary/generic lookup prefers top-level files[] over staged.files[]."""
     component = {
         "files": [{"arch": "amd64", "os": "linux", "source": "app-linux.tgz"}],
@@ -39,31 +39,25 @@ def test_filename_for_binary_or_generic_prefers_files_array() -> None:
             "files": [{"arch": "amd64", "os": "linux", "source": "staged-linux.tgz"}],
         },
     }
-    assert (
-        content_gateway.filename_for_binary_or_generic(
-            component,
-            architecture="amd64",
-            operating_system="linux",
-        )
-        == "app-linux.tgz"
-    )
+    assert content_gateway.filenames_for_binary_or_generic(
+        component,
+        architecture="amd64",
+        operating_system="linux",
+    ) == ["app-linux.tgz"]
 
 
-def test_filename_for_binary_or_generic_falls_back_to_staged_files() -> None:
+def test_filenames_for_binary_or_generic_falls_back_to_staged_files() -> None:
     """Binary/generic lookup uses staged.files[] when files[] is empty."""
     component = {
         "staged": {
             "files": [{"arch": "amd64", "os": "linux", "source": "staged-linux.tgz"}],
         },
     }
-    assert (
-        content_gateway.filename_for_binary_or_generic(
-            component,
-            architecture="amd64",
-            operating_system="linux",
-        )
-        == "staged-linux.tgz"
-    )
+    assert content_gateway.filenames_for_binary_or_generic(
+        component,
+        architecture="amd64",
+        operating_system="linux",
+    ) == ["staged-linux.tgz"]
 
 
 def test_windows_zip_filename_tar_gz() -> None:
@@ -102,16 +96,32 @@ def test_component_file_entries_empty_when_staged_files_not_list() -> None:
     assert content_gateway.component_file_entries({"staged": {"files": "invalid"}}) == []
 
 
-def test_filename_for_binary_or_generic_empty_when_no_match() -> None:
-    """Return empty when no file row matches arch and operating system."""
+def test_filenames_for_binary_or_generic_returns_all_matches() -> None:
+    """All files sharing the same (arch, os) are returned, not just the first."""
+    component = {
+        "files": [
+            {"arch": "amd64", "os": "linux", "source": "cli-a.tgz"},
+            {"arch": "amd64", "os": "linux", "source": "cli-b.tgz"},
+            {"arch": "arm64", "os": "linux", "source": "cli-c.tgz"},
+        ],
+    }
+    assert content_gateway.filenames_for_binary_or_generic(
+        component,
+        architecture="amd64",
+        operating_system="linux",
+    ) == ["cli-a.tgz", "cli-b.tgz"]
+
+
+def test_filenames_for_binary_or_generic_empty_when_no_match() -> None:
+    """Return an empty list when no file row matches arch and operating system."""
     component = {
         "files": [{"arch": "amd64", "os": "linux", "source": "app-linux.tgz"}],
     }
     assert (
-        content_gateway.filename_for_binary_or_generic(
+        content_gateway.filenames_for_binary_or_generic(
             component,
             architecture="aarch64",
             operating_system="linux",
         )
-        == ""
+        == []
     )

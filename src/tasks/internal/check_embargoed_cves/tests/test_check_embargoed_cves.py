@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import runpy
 import subprocess
 from pathlib import Path
@@ -10,9 +11,12 @@ from unittest import mock
 
 import pytest
 
-from release_service_utils.tasks.internal import check_embargoed_cves
 from release_service_utils.helpers import file
 from release_service_utils.helpers import tekton
+from release_service_utils.tasks.internal import check_embargoed_cves
+from release_service_utils.tasks.internal.check_embargoed_cves.check_embargoed_cves import (
+    EmbargoReason,
+)
 
 
 def _write_service_account(
@@ -64,19 +68,19 @@ def test_parse_cve_list() -> None:
 @pytest.mark.parametrize(
     ("payload", "exp"),
     [
-        ({}, True),
-        ({"results": []}, True),
-        ({"results": None}, True),
-        ({"results": ["not-a-dict"]}, True),
-        ({"results": [{}]}, True),
-        ({"results": [{"embargoed": None}]}, True),
-        ({"results": [{"embargoed": True}]}, True),
-        ({"results": [{"embargoed": False}]}, False),
+        ({}, EmbargoReason.NO_FLAW_DATA),
+        ({"results": []}, EmbargoReason.NO_FLAW_DATA),
+        ({"results": None}, EmbargoReason.NO_FLAW_DATA),
+        ({"results": ["not-a-dict"]}, EmbargoReason.INVALID_FLAW_DATA),
+        ({"results": [{}]}, EmbargoReason.MISSING_EMBARGO_FIELD),
+        ({"results": [{"embargoed": None}]}, EmbargoReason.STATUS_UNKNOWN),
+        ({"results": [{"embargoed": True}]}, EmbargoReason.EMBARGOED),
+        ({"results": [{"embargoed": False}]}, EmbargoReason.NOT_EMBARGOED),
     ],
 )
-def test_is_embargoed_flaw_response(payload: dict, exp: bool) -> None:
-    """Only ``results[0].embargoed == false`` means not embargoed; all other shapes do."""
-    assert check_embargoed_cves.is_embargoed_flaw_response(payload) is exp
+def test_classify_flaw_response(payload: dict, exp: EmbargoReason) -> None:
+    """Each response shape maps to a specific ``EmbargoReason`` member."""
+    assert check_embargoed_cves.classify_flaw_response(payload) is exp
 
 
 def test_fetch_flaw_state_empty_bodies() -> None:
@@ -273,7 +277,9 @@ def test_run_check_wraps_get_flaw_errors(sa_mount: Path, tmp_path: Path) -> None
     assert "querying the OSIDB flaws API" in str(e.value)
 
 
-def test_run_check_empty_body_treated_as_embargoed(sa_mount: Path, tmp_path: Path) -> None:
+def test_run_check_empty_body_treated_as_embargoed(
+    sa_mount: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """An empty flaws dict has no clear ``embargoed: false``; CVE is reported."""
     krb5 = _minimal_krb5(tmp_path / "k5.conf")
 
@@ -285,18 +291,23 @@ def test_run_check_empty_body_treated_as_embargoed(sa_mount: Path, tmp_path: Pat
             return {}
         return {"results": [{"embargoed": False}]}
 
-    p, r = check_embargoed_cves.run_check(
-        ["CVE-noaccess"],
-        sa_mount,
-        kinit=_no_kinit,
-        get_token=gtok,
-        get_flaw=gflav,
-        krb5_template=krb5,
-    )
+    with caplog.at_level(logging.DEBUG, logger="release"):
+        p, r = check_embargoed_cves.run_check(
+            ["CVE-noaccess"],
+            sa_mount,
+            kinit=_no_kinit,
+            get_token=gtok,
+            get_flaw=gflav,
+            krb5_template=krb5,
+        )
     assert p == ["CVE-noaccess"] and r == 1
+    assert any("cannot be confirmed as public" in m for m in caplog.messages)
+    assert any("OSIDB returned no results" in m for m in caplog.messages)
 
 
-def test_run_check_mixed_list_reports_embargoed_cve(sa_mount: Path, tmp_path: Path) -> None:
+def test_run_check_mixed_list_reports_embargoed_cve(
+    sa_mount: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """Only CVEs with embargoed (or not clearly public) flaw data are returned."""
     krb5 = _minimal_krb5(tmp_path / "k5.conf")
 
@@ -308,15 +319,17 @@ def test_run_check_mixed_list_reports_embargoed_cve(sa_mount: Path, tmp_path: Pa
             return {"results": [{"embargoed": True}]}
         return {"results": [{"embargoed": False}]}
 
-    p, r = check_embargoed_cves.run_check(
-        ["CVE-123", "CVE-embargo"],
-        sa_mount,
-        kinit=_no_kinit,
-        get_token=gtok,
-        get_flaw=gflav,
-        krb5_template=krb5,
-    )
+    with caplog.at_level(logging.DEBUG, logger="release"):
+        p, r = check_embargoed_cves.run_check(
+            ["CVE-123", "CVE-embargo"],
+            sa_mount,
+            kinit=_no_kinit,
+            get_token=gtok,
+            get_flaw=gflav,
+            krb5_template=krb5,
+        )
     assert p == ["CVE-embargo"] and r == 1
+    assert any("is embargoed in OSIDB" in m for m in caplog.messages)
 
 
 def test_main_all_clear(

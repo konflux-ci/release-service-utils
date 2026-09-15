@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import io
+import json
 import subprocess
+import tarfile
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, Mock, call, patch
 
 from release_service_utils.helpers import oras_utils
 from release_service_utils.helpers.oras_utils import oras_utils as _oras_utils
 import pytest
 
 from release_service_utils.helpers.oras_utils.oras_utils import oras_resolve
+
+# ---------------------------------------------------------------------------
+# oras_resolve
+# ---------------------------------------------------------------------------
 
 
 def test_oras_resolve_calls_select_oci_auth_with_reference() -> None:
@@ -166,24 +173,60 @@ def test_oras_resolve_with_auth_file_raises_when_check_true(tmp_path: Path) -> N
             oras_resolve("registry.io/repo:tag", auth_file=af)
 
 
+# ---------------------------------------------------------------------------
+# oras_pull
+# ---------------------------------------------------------------------------
+
+
 def test_oras_pull_runs_select_oci_auth_and_oras(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`oras_pull` writes auth config then pulls the artifact into *download_dir*."""
     calls: list[list[str]] = []
+    kwargs_list: list[dict[str, object]] = []
 
     def fake_run_cmd(cmd, **kwargs):  # type: ignore[no-untyped-def]
         calls.append([str(x) for x in cmd])
+        kwargs_list.append(kwargs)
         if cmd[0] == "select-oci-auth":
             return subprocess.CompletedProcess(cmd, 0, stdout='{"auths":{}}', stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(_oras_utils.subprocess_cmd, "run_cmd", fake_run_cmd)
-    oras_utils.oras_pull("quay.io/org/image@sha256:abc", tmp_path)
+    monkeypatch.setattr(oras_utils.subprocess_cmd, "run_cmd", fake_run_cmd)
+    stderr_path = tmp_path / "stderr.txt"
+    oras_utils.oras_pull("quay.io/org/image@sha256:abc", tmp_path, stderr_path=stderr_path)
 
     assert calls[0] == ["select-oci-auth", "quay.io/org/image@sha256:abc"]
     assert calls[1][0:3] == ["oras", "pull", "--registry-config"]
     assert calls[1][-1] == "quay.io/org/image@sha256:abc"
+    # Both calls must share the same stderr log so failures are diagnosable.
+    assert kwargs_list[0]["stderr_path"] == stderr_path
+    assert kwargs_list[1]["stderr_path"] == stderr_path
+    # The actual pull streams its progress live instead of being buffered until exit.
+    assert kwargs_list[1]["stream_stdout"] is True
+
+
+def test_oras_pull_select_oci_auth_failure_is_logged_to_stderr_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing select-oci-auth call logs its reason, not just an exit code."""
+    stderr_path = tmp_path / "stderr.txt"
+    stderr_path.write_text("", encoding="utf-8")
+
+    def fake_run_cmd(cmd, *, stderr_path=None, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[0] == "select-oci-auth":
+            if stderr_path is not None:
+                with open(stderr_path, "a", encoding="utf-8") as f:
+                    f.write("select-oci-auth: no credentials found for registry\n")
+            raise subprocess.CalledProcessError(1, cmd)
+        raise AssertionError("oras pull should not run when select-oci-auth fails")
+
+    monkeypatch.setattr(oras_utils.subprocess_cmd, "run_cmd", fake_run_cmd)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        oras_utils.oras_pull("quay.io/org/image:tag", tmp_path, stderr_path=stderr_path)
+
+    assert "no credentials found for registry" in stderr_path.read_text(encoding="utf-8")
 
 
 def test_oras_pull_cleans_up_auth_file(
@@ -228,6 +271,408 @@ def test_oras_pull_raises_when_subprocess_fails(
         oras_utils.oras_pull("quay.io/org/image:tag", tmp_path)
 
     assert exc_info.value.returncode == 1
+
+
+# ---------------------------------------------------------------------------
+# safe_extract_archive
+# ---------------------------------------------------------------------------
+
+
+def _make_tar(path: Path, files: dict[str, bytes]) -> None:
+    with tarfile.open(str(path), "w:gz") as tf:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+
+
+def test_safe_extract_archive_extracts_files(tmp_path: Path) -> None:
+    """Regular files are extracted into target_dir."""
+    archive = tmp_path / "test.tar.gz"
+    _make_tar(archive, {"hello.txt": b"hello", "sub/world.txt": b"world"})
+    target = tmp_path / "out"
+    target.mkdir()
+    with tarfile.open(str(archive)) as tf:
+        oras_utils.safe_extract_archive(tf, target, "test.tar.gz")
+    assert (target / "hello.txt").read_bytes() == b"hello"
+    assert (target / "sub" / "world.txt").read_bytes() == b"world"
+
+
+def test_safe_extract_archive_rejects_path_traversal(tmp_path: Path) -> None:
+    """Archives with path traversal entries raise RuntimeError."""
+    archive = tmp_path / "bad.tar.gz"
+    with tarfile.open(str(archive), "w:gz") as tf:
+        info = tarfile.TarInfo(name="../../escape.txt")
+        info.size = 4
+        tf.addfile(info, io.BytesIO(b"oops"))
+    target = tmp_path / "out"
+    target.mkdir()
+    with tarfile.open(str(archive)) as tf:
+        with pytest.raises(RuntimeError, match="unsafe path"):
+            oras_utils.safe_extract_archive(tf, target, "bad.tar.gz")
+
+
+def test_safe_extract_archive_rejects_symlinks(tmp_path: Path) -> None:
+    """Archives with symlink entries raise RuntimeError."""
+    archive = tmp_path / "sym.tar.gz"
+    with tarfile.open(str(archive), "w:gz") as tf:
+        info = tarfile.TarInfo(name="link")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "/etc/passwd"
+        tf.addfile(info)
+    target = tmp_path / "out"
+    target.mkdir()
+    with tarfile.open(str(archive)) as tf:
+        with pytest.raises(RuntimeError, match="unsupported entry type"):
+            oras_utils.safe_extract_archive(tf, target, "sym.tar.gz")
+
+
+# ---------------------------------------------------------------------------
+# os_arch_dir
+# ---------------------------------------------------------------------------
+
+
+def test_os_arch_dir_darwin(tmp_path: Path) -> None:
+    """Return the macOS subdirectory under mac_windows_base."""
+    result = oras_utils.os_arch_dir(
+        "darwin",
+        "arm64",
+        mac_windows_base=tmp_path / "unsigned",
+        linux_base=tmp_path / "linux",
+    )
+    assert result == tmp_path / "unsigned" / "macos" / "arm64"
+
+
+def test_os_arch_dir_windows(tmp_path: Path) -> None:
+    """Return the windows subdirectory under mac_windows_base."""
+    result = oras_utils.os_arch_dir(
+        "windows",
+        "amd64",
+        mac_windows_base=tmp_path / "unsigned",
+        linux_base=tmp_path / "linux",
+    )
+    assert result == tmp_path / "unsigned" / "windows" / "amd64"
+
+
+def test_os_arch_dir_linux(tmp_path: Path) -> None:
+    """Return the linux subdirectory under linux_base."""
+    result = oras_utils.os_arch_dir(
+        "linux", "amd64", mac_windows_base=tmp_path / "unsigned", linux_base=tmp_path / "linux"
+    )
+    assert result == tmp_path / "linux" / "amd64"
+
+
+def test_os_arch_dir_unknown_returns_none(tmp_path: Path) -> None:
+    """Return None for an unrecognised OS."""
+    result = oras_utils.os_arch_dir(
+        "freebsd",
+        "amd64",
+        mac_windows_base=tmp_path / "unsigned",
+        linux_base=tmp_path / "linux",
+    )
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# oras_login
+# ---------------------------------------------------------------------------
+
+
+def test_oras_login_passes_password_via_stdin() -> None:
+    """Password is piped via stdin, not on the command line."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = Mock(returncode=0)
+        oras_utils.oras_login("quay.io", "myuser", "mypass")
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args[0][0]
+    assert "mypass" not in cmd
+    assert mock_run.call_args[1]["input"] == "mypass"
+    assert "--password-stdin" in cmd
+
+
+# ---------------------------------------------------------------------------
+# oras_push
+# ---------------------------------------------------------------------------
+
+
+def test_oras_push_returns_digest(tmp_path: Path) -> None:
+    """Digest is parsed from oras push output."""
+    with patch("subprocess.check_output", return_value="Digest: sha256:abc123\n"):
+        digest = oras_utils.oras_push("quay.io/org/repo:tag", tmp_path, "macos", "mycomp")
+    assert digest == "sha256:abc123"
+
+
+def test_oras_push_raises_on_missing_digest(tmp_path: Path) -> None:
+    """RuntimeError is raised when digest cannot be parsed from oras output."""
+    with patch("subprocess.check_output", return_value="no digest here\n"):
+        with pytest.raises(RuntimeError, match="Could not extract digest"):
+            oras_utils.oras_push("quay.io/org/repo:tag", tmp_path, "macos", "mycomp")
+
+
+def _fake_skopeo_copy(
+    manifest: dict, blobs: dict[str, bytes], *, calls: list[dict[str, object]] | None = None
+):  # type: ignore[no-untyped-def]
+    """Build a fake run_cmd that simulates `skopeo copy ... dir:<target>`."""
+
+    def fake_run_cmd(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if calls is not None:
+            calls.append({"cmd": cmd, **kwargs})
+        if cmd[0] == "select-oci-auth":
+            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+        if cmd[0] == "skopeo":
+            dir_arg = next(str(a) for a in cmd if str(a).startswith("dir:"))
+            target = Path(dir_arg[len("dir:") :])
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            for digest, data in blobs.items():
+                (target / digest).write_bytes(data)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    return fake_run_cmd
+
+
+def _tar_layer_bytes(name: str, content: bytes) -> bytes:
+    """Build a tar layer archive containing one regular file at *name*."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        info = tarfile.TarInfo(name=name)
+        info.size = len(content)
+        tf.addfile(info, fileobj=io.BytesIO(content))
+    return buf.getvalue()
+
+
+def test_extract_disk_image_files_flat_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Flat OCI artifacts are matched to layers by title annotation, like `oras pull`."""
+    manifest = {
+        "config": {"mediaType": oras_utils.FLAT_ARTIFACT_CONFIG_MEDIA_TYPE},
+        "layers": [
+            {
+                "digest": "sha256:aaa",
+                "annotations": {"org.opencontainers.image.title": "test-disk-image.raw"},
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        oras_utils.subprocess_cmd,
+        "run_cmd",
+        _fake_skopeo_copy(manifest, {"aaa": b"disk content"}),
+    )
+
+    destination = tmp_path / "dest"
+    destination.mkdir()
+    oras_utils.extract_disk_image_files(
+        "quay.io/org/image@sha256:abc", ["test-disk-image.raw"], destination
+    )
+
+    assert (destination / "test-disk-image.raw").read_bytes() == b"disk content"
+
+
+def test_extract_disk_image_files_streams_skopeo_copy_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`skopeo copy` streams live progress instead of buffering it until exit."""
+    manifest = {
+        "config": {"mediaType": oras_utils.FLAT_ARTIFACT_CONFIG_MEDIA_TYPE},
+        "layers": [
+            {
+                "digest": "sha256:aaa",
+                "annotations": {"org.opencontainers.image.title": "test-disk-image.raw"},
+            }
+        ],
+    }
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        oras_utils.subprocess_cmd,
+        "run_cmd",
+        _fake_skopeo_copy(manifest, {"aaa": b"disk content"}, calls=calls),
+    )
+
+    destination = tmp_path / "dest"
+    destination.mkdir()
+    oras_utils.extract_disk_image_files(
+        "quay.io/org/image@sha256:abc", ["test-disk-image.raw"], destination
+    )
+
+    skopeo_call = next(c for c in calls if c["cmd"][0] == "skopeo")
+    assert skopeo_call["stream_stdout"] is True
+
+
+def test_extract_disk_image_files_layered_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Normal layered images (e.g. docker-build-oci-ta) are extracted via tar."""
+    manifest = {
+        "config": {"mediaType": "application/vnd.oci.image.config.v1+json"},
+        "layers": [{"digest": "sha256:bbb"}],
+    }
+    layer_bytes = _tar_layer_bytes("releases/test-disk-image.raw", b"real disk bytes")
+    monkeypatch.setattr(
+        oras_utils.subprocess_cmd,
+        "run_cmd",
+        _fake_skopeo_copy(manifest, {"bbb": layer_bytes}),
+    )
+
+    destination = tmp_path / "dest"
+    destination.mkdir()
+    oras_utils.extract_disk_image_files(
+        "quay.io/org/image@sha256:def",
+        ["/releases/test-disk-image.raw"],
+        destination,
+    )
+
+    assert (
+        destination / "releases" / "test-disk-image.raw"
+    ).read_bytes() == b"real disk bytes"
+
+
+def test_extract_disk_image_files_layered_image_later_layer_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A later layer's copy of a path overwrites an earlier layer's, like overlayfs."""
+    manifest = {
+        "config": {"mediaType": "application/vnd.oci.image.config.v1+json"},
+        "layers": [{"digest": "sha256:ccc"}, {"digest": "sha256:ddd"}],
+    }
+    monkeypatch.setattr(
+        oras_utils.subprocess_cmd,
+        "run_cmd",
+        _fake_skopeo_copy(
+            manifest,
+            {
+                "ccc": _tar_layer_bytes("releases/disk.raw", b"old"),
+                "ddd": _tar_layer_bytes("releases/disk.raw", b"new"),
+            },
+        ),
+    )
+
+    destination = tmp_path / "dest"
+    destination.mkdir()
+    oras_utils.extract_disk_image_files(
+        "quay.io/org/image@sha256:ghi", ["releases/disk.raw"], destination
+    )
+
+    assert (destination / "releases" / "disk.raw").read_bytes() == b"new"
+
+
+def test_extract_disk_image_files_missing_file_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wanted file absent from the image is silently skipped, not an error."""
+    manifest = {
+        "config": {"mediaType": oras_utils.FLAT_ARTIFACT_CONFIG_MEDIA_TYPE},
+        "layers": [],
+    }
+    monkeypatch.setattr(oras_utils.subprocess_cmd, "run_cmd", _fake_skopeo_copy(manifest, {}))
+
+    destination = tmp_path / "dest"
+    destination.mkdir()
+    oras_utils.extract_disk_image_files(
+        "quay.io/org/image@sha256:jkl", ["missing.raw"], destination
+    )
+
+    assert not (destination / "missing.raw").exists()
+
+
+def test_extract_disk_image_files_skips_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Symlink tar entries are never extracted, even if the name matches."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        info = tarfile.TarInfo(name="releases/disk.raw")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "/etc/passwd"
+        tf.addfile(info)
+
+    manifest = {
+        "config": {"mediaType": "application/vnd.oci.image.config.v1+json"},
+        "layers": [{"digest": "sha256:eee"}],
+    }
+    monkeypatch.setattr(
+        oras_utils.subprocess_cmd,
+        "run_cmd",
+        _fake_skopeo_copy(manifest, {"eee": buf.getvalue()}),
+    )
+
+    destination = tmp_path / "dest"
+    destination.mkdir()
+    oras_utils.extract_disk_image_files(
+        "quay.io/org/image@sha256:mno", ["releases/disk.raw"], destination
+    )
+
+    assert not (destination / "releases" / "disk.raw").exists()
+
+
+def test_extract_disk_image_files_rejects_path_traversal(tmp_path: Path) -> None:
+    """A wanted source escaping the destination directory is rejected up front."""
+    destination = tmp_path / "dest"
+    destination.mkdir()
+
+    with pytest.raises(ValueError, match=r"\.\."):
+        oras_utils.extract_disk_image_files(
+            "quay.io/org/image@sha256:pqr", ["../../etc/passwd"], destination
+        )
+
+
+def test_extract_disk_image_files_layered_image_whiteout_removes_earlier_layer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A later layer's `.wh.<name>` whiteout removes an earlier layer's copy."""
+    manifest = {
+        "config": {"mediaType": "application/vnd.oci.image.config.v1+json"},
+        "layers": [{"digest": "sha256:fff"}, {"digest": "sha256:ggg"}],
+    }
+    monkeypatch.setattr(
+        oras_utils.subprocess_cmd,
+        "run_cmd",
+        _fake_skopeo_copy(
+            manifest,
+            {
+                "fff": _tar_layer_bytes("releases/disk.raw", b"old"),
+                "ggg": _tar_layer_bytes("releases/.wh.disk.raw", b""),
+            },
+        ),
+    )
+
+    destination = tmp_path / "dest"
+    destination.mkdir()
+    oras_utils.extract_disk_image_files(
+        "quay.io/org/image@sha256:stu", ["releases/disk.raw"], destination
+    )
+
+    assert not (destination / "releases" / "disk.raw").exists()
+
+
+def test_extract_disk_image_files_layered_image_opaque_whiteout_removes_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A later layer's opaque-directory marker removes all wanted files under it."""
+    manifest = {
+        "config": {"mediaType": "application/vnd.oci.image.config.v1+json"},
+        "layers": [{"digest": "sha256:hhh"}, {"digest": "sha256:iii"}],
+    }
+    monkeypatch.setattr(
+        oras_utils.subprocess_cmd,
+        "run_cmd",
+        _fake_skopeo_copy(
+            manifest,
+            {
+                "hhh": _tar_layer_bytes("releases/disk.raw", b"old"),
+                "iii": _tar_layer_bytes("releases/.wh..wh..opq", b""),
+            },
+        ),
+    )
+
+    destination = tmp_path / "dest"
+    destination.mkdir()
+    oras_utils.extract_disk_image_files(
+        "quay.io/org/image@sha256:vwx", ["releases/disk.raw"], destination
+    )
+
+    assert not (destination / "releases" / "disk.raw").exists()
 
 
 def test_oras_manifest_fetch_returns_stdout(tmp_path: Path) -> None:
@@ -309,3 +754,18 @@ class TestOrasCp:
         assert "-r" in cmd
         assert "--platform" in cmd
         assert "linux/amd64" in cmd
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("oc-mirror-rhel9-linux-amd64.tar.gz", "oc-mirror-rhel9-linux-amd64"),
+        ("oc-mirror-rhel8-linux-amd64.tar.gz", "oc-mirror-rhel8-linux-amd64"),
+        ("simple.zip", "simple"),
+        ("no-ext", "no-ext"),
+        ("image.qcow2", "image"),
+    ],
+)
+def test_archive_stem(name: str, expected: str) -> None:
+    """Strip a trailing .tar.gz (or other) extension to form a directory-friendly stem."""
+    assert oras_utils.archive_stem(name) == expected

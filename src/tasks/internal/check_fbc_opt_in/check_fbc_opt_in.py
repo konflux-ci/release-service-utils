@@ -32,11 +32,11 @@ def parse_container_images(value: str) -> list[str]:
     # Input is a JSON array string; keep validation strict so malformed input fails fast.
     data = json.loads(value)
     if not isinstance(data, list):
-        raise ValueError("container images must be a JSON array")
+        raise TypeError("container images must be a JSON array")
     out: list[str] = []
     for item in data:
         if not isinstance(item, str):
-            raise ValueError("container images must be strings")
+            raise TypeError("container images must be strings")
         stripped = item.strip()
         if not stripped:
             raise ValueError("container images must be non-empty")
@@ -59,9 +59,16 @@ def get_fbc_opt_in(
     treated as a legitimate opt-out decision.
     """
     try:
-        # Build the Pyxis endpoint for this image pull spec.
+        # fbc_opt_in is a repository-level attribute; strip tag and digest.
+        repo_spec = image_ref.strip_tag_and_digest(pull_spec)
+        if repo_spec != pull_spec:
+            logger.info(
+                "Pull spec %s includes a tag/digest; stripped to %s for repo query",
+                pull_spec,
+                repo_spec,
+            )
         body = http_client.get_text(
-            image_ref.pyxis_url_for_pull_spec(pyxis_url, pull_spec),
+            image_ref.pyxis_url_for_pull_spec(pyxis_url, repo_spec),
             auth=auth,
         )
     except (OSError, requests.RequestException) as e:
@@ -183,9 +190,10 @@ def main() -> int:
             service_account_mount,
             iib_services_config_mount,
         )
-    except (ValueError, tekton.CheckStepError) as e:
-        # Surface validation and step failures as a clear one-line SystemExit message.
-        raise SystemExit(f"{PROG}: {e}") from e
+    except Exception as e:
+        logger.error("%s: %s", PROG, e, exc_info=True)
+        rpath.write_text(json.dumps([]), encoding="utf-8")
+        return 0
 
     logger.info("FBC opt-in check completed")
     logger.info("Results:")

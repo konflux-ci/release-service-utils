@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from release_service_utils.helpers import http_client
+from release_service_utils.helpers import http_client, json_merge
 from release_service_utils.helpers.authentication import setup_ca_cert
 from release_service_utils.helpers.file import resolve_path_under_base
 from get_resource import get_resource_dict
@@ -73,39 +73,6 @@ class CollectDataResult:
     snapshot_build_id: str
 
 
-def deep_merge(base: Any, override: Any) -> Any:
-    """Recursively merge *override* into *base*.
-
-    - dict + dict  -> recursive merge
-    - list + list  -> concatenate, deduplicate, then sort
-    - otherwise    -> *override* wins (``None`` in override preserves *base*)
-    """
-    if isinstance(base, dict) and isinstance(override, dict):
-        merged: dict[str, Any] = {}
-        for key in dict.fromkeys(list(base) + list(override)):
-            if key in base and key in override:
-                merged[key] = deep_merge(base[key], override[key])
-            elif key in override:
-                merged[key] = override[key]
-            else:
-                merged[key] = base[key]
-        return merged
-
-    if isinstance(base, list) and isinstance(override, list):
-        seen: list[Any] = []
-        for item in base + override:
-            if item not in seen:
-                seen.append(item)
-        try:
-            return sorted(seen, key=lambda x: json.dumps(x, sort_keys=True))
-        except TypeError:
-            return seen
-
-    if override is not None:
-        return override
-    return base
-
-
 def flatten_collectors(
     collectors_status: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -117,7 +84,7 @@ def flatten_collectors(
 
     result: dict[str, Any] = {}
     for item in all_values:
-        result = deep_merge(result, item)
+        result = json_merge.merge_deep_union_arrays(result, item)
     return result
 
 
@@ -286,9 +253,9 @@ def collect(
     release_plan_data = release_plan_json.get("spec", {}).get("data", {})
     rpa_data = rpa_json.get("spec", {}).get("data", {})
 
-    merged = deep_merge(collectors_result, release_data)
-    merged = deep_merge(merged, release_plan_data)
-    merged = deep_merge(merged, rpa_data)
+    merged = json_merge.merge_deep_union_arrays(collectors_result, release_data)
+    merged = json_merge.merge_deep_union_arrays(merged, release_plan_data)
+    merged = json_merge.merge_deep_union_arrays(merged, rpa_data)
 
     pipeline_metadata = resolve_pipeline_ref(rpa_json)
     logger.info("Release Pipeline Ref Info:")

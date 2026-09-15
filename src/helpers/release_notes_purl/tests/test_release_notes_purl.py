@@ -289,6 +289,54 @@ def test_merge_updated_artifacts_replaces_rows_by_component_arch_os() -> None:
     assert windows["purl"] == "placeholder"
 
 
+def test_merge_updated_artifacts_keeps_multiple_rows_for_same_key() -> None:
+    """Two updated entries sharing component|architecture|os are both kept.
+
+    Regression test: a plain dict keyed by component|architecture|os would
+    silently drop all but one of these rows on merge.
+    """
+    data = {
+        "releaseNotes": {
+            "content": {
+                "artifacts": [
+                    {
+                        "component": "toolkit",
+                        "architecture": "amd64",
+                        "os": "linux",
+                        "purl": "placeholder",
+                    },
+                ],
+            },
+        },
+    }
+    updated_entries = [
+        {
+            "component": "toolkit",
+            "architecture": "amd64",
+            "os": "linux",
+            "purl": "pkg:generic/toolkit@1.0?filename=toolkit-a.tgz",
+        },
+        {
+            "component": "toolkit",
+            "architecture": "amd64",
+            "os": "linux",
+            "purl": "pkg:generic/toolkit@1.0?filename=toolkit-b.tgz",
+        },
+    ]
+    rnp_module._merge_updated_artifacts(
+        data,
+        updated_entries=updated_entries,
+        updated_disk_entries=[],
+    )
+    artifacts = data["releaseNotes"]["content"]["artifacts"]
+    assert len(artifacts) == 2
+    purls = {row["purl"] for row in artifacts}
+    assert purls == {
+        "pkg:generic/toolkit@1.0?filename=toolkit-a.tgz",
+        "pkg:generic/toolkit@1.0?filename=toolkit-b.tgz",
+    }
+
+
 def test_merge_updated_artifacts_normalizes_invalid_content_and_artifact_rows() -> None:
     """Repair non-dict content, non-list artifacts, and skip invalid artifact rows."""
     data: dict[str, Any] = {
@@ -384,6 +432,54 @@ def test_updated_binary_or_generic_entries_returns_empty_when_version_missing() 
         cdn_base_url="https://access.redhat.com/downloads",
     )
     assert updated == []
+
+
+def test_updated_binary_or_generic_entries_expands_multiple_files_same_arch_os() -> None:
+    """Two files sharing (arch, os) each get their own PURL instead of colliding.
+
+    Regression test: before the per-file expansion, only the first file matching
+    a (architecture, os) pair was resolved, so a component shipping e.g. two
+    client binaries for the same target silently lost one file's PURL.
+    """
+    data = {
+        "releaseNotes": {
+            "content": {
+                "artifacts": [
+                    {
+                        "component": "toolkit",
+                        "architecture": "amd64",
+                        "os": "linux",
+                        "purl": "placeholder",
+                    },
+                ],
+            },
+        },
+    }
+    component = {
+        "name": "toolkit",
+        "staged": {"version": "1.0"},
+        "files": [
+            {"arch": "amd64", "os": "linux", "source": "toolkit-a.tgz"},
+            {"arch": "amd64", "os": "linux", "source": "toolkit-b.tgz"},
+        ],
+    }
+    checksum_map = [
+        {
+            "component": "toolkit",
+            "files": {"toolkit-a.tgz": "sha256:aaa", "toolkit-b.tgz": "sha256:bbb"},
+        },
+    ]
+    updated = rnp_module._updated_binary_or_generic_entries(
+        data,
+        component,
+        checksum_map=checksum_map,
+        cgw_base_url="https://developers.redhat.com/products",
+        cdn_base_url="https://access.redhat.com/downloads",
+    )
+    assert len(updated) == 2
+    purls = {row["purl"] for row in updated}
+    assert any("toolkit-a.tgz" in purl and "sha256%3Aaaa" in purl for purl in purls)
+    assert any("toolkit-b.tgz" in purl and "sha256%3Abbb" in purl for purl in purls)
 
 
 def test_updated_disk_image_entries_requires_staged_files() -> None:

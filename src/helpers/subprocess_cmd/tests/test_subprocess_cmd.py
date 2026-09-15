@@ -47,6 +47,19 @@ def test_run_cmd_captures_stderr_when_no_path_given() -> None:
     assert "error-msg" in r.stderr
 
 
+def test_run_cmd_stream_stdout_does_not_capture(capfd: pytest.CaptureFixture[str]) -> None:
+    """``stream_stdout=True`` inherits the parent's stdout instead of piping it."""
+    r = subprocess_cmd.run_cmd(["echo", "live-progress"], check=True, stream_stdout=True)
+    assert r.stdout is None
+    assert "live-progress" in capfd.readouterr().out
+
+
+def test_run_cmd_stream_stdout_default_still_captures() -> None:
+    """The default (``stream_stdout=False``) keeps piping stdout for callers that parse it."""
+    r = subprocess_cmd.run_cmd(["echo", "hi"], check=True)
+    assert r.stdout.strip() == "hi"
+
+
 def test_run_cmd_text_success() -> None:
     """``run_cmd_text`` returns stdout from a successful subprocess."""
     with mock.patch("subprocess.run") as run:

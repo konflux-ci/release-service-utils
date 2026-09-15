@@ -10,8 +10,6 @@ Used by ``utils-e2e-catalog-pipeline`` task ``run-catalog-e2e`` (this file:
 ``run_single_catalog_e2e_suite.py``). Expects a single suite pair in env.
 
 Required env:
-  KUBECONFIG (path to kubeconfig for ``kubectl`` create/wait; from
-  ``orchestrationKubeconfigSecretName``)
   CATALOG_GIT_URL, CATALOG_GIT_REVISION, CATALOG_E2E_RUNNER_IMAGE,
   PIPELINE_TEST_SUITE, PIPELINE_USED,
   VAULT_PASSWORD_SECRET_NAME, GITHUB_TOKEN_SECRET_NAME, KUBECONFIG_SECRET_NAME,
@@ -21,10 +19,18 @@ Required env:
 
 Optional env:
   PIPELINE_TEST_SUITE_VARS
+  KUBECONFIG — path to kubeconfig for ``kubectl`` create/wait. The pipeline
+  mounts orchestrationKubeconfigSecretName (optional) as a file and sets this
+  when the file is non-empty. Unset uses in-cluster config (the PipelineRun
+  service account).
+  CATALOG_E2E_NAMESPACE — namespace for the child catalog PipelineRun. The
+  pipeline sets this from the parent PipelineRun metadata.namespace. Unset
+  uses the in-cluster serviceaccount namespace, else
+  ``konflux-release-service-tenant``.
 
 ``KUBECONFIG_SECRET_NAME`` is the Secret **name** passed to the child catalog
-``PipelineRun`` as pipeline param ``KUBECONFIG_SECRET_NAME`` (stage/test cluster
-kubeconfig for ``e2e-tests-staging-pipeline`` tasks).
+``PipelineRun`` as pipeline param ``KUBECONFIG_SECRET_NAME``. The child catalog
+pipeline treats a missing kubeconfig Secret as in-cluster auth.
 
 Optional:
   E2E_WAIT_TIMEOUT — max wait for the child catalog PipelineRun, in seconds
@@ -45,11 +51,34 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 from catalog_e2e_helpers import require_env, opt_env
 
-CATALOG_E2E_NAMESPACE = "rhtap-release-2-tenant"
+DEFAULT_CATALOG_E2E_NAMESPACE = "konflux-release-service-tenant"
+CHILD_PIPELINE_SERVICE_ACCOUNT = "konflux-integration-runner"
+_SA_NAMESPACE_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+
+
+def catalog_e2e_namespace(
+    environ: Mapping[str, str] | None = None,
+    sa_namespace_path: Path = _SA_NAMESPACE_PATH,
+) -> str:
+    """Return the namespace for the child catalog e2e PipelineRun.
+
+    Prefers CATALOG_E2E_NAMESPACE, then the in-cluster serviceaccount
+    namespace, then DEFAULT_CATALOG_E2E_NAMESPACE.
+    """
+    env = os.environ if environ is None else environ
+    from_env = env.get("CATALOG_E2E_NAMESPACE", "").strip()
+    if from_env:
+        return from_env
+    try:
+        from_sa = sa_namespace_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        from_sa = ""
+    return from_sa or DEFAULT_CATALOG_E2E_NAMESPACE
 
 
 def _pipelinerun_finished(name: str, ns: str) -> tuple[bool, str] | None:
@@ -287,6 +316,9 @@ def _build_catalog_e2e_pipelinerun(
             },
         },
         "spec": {
+            "taskRunTemplate": {
+                "serviceAccountName": CHILD_PIPELINE_SERVICE_ACCOUNT,
+            },
             "pipelineRef": {
                 "resolver": "git",
                 "params": [
@@ -316,8 +348,7 @@ def _build_catalog_e2e_pipelinerun(
 
 def main() -> None:
     """Create the catalog test PipelineRun from env, wait for it, and validate TEST_OUTPUT."""
-    require_env("KUBECONFIG")
-    ns = CATALOG_E2E_NAMESPACE
+    ns = catalog_e2e_namespace()
     url = require_env("CATALOG_GIT_URL")
     rev = require_env("CATALOG_GIT_REVISION")
     runner = require_env("CATALOG_E2E_RUNNER_IMAGE")

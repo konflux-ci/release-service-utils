@@ -16,7 +16,7 @@ import jq
 _UNIQUE_PROGRAM = jq.compile(". | unique")
 _MULTIPLY_PROGRAM = jq.compile(".[0] * .[1]")
 
-# Mirrors the ``merge-json`` shell utility (``utils/merge-json``): objects are
+# Mirrors the former ``merge-json`` shell utility: objects are
 # merged recursively, arrays are concatenated and deduplicated/sorted (``jq``'s
 # ``unique``), and any other type has ``b``'s value win unless ``b``'s value
 # is ``null``, in which case ``a``'s value is kept. The explicit ``!= null``
@@ -62,7 +62,7 @@ def jq_multiply(a: Any, b: Any) -> Any:
 def merge_deep_union_arrays(a: dict, b: dict) -> dict:
     """Recursively merge two JSON objects, unioning arrays instead of replacing them.
 
-    Mirrors the ``merge-json`` shell utility: object values are merged
+    Mirrors the  former ``merge-json`` shell utility: object values are merged
     recursively, array values are concatenated and deduplicated (via
     :func:`unique_sorted`), and any other type has ``b``'s value win unless
     ``b``'s value is ``None``, in which case ``a``'s value is kept.

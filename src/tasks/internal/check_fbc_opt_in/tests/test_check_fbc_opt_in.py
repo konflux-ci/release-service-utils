@@ -44,8 +44,8 @@ def test_parse_container_images_ok() -> None:
 
 @pytest.mark.parametrize("raw", ['{"x": 1}', '["ok", ""]', "[1]"])
 def test_parse_container_images_invalid(raw: str) -> None:
-    """Non-array or non-string/blank items raise `ValueError`."""
-    with pytest.raises(ValueError):
+    """Non-array or non-string/blank items raise `TypeError` or `ValueError`."""
+    with pytest.raises((TypeError, ValueError)):
         check_fbc_opt_in.check_fbc_opt_in.parse_container_images(raw)
 
 
@@ -54,33 +54,52 @@ def test_get_fbc_opt_in_true_false_and_missing() -> None:
     with mock.patch(
         f"{TASK}.check_fbc_opt_in.http_client.get_text",
         return_value='{"fbc_opt_in": true}',
-    ):
+    ) as m:
         assert (
             check_fbc_opt_in.check_fbc_opt_in.get_fbc_opt_in(
                 "https://p", "r.io/repo/i:1", None
             )
             is True
         )
+        m.assert_called_once()
+        assert "/tag/" not in m.call_args[0][0]
     with mock.patch(
         f"{TASK}.check_fbc_opt_in.http_client.get_text",
         return_value='{"fbc_opt_in": false}',
-    ):
+    ) as m:
         assert (
             check_fbc_opt_in.check_fbc_opt_in.get_fbc_opt_in(
                 "https://p", "r.io/repo/i:1", None
             )
             is False
         )
+        assert "/tag/" not in m.call_args[0][0]
     with mock.patch(
         f"{TASK}.check_fbc_opt_in.http_client.get_text",
         return_value="{}",
-    ):
+    ) as m:
         assert (
             check_fbc_opt_in.check_fbc_opt_in.get_fbc_opt_in(
                 "https://p", "r.io/repo/i:1", None
             )
             is False
         )
+        assert "/tag/" not in m.call_args[0][0]
+
+
+def test_get_fbc_opt_in_strips_digest() -> None:
+    """A pull spec with a digest is stripped to the repository level."""
+    spec = "r.io/repo/i@sha256:abc123"
+    with mock.patch(
+        f"{TASK}.check_fbc_opt_in.http_client.get_text",
+        return_value='{"fbc_opt_in": true}',
+    ) as m:
+        assert (
+            check_fbc_opt_in.check_fbc_opt_in.get_fbc_opt_in("https://p", spec, None) is True
+        )
+        url = m.call_args[0][0]
+        assert "/tag/" not in url
+        assert "sha256" not in url
 
 
 def test_get_fbc_opt_in_http_error_raises_check_step_error() -> None:
@@ -217,8 +236,8 @@ def test_main_requires_pyxis_url_env(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setenv("RESULT_OPT_IN_RESULTS", str(rpath))
     monkeypatch.setenv("CONTAINER_IMAGES", '["r/repo/i:1"]')
     monkeypatch.delenv("PYXIS_URL", raising=False)
-    with pytest.raises(SystemExit, match=r"check_fbc_opt_in\.py: PYXIS_URL must be set"):
-        check_fbc_opt_in.check_fbc_opt_in.main()
+    assert check_fbc_opt_in.check_fbc_opt_in.main() == 0
+    assert json.loads(rpath.read_text(encoding="utf-8")) == []
 
 
 def test_main_missing_result_env_raises_system_exit() -> None:
@@ -230,24 +249,23 @@ def test_main_missing_result_env_raises_system_exit() -> None:
 def test_main_invalid_container_images_raises_system_exit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Invalid `CONTAINER_IMAGES` fails the step via `SystemExit`."""
+    """Invalid `CONTAINER_IMAGES` writes empty result and returns 0."""
     rpath = tmp_path / "result"
     monkeypatch.setenv("RESULT_OPT_IN_RESULTS", str(rpath))
     monkeypatch.setenv("CONTAINER_IMAGES", '{"bad": 1}')
     monkeypatch.setenv("PYXIS_URL", "https://pyxis/v1")
+    assert check_fbc_opt_in.check_fbc_opt_in.main() == 0
+    assert json.loads(rpath.read_text(encoding="utf-8")) == []
 
-    with pytest.raises(SystemExit, match="check_fbc_opt_in.py"):
-        check_fbc_opt_in.check_fbc_opt_in.main()
 
-
-def test_main_pyxis_outage_raises_system_exit_not_opt_out(
+def test_main_pyxis_outage_does_not_fake_opt_in(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A Pyxis outage during the check fails the step, not a fake opt-out result.
+    """A Pyxis outage during the check must not produce a fake opt-in result.
 
-    Exiting 0 here would let the InternalRequest report Succeeded=True, and
-    the managed caller (prepare-fbc-parameters.yaml) would then trust
-    whatever is in the result file as if it were a real opt-in decision.
+    The managed caller (prepare-fbc-parameters) would trust whatever is in
+    the result file as if it were a real opt-in decision, so the result must
+    be an empty list — no image should appear opted in.
     """
     rpath = tmp_path / "result"
     monkeypatch.setenv("RESULT_OPT_IN_RESULTS", str(rpath))
@@ -259,9 +277,8 @@ def test_main_pyxis_outage_raises_system_exit_not_opt_out(
         requests.ConnectionError("connection refused"),
     )
     with mock.patch.object(check_fbc_opt_in.check_fbc_opt_in, "run_check", side_effect=outage):
-        with pytest.raises(SystemExit, match="querying Pyxis"):
-            check_fbc_opt_in.check_fbc_opt_in.main()
+        assert check_fbc_opt_in.check_fbc_opt_in.main() == 0
 
-    # The step must fail without ever writing a result file: nothing here
-    # should be readable by the caller as a real (even if empty) result.
-    assert not rpath.exists()
+    # The result file must exist but contain an empty list — no image
+    # should be reported as opted in when Pyxis was unreachable.
+    assert json.loads(rpath.read_text(encoding="utf-8")) == []

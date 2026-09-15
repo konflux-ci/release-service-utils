@@ -10,7 +10,6 @@ from .collect_data import (  # noqa: F401
     CollectDataResult,
     check_data_key_sources,
     collect,
-    deep_merge,
     flatten_collectors,
     main,
     resolve_pipeline_ref,

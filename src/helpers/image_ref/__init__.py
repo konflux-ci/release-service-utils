@@ -9,5 +9,6 @@ from .image_ref import (  # noqa: F401
     repository,
     resolve_quay_digest_to_git_sha,
     split_image_ref,
+    strip_tag_and_digest,
     translate_delivery_repo,
 )

@@ -493,6 +493,9 @@ def test_build_catalog_e2e_pipelinerun_shape() -> None:
     assert m["kind"] == "PipelineRun"
     assert m["metadata"]["name"] == "utils-e2e-catalog-uid1"
     assert m["metadata"]["labels"]["utils-e2e/suite"] == "my-suite"
+    assert (
+        m["spec"]["taskRunTemplate"]["serviceAccountName"] == rs.CHILD_PIPELINE_SERVICE_ACCOUNT
+    )
     params = {p["name"]: p["value"] for p in m["spec"]["params"]}
     assert params["PIPELINE_TEST_SUITE"] == "my-suite"
     assert params["PIPELINE_TEST_SUITE_VARS"] == '{"var":"val"}'
@@ -588,7 +591,7 @@ def test_main_wait_failure_exits_1(monkeypatch: pytest.MonkeyPatch, tmp_path, ca
     with pytest.raises(SystemExit) as ei:
         rs.main()
     assert ei.value.code == 1
-    assert log_calls == [("n", rs.CATALOG_E2E_NAMESPACE)]
+    assert log_calls == [("n", rs.DEFAULT_CATALOG_E2E_NAMESPACE)]
     assert "dumped run-test logs" in capsys.readouterr().err
 
 
@@ -645,7 +648,7 @@ def test_main_bad_test_output_dumps_logs(
     with pytest.raises(SystemExit) as ei:
         rs.main()
     assert ei.value.code == 1
-    assert log_calls == [("child-plr", rs.CATALOG_E2E_NAMESPACE)]
+    assert log_calls == [("child-plr", rs.DEFAULT_CATALOG_E2E_NAMESPACE)]
     assert "bad outcome log dump" in capsys.readouterr().err
 
 
@@ -687,11 +690,90 @@ def test_main_missing_test_output_dumps_logs(
     with pytest.raises(SystemExit) as ei:
         rs.main()
     assert ei.value.code == 1
-    assert log_calls == [("child-plr", rs.CATALOG_E2E_NAMESPACE)]
+    assert log_calls == [("child-plr", rs.DEFAULT_CATALOG_E2E_NAMESPACE)]
     assert "missing test output log dump" in capsys.readouterr().err
 
 
-def test_script_main_guard_exits_when_kubeconfig_missing() -> None:
+def test_catalog_e2e_namespace_prefers_env() -> None:
+    """CATALOG_E2E_NAMESPACE wins over the serviceaccount file."""
+    assert (
+        rs.catalog_e2e_namespace(
+            environ={"CATALOG_E2E_NAMESPACE": "konflux-release-service-tenant"},
+            sa_namespace_path=Path("/does-not-exist"),
+        )
+        == "konflux-release-service-tenant"
+    )
+
+
+def test_catalog_e2e_namespace_uses_sa_file(tmp_path: Path) -> None:
+    """In-cluster namespace file is used when the env var is unset."""
+    sa_file = tmp_path / "namespace"
+    sa_file.write_text("from-sa\n", encoding="utf-8")
+    assert rs.catalog_e2e_namespace(environ={}, sa_namespace_path=sa_file) == "from-sa"
+
+
+def test_catalog_e2e_namespace_defaults_when_unset() -> None:
+    """Fall back to the staging tenant when env and sa file are absent."""
+    assert (
+        rs.catalog_e2e_namespace(
+            environ={},
+            sa_namespace_path=Path("/does-not-exist"),
+        )
+        == rs.DEFAULT_CATALOG_E2E_NAMESPACE
+    )
+
+
+def test_main_in_cluster_uses_env_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """KUBECONFIG is optional; child PLR namespace comes from env."""
+    monkeypatch.delenv("KUBECONFIG", raising=False)
+    monkeypatch.setenv("CATALOG_E2E_NAMESPACE", "konflux-release-service-tenant")
+    monkeypatch.setenv("CATALOG_GIT_URL", "https://github.com/o/c.git")
+    monkeypatch.setenv("CATALOG_GIT_REVISION", "dev")
+    monkeypatch.setenv("CATALOG_E2E_RUNNER_IMAGE", "quay.io/runner:v1")
+    monkeypatch.setenv("PIPELINE_TEST_SUITE", "suite1")
+    monkeypatch.setenv("PIPELINE_USED", "pipe1")
+    monkeypatch.setenv("ORCHESTRATOR_PIPELINE_RUN_UID", "abc-123")
+
+    manifests: list[dict] = []
+
+    def fake_mkstemp(suffix: str = "", **kw: object) -> tuple[int, str]:
+        path = tmp_path / "plr-stage.json"
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        return (fd, str(path))
+
+    monkeypatch.setattr(rs.tempfile, "mkstemp", fake_mkstemp)
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        plr_path = cmd[cmd.index("-f") + 1]
+        with open(plr_path, encoding="utf-8") as f:
+            manifests.append(json.load(f))
+        return subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="child-plr-name\n", stderr=""
+        )
+
+    monkeypatch.setattr(rs.subprocess, "run", fake_run)
+    monkeypatch.setattr(rs, "_wait_pipelinerun_terminal", lambda **kw: True)
+    monkeypatch.setattr(
+        rs,
+        "_fetch_run_test_task_output_json",
+        lambda pr, ns: {"result": "SUCCESS"},
+    )
+
+    rs.main()
+
+    assert "child-plr-name" in capsys.readouterr().out
+    assert manifests[0]["metadata"]["namespace"] == "konflux-release-service-tenant"
+    assert (
+        manifests[0]["spec"]["taskRunTemplate"]["serviceAccountName"]
+        == rs.CHILD_PIPELINE_SERVICE_ACCOUNT
+    )
+
+
+def test_script_main_guard_exits_when_required_env_missing() -> None:
     """Executing the file as the main program runs ``if __name__ == '__main__': main()``."""
     env = {"PATH": os.environ.get("PATH", "")}
     proc = subprocess.run(
@@ -702,4 +784,4 @@ def test_script_main_guard_exits_when_kubeconfig_missing() -> None:
         check=False,
     )
     assert proc.returncode == 1
-    assert "KUBECONFIG" in proc.stderr
+    assert "required" in proc.stderr

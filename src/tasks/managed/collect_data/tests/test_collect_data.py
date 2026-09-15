@@ -14,7 +14,6 @@ from release_service_utils.tasks.managed.collect_data import (
     CollectDataResult,
     check_data_key_sources,
     collect,
-    deep_merge,
     flatten_collectors,
     main,
     resolve_pipeline_ref,
@@ -72,64 +71,6 @@ def _resource_side_effect(
     return resources.get(resource_type, {})
 
 
-class TestDeepMerge:
-    """Tests for the deep_merge function."""
-
-    def test_merge_dicts(self) -> None:
-        """Test merge dicts."""
-        assert deep_merge({"a": 1}, {"b": 2}) == {"a": 1, "b": 2}
-
-    def test_override_scalar(self) -> None:
-        """Test override scalar."""
-        assert deep_merge({"a": 1}, {"a": 2}) == {"a": 2}
-
-    def test_nested_dict_merge(self) -> None:
-        """Test nested dict merge."""
-        base = {"one": {"two": "three"}}
-        override = {"one": {"four": ["five", "six"]}}
-        result = deep_merge(base, override)
-        assert result == {"one": {"two": "three", "four": ["five", "six"]}}
-
-    def test_array_concat_deduplicate(self) -> None:
-        """Test array concat deduplicate."""
-        base = {"tags": ["a", "b"]}
-        override = {"tags": ["b", "c"]}
-        assert deep_merge(base, override) == {"tags": ["a", "b", "c"]}
-
-    def test_boolean_false_preserved(self) -> None:
-        """Test boolean false preserved."""
-        assert deep_merge({"flag": True}, {"flag": False}) == {"flag": False}
-
-    def test_none_override_preserves_base(self) -> None:
-        """Test none override preserves base."""
-        assert deep_merge({"a": 1}, {"a": None}) == {"a": 1}
-
-    def test_none_base_with_override(self) -> None:
-        """Test none base with override."""
-        assert deep_merge({"a": None}, {"a": 42}) == {"a": 42}
-
-    def test_empty_dicts(self) -> None:
-        """Test empty dicts."""
-        assert deep_merge({}, {}) == {}
-
-    def test_scalar_override_dict(self) -> None:
-        """Test scalar override dict."""
-        assert deep_merge("old", "new") == "new"
-
-    def test_nested_arrays_in_dicts(self) -> None:
-        """Test nested arrays in dicts."""
-        base = {"issues": {"fixed": [{"id": "1"}]}}
-        override = {"issues": {"fixed": [{"id": "2"}]}}
-        result = deep_merge(base, override)
-        assert result == {"issues": {"fixed": [{"id": "1"}, {"id": "2"}]}}
-
-    def test_unsortable_list_items(self) -> None:
-        """Test list merge falls back to insertion order for non-serializable items."""
-        a, b = object(), object()
-        result = deep_merge([a], [b])
-        assert result == [a, b]
-
-
 class TestFlattenCollectors:
     """Tests for the flatten_collectors function."""
 
@@ -174,6 +115,17 @@ class TestFlattenCollectors:
         }
         result = flatten_collectors(status)
         assert result["data"]["val"] == 2
+
+    def test_overlapping_array_keys_unioned(self) -> None:
+        """Test overlapping array keys are combined instead of overwritten."""
+        status = {
+            "managed": {
+                "a": {"cves": [{"key": "CVE-1"}]},
+                "b": {"cves": [{"key": "CVE-2"}]},
+            },
+        }
+        result = flatten_collectors(status)
+        assert result["cves"] == [{"key": "CVE-1"}, {"key": "CVE-2"}]
 
 
 class TestTransformSnapshotSpec:
@@ -879,6 +831,57 @@ class TestRun:
             result_paths=result_paths,
         )
         mock_ca.assert_called_once()
+
+    @patch("release_service_utils.tasks.managed.collect_data.collect_data.get_resource_dict")
+    def test_run_large_data(self, mock_get: MagicMock, tmp_path: Path) -> None:
+        """Test run with a large number of CVEs and snapshot components."""
+        cve_count = 3000
+        component_count = 3000
+
+        def side_effect(resource_type: str, namespace: str, name: str) -> dict:
+            if resource_type == "release":
+                return {
+                    "metadata": {"name": "my-release"},
+                    "spec": {
+                        "data": {
+                            "releaseNotes": {
+                                "cves": [{"key": f"CVE-{i}"} for i in range(cve_count)]
+                            }
+                        }
+                    },
+                    "status": {"collectors": {}},
+                }
+            if resource_type == "snapshot":
+                return {
+                    "metadata": {"name": "my-snap", "labels": {}},
+                    "spec": {
+                        "application": "myapp",
+                        "components": [{"name": f"comp{i}"} for i in range(component_count)],
+                    },
+                }
+            return _resource_side_effect(resource_type, namespace, name)
+
+        mock_get.side_effect = side_effect
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        result_paths = self._make_result_paths(tmp_path)
+
+        run(
+            release="default/my-release",
+            release_plan="default/my-rp",
+            release_plan_admission="default/my-rpa",
+            release_service_config="default/my-rsc",
+            snapshot="default/my-snap",
+            subdirectory="uid123",
+            data_dir=data_dir,
+            result_paths=result_paths,
+        )
+
+        data = json.loads((data_dir / "uid123" / "data.json").read_text())
+        assert len(data["releaseNotes"]["cves"]) == cve_count
+
+        snapshot = json.loads((data_dir / "uid123" / "snapshot_spec.json").read_text())
+        assert len(snapshot["components"]) == component_count
 
 
 class TestMain:

@@ -9,4 +9,5 @@ from .sign_mac import (  # noqa: F401
     QUAY_SECRET_MOUNT,
     main,
     run,
+    run_custom_signing,
 )
