@@ -16,7 +16,6 @@ import gzip
 import json
 import os
 import re
-import subprocess
 import tarfile
 import tempfile
 from pathlib import Path
@@ -26,28 +25,21 @@ import requests
 
 from release_service_utils.helpers import advisory_data
 from release_service_utils.helpers import file as file_helper
-from release_service_utils.helpers import http_client
 from release_service_utils.helpers import oras_utils
 from release_service_utils.helpers import subprocess_cmd
 from release_service_utils.helpers import tekton
 from release_service_utils.helpers.logger import logger
 from release_service_utils.helpers.pulp_client import (
-    PulpAuth,
     PulpClient,
     PulpDigestStatus,
     parse_pulp_config,
 )
-
-
-@dataclasses.dataclass(frozen=True)
-class RpmNevra:
-    """Name-Epoch-Version-Release-Architecture for an RPM."""
-
-    name: str
-    epoch: str
-    version: str
-    release: str
-    arch: str
+from release_service_utils.helpers.rpm_utils import (
+    RpmNevra,
+    list_rpm_files,
+    parse_comma_list,
+    parse_nevra,
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -114,11 +106,6 @@ class FilteringResult:
     advisory_internal_url: str
 
 
-def should_exclude_file(filename: str, patterns: list[str]) -> bool:
-    """Return True if *filename* contains any non-blank *pattern* as a substring."""
-    return any(p in filename for p in patterns if p.strip())
-
-
 def determine_environment(data: dict[str, Any]) -> str:
     """Return ``"stage"`` or ``"production"`` based on data file content."""
     intention = data.get("intention", "")
@@ -134,44 +121,11 @@ def determine_environment(data: dict[str, Any]) -> str:
 
 
 def extract_rpm_metadata(rpm_path: Path) -> RpmNevra | None:
-    """Run ``rpm -qp`` to extract NEVRA metadata from an RPM file.
-
-    Return an ``RpmNevra``, or ``None`` on failure.
-    """
+    """Return NEVRA from the RPM header, or None when the header cannot be read."""
     try:
-        result = subprocess_cmd.run_cmd(
-            [
-                "rpm",
-                "-qp",
-                "--qf",
-                "%{NAME}|%{EPOCH}|%{VERSION}|%{RELEASE}|%{ARCH}\n",
-                str(rpm_path),
-            ],
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        logger.warning("extract_rpm_metadata: exception running rpm -qp: %s", exc)
+        return parse_nevra(rpm_path, fallback_to_filename=False)
+    except ValueError:
         return None
-
-    if result.returncode != 0:
-        return None
-
-    line = result.stdout.strip().split("\n")[0]
-    parts = line.split("|")
-    if len(parts) != 5:
-        return None
-
-    epoch = parts[1]
-    if not epoch or epoch == "(none)":
-        epoch = "0"
-
-    return RpmNevra(
-        name=parts[0],
-        epoch=epoch,
-        version=parts[2],
-        release=parts[3],
-        arch=parts[4],
-    )
 
 
 def _build_arch_repo_cache(
@@ -197,18 +151,7 @@ def _pull_rpm_files(
 ) -> list[str]:
     """Pull an OCI artifact and return filtered RPM filenames."""
     oras_utils.oras_pull(image, files_dir)
-
-    kept = []
-    for f in sorted(files_dir.iterdir()):
-        if not f.is_file():
-            continue
-        if not f.name.endswith(".rpm"):
-            continue
-        if should_exclude_file(f.name, excludes):
-            continue
-        kept.append(f.name)
-
-    return kept
+    return [path.name for path in list_rpm_files(files_dir, excludes)]
 
 
 def _resolve_target_repos(
@@ -497,7 +440,9 @@ def validate_pulp_digests(
 ) -> None:
     """Validate Pulp digests for in-advisory RPMs.
 
-    Raise ``RuntimeError`` on digest mismatch or Pulp API failures.
+    Search published content and, if nothing is published, the repository's
+    unpublished latest version. Raise ``RuntimeError`` on digest mismatch
+    or Pulp API failures.
     """
     logger.info(
         "Validating Pulp digests for %d in-advisory RPMs...",
@@ -523,7 +468,14 @@ def validate_pulp_digests(
 
         try:
             status = pulp.check_digest(
-                repo_name, rpmname, epoch, version, release, arch, sha256
+                repo_name,
+                rpmname,
+                epoch,
+                version,
+                release,
+                arch,
+                sha256,
+                fallback_to_latest=True,
             )
         except requests.RequestException as exc:
             raise RuntimeError(
@@ -661,23 +613,6 @@ def submit_advisory_filter(
     )
 
 
-def make_pulp_client(
-    ctx: LoadedContext,
-    domain: str,
-) -> PulpClient:
-    """Build a PulpClient with retry session and auth configured."""
-    session = http_client.get_retry_session(
-        total=3,
-        connect=3,
-        read=3,
-        status=2,
-        backoff_factor=0.4,
-        allowed_methods=frozenset({"GET", "POST"}),
-    )
-    session.auth = PulpAuth(ctx.pulp_config)
-    return PulpClient(session, ctx.base_url, domain)
-
-
 def run(
     config: FilterConfig,
     results: ResultPaths,
@@ -703,7 +638,7 @@ def run(
 
     filtering = submit_advisory_filter(rpm_entries, config, ctx)
 
-    pulp = make_pulp_client(ctx, config.pulp_domain)
+    pulp = PulpClient.from_config(ctx.pulp_config, config.pulp_domain)
     if filtering.in_advisory_rpms:
         validate_pulp_digests(filtering.in_advisory_rpms, pulp)
 
@@ -751,20 +686,12 @@ def main() -> int:
         rpa_file=Path(tekton.require_env("RPA_FILE")),
         pulp_config_file=Path(tekton.require_env("PULP_CONFIG_FILE")),
         pulp_domain=tekton.require_env("PULP_DOMAIN"),
-        default_excludes=[
-            x.strip()
-            for x in os.environ.get("DEFAULT_EXCLUDES", "-debuginfo-, -debugsource-").split(
-                ","
-            )
-            if x.strip()
-        ],
-        default_architectures=[
-            x.strip()
-            for x in os.environ.get(
-                "DEFAULT_ARCHITECTURES", "x86_64,aarch64,s390x,ppc64le"
-            ).split(",")
-            if x.strip()
-        ],
+        default_excludes=parse_comma_list(
+            os.environ.get("DEFAULT_EXCLUDES", "-debuginfo-, -debugsource-")
+        ),
+        default_architectures=parse_comma_list(
+            os.environ.get("DEFAULT_ARCHITECTURES", "x86_64,aarch64,s390x,ppc64le")
+        ),
         pipeline_run_uid=tekton.require_env("PIPELINE_RUN_UID"),
         oci_storage=os.environ.get("OCI_STORAGE", "empty"),
         oras_options=os.environ.get("ORAS_OPTIONS", ""),
