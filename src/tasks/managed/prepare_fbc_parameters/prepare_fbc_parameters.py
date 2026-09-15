@@ -10,16 +10,14 @@ from typing import Any
 
 from release_service_utils.helpers import file, internal_request, tekton
 from release_service_utils.helpers.internal_request import (
+    PIPELINERUN_UID_LABEL,
     SPAWN_OVERHEAD_SECONDS,
+    TASK_GROUP_LABEL,
     seconds_to_duration,
 )
 from release_service_utils.helpers.logger import logger
+from release_service_utils.helpers.pyxis_api import pyxis_api_url_for_server
 from release_service_utils.helpers.subprocess_cmd import run_cmd
-
-TASK_LABEL = "internal-services.appstudio.openshift.io/group-id"
-PIPELINERUN_LABEL = "internal-services.appstudio.openshift.io/pipelinerun-uid"
-
-PYXIS_STAGE_URL = "https://pyxis.stage.engineering.redhat.com/v1"
 
 
 def detect_release_mode(data: dict[str, Any]) -> str:
@@ -44,13 +42,10 @@ def detect_release_mode(data: dict[str, Any]) -> str:
 
 def render_fbc_fragment(
     fbc_fragment: str,
-    *,
-    run: Any = None,
 ) -> list[dict[str, Any]]:
     """Run ``opm render`` on *fbc_fragment* and return parsed catalog entries."""
-    runner = run or run_cmd
     logger.info("Rendering FBC fragment: %s", fbc_fragment)
-    result = runner(
+    result = run_cmd(
         ["opm", "render", fbc_fragment],
         check=True,
     )
@@ -171,24 +166,9 @@ def select_iib_service_account(staged: bool) -> str:
 
 def fetch_ir_opt_in_results(
     ir_name: str,
-    *,
-    run: Any = None,
 ) -> list[dict[str, Any]]:
     """Fetch optInResults from a completed InternalRequest."""
-    runner = run or run_cmd
-    result = runner(
-        [
-            "kubectl",
-            "get",
-            "internalrequest",
-            ir_name,
-            "-o",
-            "json",
-        ],
-        check=True,
-    )
-    ir_data = json.loads(result.stdout)
-    results_raw = ir_data.get("status", {}).get("results", {})
+    results_raw = internal_request.fetch_results(ir_name)
     opt_in_raw = results_raw.get("optInResults")
     if not opt_in_raw:
         raise tekton.CheckStepError(
@@ -208,11 +188,8 @@ def check_fbc_opt_in(
     task_run_uid: str,
     *,
     timeout: int = 3600,
-    create_ir: Any = None,
-    run: Any = None,
 ) -> list[dict[str, Any]]:
     """Create check-fbc-opt-in InternalRequest and return results."""
-    ir_create = create_ir or internal_request.create
     params: dict[str, str] = {
         "containerImages": json.dumps(bundle_images),
         "iibServiceAccountSecret": iib_service_account_secret,
@@ -221,18 +198,18 @@ def check_fbc_opt_in(
         "taskGitRevision": task_git_revision,
     }
     if pyxis_server == "stage":
-        params["pyxisUrl"] = PYXIS_STAGE_URL
+        params["pyxisUrl"] = pyxis_api_url_for_server("stage-internal")
 
     labels = {
-        TASK_LABEL: task_run_uid,
-        PIPELINERUN_LABEL: pipeline_run_uid,
+        TASK_GROUP_LABEL: task_run_uid,
+        PIPELINERUN_UID_LABEL: pipeline_run_uid,
     }
 
     pipeline_timeout = seconds_to_duration(timeout + SPAWN_OVERHEAD_SECONDS)
     task_timeout = seconds_to_duration(timeout)
     wait_timeout = timeout + SPAWN_OVERHEAD_SECONDS
 
-    ir_name = ir_create(
+    ir_name = internal_request.create(
         "check-fbc-opt-in",
         params=params,
         labels=labels,
@@ -242,7 +219,7 @@ def check_fbc_opt_in(
         task_timeout=task_timeout,
     )
     logger.info("InternalRequest '%s' completed.", ir_name)
-    return fetch_ir_opt_in_results(ir_name, run=run)
+    return fetch_ir_opt_in_results(ir_name)
 
 
 def run_prepare(
@@ -254,12 +231,8 @@ def run_prepare(
     task_git_revision: str,
     pipeline_run_uid: str,
     task_run_uid: str = "",
-    render: Any = None,
-    create_ir: Any = None,
-    run: Any = None,
 ) -> dict[str, str]:
     """Orchestrate all validation phases and return Tekton results."""
-    render_fn = render or render_fbc_fragment
     snapshot = file.load_json_dict(snapshot_path)
     data = file.load_json_dict(data_path)
 
@@ -291,7 +264,7 @@ def run_prepare(
             fbc_fragment,
         )
 
-        catalog = render_fn(fbc_fragment)
+        catalog = render_fbc_fragment(fbc_fragment)
         packages = extract_packages(catalog)
         bundle_images = extract_bundle_images(catalog)
         all_bundle_images.extend(bundle_images)
@@ -344,8 +317,6 @@ def run_prepare(
         pipeline_run_uid,
         task_run_uid,
         timeout=request_timeout,
-        create_ir=create_ir,
-        run=run,
     )
     logger.info("Opt-in results: %s", json.dumps(opt_in_results))
 

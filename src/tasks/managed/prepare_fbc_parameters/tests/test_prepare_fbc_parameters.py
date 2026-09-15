@@ -284,75 +284,56 @@ def test_iib_sa_stage() -> None:
 # --- render_fbc_fragment ---
 
 
-def test_render_fbc_fragment() -> None:
+@mock.patch(f"{TASK}.prepare_fbc_parameters.run_cmd")
+def test_render_fbc_fragment(mock_run_cmd: mock.MagicMock) -> None:
     """Parse opm render stdout into catalog entry dicts."""
     stdout = (
         '{"schema":"olm.package","name":"pkg-a"}\n'
         '{"schema":"olm.bundle","image":"q.io/b@sha256:x"}\n'
     )
-    fake_result = subprocess.CompletedProcess(
+    mock_run_cmd.return_value = subprocess.CompletedProcess(
         args=[],
         returncode=0,
         stdout=stdout,
         stderr="",
     )
 
-    def fake_run(cmd: list[str], **_kw: object) -> subprocess.CompletedProcess[str]:
-        assert cmd == ["opm", "render", "registry.io/img@sha256:abc"]
-        return fake_result
-
     entries = prepare_fbc_parameters.render_fbc_fragment(
         "registry.io/img@sha256:abc",
-        run=fake_run,
     )
     assert len(entries) == 2
     assert entries[0]["name"] == "pkg-a"
+    mock_run_cmd.assert_called_once_with(
+        ["opm", "render", "registry.io/img@sha256:abc"],
+        check=True,
+    )
 
 
 # --- fetch_ir_opt_in_results ---
 
 
-def test_fetch_ir_opt_in_results() -> None:
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.fetch_results")
+def test_fetch_ir_opt_in_results(mock_fetch: mock.MagicMock) -> None:
     """Extract optInResults from InternalRequest status."""
-    ir_data = {
-        "status": {
-            "results": {
-                "optInResults": json.dumps(
-                    [
-                        {"containerImage": "a", "fbcOptIn": True},
-                    ]
-                ),
-            },
-        },
+    mock_fetch.return_value = {
+        "optInResults": json.dumps(
+            [
+                {"containerImage": "a", "fbcOptIn": True},
+            ]
+        ),
     }
-    fake_result = subprocess.CompletedProcess(
-        args=[],
-        returncode=0,
-        stdout=json.dumps(ir_data),
-        stderr="",
-    )
 
-    results = prepare_fbc_parameters.fetch_ir_opt_in_results(
-        "test-ir",
-        run=lambda *a, **kw: fake_result,
-    )
+    results = prepare_fbc_parameters.fetch_ir_opt_in_results("test-ir")
     assert results == [{"containerImage": "a", "fbcOptIn": True}]
+    mock_fetch.assert_called_once_with("test-ir")
 
 
-def test_fetch_ir_opt_in_results_empty_raises() -> None:
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.fetch_results")
+def test_fetch_ir_opt_in_results_empty_raises(mock_fetch: mock.MagicMock) -> None:
     """Raise CheckStepError when optInResults is missing from status."""
-    ir_data = {"status": {"results": {}}}
-    fake_result = subprocess.CompletedProcess(
-        args=[],
-        returncode=0,
-        stdout=json.dumps(ir_data),
-        stderr="",
-    )
+    mock_fetch.return_value = {}
     with pytest.raises(tekton.CheckStepError, match="empty optInResults"):
-        prepare_fbc_parameters.fetch_ir_opt_in_results(
-            "test-ir",
-            run=lambda *a, **kw: fake_result,
-        )
+        prepare_fbc_parameters.fetch_ir_opt_in_results("test-ir")
 
 
 # --- run_prepare ---
@@ -382,33 +363,27 @@ def _setup_run_prepare(
     return snap_path, data_path
 
 
-def test_run_prepare_success(tmp_path: Path) -> None:
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.fetch_results")
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.create")
+@mock.patch(f"{TASK}.prepare_fbc_parameters.render_fbc_fragment")
+def test_run_prepare_success(
+    mock_render: mock.MagicMock,
+    mock_ir_create: mock.MagicMock,
+    mock_fetch: mock.MagicMock,
+    tmp_path: Path,
+) -> None:
     """Return correct result dict for a standard opt-in release."""
     snap_path, data_path = _setup_run_prepare(tmp_path)
 
-    def fake_render(fbc_fragment: str, **_kw: object) -> list[dict]:
-        return _catalog_entries(["pkg-a"], ["quay.io/bundle-a"])
-
-    def fake_create_ir(pipeline: str, **kwargs: object) -> str:
-        return "test-ir-name"
-
-    ir_data = {
-        "status": {
-            "results": {
-                "optInResults": json.dumps(
-                    [
-                        {"containerImage": "quay.io/bundle-a", "fbcOptIn": True},
-                    ]
-                ),
-            },
-        },
+    mock_render.return_value = _catalog_entries(["pkg-a"], ["quay.io/bundle-a"])
+    mock_ir_create.return_value = "test-ir-name"
+    mock_fetch.return_value = {
+        "optInResults": json.dumps(
+            [
+                {"containerImage": "quay.io/bundle-a", "fbcOptIn": True},
+            ]
+        ),
     }
-    fake_result = subprocess.CompletedProcess(
-        args=[],
-        returncode=0,
-        stdout=json.dumps(ir_data),
-        stderr="",
-    )
 
     results = prepare_fbc_parameters.run_prepare(
         snap_path,
@@ -416,9 +391,6 @@ def test_run_prepare_success(tmp_path: Path) -> None:
         task_git_url="http://localhost",
         task_git_revision="main",
         pipeline_run_uid="uid-123",
-        render=fake_render,
-        create_ir=fake_create_ir,
-        run=lambda *a, **kw: fake_result,
     )
     assert results["fbcOptIn"] == "true"
     assert results["validationPassed"] == "true"
@@ -428,15 +400,18 @@ def test_run_prepare_success(tmp_path: Path) -> None:
     assert results["iibServiceAccountSecret"] == "iib-service-account-prod"
 
 
-def test_run_prepare_disallowed_packages(tmp_path: Path) -> None:
+@mock.patch(f"{TASK}.prepare_fbc_parameters.render_fbc_fragment")
+def test_run_prepare_disallowed_packages(
+    mock_render: mock.MagicMock,
+    tmp_path: Path,
+) -> None:
     """Raise CheckStepError when packages are not in the allowed set."""
     snap_path, data_path = _setup_run_prepare(
         tmp_path,
         data=_make_data(allowed_packages=["other-pkg"]),
     )
 
-    def fake_render(fbc_fragment: str, **_kw: object) -> list[dict]:
-        return _catalog_entries(["pkg-a"])
+    mock_render.return_value = _catalog_entries(["pkg-a"])
 
     with pytest.raises(tekton.CheckStepError, match="Validation failed"):
         prepare_fbc_parameters.run_prepare(
@@ -445,7 +420,6 @@ def test_run_prepare_disallowed_packages(tmp_path: Path) -> None:
             task_git_url="http://localhost",
             task_git_revision="main",
             pipeline_run_uid="uid-123",
-            render=fake_render,
         )
 
 
@@ -481,36 +455,30 @@ def test_run_prepare_multiple_modes(tmp_path: Path) -> None:
         )
 
 
-def test_run_prepare_hotfix_mode(tmp_path: Path) -> None:
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.fetch_results")
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.create")
+@mock.patch(f"{TASK}.prepare_fbc_parameters.render_fbc_fragment")
+def test_run_prepare_hotfix_mode(
+    mock_render: mock.MagicMock,
+    mock_ir_create: mock.MagicMock,
+    mock_fetch: mock.MagicMock,
+    tmp_path: Path,
+) -> None:
     """Hotfix mode sets publish and sign but not overwrite."""
     snap_path, data_path = _setup_run_prepare(
         tmp_path,
         data=_make_data(hotfix=True, allowed_packages=["pkg-a"]),
     )
 
-    def fake_render(fbc_fragment: str, **_kw: object) -> list[dict]:
-        return _catalog_entries(["pkg-a"], ["quay.io/bundle-a"])
-
-    def fake_create_ir(pipeline: str, **kwargs: object) -> str:
-        return "test-ir-name"
-
-    ir_data = {
-        "status": {
-            "results": {
-                "optInResults": json.dumps(
-                    [
-                        {"containerImage": "quay.io/bundle-a", "fbcOptIn": False},
-                    ]
-                ),
-            },
-        },
+    mock_render.return_value = _catalog_entries(["pkg-a"], ["quay.io/bundle-a"])
+    mock_ir_create.return_value = "test-ir-name"
+    mock_fetch.return_value = {
+        "optInResults": json.dumps(
+            [
+                {"containerImage": "quay.io/bundle-a", "fbcOptIn": False},
+            ]
+        ),
     }
-    fake_result = subprocess.CompletedProcess(
-        args=[],
-        returncode=0,
-        stdout=json.dumps(ir_data),
-        stderr="",
-    )
 
     results = prepare_fbc_parameters.run_prepare(
         snap_path,
@@ -518,45 +486,36 @@ def test_run_prepare_hotfix_mode(tmp_path: Path) -> None:
         task_git_url="http://localhost",
         task_git_revision="main",
         pipeline_run_uid="uid-123",
-        render=fake_render,
-        create_ir=fake_create_ir,
-        run=lambda *a, **kw: fake_result,
     )
     assert results["mustPublishIndexImage"] == "true"
     assert results["mustSignIndexImage"] == "true"
     assert results["mustOverwriteFromIndexImage"] == "false"
 
 
-def test_run_prepare_staged_mode(tmp_path: Path) -> None:
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.fetch_results")
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.create")
+@mock.patch(f"{TASK}.prepare_fbc_parameters.render_fbc_fragment")
+def test_run_prepare_staged_mode(
+    mock_render: mock.MagicMock,
+    mock_ir_create: mock.MagicMock,
+    mock_fetch: mock.MagicMock,
+    tmp_path: Path,
+) -> None:
     """Staged mode disables all publishing and uses stage SA."""
     snap_path, data_path = _setup_run_prepare(
         tmp_path,
         data=_make_data(staged_index=True, allowed_packages=["pkg-a"]),
     )
 
-    def fake_render(fbc_fragment: str, **_kw: object) -> list[dict]:
-        return _catalog_entries(["pkg-a"], ["quay.io/bundle-a"])
-
-    def fake_create_ir(pipeline: str, **kwargs: object) -> str:
-        return "test-ir-name"
-
-    ir_data = {
-        "status": {
-            "results": {
-                "optInResults": json.dumps(
-                    [
-                        {"containerImage": "quay.io/bundle-a", "fbcOptIn": True},
-                    ]
-                ),
-            },
-        },
+    mock_render.return_value = _catalog_entries(["pkg-a"], ["quay.io/bundle-a"])
+    mock_ir_create.return_value = "test-ir-name"
+    mock_fetch.return_value = {
+        "optInResults": json.dumps(
+            [
+                {"containerImage": "quay.io/bundle-a", "fbcOptIn": True},
+            ]
+        ),
     }
-    fake_result = subprocess.CompletedProcess(
-        args=[],
-        returncode=0,
-        stdout=json.dumps(ir_data),
-        stderr="",
-    )
 
     results = prepare_fbc_parameters.run_prepare(
         snap_path,
@@ -564,9 +523,6 @@ def test_run_prepare_staged_mode(tmp_path: Path) -> None:
         task_git_url="http://localhost",
         task_git_revision="main",
         pipeline_run_uid="uid-123",
-        render=fake_render,
-        create_ir=fake_create_ir,
-        run=lambda *a, **kw: fake_result,
     )
     assert results["mustPublishIndexImage"] == "false"
     assert results["mustSignIndexImage"] == "false"
@@ -574,7 +530,11 @@ def test_run_prepare_staged_mode(tmp_path: Path) -> None:
     assert results["iibServiceAccountSecret"] == "iib-service-account-stage"
 
 
-def test_run_prepare_duplicate_packages(tmp_path: Path) -> None:
+@mock.patch(f"{TASK}.prepare_fbc_parameters.render_fbc_fragment")
+def test_run_prepare_duplicate_packages(
+    mock_render: mock.MagicMock,
+    tmp_path: Path,
+) -> None:
     """Raise CheckStepError when components share duplicate packages."""
     snap_path, data_path = _setup_run_prepare(
         tmp_path,
@@ -593,8 +553,7 @@ def test_run_prepare_duplicate_packages(tmp_path: Path) -> None:
         data=_make_data(allowed_packages=["pkg-a"]),
     )
 
-    def fake_render(fbc_fragment: str, **_kw: object) -> list[dict]:
-        return _catalog_entries(["pkg-a"], ["quay.io/bundle"])
+    mock_render.return_value = _catalog_entries(["pkg-a"], ["quay.io/bundle"])
 
     with pytest.raises(tekton.CheckStepError, match="Validation failed"):
         prepare_fbc_parameters.run_prepare(
@@ -603,7 +562,6 @@ def test_run_prepare_duplicate_packages(tmp_path: Path) -> None:
             task_git_url="http://localhost",
             task_git_revision="main",
             pipeline_run_uid="uid-123",
-            render=fake_render,
         )
 
 

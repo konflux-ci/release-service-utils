@@ -113,6 +113,7 @@ from release_service_utils.helpers.subprocess_cmd import run_cmd
 
 PIPELINE_NAME_LABEL = "internal-services.appstudio.openshift.io/pipeline-name"
 PIPELINERUN_UID_LABEL = "internal-services.appstudio.openshift.io/pipelinerun-uid"
+TASK_GROUP_LABEL = "internal-services.appstudio.openshift.io/group-id"
 CLEANUP_PROPAGATION_SLEEP_SECONDS = 5
 # Extra poll budget before the PipelineRun starts (operator reconcile and scheduling).
 SPAWN_OVERHEAD_SECONDS = 300
