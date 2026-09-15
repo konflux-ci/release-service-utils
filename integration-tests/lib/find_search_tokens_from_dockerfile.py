@@ -23,6 +23,11 @@ _COPY_HOME = re.compile(
     r"^COPY\s+(?!--from=)(\S+)\s+(/home/\S+)\s*(?:#.*)?$",
     re.IGNORECASE,
 )
+_LN_HOME = re.compile(
+    r"^(RUN\s+){0,1}ln\s+-s\s+(\S+)\s+(\/home\/scripts\/python/\S+)",
+    re.IGNORECASE,
+)
+
 # ``ENV PYTHONPATH`` also contains the substring PATH; match only executable PATH.
 _ENV_PATH = re.compile(r"^ENV\s+PATH\s*=", re.IGNORECASE)
 
@@ -35,6 +40,7 @@ class UtilsImageHomeLayout:
     repo_segment_to_home: dict[str, str]
     #: Dirs on ``PATH`` (e.g. ``/home/pyxis``) for basename search tokens.
     path_home_dirs: frozenset[str]
+    aliases: dict[str, str]
 
 
 def parse_dockerfile_home_layout(dockerfile_text: str) -> UtilsImageHomeLayout:
@@ -46,16 +52,20 @@ def parse_dockerfile_home_layout(dockerfile_text: str) -> UtilsImageHomeLayout:
     """
     # First pass: COPY lines map repo roots (pyxis, scripts, …) under /home.
     segment_to_home: dict[str, str] = {}
+    aliases: dict[str, str] = {}
     for line in dockerfile_text.splitlines():
         raw = line.split("#", 1)[0].strip()
         m = _COPY_HOME.match(raw)
+        if m:
+            src, dest = m.group(1), m.group(2)
+            # Skip COPY foo/bar … — one top-level source dir per line (matches Dockerfile).
+            if "/" not in src:
+                segment_to_home[src] = dest.rstrip("/")
+        m = _LN_HOME.match(raw)
         if not m:
             continue
-        src, dest = m.group(1), m.group(2)
-        # Skip COPY foo/bar … — one top-level source dir per line (matches Dockerfile).
-        if "/" in src:
-            continue
-        segment_to_home[src] = dest.rstrip("/")
+        src, dest = m.group(2), m.group(3)
+        aliases[src] = dest
 
     # Second pass: ``ENV PATH=`` adds e.g. /home/pyxis for basename search tokens.
     path_dirs: set[str] = set()
@@ -69,6 +79,7 @@ def parse_dockerfile_home_layout(dockerfile_text: str) -> UtilsImageHomeLayout:
     return UtilsImageHomeLayout(
         repo_segment_to_home=segment_to_home,
         path_home_dirs=frozenset(path_dirs),
+        aliases=aliases,
     )
 
 
@@ -114,6 +125,13 @@ def search_tokens_for_repo_path(rel_path: str, layout: UtilsImageHomeLayout) -> 
     # Always search for the full in-container path; Task YAML may reference it explicitly.
     out: set[str] = {full_path}
 
+    alias = False
+    if full_path in layout.aliases:
+        alias = layout.aliases[full_path]
+        out.add(layout.aliases[full_path])
+
+    # Always search for the full in-container path; Task YAML may reference it explicitly.
+
     if rest.endswith(".py"):
         parent_container_dir: str
         if "/" in rest:
@@ -125,6 +143,10 @@ def search_tokens_for_repo_path(rel_path: str, layout: UtilsImageHomeLayout) -> 
             stem = PurePosixPath(rest).stem
             if stem:
                 out.add(stem)
+    if alias:
+        stem = PurePosixPath(alias).stem
+        if stem:
+            out.add(stem)
 
     return frozenset(out)
 
