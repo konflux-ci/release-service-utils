@@ -493,20 +493,75 @@ def test_render_and_validate_schema_failure(tmp_path: Path) -> None:
     assert "advisory.yaml" in log.read_text(encoding="utf-8")
 
 
-def test_commit_and_push_new_advisory(tmp_path: Path) -> None:
-    """Commit the new advisory file and push to the default branch."""
-    with mock.patch(f"{TASK}.create_advisory.git.commit_and_push") as commit_push:
-        create_advisory.create_advisory._commit_and_push_new_advisory(
-            tmp_path, "path/y.yaml", "grp", stderr_path=tmp_path / "e.log"
+def test_advisory_source_branch_is_stable(tmp_path: Path) -> None:
+    """Branch names are derived from origin and canonical remaining content."""
+    content = tmp_path / "content.json"
+    content.write_text('[{"a":1}]\n', encoding="utf-8")
+    branch = create_advisory.create_advisory._advisory_source_branch("tenant-a", content)
+    assert branch.startswith("konflux-advisory-tenant-a-")
+    assert len(branch.split("-")[-1]) == 12
+
+
+def test_advisory_yaml_path_from_merge_request() -> None:
+    """Extract the advisory YAML path from MR file changes."""
+    merge_request = mock.Mock()
+    merge_request.changes.return_value = {
+        "changes": [
+            {"new_path": "data/advisories/t/2025/0001/advisory.yaml"},
+        ]
+    }
+    path = create_advisory.create_advisory._advisory_yaml_path_from_merge_request(
+        merge_request
+    )
+    assert path == "data/advisories/t/2025/0001/advisory.yaml"
+
+
+def test_commit_and_merge_new_advisory(
+    tmp_path: Path, creds: gitlab.GitLabCredentials
+) -> None:
+    """Commit on a feature branch, open an MR, and merge it to main."""
+    client = mock.Mock()
+    results = {
+        "result": tmp_path / "r",
+        "advisory_url": tmp_path / "u",
+        "advisory_internal_url": tmp_path / "i",
+    }
+    with (
+        mock.patch(f"{TASK}.create_advisory.git.checkout") as checkout,
+        mock.patch(f"{TASK}.create_advisory.git.index_add_commit") as index_commit,
+        mock.patch(f"{TASK}.create_advisory.git.push") as push,
+        mock.patch(f"{TASK}.create_advisory.gitlab.get_or_create_merge_request") as get_mr,
+        mock.patch(
+            f"{TASK}.create_advisory._finish_from_merged_merge_request",
+            return_value="data/2025/0001/advisory.yaml",
+        ) as finish,
+    ):
+        merge_request = mock.Mock()
+        get_mr.return_value = merge_request
+        out = create_advisory.create_advisory._commit_and_merge_new_advisory(
+            client,
+            creds,
+            tmp_path,
+            "data/2025/0001/advisory.yaml",
+            "konflux-advisory-t-deadbeef0001",
+            "grp",
+            "parent-pr",
+            "task-run-1",
+            "https://access.redhat.com/errata",
+            results,
+            stderr_path=tmp_path / "e.log",
         )
-    commit_push.assert_called_once_with(
+    checkout.assert_called_once()
+    index_commit.assert_called_once_with(
         tmp_path,
-        ["path/y.yaml"],
+        ["data/2025/0001/advisory.yaml"],
         "[Konflux Release] new advisory for grp",
-        gitlab.DEFAULT_BRANCH,
-        retries=5,
         stderr_path=tmp_path / "e.log",
     )
+    push.assert_called_once()
+    get_mr.assert_called_once()
+    finish.assert_called_once()
+    assert out == "data/2025/0001/advisory.yaml"
 
 
 def test_create_new_advisory(tmp_path: Path, creds: gitlab.GitLabCredentials) -> None:
@@ -523,8 +578,9 @@ def test_create_new_advisory(tmp_path: Path, creds: gitlab.GitLabCredentials) ->
         f"{TASK}.create_advisory._render_and_validate_advisory_yaml",
         return_value="data/2025/0042/advisory.yaml",
     ):
-        with mock.patch(f"{TASK}.create_advisory._commit_and_push_new_advisory"):
+        with mock.patch(f"{TASK}.create_advisory._commit_and_merge_new_advisory"):
             create_advisory.create_advisory._create_new_advisory(
+                gitlab_client=mock.Mock(),
                 credentials=creds,
                 repo_root=repo,
                 advisory_base=base,
@@ -534,13 +590,121 @@ def test_create_new_advisory(tmp_path: Path, creds: gitlab.GitLabCredentials) ->
                 advisory_number_segment="0042",
                 portal_advisory_id="2025:0042",
                 ship_date="2025-01-01T00:00:00Z",
+                source_branch="konflux-advisory-t-abc",
                 url_prefix="https://access.redhat.com/errata",
                 work_dir=tmp_path,
                 stderr_path=tmp_path / "e.log",
                 result_paths=results,
-                params={"component_group": "g"},
+                params={
+                    "component_group": "g",
+                    "internal_request_pr_name": "pr",
+                    "task_run_name": "tr",
+                },
             )
-    assert results["result"].read_text(encoding="utf-8") == "Success"
+
+
+def test_try_finish_via_existing_merge_request_false(tmp_path: Path) -> None:
+    """Sync main and return False when content is still unpublished."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+    with (
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.find_open_merge_request_by_source_branch",
+            return_value=None,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.git.remote_branch_exists",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._sync_main_and_finish_if_published",
+            return_value=False,
+        ) as sync_finish,
+    ):
+        finished = create_advisory.create_advisory._try_finish_via_existing_merge_request(
+            gitlab_client=mock.Mock(),
+            credentials=mock.Mock(git_repo="https://gitlab.example.com/g/r.git"),
+            repo_root=repo,
+            work_dir=work,
+            decoded={"content": {"images": [{"x": 1}]}},
+            advisory_base=repo / "data" / "advisories" / "t",
+            content_list_path=".content.images",
+            content_type="image",
+            source_branch="konflux-advisory-t-abc",
+            component_group="g",
+            internal_request_pr_name="pr",
+            task_run_name="tr",
+            url_prefix="https://access.redhat.com/errata",
+            stderr_path=tmp_path / "e.log",
+            result_paths={
+                "result": tmp_path / "r",
+                "advisory_url": tmp_path / "u",
+                "advisory_internal_url": tmp_path / "i",
+            },
+        )
+    assert finished is False
+    sync_finish.assert_called_once()
+
+
+def test_run_create_advisory_existing_mr_early_return(
+    tmp_path: Path, creds: gitlab.GitLabCredentials
+) -> None:
+    """Stop after joining an in-flight MR before reserving a live id."""
+    secret = tmp_path / "gitlab"
+    _write_gitlab_secret(secret)
+    errata = tmp_path / "errata"
+    _write_errata_mount(errata)
+    results = {
+        "result": tmp_path / "r",
+        "advisory_url": tmp_path / "u",
+        "advisory_internal_url": tmp_path / "i",
+        "internal_pr_name": tmp_path / "pr",
+        "internal_task_run_name": tmp_path / "tr",
+    }
+    with (
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.read_credentials_from_mount",
+            return_value=creds,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._clone_advisory_repo",
+            return_value=(
+                tmp_path / "repo",
+                tmp_path / "repo" / "data" / "advisories" / "t",
+            ),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._finish_if_all_content_already_published",
+            return_value=False,
+        ),
+        mock.patch(f"{TASK}.create_advisory.gitlab.client_from_credentials"),
+        mock.patch(
+            f"{TASK}.create_advisory._try_finish_via_existing_merge_request",
+            return_value=True,
+        ) as finish_mr,
+        mock.patch(f"{TASK}.create_advisory._resolve_live_id_number") as reserve,
+        mock.patch(f"{TASK}.create_advisory._create_new_advisory") as create,
+    ):
+        create_advisory.create_advisory.run_create_advisory(
+            advisory_secret=secret,
+            errata_mount=errata,
+            stderr_path=tmp_path / "e.log",
+            result_paths=results,
+            params={
+                "component_group": "g",
+                "origin": "t",
+                "config_map_name": "cm",
+                "content_type": "image",
+                "internal_request_pr_name": "pr",
+                "task_run_name": "tr",
+            },
+            decoded={"content": {"images": [{"x": 1}]}},
+        )
+    finish_mr.assert_called_once()
+    reserve.assert_not_called()
+    create.assert_not_called()
 
 
 def test_run_create_advisory_idempotent_early_return(
@@ -623,6 +787,19 @@ def test_run_create_advisory_full_create_path(
         mock.patch(
             f"{TASK}.create_advisory._build_merged_advisory_with_signing_key",
             return_value={"type": "RHSA", "content": {"images": []}},
+        ),
+        mock.patch(f"{TASK}.create_advisory.gitlab.client_from_credentials"),
+        mock.patch(
+            f"{TASK}.create_advisory._try_finish_via_existing_merge_request",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._claim_source_branch",
+            return_value=(True, "claimsha"),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._sync_main_and_finish_if_published",
+            return_value=False,
         ),
         mock.patch(
             f"{TASK}.create_advisory._resolve_live_id_number",
@@ -927,29 +1104,51 @@ def test_run_create_advisory_partial_idempotency_creates_new(
                 f"{TASK}.create_advisory.subprocess_cmd.run_cmd",
                 return_value=mock.MagicMock(stdout=_configmap_signing_key_stdout()),
             ):
-                with mock.patch(
-                    f"{TASK}.create_advisory._resolve_live_id_number",
-                    return_value=1234,
-                ):
-                    with mock.patch(f"{TASK}.create_advisory._ensure_advisory_number_unused"):
+                with mock.patch(f"{TASK}.create_advisory.gitlab.client_from_credentials"):
+                    with mock.patch(
+                        f"{TASK}.create_advisory._try_finish_via_existing_merge_request",
+                        return_value=False,
+                    ):
                         with mock.patch(
-                            f"{TASK}.create_advisory._create_new_advisory"
-                        ) as create:
-                            create_advisory.create_advisory.run_create_advisory(
-                                advisory_secret=secret,
-                                errata_mount=errata,
-                                stderr_path=tmp_path / "e.log",
-                                result_paths=results,
-                                params={
-                                    "component_group": "g",
-                                    "origin": "dev-tenant",
-                                    "config_map_name": "cm",
-                                    "content_type": "image",
-                                    "internal_request_pr_name": "pr",
-                                    "task_run_name": "tr",
-                                },
-                                decoded=decoded,
-                            )
+                            f"{TASK}.create_advisory._claim_source_branch",
+                            return_value=(True, "claimsha"),
+                        ):
+                            with mock.patch(
+                                f"{TASK}.create_advisory._sync_main_and_finish_if_published",
+                                return_value=False,
+                            ):
+                                with mock.patch(
+                                    f"{TASK}.create_advisory._resolve_live_id_number",
+                                    return_value=1234,
+                                ):
+                                    with mock.patch(
+                                        (
+                                            f"{TASK}.create_advisory."
+                                            "_ensure_advisory_number_unused"
+                                        ),
+                                    ):
+                                        with mock.patch(
+                                            (
+                                                f"{TASK}.create_advisory."
+                                                "_create_new_advisory"
+                                            ),
+                                        ) as create:
+                                            mod = create_advisory.create_advisory
+                                            mod.run_create_advisory(
+                                                advisory_secret=secret,
+                                                errata_mount=errata,
+                                                stderr_path=tmp_path / "e.log",
+                                                result_paths=results,
+                                                params={
+                                                    "component_group": "g",
+                                                    "origin": "dev-tenant",
+                                                    "config_map_name": "cm",
+                                                    "content_type": "image",
+                                                    "internal_request_pr_name": "pr",
+                                                    "task_run_name": "tr",
+                                                },
+                                                decoded=decoded,
+                                            )
     merged_arg = create.call_args.kwargs["merged"]
     assert len(merged_arg["content"]["images"]) == 1
     assert "NEW" in merged_arg["content"]["images"][0]["containerImage"]
@@ -1032,86 +1231,32 @@ def test_render_schema_failure_wrong_type_and_severity(tmp_path: Path) -> None:
     assert "wrongType" in log_text or "type" in log_text
 
 
-def test_create_new_advisory_stage_portal_url(
-    tmp_path: Path,
-) -> None:
-    """`rhtap-release` repos use the staging customer portal errata URL prefix."""
-    secret = tmp_path / "gitlab"
-    _write_gitlab_secret(secret)
-    secret.joinpath("git_repo").write_text(
-        "https://gitlab.com/rhtap-release/repo.git",
+def test_write_success_from_published_yaml_reads_synced_main(tmp_path: Path) -> None:
+    """Load advisory metadata from the updated worktree after syncing main."""
+    repo = tmp_path / "repo"
+    yaml_path = repo / "data" / "advisories" / "t" / "2025" / "0042" / "advisory.yaml"
+    yaml_path.parent.mkdir(parents=True)
+    yaml_path.write_text(
+        "metadata:\n  name: '2025:0042'\nspec:\n  type: RHSA\n",
         encoding="utf-8",
     )
-    creds = gitlab.read_credentials_from_mount(secret)
-    repo = tmp_path / "repo"
-    base = repo / "data" / "advisories" / "t"
-    base.mkdir(parents=True)
     results = {
         "result": tmp_path / "r",
         "advisory_url": tmp_path / "u",
         "advisory_internal_url": tmp_path / "i",
     }
-    with mock.patch(
-        f"{TASK}.create_advisory._render_and_validate_advisory_yaml",
-        return_value="data/2025/0042/advisory.yaml",
-    ):
-        with mock.patch(f"{TASK}.create_advisory._commit_and_push_new_advisory"):
-            create_advisory.create_advisory._create_new_advisory(
-                credentials=creds,
-                repo_root=repo,
-                advisory_base=base,
-                merged={"type": "RHSA", "content": {"images": []}},
-                decoded={"type": "RHSA"},
-                year="2025",
-                advisory_number_segment="0042",
-                portal_advisory_id="2025:0042",
-                ship_date="2025-01-01T00:00:00Z",
-                url_prefix="https://access.stage.redhat.com/errata",
-                work_dir=tmp_path,
-                stderr_path=tmp_path / "e.log",
-                result_paths=results,
-                params={"component_group": "g"},
-            )
+    with mock.patch(f"{TASK}.create_advisory.git.sync_to_origin_main") as sync_main:
+        create_advisory.create_advisory._write_success_from_published_yaml(
+            repo,
+            "data/advisories/t/2025/0042/advisory.yaml",
+            "https://gitlab.example.com/g/r.git",
+            "https://access.stage.redhat.com/errata",
+            results,
+            stderr_path=tmp_path / "e.log",
+        )
+    sync_main.assert_called_once()
     assert results["advisory_url"].read_text(encoding="utf-8") == (
         "https://access.stage.redhat.com/errata/RHSA-2025:0042"
-    )
-
-
-def test_create_new_advisory_custom_live_id_portal_url(
-    tmp_path: Path, creds: gitlab.GitLabCredentials
-) -> None:
-    """A pre-assigned `live_id` is reflected in the portal URL (e.g. `:0999`)."""
-    repo = tmp_path / "repo"
-    base = repo / "data" / "advisories" / "t"
-    base.mkdir(parents=True)
-    results = {
-        "result": tmp_path / "r",
-        "advisory_url": tmp_path / "u",
-        "advisory_internal_url": tmp_path / "i",
-    }
-    with mock.patch(
-        f"{TASK}.create_advisory._render_and_validate_advisory_yaml",
-        return_value="data/2025/0999/advisory.yaml",
-    ):
-        with mock.patch(f"{TASK}.create_advisory._commit_and_push_new_advisory"):
-            create_advisory.create_advisory._create_new_advisory(
-                credentials=creds,
-                repo_root=repo,
-                advisory_base=base,
-                merged={"type": "RHSA", "content": {"images": []}},
-                decoded={"type": "RHSA", "live_id": 999},
-                year="2025",
-                advisory_number_segment="0999",
-                portal_advisory_id="2025:0999",
-                ship_date="2025-01-01T00:00:00Z",
-                url_prefix="https://access.redhat.com/errata",
-                work_dir=tmp_path,
-                stderr_path=tmp_path / "e.log",
-                result_paths=results,
-                params={"component_group": "g"},
-            )
-    assert results["advisory_url"].read_text(encoding="utf-8") == (
-        "https://access.redhat.com/errata/RHSA-2025:0999"
     )
 
 
@@ -1270,6 +1415,19 @@ def test_run_create_advisory_generic_content_type(
             f"{TASK}.create_advisory._build_merged_advisory_with_signing_key",
             return_value=decoded,
         ) as build,
+        mock.patch(f"{TASK}.create_advisory.gitlab.client_from_credentials"),
+        mock.patch(
+            f"{TASK}.create_advisory._try_finish_via_existing_merge_request",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._claim_source_branch",
+            return_value=(True, "claimsha"),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._sync_main_and_finish_if_published",
+            return_value=False,
+        ),
         mock.patch(
             f"{TASK}.create_advisory._resolve_live_id_number",
             return_value=1234,
@@ -1368,7 +1526,37 @@ def test_run_create_advisory_happy_path_writes_portal_url(
             return_value=False,
         ),
         mock.patch.object(create_advisory.create_advisory, "ADVISORY_TEMPLATE_PATH", template),
-        mock.patch(f"{TASK}.create_advisory.git.commit_and_push"),
+        mock.patch(f"{TASK}.create_advisory.gitlab.client_from_credentials"),
+        mock.patch(
+            f"{TASK}.create_advisory._try_finish_via_existing_merge_request",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._claim_source_branch",
+            return_value=(True, "claimsha"),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._sync_main_and_finish_if_published",
+            return_value=False,
+        ),
+        mock.patch(f"{TASK}.create_advisory.git.checkout"),
+        mock.patch(f"{TASK}.create_advisory.git.index_add_commit"),
+        mock.patch(f"{TASK}.create_advisory.git.push"),
+        mock.patch(f"{TASK}.create_advisory.gitlab.get_or_create_merge_request"),
+        mock.patch(
+            f"{TASK}.create_advisory._finish_from_merged_merge_request",
+            side_effect=lambda **kwargs: (
+                create_advisory.create_advisory._write_success_results(
+                    kwargs["result_paths"],
+                    customer_portal_url=("https://access.redhat.com/errata/RHSA-2025:1234"),
+                    gitlab_raw_url=(
+                        "https://gitlab.example.com/g/r/-/raw/main/"
+                        "data/advisories/not-existing-origin/2025/1234/advisory.yaml"
+                    ),
+                ),
+                "data/advisories/not-existing-origin/2025/1234/advisory.yaml",
+            )[1],
+        ),
     ):
         create_advisory.create_advisory.run_create_advisory(
             advisory_secret=secret,
@@ -1389,6 +1577,750 @@ def test_run_create_advisory_happy_path_writes_portal_url(
     url = results["advisory_url"].read_text(encoding="utf-8")
     assert url.startswith("https://access.redhat.com/errata/RHSA-")
     assert url.endswith(":1234")
+
+
+def test_try_finish_syncs_main_when_branch_removed(tmp_path: Path) -> None:
+    """Detect a concurrent merge after the source branch was deleted."""
+    repo = tmp_path / "repo"
+    base = repo / "data" / "advisories" / "t" / "2025" / "0001"
+    base.mkdir(parents=True)
+    (base / "advisory.yaml").write_text(
+        "metadata:\n  name: '2025:0001'\nspec:\n  type: RHSA\n  content:\n"
+        "    images:\n      - containerImage: q.io/i\n        tags: ['t']\n"
+        "        repository: r\n",
+        encoding="utf-8",
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    results = {
+        "result": tmp_path / "res",
+        "advisory_url": tmp_path / "url",
+        "advisory_internal_url": tmp_path / "internal",
+    }
+    with (
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.find_open_merge_request_by_source_branch",
+            return_value=None,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.git.remote_branch_exists",
+            return_value=False,
+        ),
+        mock.patch(f"{TASK}.create_advisory.git.sync_to_origin_main"),
+    ):
+        finished = create_advisory.create_advisory._try_finish_via_existing_merge_request(
+            gitlab_client=mock.Mock(),
+            credentials=mock.Mock(git_repo="https://gitlab.example.com/g/r.git"),
+            repo_root=repo,
+            work_dir=work,
+            decoded={
+                "content": {
+                    "images": [
+                        {
+                            "containerImage": "q.io/i",
+                            "tags": ["t"],
+                            "repository": "r",
+                        }
+                    ]
+                }
+            },
+            advisory_base=repo / "data" / "advisories" / "t",
+            content_list_path=".content.images",
+            content_type="image",
+            source_branch="konflux-advisory-t-abc",
+            component_group="g",
+            internal_request_pr_name="pr",
+            task_run_name="tr",
+            url_prefix="https://access.redhat.com/errata",
+            stderr_path=tmp_path / "e.log",
+            result_paths=results,
+        )
+    assert finished is True
+    assert results["advisory_url"].read_text(encoding="utf-8") == (
+        "https://access.redhat.com/errata/RHSA-2025:0001"
+    )
+
+
+def test_claim_source_branch_uses_create_only_push(tmp_path: Path) -> None:
+    """Claim the source branch with a create-only remote ref update."""
+    call_order: list[str] = []
+
+    def _rev_parse(*_args: object, **_kwargs: object) -> str:
+        call_order.append("rev_parse")
+        return "claimsha"
+
+    def _push_new_branch(*_args: object, **_kwargs: object) -> None:
+        call_order.append("push_new_branch")
+
+    with (
+        mock.patch(f"{TASK}.create_advisory.git.sync_to_origin_main"),
+        mock.patch(f"{TASK}.create_advisory.git.checkout"),
+        mock.patch(
+            f"{TASK}.create_advisory.git.push_new_branch",
+            side_effect=_push_new_branch,
+        ) as push_new,
+        mock.patch(
+            f"{TASK}.create_advisory.git.rev_parse",
+            side_effect=_rev_parse,
+        ),
+    ):
+        claimed, claim_sha = create_advisory.create_advisory._claim_source_branch(
+            tmp_path,
+            "konflux-advisory-t-abc",
+            stderr_path=tmp_path / "e.log",
+        )
+    assert claimed is True
+    assert claim_sha == "claimsha"
+    assert call_order == ["rev_parse", "push_new_branch"]
+    push_new.assert_called_once_with(
+        tmp_path,
+        "konflux-advisory-t-abc",
+        stderr_path=tmp_path / "e.log",
+    )
+
+
+def test_try_finish_waits_for_merge_request_when_branch_exists(tmp_path: Path) -> None:
+    """Poll for an MR when the source branch exists without an open request."""
+    repo = tmp_path / "repo"
+    work = tmp_path / "work"
+    work.mkdir()
+    merge_request = mock.Mock()
+    merge_request.changes.return_value = {
+        "changes": [{"new_path": "data/advisories/t/2025/0001/advisory.yaml"}]
+    }
+    results = {
+        "result": tmp_path / "res",
+        "advisory_url": tmp_path / "url",
+        "advisory_internal_url": tmp_path / "internal",
+    }
+    with (
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.find_open_merge_request_by_source_branch",
+            return_value=None,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.git.remote_branch_exists",
+            return_value=True,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.wait_for_open_merge_request_by_source_branch",
+            return_value=merge_request,
+        ) as wait_mr,
+        mock.patch(
+            f"{TASK}.create_advisory._finish_from_merged_merge_request",
+            return_value="data/advisories/t/2025/0001/advisory.yaml",
+        ) as finish,
+        mock.patch(f"{TASK}.create_advisory.gitlab.get_or_create_merge_request") as create_mr,
+    ):
+        finished = create_advisory.create_advisory._try_finish_via_existing_merge_request(
+            gitlab_client=mock.Mock(),
+            credentials=mock.Mock(git_repo="https://gitlab.example.com/g/r.git"),
+            repo_root=repo,
+            work_dir=work,
+            decoded={"content": {"images": [{"x": 1}]}},
+            advisory_base=repo / "data" / "advisories" / "t",
+            content_list_path=".content.images",
+            content_type="image",
+            source_branch="konflux-advisory-t-abc",
+            component_group="g",
+            internal_request_pr_name="pr",
+            task_run_name="tr",
+            url_prefix="https://access.redhat.com/errata",
+            stderr_path=tmp_path / "e.log",
+            result_paths=results,
+        )
+    assert finished is True
+    wait_mr.assert_called_once()
+    create_mr.assert_not_called()
+    finish.assert_called_once()
+
+
+def test_run_create_advisory_releases_claimed_branch_on_post_claim_idempotency(
+    tmp_path: Path, creds: gitlab.GitLabCredentials
+) -> None:
+    """Delete a claimed branch when refreshed idempotency finds published content."""
+    secret = tmp_path / "gitlab"
+    _write_gitlab_secret(secret)
+    errata = tmp_path / "errata"
+    _write_errata_mount(errata)
+    results = {
+        "result": tmp_path / "r",
+        "advisory_url": tmp_path / "u",
+        "advisory_internal_url": tmp_path / "i",
+        "internal_pr_name": tmp_path / "pr",
+        "internal_task_run_name": tmp_path / "tr",
+    }
+    client = mock.Mock()
+    with (
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.read_credentials_from_mount",
+            return_value=creds,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._clone_advisory_repo",
+            return_value=(
+                tmp_path / "repo",
+                tmp_path / "repo" / "data" / "advisories" / "t",
+            ),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._finish_if_all_content_already_published",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.client_from_credentials",
+            return_value=client,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._try_finish_via_existing_merge_request",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._build_merged_advisory_with_signing_key",
+            return_value={"type": "RHSA", "content": {"images": []}},
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._claim_source_branch",
+            return_value=(True, "claimsha"),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._sync_main_and_finish_if_published",
+            return_value=True,
+        ),
+        mock.patch(f"{TASK}.create_advisory._release_claimed_work") as release,
+        mock.patch(f"{TASK}.create_advisory._resolve_live_id_number") as reserve,
+    ):
+        create_advisory.create_advisory.run_create_advisory(
+            advisory_secret=secret,
+            errata_mount=errata,
+            stderr_path=tmp_path / "e.log",
+            result_paths=results,
+            params={
+                "component_group": "g",
+                "origin": "t",
+                "config_map_name": "cm",
+                "content_type": "image",
+                "internal_request_pr_name": "pr",
+                "task_run_name": "tr",
+            },
+            decoded={"content": {"images": [{"x": 1}]}},
+        )
+    release.assert_called_once_with(client, creds, mock.ANY)
+    reserve.assert_not_called()
+
+
+def test_commit_and_merge_push_race_joins_competitor_mr(
+    tmp_path: Path, creds: gitlab.GitLabCredentials
+) -> None:
+    """Report the merged advisory from a competing MR after a rejected push."""
+    client = mock.Mock()
+    results = {
+        "result": tmp_path / "r",
+        "advisory_url": tmp_path / "u",
+        "advisory_internal_url": tmp_path / "i",
+    }
+    merge_request = mock.Mock()
+    merge_request.changes.return_value = {
+        "changes": [{"new_path": "data/advisories/t/2025/0999/advisory.yaml"}]
+    }
+    with (
+        mock.patch(f"{TASK}.create_advisory.git.checkout"),
+        mock.patch(f"{TASK}.create_advisory.git.index_add_commit"),
+        mock.patch(
+            f"{TASK}.create_advisory.git.push",
+            side_effect=subprocess.CalledProcessError(1, "git push"),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.git.remote_branch_exists",
+            return_value=True,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.git.rev_parse",
+            return_value="localsha",
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.git.remote_branch_sha",
+            return_value="remotesha",
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.wait_for_open_merge_request_by_source_branch",
+            return_value=merge_request,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._finish_from_merged_merge_request",
+            return_value="data/advisories/t/2025/0999/advisory.yaml",
+        ) as finish,
+    ):
+        out = create_advisory.create_advisory._commit_and_merge_new_advisory(
+            client,
+            creds,
+            tmp_path,
+            "data/advisories/t/2025/1234/advisory.yaml",
+            "konflux-advisory-t-deadbeef0001",
+            "grp",
+            "parent-pr",
+            "task-run-1",
+            "https://access.redhat.com/errata",
+            results,
+            claim_commit_sha="claimsha",
+            stderr_path=tmp_path / "e.log",
+        )
+    finish.assert_called_once()
+    assert out == "data/advisories/t/2025/0999/advisory.yaml"
+
+
+def test_commit_and_merge_rejects_push_when_remote_still_at_claim(
+    tmp_path: Path, creds: gitlab.GitLabCredentials
+) -> None:
+    """Propagate a failed push when the remote branch never left the claim commit."""
+    client = mock.Mock()
+    results = {
+        "result": tmp_path / "r",
+        "advisory_url": tmp_path / "u",
+        "advisory_internal_url": tmp_path / "i",
+    }
+    with (
+        mock.patch(f"{TASK}.create_advisory.git.checkout"),
+        mock.patch(f"{TASK}.create_advisory.git.index_add_commit"),
+        mock.patch(
+            f"{TASK}.create_advisory.git.push",
+            side_effect=subprocess.CalledProcessError(1, "git push"),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.git.remote_branch_exists",
+            return_value=True,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.git.rev_parse",
+            return_value="localsha",
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.git.remote_branch_sha",
+            return_value="claimsha",
+        ),
+        pytest.raises(subprocess.CalledProcessError),
+    ):
+        create_advisory.create_advisory._commit_and_merge_new_advisory(
+            client,
+            creds,
+            tmp_path,
+            "data/advisories/t/2025/1234/advisory.yaml",
+            "konflux-advisory-t-deadbeef0001",
+            "grp",
+            "parent-pr",
+            "task-run-1",
+            "https://access.redhat.com/errata",
+            results,
+            claim_commit_sha="claimsha",
+            stderr_path=tmp_path / "e.log",
+        )
+
+
+def test_release_claimed_work_closes_merge_request(
+    creds: gitlab.GitLabCredentials,
+) -> None:
+    """Close the merge request before deleting the branch when both exist."""
+    client = mock.Mock()
+    merge_request = mock.Mock()
+    with mock.patch(
+        f"{TASK}.create_advisory.gitlab.cleanup_merge_request_branch",
+    ) as cleanup:
+        create_advisory.create_advisory._release_claimed_work(
+            client,
+            creds,
+            "konflux-advisory-t-abc",
+            merge_request,
+        )
+    cleanup.assert_called_once_with(
+        client,
+        creds.git_repo,
+        merge_request,
+        "konflux-advisory-t-abc",
+    )
+
+
+def test_release_claimed_work_looks_up_open_merge_request(
+    creds: gitlab.GitLabCredentials,
+) -> None:
+    """Close a remotely created MR when cleanup has no merge request object."""
+    client = mock.Mock()
+    merge_request = mock.Mock()
+    with (
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.find_open_merge_request_by_source_branch",
+            return_value=merge_request,
+        ) as find_mr,
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.cleanup_merge_request_branch",
+        ) as cleanup,
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.delete_remote_branch",
+        ) as delete_branch,
+    ):
+        create_advisory.create_advisory._release_claimed_work(
+            client,
+            creds,
+            "konflux-advisory-t-abc",
+        )
+    find_mr.assert_called_once_with(
+        client,
+        creds.git_repo,
+        "konflux-advisory-t-abc",
+    )
+    cleanup.assert_called_once_with(
+        client,
+        creds.git_repo,
+        merge_request,
+        "konflux-advisory-t-abc",
+    )
+    delete_branch.assert_not_called()
+
+
+def test_release_claimed_work_logs_merge_request_lookup_failure(
+    creds: gitlab.GitLabCredentials,
+) -> None:
+    """Fall back to branch deletion when MR lookup fails during cleanup."""
+    client = mock.Mock()
+    with (
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.find_open_merge_request_by_source_branch",
+            side_effect=RuntimeError("lookup failed"),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.delete_remote_branch",
+        ) as delete_branch,
+        mock.patch(f"{TASK}.create_advisory.logger.warning") as warn,
+    ):
+        create_advisory.create_advisory._release_claimed_work(
+            client,
+            creds,
+            "konflux-advisory-t-abc",
+        )
+    delete_branch.assert_called_once_with(
+        client,
+        creds.git_repo,
+        "konflux-advisory-t-abc",
+    )
+    assert warn.call_args.args[0] == (
+        "failed to look up merge request for branch %s during cleanup: %s"
+    )
+
+
+def test_run_create_advisory_cleans_up_merge_request_after_create_raises(
+    tmp_path: Path,
+    creds: gitlab.GitLabCredentials,
+) -> None:
+    """Close an open MR left behind when merge-request creation raises."""
+    secret = tmp_path / "gitlab"
+    _write_gitlab_secret(secret)
+    errata = tmp_path / "errata"
+    _write_errata_mount(errata)
+    repo = tmp_path / "repo"
+    base = repo / "data" / "advisories" / "t"
+    base.mkdir(parents=True)
+    results = {
+        "result": tmp_path / "r",
+        "advisory_url": tmp_path / "u",
+        "advisory_internal_url": tmp_path / "i",
+        "internal_pr_name": tmp_path / "pr",
+        "internal_task_run_name": tmp_path / "tr",
+    }
+    client = mock.Mock()
+    merge_request = mock.Mock()
+    with (
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.read_credentials_from_mount",
+            return_value=creds,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._clone_advisory_repo",
+            return_value=(repo, base),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._finish_if_all_content_already_published",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.client_from_credentials",
+            return_value=client,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._try_finish_via_existing_merge_request",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._claim_source_branch",
+            return_value=(True, "claimsha"),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._sync_main_and_finish_if_published",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.subprocess_cmd.run_cmd",
+            return_value=mock.MagicMock(stdout=_configmap_signing_key_stdout()),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._reserve_errata_live_id",
+            return_value=42,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.git.origin_main_has_path_matching",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._render_and_validate_advisory_yaml",
+            return_value="data/advisories/t/2026/0042/advisory.yaml",
+        ),
+        mock.patch(f"{TASK}.create_advisory.git.checkout"),
+        mock.patch(f"{TASK}.create_advisory.git.index_add_commit"),
+        mock.patch(f"{TASK}.create_advisory.git.push"),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.get_or_create_merge_request",
+            side_effect=RuntimeError("mr created remotely but not returned"),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.find_open_merge_request_by_source_branch",
+            return_value=merge_request,
+        ) as find_mr,
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.cleanup_merge_request_branch",
+        ) as cleanup,
+        pytest.raises(RuntimeError, match="mr created remotely"),
+    ):
+        create_advisory.create_advisory.run_create_advisory(
+            advisory_secret=secret,
+            errata_mount=errata,
+            stderr_path=tmp_path / "e.log",
+            result_paths=results,
+            params={
+                "component_group": "g",
+                "origin": "t",
+                "config_map_name": "cm",
+                "content_type": "image",
+                "internal_request_pr_name": "pr",
+                "task_run_name": "tr",
+            },
+            decoded={
+                "type": "RHSA",
+                "content": {"images": [{"x": 1}]},
+            },
+        )
+    find_mr.assert_called_once()
+    cleanup.assert_called_once_with(
+        client,
+        creds.git_repo,
+        merge_request,
+        mock.ANY,
+    )
+
+
+def test_release_claimed_work_logs_branch_delete_failure(
+    creds: gitlab.GitLabCredentials,
+) -> None:
+    """Log branch cleanup failures without raising."""
+    client = mock.Mock()
+    with (
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.find_open_merge_request_by_source_branch",
+            return_value=None,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.delete_remote_branch",
+            side_effect=RuntimeError("boom"),
+        ),
+        mock.patch(f"{TASK}.create_advisory.logger.warning") as warn,
+    ):
+        create_advisory.create_advisory._release_claimed_work(
+            client,
+            creds,
+            "konflux-advisory-t-abc",
+        )
+    warn.assert_called_once()
+    assert warn.call_args.args[0] == "failed to delete claimed branch %s: %s"
+
+
+def test_recover_after_merge_request_wait_timeout_without_branch(
+    tmp_path: Path,
+) -> None:
+    """Rerun idempotency when the source branch disappeared after a wait timeout."""
+    repo = tmp_path / "repo"
+    work = tmp_path / "work"
+    work.mkdir()
+    results = {
+        "result": tmp_path / "res",
+        "advisory_url": tmp_path / "url",
+        "advisory_internal_url": tmp_path / "internal",
+    }
+    with (
+        mock.patch(
+            f"{TASK}.create_advisory.git.remote_branch_exists",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._sync_main_and_finish_if_published",
+            return_value=True,
+        ) as sync_finish,
+        mock.patch(f"{TASK}.create_advisory._release_claimed_work") as release,
+    ):
+        finished = create_advisory.create_advisory._recover_after_merge_request_wait_timeout(
+            gitlab_client=mock.Mock(),
+            credentials=mock.Mock(git_repo="https://gitlab.example.com/g/r.git"),
+            repo_root=repo,
+            work_dir=work,
+            decoded={"content": {"images": [{"x": 1}]}},
+            advisory_base=repo / "data" / "advisories" / "t",
+            content_list_path=".content.images",
+            content_type="image",
+            source_branch="konflux-advisory-t-abc",
+            component_group="g",
+            internal_request_pr_name="pr",
+            task_run_name="tr",
+            url_prefix="https://access.redhat.com/errata",
+            stderr_path=tmp_path / "e.log",
+            result_paths=results,
+        )
+    assert finished is True
+    sync_finish.assert_called_once()
+    release.assert_not_called()
+
+
+def test_recover_after_merge_request_wait_timeout_creates_merge_request(
+    tmp_path: Path,
+) -> None:
+    """Open an MR for a remote advisory branch that has no open request."""
+    repo = tmp_path / "repo"
+    work = tmp_path / "work"
+    work.mkdir()
+    merge_request = mock.Mock()
+    results = {
+        "result": tmp_path / "res",
+        "advisory_url": tmp_path / "url",
+        "advisory_internal_url": tmp_path / "internal",
+    }
+    with (
+        mock.patch(
+            f"{TASK}.create_advisory._sync_main_and_finish_if_published",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.git.remote_branch_exists",
+            return_value=True,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._is_claim_only_branch",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.get_or_create_merge_request",
+            return_value=merge_request,
+        ) as create_mr,
+        mock.patch(
+            f"{TASK}.create_advisory._finish_from_merged_merge_request",
+            return_value="data/advisories/t/2025/0001/advisory.yaml",
+        ) as finish,
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.wait_for_open_merge_request_by_source_branch",
+        ) as wait_mr,
+    ):
+        finished = create_advisory.create_advisory._recover_after_merge_request_wait_timeout(
+            gitlab_client=mock.Mock(),
+            credentials=mock.Mock(git_repo="https://gitlab.example.com/g/r.git"),
+            repo_root=repo,
+            work_dir=work,
+            decoded={"content": {"images": [{"x": 1}]}},
+            advisory_base=repo / "data" / "advisories" / "t",
+            content_list_path=".content.images",
+            content_type="image",
+            source_branch="konflux-advisory-t-abc",
+            component_group="g",
+            internal_request_pr_name="pr",
+            task_run_name="tr",
+            url_prefix="https://access.redhat.com/errata",
+            stderr_path=tmp_path / "e.log",
+            result_paths=results,
+        )
+    assert finished is True
+    create_mr.assert_called_once()
+    finish.assert_called_once()
+    wait_mr.assert_not_called()
+
+
+def test_run_create_advisory_joins_advanced_branch_when_claim_fails(
+    tmp_path: Path, creds: gitlab.GitLabCredentials
+) -> None:
+    """Join advisory work without a second MR wait when the branch is taken."""
+    secret = tmp_path / "gitlab"
+    _write_gitlab_secret(secret)
+    errata = tmp_path / "errata"
+    _write_errata_mount(errata)
+    results = {
+        "result": tmp_path / "r",
+        "advisory_url": tmp_path / "u",
+        "advisory_internal_url": tmp_path / "i",
+        "internal_pr_name": tmp_path / "pr",
+        "internal_task_run_name": tmp_path / "tr",
+    }
+    client = mock.Mock()
+    with (
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.read_credentials_from_mount",
+            return_value=creds,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._clone_advisory_repo",
+            return_value=(
+                tmp_path / "repo",
+                tmp_path / "repo" / "data" / "advisories" / "t",
+            ),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._finish_if_all_content_already_published",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.client_from_credentials",
+            return_value=client,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._try_finish_via_existing_merge_request",
+            return_value=False,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._build_merged_advisory_with_signing_key",
+            return_value={"type": "RHSA", "content": {"images": []}},
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._claim_source_branch",
+            return_value=(False, None),
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory._recover_after_merge_request_wait_timeout",
+            return_value=True,
+        ) as recover,
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.wait_for_open_merge_request_by_source_branch",
+        ) as wait_mr,
+        mock.patch(f"{TASK}.create_advisory._resolve_live_id_number") as reserve,
+    ):
+        create_advisory.create_advisory.run_create_advisory(
+            advisory_secret=secret,
+            errata_mount=errata,
+            stderr_path=tmp_path / "e.log",
+            result_paths=results,
+            params={
+                "component_group": "g",
+                "origin": "t",
+                "config_map_name": "cm",
+                "content_type": "image",
+                "internal_request_pr_name": "pr",
+                "task_run_name": "tr",
+            },
+            decoded={"content": {"images": [{"x": 1}]}},
+        )
+    recover.assert_called_once()
+    wait_mr.assert_not_called()
+    reserve.assert_not_called()
 
 
 def test_main_uses_secret_mount_env_overrides(
