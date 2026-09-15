@@ -489,3 +489,109 @@ def test_set_remote_url(tmp_path: Path) -> None:
         cwd=tmp_path,
         stderr_path=None,
     )
+
+
+def test_diff_files(tmp_path: Path) -> None:
+    """Return lists of file paths changed between two commits."""
+    mock_result = mock.MagicMock()
+    mock_result.stdout = "file1.txt\nfile2.txt\n\n"
+
+    with mock.patch.object(git, "_run_git_cmd", return_value=mock_result) as run_cmd:
+        result = git.diff_files(tmp_path, "sha1", "sha2", "AM", stderr_path=None)
+
+    assert result == ["file1.txt", "file2.txt"]
+    run_cmd.assert_called_once_with(
+        ["git", "diff", "--name-only", "--diff-filter=AM", "sha1", "sha2"],
+        cwd=tmp_path,
+        stderr_path=None,
+    )
+
+
+def test_show_file(tmp_path: Path) -> None:
+    """Return file content at revision:path via git show."""
+    mock_result = mock.MagicMock()
+    mock_result.stdout = "hello world\n"
+
+    with mock.patch.object(git, "_run_git_cmd", return_value=mock_result) as run_cmd:
+        result = git.show_file(tmp_path, "revision123", "some/path.txt", stderr_path=None)
+
+    assert result == "hello world\n"
+    run_cmd.assert_called_once_with(
+        ["git", "show", "revision123:some/path.txt"],
+        cwd=tmp_path,
+        stderr_path=None,
+    )
+
+
+def test_file_change_log(tmp_path: Path) -> None:
+    """Return formatted git log excluding git metadata lines."""
+    git_log_output = (
+        "commit-hash date author <email>\n"
+        "diff --git a/some/path.txt b/some/path.txt\n"
+        "index 123..456 100644\n"
+        "--- a/some/path.txt\n"
+        "+++ b/some/path.txt\n"
+        "+added line\n"
+        "-removed line\n"
+    )
+    mock_result = mock.MagicMock()
+    mock_result.stdout = git_log_output
+
+    with mock.patch.object(git, "_run_git_cmd", return_value=mock_result) as run_cmd:
+        result = git.file_change_log(
+            tmp_path,
+            "some/path.txt",
+            "from_sha",
+            "to_sha",
+            stderr_path=None,
+        )
+
+    expected = "commit-hash date author <email>\n" "+added line\n" "-removed line"
+    assert result == expected
+    run_cmd.assert_called_once_with(
+        [
+            "git",
+            "log",
+            "-p",
+            "--no-merges",
+            "--format=%h %ad %an <%ae>",
+            "--date=iso",
+            "--no-show-signature",
+            "from_sha..to_sha",
+            "--",
+            "some/path.txt",
+        ],
+        cwd=tmp_path,
+        stderr_path=None,
+    )
+
+
+def test_last_commit_date(tmp_path: Path) -> None:
+    """Return formatted date of the last commit that modified a path."""
+    mock_result = mock.MagicMock()
+    mock_result.stdout = " 2026-09-03T12:00:00Z \n"
+
+    with mock.patch.object(git, "_run_git_cmd", return_value=mock_result) as run_cmd:
+        result = git.last_commit_date(
+            tmp_path,
+            "some/path.txt",
+            "revision123",
+            "%Y-%m-%dT%H:%M:%SZ",
+            stderr_path=None,
+        )
+
+    assert result == "2026-09-03T12:00:00Z"
+    run_cmd.assert_called_once_with(
+        [
+            "git",
+            "log",
+            "-1",
+            "--date=format:%Y-%m-%dT%H:%M:%SZ",
+            "--pretty=format:%ad",
+            "revision123",
+            "--",
+            "some/path.txt",
+        ],
+        cwd=tmp_path,
+        stderr_path=None,
+    )

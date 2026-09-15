@@ -157,3 +157,500 @@ def test_patch_repository_json_raises_on_http_error() -> None:
         backoff_factor=5.0,
         allowed_methods=frozenset({"PATCH"}),
     )
+
+
+def test_get_advisory_success() -> None:
+    """GET Pyxis advisory by ID successfully."""
+    import json
+
+    response = mock.MagicMock()
+    response.status_code = 200
+    advisory_data = {"_id": "adv-123", "status": "active"}
+    response.json.return_value = advisory_data
+    response.text = json.dumps(advisory_data)
+
+    session = mock.MagicMock()
+    session.get.return_value = response
+
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_retry_session",
+        return_value=session,
+    ) as get_retry_session:
+        result = pyxis_api.get_advisory(
+            "https://pyxis/v1",
+            "adv-123",
+            cert=("/tmp/cert", "/tmp/key"),
+        )
+    assert result == advisory_data
+    session.get.assert_called_once_with(
+        "https://pyxis/v1/id/adv-123", auth=None, headers=None, timeout=120
+    )
+    assert session.cert == ("/tmp/cert", "/tmp/key")
+    get_retry_session.assert_called_once_with(
+        total=3,
+        connect=3,
+        read=3,
+        status=2,
+        backoff_factor=0.4,
+        allowed_methods=frozenset({"GET"}),
+    )
+
+
+def test_get_advisory_not_found() -> None:
+    """GET Pyxis advisory returns None if 404 is received."""
+    response = mock.MagicMock()
+    response.status_code = 404
+    response.raise_for_status.side_effect = requests.HTTPError("404 Error", response=response)
+
+    session = mock.MagicMock()
+    session.get.return_value = response
+
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_retry_session",
+        return_value=session,
+    ):
+        result = pyxis_api.get_advisory(
+            "https://pyxis/v1",
+            "adv-123",
+            cert=("/tmp/cert", "/tmp/key"),
+        )
+    assert result is None
+
+
+def test_get_advisory_http_error_raises() -> None:
+    """GET Pyxis advisory raises RequestException on HTTP error."""
+    response = mock.MagicMock()
+    response.status_code = 500
+    response.text = "internal error"
+    response.raise_for_status.side_effect = requests.HTTPError("500 Error")
+
+    session = mock.MagicMock()
+    session.get.return_value = response
+
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_retry_session",
+        return_value=session,
+    ):
+        with pytest.raises(requests.RequestException, match="Pyxis advisory GET failed"):
+            pyxis_api.get_advisory(
+                "https://pyxis/v1",
+                "adv-123",
+                cert=("/tmp/cert", "/tmp/key"),
+            )
+
+
+def test_get_advisory_invalid_json_raises() -> None:
+    """GET Pyxis advisory raises ValueError on invalid JSON response."""
+    response = mock.MagicMock()
+    response.status_code = 200
+    response.text = "not json"
+    import json
+
+    response.json.side_effect = json.JSONDecodeError("msg", "doc", 0)
+
+    session = mock.MagicMock()
+    session.get.return_value = response
+
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_retry_session",
+        return_value=session,
+    ):
+        with pytest.raises(ValueError, match="invalid JSON from Pyxis advisory GET"):
+            pyxis_api.get_advisory(
+                "https://pyxis/v1",
+                "adv-123",
+                cert=("/tmp/cert", "/tmp/key"),
+            )
+
+
+def test_create_or_update_advisory_existing_patch() -> None:
+    """PATCH existing Pyxis advisory when it exists."""
+    existing_advisory = {"_id": "adv-123", "status": "active"}
+
+    session = mock.MagicMock()
+    response = mock.MagicMock()
+    response.status_code = 200
+    session.patch.return_value = response
+
+    payload = {"status": "updated"}
+
+    with (
+        mock.patch(
+            "release_service_utils.helpers.pyxis_api.pyxis_api.get_advisory",
+            return_value=existing_advisory,
+        ) as mock_get,
+        mock.patch(
+            "release_service_utils.helpers.http_client.get_retry_session",
+            return_value=session,
+        ) as get_retry_session,
+    ):
+        pyxis_api.create_or_update_advisory(
+            "https://pyxis/v1",
+            "adv-123",
+            payload,
+            cert=("/tmp/cert", "/tmp/key"),
+        )
+
+    mock_get.assert_called_once_with(
+        "https://pyxis/v1", "adv-123", cert=("/tmp/cert", "/tmp/key")
+    )
+    session.patch.assert_called_once_with(
+        "https://pyxis/v1/id/adv-123",
+        json=payload,
+        headers={"Content-Type": "application/json"},
+        timeout=120,
+    )
+    assert session.cert == ("/tmp/cert", "/tmp/key")
+    get_retry_session.assert_called_once_with(
+        total=3,
+        connect=3,
+        read=3,
+        status=3,
+        backoff_factor=2.0,
+        allowed_methods=frozenset({"POST", "PATCH"}),
+    )
+
+
+def test_create_or_update_advisory_new_post() -> None:
+    """POST a new Pyxis advisory when it does not exist."""
+    session = mock.MagicMock()
+    response = mock.MagicMock()
+    response.status_code = 201
+    session.post.return_value = response
+
+    payload = {"_id": "adv-123", "status": "active"}
+
+    with (
+        mock.patch(
+            "release_service_utils.helpers.pyxis_api.pyxis_api.get_advisory",
+            return_value=None,
+        ) as mock_get,
+        mock.patch(
+            "release_service_utils.helpers.http_client.get_retry_session",
+            return_value=session,
+        ),
+    ):
+        pyxis_api.create_or_update_advisory(
+            "https://pyxis/v1",
+            "adv-123",
+            payload,
+            cert=("/tmp/cert", "/tmp/key"),
+        )
+
+    mock_get.assert_called_once_with(
+        "https://pyxis/v1", "adv-123", cert=("/tmp/cert", "/tmp/key")
+    )
+    session.post.assert_called_once_with(
+        "https://pyxis/v1",
+        json=payload,
+        headers={"Content-Type": "application/json"},
+        timeout=120,
+    )
+    assert session.cert == ("/tmp/cert", "/tmp/key")
+
+
+def test_create_or_update_advisory_raises_on_failure() -> None:
+    """Raise HTTPError when POST/PATCH fails."""
+    session = mock.MagicMock()
+    response = mock.MagicMock()
+    response.status_code = 500
+    response.text = "internal error"
+    response.raise_for_status.side_effect = requests.HTTPError("500 error")
+    session.post.return_value = response
+
+    payload = {"_id": "adv-123", "status": "active"}
+
+    with (
+        mock.patch(
+            "release_service_utils.helpers.pyxis_api.pyxis_api.get_advisory",
+            return_value=None,
+        ) as mock_get,
+        mock.patch(
+            "release_service_utils.helpers.http_client.get_retry_session",
+            return_value=session,
+        ),
+    ):
+        with pytest.raises(requests.HTTPError, match="500 error"):
+            pyxis_api.create_or_update_advisory(
+                "https://pyxis/v1",
+                "adv-123",
+                payload,
+                cert=("/tmp/cert", "/tmp/key"),
+            )
+
+    assert mock_get.call_count == 1
+    assert session.post.call_count == 1
+
+
+def test_get_image_by_digest_success() -> None:
+    """GET Pyxis image by digest successfully."""
+    import json
+
+    response = mock.MagicMock()
+    response.status_code = 200
+    image_data = {"_id": "img-123", "repositories": []}
+    response.json.return_value = {"data": [image_data]}
+    response.text = json.dumps({"data": [image_data]})
+
+    session = mock.MagicMock()
+    session.get.return_value = response
+
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_retry_session",
+        return_value=session,
+    ) as get_retry_session:
+        result = pyxis_api.get_image_by_digest(
+            "https://pyxis/v1/images",
+            "abcdef123456",
+            cert=("/tmp/cert", "/tmp/key"),
+        )
+    assert result == image_data
+    expected_url = (
+        "https://pyxis/v1/images?page_size=1&"
+        "filter=repositories.manifest_schema2_digest%3D%3D%22sha256%3Aabcdef123456%22%3B"
+        "not%28deleted%3D%3Dtrue%29"
+    )
+    session.get.assert_called_once_with(expected_url, auth=None, headers=None, timeout=120)
+    assert session.cert == ("/tmp/cert", "/tmp/key")
+    get_retry_session.assert_called_once_with(
+        total=3,
+        connect=3,
+        read=3,
+        status=2,
+        backoff_factor=0.4,
+        allowed_methods=frozenset({"GET"}),
+    )
+
+
+def test_get_image_by_digest_http_error_raises() -> None:
+    """GET Pyxis image raises RequestException on HTTP error."""
+    response = mock.MagicMock()
+    response.status_code = 500
+    response.text = "internal error"
+    response.raise_for_status.side_effect = requests.HTTPError("500 Error")
+
+    session = mock.MagicMock()
+    session.get.return_value = response
+
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_retry_session",
+        return_value=session,
+    ):
+        with pytest.raises(requests.RequestException, match="Pyxis image GET failed"):
+            pyxis_api.get_image_by_digest(
+                "https://pyxis/v1/images",
+                "abcdef123456",
+                cert=("/tmp/cert", "/tmp/key"),
+            )
+
+
+def test_get_image_by_digest_invalid_json_raises() -> None:
+    """GET Pyxis image raises ValueError on invalid JSON response."""
+    response = mock.MagicMock()
+    response.status_code = 200
+    response.text = "not json"
+    import json
+
+    response.json.side_effect = json.JSONDecodeError("msg", "doc", 0)
+
+    session = mock.MagicMock()
+    session.get.return_value = response
+
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_retry_session",
+        return_value=session,
+    ):
+        with pytest.raises(ValueError, match="invalid JSON from Pyxis image GET"):
+            pyxis_api.get_image_by_digest(
+                "https://pyxis/v1/images",
+                "abcdef123456",
+                cert=("/tmp/cert", "/tmp/key"),
+            )
+
+
+def test_get_image_by_digest_no_images_raises() -> None:
+    """GET Pyxis image raises ValueError when no image matches the digest."""
+    import json
+
+    response = mock.MagicMock()
+    response.status_code = 200
+    response.json.return_value = {"data": []}
+    response.text = json.dumps({"data": []})
+
+    session = mock.MagicMock()
+    session.get.return_value = response
+
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_retry_session",
+        return_value=session,
+    ):
+        with pytest.raises(ValueError, match="No Pyxis image found for digest"):
+            pyxis_api.get_image_by_digest(
+                "https://pyxis/v1/images",
+                "abcdef123456",
+                cert=("/tmp/cert", "/tmp/key"),
+            )
+
+
+def test_link_image_to_advisory_success() -> None:
+    """Successfully PATCH Pyxis image with linked advisory ID."""
+    import json
+
+    image_data = {
+        "_id": "img-123",
+        "repositories": [
+            {
+                "registry": "registry.access.redhat.com",
+                "repository": "my-repo",
+                "image_advisory_id": "old-adv",
+            },
+            {
+                "registry": "other.registry",
+                "repository": "my-repo",
+                "image_advisory_id": "other-adv",
+            },
+        ],
+    }
+
+    get_response = mock.MagicMock()
+    get_response.status_code = 200
+    get_response.json.return_value = image_data
+    get_response.text = json.dumps(image_data)
+
+    patch_response = mock.MagicMock()
+    patch_response.status_code = 200
+
+    session = mock.MagicMock()
+    session.get.return_value = get_response
+    session.patch.return_value = patch_response
+
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_retry_session",
+        return_value=session,
+    ) as get_retry_session:
+        pyxis_api.link_image_to_advisory(
+            "https://pyxis/v1/images",
+            "img-123",
+            "my-repo",
+            "new-adv",
+            cert=("/tmp/cert", "/tmp/key"),
+        )
+
+    expected_url = "https://pyxis/v1/images/id/img-123"
+    session.get.assert_called_once_with(expected_url, auth=None, headers=None, timeout=120)
+
+    expected_patch_payload = {
+        "_id": "img-123",
+        "repositories": [
+            {
+                "registry": "registry.access.redhat.com",
+                "repository": "my-repo",
+                "image_advisory_id": "new-adv",
+            },
+            {
+                "registry": "other.registry",
+                "repository": "my-repo",
+                "image_advisory_id": "other-adv",
+            },
+        ],
+    }
+    session.patch.assert_called_once_with(
+        expected_url,
+        json=expected_patch_payload,
+        headers={"Content-Type": "application/json"},
+        timeout=120,
+    )
+    assert get_retry_session.call_count == 2
+
+
+def test_link_image_to_advisory_get_raises() -> None:
+    """GET fails during link_image_to_advisory and raises RequestException."""
+    get_response = mock.MagicMock()
+    get_response.status_code = 500
+    get_response.text = "internal error"
+    get_response.raise_for_status.side_effect = requests.HTTPError("500 Error")
+
+    session = mock.MagicMock()
+    session.get.return_value = get_response
+
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_retry_session",
+        return_value=session,
+    ):
+        with pytest.raises(requests.RequestException, match="Pyxis image GET failed"):
+            pyxis_api.link_image_to_advisory(
+                "https://pyxis/v1/images",
+                "img-123",
+                "my-repo",
+                "new-adv",
+                cert=("/tmp/cert", "/tmp/key"),
+            )
+
+
+def test_link_image_to_advisory_get_invalid_json_raises() -> None:
+    """GET returns invalid JSON and raises ValueError."""
+    get_response = mock.MagicMock()
+    get_response.status_code = 200
+    get_response.text = "not json"
+    import json
+
+    get_response.json.side_effect = json.JSONDecodeError("msg", "doc", 0)
+
+    session = mock.MagicMock()
+    session.get.return_value = get_response
+
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_retry_session",
+        return_value=session,
+    ):
+        with pytest.raises(ValueError, match="invalid JSON from Pyxis image GET"):
+            pyxis_api.link_image_to_advisory(
+                "https://pyxis/v1/images",
+                "img-123",
+                "my-repo",
+                "new-adv",
+                cert=("/tmp/cert", "/tmp/key"),
+            )
+
+
+def test_link_image_to_advisory_patch_raises() -> None:
+    """PATCH fails during link_image_to_advisory and raises RequestException."""
+    import json
+
+    get_response = mock.MagicMock()
+    get_response.status_code = 200
+    get_response.json.return_value = {"_id": "img-123", "repositories": []}
+    get_response.text = json.dumps(
+        {
+            "_id": "img-123",
+            "repositories": [
+                {
+                    "registry": "registry.access.redhat.com",
+                    "repository": "my-repo",
+                    "image_advisory_id": "new-adv",
+                },
+            ],
+        }
+    )
+
+    patch_response = mock.MagicMock()
+    patch_response.status_code = 500
+    patch_response.text = "internal error"
+    patch_response.raise_for_status.side_effect = requests.HTTPError("500 Error")
+
+    session = mock.MagicMock()
+    session.get.return_value = get_response
+    session.patch.return_value = patch_response
+
+    with mock.patch(
+        "release_service_utils.helpers.http_client.get_retry_session",
+        return_value=session,
+    ):
+        with pytest.raises(requests.RequestException, match="Pyxis image PATCH failed"):
+            pyxis_api.link_image_to_advisory(
+                "https://pyxis/v1/images",
+                "img-123",
+                "my-repo",
+                "new-adv",
+                cert=("/tmp/cert", "/tmp/key"),
+            )

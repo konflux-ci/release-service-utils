@@ -1,4 +1,4 @@
-"""Verify every managed task subpackage is importable via its absolute path."""
+"""Verify every aux task subpackage is importable via its absolute path."""
 
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ _TASKS_DIR = Path(__file__).parent
 _REPO_ROOT = _TASKS_DIR.parent.parent.parent
 _MODULE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _SKIP = {"__pycache__", "tests"}
-_TASKS_MODULE = "release_service_utils.tasks.managed"
+_TASKS_MODULE = "release_service_utils.tasks.aux"
 
 
 def _discover_subpackages() -> list[str]:
-    """Return managed task subpackage names that should be importable."""
+    """Return aux task subpackage names that should be importable."""
     return sorted(
         d.name
         for d in _TASKS_DIR.iterdir()
@@ -31,14 +31,14 @@ def _discover_subpackages() -> list[str]:
 
 
 @pytest.mark.parametrize("name", _discover_subpackages())
-def test_managed_task_importable(name: str) -> None:
-    """Import ``release_service_utils.tasks.managed.<name>`` without error."""
-    importlib.import_module(f"release_service_utils.tasks.managed.{name}")
+def test_aux_task_importable(name: str) -> None:
+    """Import ``release_service_utils.tasks.aux.<name>`` without error."""
+    importlib.import_module(f"{_TASKS_MODULE}.{name}")
 
 
 @pytest.mark.parametrize("name", _discover_subpackages())
 def test_managed_task_runnable_as_module(name: str) -> None:
-    """Run ``python -m release_service_utils.tasks.managed.<name> --help``.
+    """Run ``python -m release_service_utils.tasks.aux.<name> --help``.
 
     without import errors
     """
@@ -67,9 +67,6 @@ def test_managed_task_runnable_as_module(name: str) -> None:
     # Accept exit code 0 (success), 1 (custom error), or 2 (argparse error)
     # The key is that there should be no import/module errors
     print(f"{_TASKS_MODULE}.{name}, stdout: \n{result.stdout}\n stderr: \n{result.stderr}\n")
-    assert (
-        f"No module named {_TASKS_MODULE}.{name}.__main__" not in result.stderr
-    ), f"Module import failed for {module_name}:\n{result.stderr}"
     assert (
         f"No module named {_TASKS_MODULE}.{name}.__main__" not in result.stderr
     ), f"Module import failed for {module_name}:\n{result.stderr}"
