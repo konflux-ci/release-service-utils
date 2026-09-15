@@ -230,6 +230,8 @@ def _write_task_results(
     logger.info("Advisory created")
     advisory_url = str(results.get("advisory_url") or "")
     advisory_internal_url = str(results.get("advisory_internal_url") or "")
+    logger.info("advisory_url: %s", advisory_url)
+    logger.info("advisory_internal_url: %s", advisory_internal_url)
     params.advisory_url_result.write_text(advisory_url, encoding="utf-8")
     params.advisory_internal_url_result.write_text(
         advisory_internal_url,
