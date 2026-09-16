@@ -17,6 +17,7 @@ from release_service_utils.helpers import tekton
 
 FILE_UPDATES_SECRET_MOUNT = process_file_updates.FILE_UPDATES_SECRET_MOUNT_ENV
 
+_PROG_ARGV = ["process_file_updates.py"]
 _VALID_ARGS = [
     "--upstream-repo",
     "https://gitlab.com/org/upstream.git",
@@ -33,6 +34,21 @@ _VALID_ARGS = [
     "--internal-request-task-run-name",
     "tr-1",
 ]
+_VALID_TASK_ENV = {
+    "UPSTREAM_REPO": "https://gitlab.com/org/upstream.git",
+    "REPO": "https://gitlab.com/org/repo.git",
+    "REF": "main",
+    "PATHS": '[{"path":"f.yaml","replacements":[]}]',
+    "COMPONENT_GROUP": "my-group",
+    "INTERNAL_REQUEST_PIPELINE_RUN_NAME": "pr-1",
+    "INTERNAL_REQUEST_TASK_RUN_NAME": "tr-1",
+}
+
+
+def _setup_task_env(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> None:
+    """Set required task input env vars, with optional overrides."""
+    for key, value in {**_VALID_TASK_ENV, **overrides}.items():
+        monkeypatch.setenv(key, value)
 
 
 def _write_file_updates_secret(mount: Path) -> None:
@@ -55,6 +71,7 @@ def _setup_tekton_env(
     monkeypatch.setenv("RESULT_INTERNAL_REQUEST_PIPELINE_RUN_NAME", str(ir_pr))
     monkeypatch.setenv("RESULT_INTERNAL_REQUEST_TASK_RUN_NAME", str(ir_tr))
     monkeypatch.setenv(FILE_UPDATES_SECRET_MOUNT, str(secret_mount))
+    _setup_task_env(monkeypatch)
     return info, state, ir_pr, ir_tr
 
 
@@ -269,6 +286,62 @@ def _large_deploy_yaml() -> str:
     return content
 
 
+def test_load_config_from_env_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Required env vars populate ``FileUpdatesConfig``."""
+    _setup_task_env(monkeypatch, TEMP_DIR="/tmp/work")
+    config = process_file_updates.load_config_from_env()
+    assert config.upstream_repo == "https://gitlab.com/org/upstream.git"
+    assert config.component_group == "my-group"
+    assert config.temp_dir == Path("/tmp/work")
+
+
+def test_load_config_from_env_missing_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing required env vars raise ``CheckStepError``."""
+    _setup_task_env(monkeypatch)
+    monkeypatch.delenv("UPSTREAM_REPO", raising=False)
+    with pytest.raises(tekton.CheckStepError) as exc:
+        process_file_updates.load_config_from_env()
+    assert exc.value.action == "loading task configuration"
+    assert "UPSTREAM_REPO" in str(exc.value.cause)
+
+
+def test_load_config_from_cli_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI flags populate config when task env vars are unset."""
+    for key in _VALID_TASK_ENV:
+        monkeypatch.delenv(key, raising=False)
+    args = process_file_updates.parse_args(_VALID_ARGS)
+    config = process_file_updates.load_config_from_env(args)
+    assert config.upstream_repo == "https://gitlab.com/org/upstream.git"
+    assert config.component_group == "my-group"
+
+
+def test_load_config_prefers_cli_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI flag values win over environment variables."""
+    _setup_task_env(monkeypatch)
+    args = process_file_updates.parse_args(
+        [
+            "--upstream-repo",
+            "https://gitlab.com/cli/upstream.git",
+            "--repo",
+            "https://gitlab.com/cli/repo.git",
+            "--ref",
+            "cli-ref",
+            "--paths",
+            "[]",
+            "--component-group",
+            "cli-group",
+            "--internal-request-pipeline-run-name",
+            "pr-cli",
+            "--internal-request-task-run-name",
+            "tr-cli",
+        ]
+    )
+    config = process_file_updates.load_config_from_env(args)
+    assert config.upstream_repo == "https://gitlab.com/cli/upstream.git"
+    assert config.component_group == "cli-group"
+    assert config.internal_request_pipeline_run_name == "pr-cli"
+
+
 def test_parse_args_help() -> None:
     """``-h`` prints usage and exits with code 1."""
     with pytest.raises(SystemExit) as exc:
@@ -297,6 +370,13 @@ def test_parse_args_ok() -> None:
     ns = process_file_updates.process_file_updates.parse_args(_VALID_ARGS)
     assert ns.upstream_repo == "https://gitlab.com/org/upstream.git"
     assert ns.component_group == "my-group"
+
+
+def test_parse_args_empty_allows_env_fallback() -> None:
+    """An empty argv leaves flags unset for environment fallback."""
+    ns = process_file_updates.process_file_updates.parse_args([])
+    assert ns.upstream_repo is None
+    assert ns.repo is None
 
 
 def test_parse_replacement_expression() -> None:
@@ -503,7 +583,30 @@ def test_main_success_writes_results(
     with mock.patch.object(
         process_file_updates.process_file_updates, "run_file_updates", side_effect=_fake_run
     ):
-        rc = process_file_updates.main(["process_file_updates.py", *_VALID_ARGS])
+        rc = process_file_updates.main([*_PROG_ARGV])
+
+    assert rc == 0
+    assert state.read_text(encoding="utf-8") == "Success"
+    assert "merge_request" in info.read_text(encoding="utf-8")
+    assert ir_pr.read_text(encoding="utf-8") == "pr-1"
+    assert ir_tr.read_text(encoding="utf-8") == "tr-1"
+
+
+def test_main_accepts_cli_flags(
+    tmp_path: Path, secret_mount: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Callers that pass the established CLI flags do not need task env vars."""
+    info, state, ir_pr, ir_tr = _setup_tekton_env(tmp_path, monkeypatch, secret_mount)
+    for key in _VALID_TASK_ENV:
+        monkeypatch.delenv(key, raising=False)
+
+    def _fake_run(**_k: object) -> tuple[str, str, int]:
+        return '{"merge_request":"https://x/mr/1"}\n', "Success", 0
+
+    with mock.patch.object(
+        process_file_updates.process_file_updates, "run_file_updates", side_effect=_fake_run
+    ):
+        rc = process_file_updates.main([*_PROG_ARGV, *_VALID_ARGS])
 
     assert rc == 0
     assert state.read_text(encoding="utf-8") == "Success"
@@ -524,7 +627,7 @@ def test_main_maps_check_step_error_to_failed(
     with mock.patch.object(
         process_file_updates.process_file_updates, "run_file_updates", side_effect=_fail
     ):
-        rc = process_file_updates.main(["process_file_updates.py", *_VALID_ARGS])
+        rc = process_file_updates.main([*_PROG_ARGV])
 
     assert rc == 0
     assert state.read_text(encoding="utf-8") == "Failed"
@@ -543,7 +646,7 @@ def test_main_yaml_error_exits_one(
     with mock.patch.object(
         process_file_updates.process_file_updates, "run_file_updates", side_effect=_yaml_fail
     ):
-        rc = process_file_updates.main(["process_file_updates.py", *_VALID_ARGS])
+        rc = process_file_updates.main([*_PROG_ARGV])
 
     assert rc == 1
     assert "not yaml" in info.read_text(encoding="utf-8")
@@ -562,7 +665,7 @@ def test_main_subprocess_error_writes_failed(
     with mock.patch.object(
         process_file_updates.process_file_updates, "run_file_updates", side_effect=_cmd_fail
     ):
-        rc = process_file_updates.main(["process_file_updates.py", *_VALID_ARGS])
+        rc = process_file_updates.main([*_PROG_ARGV])
 
     assert rc == 0
     assert state.read_text(encoding="utf-8") == "Failed"
@@ -588,7 +691,7 @@ def test_main_catches_unexpected_exception_writes_failed(
     with mock.patch.object(
         process_file_updates.process_file_updates, "run_file_updates", side_effect=_fail
     ):
-        rc = process_file_updates.main(["process_file_updates.py", *_VALID_ARGS])
+        rc = process_file_updates.main([*_PROG_ARGV])
 
     assert rc == 0
     assert state.read_text(encoding="utf-8") == "Failed"
@@ -736,6 +839,28 @@ def test_configure_git_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     assert os.environ["ACCESS_TOKEN"] == "tok123"
     assert os.environ["GITLAB_HOST"] == "gitlab.example.com"
     auth.assert_called_once_with("tok123")
+
+
+@pytest.mark.parametrize(
+    ("gitlab_host", "expected"),
+    [
+        ("gitlab.cee.redhat.com", "https://gitlab.cee.redhat.com"),
+        ("gitlab.example.com", "https://gitlab.example.com"),
+        ("https://gitlab.example.com", "https://gitlab.example.com"),
+        ("http://gitlab.example.com", "http://gitlab.example.com"),
+        ("  gitlab.cee.redhat.com  ", "https://gitlab.cee.redhat.com"),
+        ("https://gitlab.example.com/", "https://gitlab.example.com/"),
+    ],
+)
+def test_normalize_gitlab_url(gitlab_host: str, expected: str) -> None:
+    """Hostname-form secrets get an https scheme; complete URLs are preserved."""
+    assert process_file_updates.normalize_gitlab_url(gitlab_host) == expected
+
+
+def test_normalize_gitlab_url_rejects_empty() -> None:
+    """Empty gitlab_host cannot be turned into a python-gitlab URL."""
+    with pytest.raises(ValueError, match="gitlab_host is required"):
+        process_file_updates.normalize_gitlab_url("   ")
 
 
 def test_git_functions_init_raises_on_missing_fields() -> None:
@@ -891,26 +1016,11 @@ def test_main_rejects_unsafe_path_entry(
     info, state, _, _ = _setup_tekton_env(tmp_path, monkeypatch, secret_mount)
     repo = tmp_path / "repo"
     repo.mkdir()
-    paths_json = json.dumps([{"path": "../evil.yaml", "seed": "x"}])
-    argv = [
-        "process_file_updates.py",
-        "--upstream-repo",
-        "https://gitlab.com/org/upstream.git",
-        "--repo",
-        "https://gitlab.com/org/repo.git",
-        "--ref",
-        "main",
-        "--paths",
-        paths_json,
-        "--component-group",
-        "my-group",
-        "--internal-request-pipeline-run-name",
-        "pr-1",
-        "--internal-request-task-run-name",
-        "tr-1",
-        "--temp-dir",
-        str(tmp_path / "work"),
-    ]
+    _setup_task_env(
+        monkeypatch,
+        PATHS=json.dumps([{"path": "../evil.yaml", "seed": "x"}]),
+        TEMP_DIR=str(tmp_path / "work"),
+    )
 
     with (
         mock.patch.object(
@@ -934,7 +1044,7 @@ def test_main_rejects_unsafe_path_entry(
             process_file_updates.process_file_updates, "prepare_repository", return_value=repo
         ),
     ):
-        rc = process_file_updates.main(argv)
+        rc = process_file_updates.main([*_PROG_ARGV])
 
     assert rc == 0
     assert state.read_text(encoding="utf-8") == "Failed"
@@ -1424,7 +1534,7 @@ def test_main_writes_replacement_error_result(
     with mock.patch.object(
         process_file_updates.process_file_updates, "run_file_updates", side_effect=_fail
     ):
-        rc = process_file_updates.main(["process_file_updates.py", *_VALID_ARGS])
+        rc = process_file_updates.main([*_PROG_ARGV])
 
     assert rc == 0
     assert state.read_text(encoding="utf-8") == "Failed"
@@ -1445,7 +1555,7 @@ def test_main_writes_json_error_result(
     with mock.patch.object(
         process_file_updates.process_file_updates, "run_file_updates", side_effect=_fail
     ):
-        rc = process_file_updates.main(["process_file_updates.py", *_VALID_ARGS])
+        rc = process_file_updates.main([*_PROG_ARGV])
 
     assert rc == 0
     payload = json.loads(info.read_text(encoding="utf-8"))
@@ -1455,9 +1565,10 @@ def test_main_writes_json_error_result(
 
 def test_main_missing_result_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing result env vars exit before updates run."""
+    _setup_task_env(monkeypatch)
     monkeypatch.delenv("RESULT_FILE_UPDATES_INFO", raising=False)
     with pytest.raises(SystemExit) as exc:
-        process_file_updates.main(["process_file_updates.py", *_VALID_ARGS])
+        process_file_updates.main([*_PROG_ARGV])
     assert exc.value.code == 1
 
 
@@ -1507,7 +1618,7 @@ def test_run_file_updates_builds_gitlab_client_when_not_provided(tmp_path: Path)
             temp_dir=tmp_path,
             secrets=secrets,
         )
-    mk.assert_called_once_with("gitlab.example.com", "t")
+    mk.assert_called_once_with("https://gitlab.example.com", "t")
 
 
 def test_apply_replacements_for_entry_skips_empty_replacements(
@@ -1752,6 +1863,19 @@ def test_run_file_updates_returns_existing_mr(tmp_path: Path) -> None:
             secrets=secrets,
         )
     assert (body, state, code) == (existing, "Success", 0)
+
+
+def test_main_missing_required_task_env(
+    tmp_path: Path, secret_mount: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing required task env vars write Failed state and exit 0."""
+    info, state, _, _ = _setup_tekton_env(tmp_path, monkeypatch, secret_mount)
+    monkeypatch.delenv("UPSTREAM_REPO", raising=False)
+    rc = process_file_updates.main([*_PROG_ARGV])
+    assert rc == 0
+    assert state.read_text(encoding="utf-8") == "Failed"
+    assert "loading task configuration" in info.read_text(encoding="utf-8")
+    assert "UPSTREAM_REPO" in info.read_text(encoding="utf-8")
 
 
 def test_main_parse_args_non_int_exit_code() -> None:
