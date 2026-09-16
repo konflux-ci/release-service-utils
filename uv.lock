@@ -657,7 +657,7 @@ wheels = [
 
 [[package]]
 name = "cloudpub"
-version = "1.7.4"
+version = "1.7.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
@@ -667,9 +667,9 @@ dependencies = [
     { name = "requests" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/91/f6/af80aebf89f0bab9d665ff169b0a009a85a14799e6fd3132acfee50f674a/cloudpub-1.7.4.tar.gz", hash = "sha256:d2f5e707d6bd03c83571a9508c5367f80dcfc1171a89fac4abdc9edb4073623e", size = 69268, upload-time = "2026-07-07T14:25:27.978Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/01/d5/80832e082d4be748f71e728619289eafffb5db478ebf59693b92d4fd1aea/cloudpub-1.7.6.tar.gz", hash = "sha256:8feb238c30ffa21a6316575b6c27662cda954f9f5d654541b67c0dc312a9d8e7", size = 71374, upload-time = "2026-09-14T16:54:06.641Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/09/8d/3827a9738f0203b9fd31b692c26baf4d92d809b684585a629250187cf57c/cloudpub-1.7.4-py3-none-any.whl", hash = "sha256:1b95233441d926ab47cd06834200ba2fbef5aac78f9360b3f400015af5b75577", size = 59521, upload-time = "2026-07-07T14:25:26.895Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/a8/6dd63d4315e487378828cabf31a639221aafc837e8945aec320b8ae211f2/cloudpub-1.7.6-py3-none-any.whl", hash = "sha256:c2cbac9bf69243e3528b8d41a0ea8576898320f8af03c5cbbfc1f3833cf69030", size = 60012, upload-time = "2026-09-14T16:54:05.309Z" },
 ]
 
 [[package]]
@@ -1895,7 +1895,7 @@ wheels = [
 
 [[package]]
 name = "pubtools-marketplacesvm"
-version = "2.1.2"
+version = "2.1.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cloudimg" },
@@ -1907,9 +1907,9 @@ dependencies = [
     { name = "starmap-client" },
     { name = "strenum" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d5/5c/8dd0ad5f3ca647f5c224e91b2d9975be705eeec1c42d2fa1dccfc70541d1/pubtools_marketplacesvm-2.1.2.tar.gz", hash = "sha256:ae84ae26eb52b93a25772e6eeb2e8935c6b4fefd758dd761d4dc401950d8b1c8", size = 59656, upload-time = "2026-05-05T14:02:53.312Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/36/5c/249d8e671265f001d2adb54476d33779fa5cb1aa1193b9dfce6e8b6c201d/pubtools_marketplacesvm-2.1.4.tar.gz", hash = "sha256:81095ebe3fa26fb39600d7480898352df680c63e266e8d9191829264ad3ca3a1", size = 59749, upload-time = "2026-09-15T07:09:04.294Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/c5/795a95930aae6095b951341d5c91c402098c10c1dfa5afe3cd362cd941b4/pubtools_marketplacesvm-2.1.2-py3-none-any.whl", hash = "sha256:ef3854fa5b4ee01cc9bc493699d50f6baf007f31136dbadaa57ecf37a7e1feea", size = 74350, upload-time = "2026-05-05T14:02:51.985Z" },
+    { url = "https://files.pythonhosted.org/packages/23/3f/5b0829502a18bd40a7e94cae84a965190f71a0b331584f403b49ca369439/pubtools_marketplacesvm-2.1.4-py3-none-any.whl", hash = "sha256:ff118294196e4fc1c06ac7a2fad1d1b241b049959d4c487b6384de07cc77646b", size = 74356, upload-time = "2026-09-15T07:09:02.924Z" },
 ]
 
 [[package]]
@@ -2022,7 +2022,7 @@ wheels = [
 
 [[package]]
 name = "pulp-tool"
-version = "1.1.1.dev14+ge7d820847.d20260915"
+version = "1.1.1.dev14+ge7d820847.d20260916"
 source = { git = "https://github.com/konflux-ci/pulp-tool.git#e7d8208471d6c123e9aa8a02b3f2e149891ec877" }
 dependencies = [
     { name = "click" },
@@ -2563,7 +2563,7 @@ requires-dist = [
     { name = "packaging" },
     { name = "pubtools-content-gateway", specifier = "==0.5.4" },
     { name = "pubtools-exodus", specifier = "==1.5.2" },
-    { name = "pubtools-marketplacesvm", specifier = "==2.1.2" },
+    { name = "pubtools-marketplacesvm", specifier = "==2.1.4" },
     { name = "pubtools-pulp", specifier = "==1.33.2" },
     { name = "pubtools-pyxis", specifier = "==1.3.8" },
     { name = "pubtools-sign", specifier = "==1.0.6" },
