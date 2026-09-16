@@ -141,6 +141,13 @@ def extract_log_url(build_info: IIBBuild) -> str:
     return ""
 
 
+def select_service_account(staged: bool) -> str:
+    """Return the IIB service account name for the target environment."""
+    if staged:
+        return "iib-service-account-stage"
+    return "iib-service-account-prod"
+
+
 def compress_build_info(data: IIBBuild) -> str:
     """Serialize, gzip-compress, and base64-encode build info.
 
