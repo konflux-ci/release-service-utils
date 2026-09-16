@@ -101,8 +101,10 @@ Intended for clusters whose API includes the `InternalRequest` resource type
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import socket
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -114,6 +116,7 @@ from kubernetes import config as k8s_config
 from release_service_utils.helpers import retry
 from release_service_utils.helpers.logger import logger
 
+CREATOR_POD_LABEL = "internal-services.appstudio.openshift.io/creator-pod"
 PIPELINE_NAME_LABEL = "internal-services.appstudio.openshift.io/pipeline-name"
 PIPELINERUN_UID_LABEL = "internal-services.appstudio.openshift.io/pipelinerun-uid"
 CLEANUP_PROPAGATION_SLEEP_SECONDS = 5
@@ -127,6 +130,16 @@ _IR_GROUP = "appstudio.redhat.com"
 _IR_VERSION = "v1alpha1"
 _IR_PLURAL = "internalrequests"
 _NAMESPACE_FILE = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+
+
+def _hash_pod_name(pod_name: str) -> str:
+    """Return the first 16 hex characters of the MD5 hash of *pod_name*.
+
+    This produces a Kubernetes-label-safe value that distinguishes pods
+    across Tekton retries (each retry creates a new pod) while remaining
+    stable within a single attempt (all batches share the same pod).
+    """
+    return hashlib.md5(pod_name.encode(), usedforsecurity=False).hexdigest()[:16]
 
 
 class InternalRequestWaitError(RuntimeError):
@@ -225,8 +238,11 @@ def build_payload(
     service_account: str | None,
 ) -> dict[str, Any]:
     """Build the InternalRequest manifest payload."""
+    creator_pod = socket.gethostname() or None
     merged_labels = dict(labels)
     merged_labels[PIPELINE_NAME_LABEL] = pipeline
+    if creator_pod:
+        merged_labels[CREATOR_POD_LABEL] = _hash_pod_name(creator_pod)
 
     payload: dict[str, Any] = {
         "apiVersion": "appstudio.redhat.com/v1alpha1",
@@ -453,38 +469,119 @@ def cleanup_existing_requests(
     labels: Mapping[str, str],
     k8s_api: k8s_client.CustomObjectsApi | None = None,
 ) -> None:
-    """Delete prior InternalRequests for the same pipeline run and pipeline name."""
+    """Delete prior InternalRequests for the same pipeline run and pipeline name.
+
+    List matching requests once and compare their creator-pod labels with
+    the hash of ``socket.gethostname()``. Preserve requests from this pod
+    (same Tekton attempt) and delete those with a different or missing
+    creator-pod label. Log the observed counts and each cleanup decision.
+    """
     if k8s_api is None:
         k8s_api = _default_k8s_api()
 
     pipelinerun_uid = _pipelinerun_uid_from_labels(labels)
     if not pipelinerun_uid:
+        logger.info("Cleanup skipped for pipeline=%s: no pipelinerun-uid label", pipeline)
         return
 
+    resolved_pod = socket.gethostname() or None
+    if not resolved_pod:
+        logger.warning(
+            "Cleanup skipped: pod hostname could not be determined. "
+            "Cannot identify creator pod to scope cleanup safely."
+        )
+        return
+
+    creator_hash = _hash_pod_name(resolved_pod)
     label_selector = (
-        f"{PIPELINERUN_UID_LABEL}={pipelinerun_uid}," f"{PIPELINE_NAME_LABEL}={pipeline}"
+        f"{PIPELINERUN_UID_LABEL}={pipelinerun_uid},{PIPELINE_NAME_LABEL}={pipeline}"
     )
-    items = _fetch_internal_requests(name=None, label_selector=label_selector, k8s_api=k8s_api)
-    if not items:
+    logger.info(
+        "Cleanup scanning InternalRequests: pipeline=%s, pipelinerun-uid=%s, "
+        "pod=%s, creator-pod=%s",
+        pipeline,
+        pipelinerun_uid,
+        resolved_pod,
+        creator_hash,
+    )
+    try:
+        items = _fetch_internal_requests(
+            name=None, label_selector=label_selector, k8s_api=k8s_api
+        )
+    except k8s_client.ApiException:
+        logger.error("Cleanup could not list InternalRequests; no deletion performed")
+        raise
+
+    siblings = []
+    to_delete = []
+    for item in items:
+        if not isinstance(item, dict):
+            logger.warning("Cleanup ignoring invalid InternalRequest entry")
+            continue
+        metadata = item.get("metadata", {})
+        ir_name = metadata.get("name")
+        if not isinstance(ir_name, str) or not ir_name:
+            logger.warning("Cleanup ignoring InternalRequest with invalid name")
+            continue
+        if (metadata.get("labels") or {}).get(CREATOR_POD_LABEL) == creator_hash:
+            siblings.append(item)
+        else:
+            to_delete.append(item)
+
+    logger.info(
+        "Cleanup found %d InternalRequest(s): preserving %d same-pod sibling(s), "
+        "deleting %d with a different or missing creator-pod "
+        "(pipeline=%s, pipelinerun-uid=%s, creator-pod=%s)",
+        len(items),
+        len(siblings),
+        len(to_delete),
+        pipeline,
+        pipelinerun_uid,
+        creator_hash,
+    )
+    for sibling in siblings:
+        succeeded = next(
+            (
+                condition.get("status", "Unknown")
+                for condition in sibling.get("status", {}).get("conditions", [])
+                if condition.get("type") == "Succeeded"
+            ),
+            "unset",
+        )
+        logger.info(
+            "Preserving InternalRequest %s during cleanup: "
+            "same creator-pod=%s, Succeeded=%s",
+            sibling["metadata"]["name"],
+            creator_hash,
+            succeeded,
+        )
+    if not to_delete:
+        logger.info("Cleanup: no InternalRequests will be deleted")
         return
 
     namespace = _get_namespace()
 
-    logger.info("Found existing InternalRequests from prior attempts. Cleaning up...")
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        ir_name = item.get("metadata", {}).get("name")
-        if not isinstance(ir_name, str) or not ir_name:
-            continue
-        logger.info("Deleting InternalRequest %s...", ir_name)
-        k8s_api.delete_namespaced_custom_object(
-            group=_IR_GROUP,
-            version=_IR_VERSION,
-            namespace=namespace,
-            plural=_IR_PLURAL,
-            name=ir_name,
+    for item in to_delete:
+        ir_name = item["metadata"]["name"]
+        logger.info(
+            "Deleting InternalRequest %s: creator-pod=%s differs from current creator-pod=%s",
+            ir_name,
+            (item["metadata"].get("labels") or {}).get(CREATOR_POD_LABEL, "<missing>"),
+            creator_hash,
         )
+        try:
+            k8s_api.delete_namespaced_custom_object(
+                group=_IR_GROUP,
+                version=_IR_VERSION,
+                namespace=namespace,
+                plural=_IR_PLURAL,
+                name=ir_name,
+            )
+        except k8s_client.ApiException as exc:
+            if exc.status == 404:
+                logger.info("InternalRequest %s already deleted", ir_name)
+                continue
+            raise
         _wait_for_deletion(ir_name, namespace, k8s_api)
         logger.info("Deleted InternalRequest %s", ir_name)
 
@@ -561,8 +658,7 @@ def create(
     the InternalRequest completes using the same semantics as the bash utility.
 
     When *cleanup* is false it skips deleting prior InternalRequests for the same
-    pipeline run. Set this when multiple InternalRequests are created
-    concurrently with the same labels.
+    pipeline run. With cleanup enabled, requests from this pod are preserved.
     """
     if not pipeline:
         msg = "pipeline is required"
@@ -589,7 +685,13 @@ def create(
     if k8s_api is None:
         k8s_api = _default_k8s_api()
     if cleanup:
-        cleanup_existing_requests(pipeline=pipeline, labels=merged_labels, k8s_api=k8s_api)
+        cleanup_existing_requests(
+            pipeline=pipeline,
+            labels=merged_labels,
+            k8s_api=k8s_api,
+        )
+    else:
+        logger.info("Cleanup skipped for pipeline=%s: cleanup=False", pipeline)
 
     payload = build_payload(
         pipeline=pipeline,
