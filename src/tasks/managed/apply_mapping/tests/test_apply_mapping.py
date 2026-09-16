@@ -1657,13 +1657,66 @@ def test_skopeo_list_repo_tags_repo_not_found_returns_empty_list() -> None:
         assert apply_mapping._skopeo_list_repo_tags("repo") == []
 
 
-def test_skopeo_list_repo_tags_missing_tags_key_returns_empty_list() -> None:
-    """A response with no 'Tags' key returns an empty list."""
+def test_skopeo_list_repo_tags_missing_tags_key_raises() -> None:
+    """A response with no 'Tags' key raises ``CheckStepError``."""
     with mock.patch(
         f"{TASK}.skopeo.list_tags",
         return_value=_completed(json.dumps({})),
     ):
+        with pytest.raises(apply_mapping.tekton.CheckStepError, match="missing Tags key"):
+            apply_mapping._skopeo_list_repo_tags("repo")
+
+
+def test_skopeo_list_repo_tags_empty_tags_existing_repo_raises() -> None:
+    """An existing repo returning empty tags raises to prevent overwriting."""
+    with (
+        mock.patch(
+            f"{TASK}.skopeo.list_tags",
+            return_value=_completed(json.dumps({"Tags": []})),
+        ),
+        mock.patch(
+            f"{TASK}.skopeo.inspect",
+            return_value=_completed(json.dumps({})),
+        ),
+    ):
+        with pytest.raises(
+            apply_mapping.tekton.CheckStepError,
+            match="exists but skopeo list-tags returned an empty",
+        ):
+            apply_mapping._skopeo_list_repo_tags("repo")
+
+
+def test_skopeo_list_repo_tags_empty_tags_new_repo_returns_empty() -> None:
+    """A genuinely new repo (inspect returns repo-not-found) with empty tags returns ``[]``."""
+    with (
+        mock.patch(
+            f"{TASK}.skopeo.list_tags",
+            return_value=_completed(json.dumps({"Tags": []})),
+        ),
+        mock.patch(
+            f"{TASK}.skopeo.inspect",
+            return_value=_completed(returncode=1, stderr="repository not found"),
+        ),
+    ):
         assert apply_mapping._skopeo_list_repo_tags("repo") == []
+
+
+def test_skopeo_list_repo_tags_empty_tags_inspect_non_repo_error_raises() -> None:
+    """An inspect failure that isn't repo-not-found raises instead of returning ``[]``."""
+    with (
+        mock.patch(
+            f"{TASK}.skopeo.list_tags",
+            return_value=_completed(json.dumps({"Tags": []})),
+        ),
+        mock.patch(
+            f"{TASK}.skopeo.inspect",
+            return_value=_completed(returncode=1, stderr="unauthorized: access denied"),
+        ),
+    ):
+        with pytest.raises(
+            apply_mapping.tekton.CheckStepError, match="not a 'repository not found'"
+        ):
+            apply_mapping._skopeo_list_repo_tags("repo")
 
 
 def test_inspect_json_parses_stdout() -> None:
