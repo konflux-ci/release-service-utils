@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from release_service_utils.helpers import file, internal_request, tekton
+from release_service_utils.helpers import file, iib, internal_request, tekton
 from release_service_utils.helpers.internal_request import (
     PIPELINERUN_UID_LABEL,
     SPAWN_OVERHEAD_SECONDS,
@@ -157,13 +157,6 @@ def compute_publishing_decisions(mode: str, opt_in: bool) -> tuple[bool, bool, b
     return (opt_in, opt_in, opt_in)
 
 
-def select_iib_service_account(staged: bool) -> str:
-    """Return IIB service account name based on environment."""
-    if staged:
-        return "iib-service-account-stage"
-    return "iib-service-account-prod"
-
-
 def fetch_ir_opt_in_results(
     ir_name: str,
 ) -> list[dict[str, Any]]:
@@ -305,7 +298,7 @@ def run_prepare(
             ValueError("Validation failed"),
         )
 
-    iib_sa = select_iib_service_account(mode == "stagedIndex")
+    iib_sa = iib.select_service_account(mode == "stagedIndex")
     logger.info("IIB service account: %s", iib_sa)
 
     opt_in_results = check_fbc_opt_in(

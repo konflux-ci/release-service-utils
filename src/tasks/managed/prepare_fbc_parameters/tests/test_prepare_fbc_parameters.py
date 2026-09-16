@@ -264,23 +264,6 @@ def test_publishing_decisions_standard_opt_out() -> None:
     ) == (False, False, False)
 
 
-# --- select_iib_service_account ---
-
-
-def test_iib_sa_prod() -> None:
-    """Select prod service account when not staged."""
-    assert (
-        prepare_fbc_parameters.select_iib_service_account(False) == "iib-service-account-prod"
-    )
-
-
-def test_iib_sa_stage() -> None:
-    """Select stage service account when staged."""
-    assert (
-        prepare_fbc_parameters.select_iib_service_account(True) == "iib-service-account-stage"
-    )
-
-
 # --- render_fbc_fragment ---
 
 

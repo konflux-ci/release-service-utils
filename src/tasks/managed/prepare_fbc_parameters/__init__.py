@@ -11,7 +11,6 @@ from .prepare_fbc_parameters import (  # noqa: F401
     main,
     render_fbc_fragment,
     run_prepare,
-    select_iib_service_account,
     validate_allowed_packages,
     validate_no_duplicate_packages,
 )

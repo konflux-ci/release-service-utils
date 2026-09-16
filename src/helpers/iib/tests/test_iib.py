@@ -292,3 +292,13 @@ def test_extract_log_url_logs_none() -> None:
         "logs": None,  # type: ignore[typeddict-item]
     }
     assert iib.extract_log_url(build) == ""
+
+
+def test_select_service_account_prod() -> None:
+    """Return prod service account when not staged."""
+    assert iib.select_service_account(False) == "iib-service-account-prod"
+
+
+def test_select_service_account_stage() -> None:
+    """Return stage service account when staged."""
+    assert iib.select_service_account(True) == "iib-service-account-stage"
