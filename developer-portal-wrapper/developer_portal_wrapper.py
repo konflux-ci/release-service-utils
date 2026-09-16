@@ -10,7 +10,7 @@ import logging
 
 import requests
 from requests.auth import HTTPBasicAuth
-from utils import cgw_idempotency
+from release_service_utils.helpers.content_gateway import cgw_idempotency
 
 LOG = logging.getLogger("developer-portal-wrapper")
 DEFAULT_LOG_FMT = "%(asctime)s [%(levelname)-8s] %(message)s"
@@ -27,9 +27,9 @@ os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
 
 def generate_download_url(content_dir, file_name):
-    """
-    Generate a download URL in this format:
-    /content/origin/files/sha256/{checksum[:2]}{checksum}/{file_name}
+    """Generate a download URL.
+
+    Format: /content/origin/files/sha256/{checksum[:2]}{checksum}/{file_name}
     """
     prefix = "/content/origin/files/sha256"
     sha256_hash = hashlib.sha256()
@@ -43,10 +43,7 @@ def generate_download_url(content_dir, file_name):
 def generate_metadata(
     product_name, product_code, product_version_name, content_dir, content_list, file_prefix
 ):
-    """
-    Generate metadata for each file in
-    content_list that starts with the component name
-    """
+    """Generate metadata for each file in content_list that starts with the component name."""
     metadata = []
     short_url_prefix = f"/cgw/{product_code}/{product_version_name}"
 

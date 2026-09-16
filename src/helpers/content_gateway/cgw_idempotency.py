@@ -1,30 +1,53 @@
+"""Idempotent Content Gateway (CGW) file publishing helpers."""
+
+from __future__ import annotations
+
 import logging
 import re
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
+from release_service_utils.helpers import http_client
+
 TIMESTAMP_TOKEN_RE = re.compile(r"-(\d{10})(?=-)")
 
 
 def call_cgw_api(*, host, method, endpoint, session, data=None):
-    """Make an API call to the Content Gateway service."""
+    """Make an API call to the Content Gateway service.
+
+    Retries on connection-level failures (e.g. connection reset), which are
+    transient and unrelated to the request payload. HTTP error responses are
+    not retried since they indicate a real problem with the request.
+
+    A plain create POST (no ``id`` in the body) is not retried either: if the
+    server committed the create but the acknowledgement was lost, blindly
+    resending the same POST would create a second file record with the same
+    shortURL. GET/DELETE calls and update POSTs (which carry an existing
+    ``id``) are idempotent, so those are safe to retry.
+    """
+    is_idempotent = method.upper() != "POST" or (isinstance(data, dict) and "id" in data)
+    max_attempts = 3 if is_idempotent else 1
+
     try:
-        response = session.request(
-            method=method.upper(),
+        response = http_client.request_with_retry(
+            session,
+            method=method,
             url=f"{host}{endpoint}",
             json=data,
+            max_attempts=max_attempts,
+            retry_on=requests.exceptions.ConnectionError,
         )
-
-        if not response.ok:
-            error_message = (
-                response.text.strip() or f"HTTP {response.status_code}:{response.reason}"
-            )
-            raise RuntimeError(f"API call failed: {error_message}")
-
-        return response
     except requests.RequestException as e:
-        raise RuntimeError(f"API call failed: {e}")
+        raise RuntimeError(f"API call failed: {e}") from e
+
+    if not response.ok:
+        error_message = (
+            response.text.strip() or f"HTTP {response.status_code}:{response.reason}"
+        )
+        raise RuntimeError(f"API call failed: {error_message}")
+
+    return response
 
 
 def get_product_id(*, host, session, product_name, product_code):
@@ -64,8 +87,7 @@ def find_existing_file(existing_files, new_file):
 
 
 def normalize_shorturl_for_matching(shorturl):
-    """
-    Normalize shortURL for idempotent matching.
+    """Normalize shortURL for idempotent matching.
 
     For timestamped filenames such as
     `...-1777494747-x86_64-boot.iso.gz`, strip the epoch token so
@@ -133,8 +155,7 @@ def rollback_files(*, host, session, product_id, version_id, created_file_ids):
 
 
 def create_files(*, host, session, product_id, version_id, metadata):
-    """
-    Create or update files idempotently.
+    """Create or update files idempotently.
 
     Existing files are matched by shortURL:
     - same shortURL + same downloadURL -> skip
