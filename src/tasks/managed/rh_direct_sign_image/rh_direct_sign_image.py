@@ -713,7 +713,8 @@ def submit_batch(batch_file: Path, config: SubmitConfig) -> None:
             service_account=config.service_account,
             pipeline_timeout=config.pipeline_timeout,
             task_timeout=config.task_timeout,
-            cleanup=False,
+            # Creator-pod scoping preserves sibling batches and removes retry orphans.
+            cleanup=True,
         )
     except InternalRequestWaitError as exc:
         duration = time.monotonic() - start
