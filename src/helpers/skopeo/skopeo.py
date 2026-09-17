@@ -18,6 +18,7 @@ def inspect(
     no_tags: bool = False,
     override_os: str | None = None,
     override_arch: str | None = None,
+    creds: str | None = None,
     retry_times: int = 3,
     check: bool = False,
 ) -> subprocess.CompletedProcess[str]:
@@ -33,6 +34,8 @@ def inspect(
         cmd += ["--override-os", override_os]
     if override_arch:
         cmd += ["--override-arch", override_arch]
+    if creds:
+        cmd.extend(["--creds", creds])
     cmd.append(f"docker://{image_ref}")
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
@@ -63,6 +66,11 @@ def copy(
     source: str,
     dest: str | Path,
     *,
+    all: bool = False,
+    preserve_digests: bool = False,
+    src_tls_verify: bool | None = None,
+    src_creds: str | None = None,
+    dest_creds: str | None = None,
     retry_times: int = 3,
     extra_args: list[str] | None = None,
     check: bool = False,
@@ -87,15 +95,20 @@ def copy(
             dest = f"dir:{dest}"
             extra_args = ["--authfile", str(auth_file), *(extra_args or [])]
 
-        cmd = [
-            "skopeo",
-            "copy",
-            "--retry-times",
-            str(retry_times),
-            *(extra_args or []),
-            source,
-            str(dest),
-        ]
+        cmd = ["skopeo", "copy", "--retry-times", str(retry_times)]
+        if all:
+            cmd.append("--all")
+        if preserve_digests:
+            cmd.append("--preserve-digests")
+        if src_tls_verify is not None:
+            cmd.append(f"--src-tls-verify={str(src_tls_verify).lower()}")
+        if src_creds:
+            cmd.extend(["--src-creds", src_creds])
+        if dest_creds:
+            cmd.extend(["--dest-creds", dest_creds])
+        if extra_args:
+            cmd.extend(extra_args)
+        cmd.extend([source, str(dest)])
         return subprocess.run(cmd, capture_output=True, text=True, check=check)
     finally:
         if auth_file is not None:
