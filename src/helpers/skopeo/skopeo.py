@@ -67,12 +67,16 @@ def copy(
     extra_args: list[str] | None = None,
     check: bool = False,
     authenticated: bool = False,
+    all: bool = False,
+    source_auth_file: Path | None = None,
+    dest_auth_file: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``skopeo copy`` to copy an image between transports.
 
     When *authenticated* is true, treat *source* as a registry pullspec and
     *dest* as a local directory. Obtain credentials with ``select-oci-auth``
     and remove the temporary auth file after the copy completes.
+    (Deprecated: use source_auth_file and explicit transport prefixes instead.)
     """
     auth_file: Path | None = None
     try:
@@ -87,15 +91,16 @@ def copy(
             dest = f"dir:{dest}"
             extra_args = ["--authfile", str(auth_file), *(extra_args or [])]
 
-        cmd = [
-            "skopeo",
-            "copy",
-            "--retry-times",
-            str(retry_times),
-            *(extra_args or []),
-            source,
-            str(dest),
-        ]
+        cmd = ["skopeo", "copy", "--retry-times", str(retry_times)]
+        if all:
+            cmd.append("--all")
+        if source_auth_file:
+            cmd += ["--src-authfile", str(source_auth_file)]
+        if dest_auth_file:
+            cmd += ["--dest-authfile", str(dest_auth_file)]
+        if extra_args:
+            cmd += extra_args
+        cmd += [source, str(dest)]
         return subprocess.run(cmd, capture_output=True, text=True, check=check)
     finally:
         if auth_file is not None:
