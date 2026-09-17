@@ -16,6 +16,7 @@ from .internal_request import (  # noqa: F401
     create_internal_request,
     fetch_results,
     duration_to_seconds,
+    seconds_to_duration,
     validate_timeouts,
     wait_for_completion,
 )
