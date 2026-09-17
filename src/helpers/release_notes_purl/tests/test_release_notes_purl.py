@@ -483,7 +483,7 @@ def test_updated_binary_or_generic_entries_expands_multiple_files_same_arch_os()
 
 
 def test_updated_disk_image_entries_requires_staged_files() -> None:
-    """Fail when a disk-image has artifact rows but no snapshot staged.files[]."""
+    """Fail when a disk-image has artifact rows but no snapshot files[]/staged.files[]."""
     data = {
         "releaseNotes": {
             "content": {
@@ -499,7 +499,7 @@ def test_updated_disk_image_entries_requires_staged_files() -> None:
         },
     }
     component = {"name": "iso", "staged": {"version": "1.0"}}
-    with pytest.raises(ValueError, match="no staged.files"):
+    with pytest.raises(ValueError, match=r"no files\[\] or staged\.files\[\]"):
         rnp_module._updated_disk_image_entries(
             data,
             component,
@@ -512,7 +512,7 @@ def test_updated_disk_image_entries_requires_staged_files() -> None:
 
 @pytest.mark.parametrize("filename", ["", "null", None])
 def test_updated_disk_image_entries_requires_filename(filename: str | None) -> None:
-    """Fail when a staged file has a missing, empty, or literal null filename."""
+    """Fail when a staged file has a missing, empty, or literal null filename and no source."""
     data = {
         "releaseNotes": {
             "content": {
@@ -528,11 +528,80 @@ def test_updated_disk_image_entries_requires_filename(filename: str | None) -> N
         },
     }
     component = {"name": "iso", "staged": {"version": "1.0"}}
-    with pytest.raises(ValueError, match="filename is required"):
+    with pytest.raises(ValueError, match="missing a usable filename"):
         rnp_module._updated_disk_image_entries(
             data,
             component,
             staged_files=[{"filename": filename}],
+            checksum_map=[],
+            cgw_base_url="https://developers.redhat.com/products",
+            cdn_base_url="https://access.redhat.com/downloads",
+        )
+
+
+def test_updated_disk_image_entries_derives_filename_from_source() -> None:
+    """A files[] entry with no filename derives its published name from source."""
+    data = {
+        "releaseNotes": {
+            "content": {
+                "artifacts": [
+                    {
+                        "component": "iso",
+                        "architecture": "x86_64",
+                        "os": "linux",
+                        "purl": "placeholder",
+                    },
+                ],
+            },
+        },
+    }
+    component = {
+        "name": "iso",
+        "contentGateway": {"productVersionName": "1.5"},
+    }
+    updated = rnp_module._updated_disk_image_entries(
+        data,
+        component,
+        staged_files=[{"source": "images/product-1.5-x86_64.iso.gz"}],
+        checksum_map=[
+            {"component": "iso", "files": {"product-1.5-x86_64.iso.gz": "sha256:iso"}},
+        ],
+        cgw_base_url="https://developers.redhat.com/products",
+        cdn_base_url="https://access.redhat.com/downloads",
+    )
+    assert len(updated) == 1
+    assert "filename=product-1.5-x86_64.iso.gz" in updated[0]["purl"]
+    assert "checksum=sha256%3Aiso" in updated[0]["purl"]
+    assert updated[0]["architecture"] == "x86_64"
+
+
+def test_updated_disk_image_entries_rejects_literal_null_filename_with_source() -> None:
+    """A literal "null" filename is rejected even when a source is present.
+
+    Regression test: a staged.files[] entry with filename == "null" must
+    fail loudly instead of silently publishing (and computing checksum/PURL)
+    under the source-derived basename instead.
+    """
+    data = {
+        "releaseNotes": {
+            "content": {
+                "artifacts": [
+                    {
+                        "component": "iso",
+                        "architecture": "x86_64",
+                        "os": "linux",
+                        "purl": "placeholder",
+                    },
+                ],
+            },
+        },
+    }
+    component = {"name": "iso", "staged": {"version": "1.0"}}
+    with pytest.raises(ValueError, match="missing a usable filename"):
+        rnp_module._updated_disk_image_entries(
+            data,
+            component,
+            staged_files=[{"filename": "null", "source": "images/product-x86_64.iso"}],
             checksum_map=[],
             cgw_base_url="https://developers.redhat.com/products",
             cdn_base_url="https://access.redhat.com/downloads",
@@ -803,6 +872,63 @@ def test_update_artifact_purls_expands_disk_image_per_staged_file(tmp_path: Path
     assert all(row["architecture"] == "x86_64" for row in artifacts)
 
 
+def test_update_artifact_purls_disk_image_content_gateway_only(tmp_path: Path) -> None:
+    """CGW-only disk-image (no ``staged``) gets its PURL populated from ``files[]``.
+
+    Regression test: ``staged`` only determines the Customer Portal (Pulp)
+    destination, not whether a disk-image release has files at all. A
+    component delivered to the Content Gateway only has no ``staged`` block
+    in either the mapping or the snapshot, and lists its files under the
+    snapshot component's top-level ``files[]`` instead.
+    """
+    data = _generic_mapping_data(
+        component_name="cgw-iso",
+        content_type="disk-image",
+        component_extra={
+            "contentGateway": {"contentType": "disk-image", "productVersionName": "1.5"},
+            "staged": None,
+        },
+        artifact_extra={"component": "cgw-iso"},
+    )
+    del data["mapping"]["components"][0]["files"]
+    data["mapping"]["components"][0] = {
+        k: v for k, v in data["mapping"]["components"][0].items() if v is not None
+    }
+    data_file = tmp_path / "data.json"
+    _write_data(data_file, data)
+    snapshot_file = tmp_path / "snapshot.json"
+    _write_data(
+        snapshot_file,
+        {
+            "components": [
+                {
+                    "name": "cgw-iso",
+                    "files": [{"source": "images/product-1.5-x86_64.iso.gz"}],
+                },
+            ],
+        },
+    )
+    checksum_map = [
+        {"component": "cgw-iso", "files": {"product-1.5-x86_64.iso.gz": "sha256:iso"}},
+    ]
+    with _patch_oci_update(checksum_map):
+        rnp_module.update_artifact_purls(
+            data_file,
+            checksum_map_param="oci:checksum",
+            snapshot_path=snapshot_file,
+        )
+
+    artifact = json.loads(data_file.read_text(encoding="utf-8"))["releaseNotes"]["content"][
+        "artifacts"
+    ][0]
+    assert "pkg:generic/cgw-iso@1.5" in artifact["purl"]
+    assert "filename=product-1.5-x86_64.iso.gz" in artifact["purl"]
+    assert "checksum=sha256%3Aiso" in artifact["purl"]
+    assert "download_url=https%3A%2F%2Fdevelopers.redhat.com%2Fproducts" in artifact["purl"]
+    assert artifact["architecture"] == "x86_64"
+    assert artifact["os"] == "linux"
+
+
 def test_update_artifact_purls_mixed_content_types(tmp_path: Path) -> None:
     """Update later PURL components even when the first mapping component is image."""
     data = {
@@ -1013,6 +1139,59 @@ def test_staged_files_by_component_edge_cases() -> None:
         "no-staged": [],
         "bad-files": [],
         "ok": [{"filename": "a.iso"}],
+    }
+
+
+def test_staged_files_by_component_falls_back_to_top_level_files() -> None:
+    """A CGW-only component (no ``staged``) is read from top-level ``files[]``."""
+    assert rnp_module._staged_files_by_component(
+        {
+            "components": [
+                {
+                    "name": "cgw-only",
+                    "contentGateway": {"contentType": "disk-image"},
+                    "files": [{"source": "images/product-x86_64.iso"}],
+                },
+            ],
+        },
+    ) == {
+        "cgw-only": [{"source": "images/product-x86_64.iso"}],
+    }
+
+
+def test_staged_files_by_component_prefers_staged_over_top_level_files() -> None:
+    """A dual-delivery component (both files[] and staged.files[]) keeps staged.files[].
+
+    Regression test: a disk-image can be delivered to both the Content
+    Gateway (top-level files[], untemplated source) and the Customer Portal
+    (staged.files[], with the authoritative templated published filename).
+    Preferring files[] here would silently swap in the wrong (untemplated)
+    published filename for the Customer Portal deliverable.
+    """
+    assert rnp_module._staged_files_by_component(
+        {
+            "components": [
+                {
+                    "name": "dual",
+                    "files": [{"source": "images/product-x86_64.iso"}],
+                    "staged": {
+                        "files": [
+                            {
+                                "source": "images/product-x86_64.iso",
+                                "filename": "product-1.0-20260101-x86_64.iso",
+                            },
+                        ],
+                    },
+                },
+            ],
+        },
+    ) == {
+        "dual": [
+            {
+                "source": "images/product-x86_64.iso",
+                "filename": "product-1.0-20260101-x86_64.iso",
+            },
+        ],
     }
 
 

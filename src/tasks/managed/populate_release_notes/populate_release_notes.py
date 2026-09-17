@@ -19,6 +19,7 @@ from requests.auth import HTTPBasicAuth
 
 from release_service_utils.helpers import (
     advisory_data,
+    content_gateway,
     file as file_helper,
     http_client,
     jira as jira_helper,
@@ -352,13 +353,31 @@ def _populate_disk_image(
     has_cves: bool,
     content_artifacts: list[dict[str, Any]],
 ) -> None:
-    """Append disk-image artifact entries."""
+    """Append disk-image artifact entries.
+
+    ``staged`` only determines the Customer Portal (Pulp) destination; it is
+    not required for a disk-image release. A component delivered to the
+    Content Gateway / Developer Portal only (no Customer Portal delivery) has
+    no ``staged`` block and instead lists its files directly under the
+    mapping component's top-level ``files[]``. A component delivered to both
+    destinations can populate both arrays, in which case ``staged.files[]``
+    takes priority -- see ``content_gateway.disk_image_file_entries``.
+    ``staged.files[]`` entries declare an explicit ``filename``; ``files[]``
+    entries do not, so their filename is derived from ``source`` instead
+    (see ``content_gateway.resolved_filename``).
+    """
     marketplace = bool(data.get("mapping", {}).get("cloudMarketplacesSecret"))
     for mapping_component in data.get("mapping", {}).get("components", []):
         if mapping_component.get("name") != name:
             continue
-        for file_entry in mapping_component.get("staged", {}).get("files", []):
-            filename = file_entry["filename"]
+        for file_entry in content_gateway.disk_image_file_entries(mapping_component):
+            filename = content_gateway.resolved_filename(file_entry)
+            if not filename:
+                msg = (
+                    f"disk-image component {name} has a files[]/staged.files[] entry "
+                    "with no filename and no source to derive one from"
+                )
+                raise RuntimeError(msg)
 
             arch = "unknown"
             if "aarch64" in filename:

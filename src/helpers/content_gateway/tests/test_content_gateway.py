@@ -125,3 +125,68 @@ def test_filenames_for_binary_or_generic_empty_when_no_match() -> None:
         )
         == []
     )
+
+
+def test_disk_image_file_entries_prefers_staged_files() -> None:
+    """Disk-image lookup prefers staged.files[] over top-level files[]."""
+    component = {
+        "files": [{"source": "raw-x86_64.iso"}],
+        "staged": {
+            "files": [{"source": "raw-x86_64.iso", "filename": "published-x86_64.iso"}]
+        },
+    }
+    assert content_gateway.disk_image_file_entries(component) == [
+        {"source": "raw-x86_64.iso", "filename": "published-x86_64.iso"},
+    ]
+
+
+def test_disk_image_file_entries_falls_back_to_top_level_files() -> None:
+    """Disk-image lookup uses files[] when there is no staged block (CGW-only)."""
+    component = {"files": [{"source": "raw-x86_64.iso"}]}
+    assert content_gateway.disk_image_file_entries(component) == [
+        {"source": "raw-x86_64.iso"},
+    ]
+
+
+def test_disk_image_file_entries_falls_back_when_staged_files_empty() -> None:
+    """Disk-image lookup uses files[] when staged.files[] is present but empty."""
+    component = {"files": [{"source": "raw-x86_64.iso"}], "staged": {"files": []}}
+    assert content_gateway.disk_image_file_entries(component) == [
+        {"source": "raw-x86_64.iso"},
+    ]
+
+
+def test_disk_image_file_entries_empty_when_neither_present() -> None:
+    """Return no rows when neither staged.files[] nor files[] is usable."""
+    assert content_gateway.disk_image_file_entries({}) == []
+
+
+def test_resolved_filename_uses_explicit_filename() -> None:
+    """A valid explicit filename is returned as-is."""
+    assert content_gateway.resolved_filename(
+        {"filename": "app-1.0.iso", "source": "x.iso"}
+    ) == ("app-1.0.iso")
+
+
+def test_resolved_filename_derives_from_source_when_no_filename_key() -> None:
+    """An entry with no filename key derives the name from source's basename."""
+    assert content_gateway.resolved_filename({"source": "images/app-1.0.iso"}) == "app-1.0.iso"
+
+
+def test_resolved_filename_rejects_literal_null_without_falling_back_to_source() -> None:
+    """A literal "null" filename is rejected, not replaced by the source basename.
+
+    Regression test: staged.files[] entries with a "null" filename must fail
+    instead of silently publishing under a different (source-derived) name.
+    """
+    assert content_gateway.resolved_filename({"filename": "null", "source": "x.iso"}) == ""
+
+
+def test_resolved_filename_rejects_empty_filename_without_falling_back_to_source() -> None:
+    """An explicit empty-string filename is rejected, not replaced by source."""
+    assert content_gateway.resolved_filename({"filename": "", "source": "x.iso"}) == ""
+
+
+def test_resolved_filename_empty_when_no_filename_or_source() -> None:
+    """Return "" when neither filename nor source is usable."""
+    assert content_gateway.resolved_filename({}) == ""
