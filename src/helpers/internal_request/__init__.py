@@ -10,6 +10,7 @@ from .internal_request import (  # noqa: F401
     PIPELINERUN_UID_LABEL,
     PIPELINE_NAME_LABEL,
     SPAWN_OVERHEAD_SECONDS,
+    TASK_GROUP_LABEL,
     build_payload,
     cleanup_existing_requests,
     create,
