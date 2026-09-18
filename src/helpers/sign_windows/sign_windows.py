@@ -35,6 +35,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from release_service_utils.helpers.sign_mac.sign_mac import read_destination_quay_credentials
+
 PROG = "sign_windows.py"
 
 WINDOWS_SSH_KEY_MOUNT = Path(os.environ.get("WINDOWS_SSH_KEY_MOUNT", "/mnt/secrets"))
@@ -381,15 +383,6 @@ def run_custom_signing(
     quay_user = (QUAY_SECRET_MOUNT / "username").read_text().strip()
     quay_pass = (QUAY_SECRET_MOUNT / "password").read_text().strip()
 
-    dest_quay_user_path = DEST_QUAY_SECRET_MOUNT / "username"
-    dest_quay_pass_path = DEST_QUAY_SECRET_MOUNT / "password"
-    if dest_quay_user_path.exists() and dest_quay_pass_path.exists():
-        dest_quay_user = dest_quay_user_path.read_text().strip()
-        dest_quay_pass = dest_quay_pass_path.read_text().strip()
-    else:
-        dest_quay_user = quay_user
-        dest_quay_pass = quay_pass
-
     ssh_dir = Path("/tmp/.ssh")
     ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     id_rsa = ssh_dir / "id_rsa"
@@ -442,6 +435,10 @@ def run_custom_signing(
                 "No Windows content for component %s, skipping Windows signing...", name
             )
             continue
+
+        dest_quay_user, dest_quay_pass = read_destination_quay_credentials(
+            DEST_QUAY_SECRET_MOUNT, origin, name
+        )
 
         logger.info("Signing Windows binaries for component: %s", name)
 

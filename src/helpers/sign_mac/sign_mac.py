@@ -53,6 +53,27 @@ CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 logger = logging.getLogger(__name__)
 
 
+def read_destination_quay_credentials(
+    mount: Path, origin: str, component: str
+) -> tuple[str, str]:
+    """Read component-specific or generic destination Quay credentials."""
+    dest_quay_user_path = mount / f"{origin}-{component}-username"
+    dest_quay_pass_path = mount / f"{origin}-{component}-password"
+    if dest_quay_user_path.exists() and dest_quay_pass_path.exists():
+        return dest_quay_user_path.read_text().strip(), dest_quay_pass_path.read_text().strip()
+
+    if not dest_quay_user_path.exists() and not dest_quay_pass_path.exists():
+        return (
+            (mount / "username").read_text().strip(),
+            (mount / "password").read_text().strip(),
+        )
+
+    missing_path = (
+        dest_quay_user_path if not dest_quay_user_path.exists() else dest_quay_pass_path
+    )
+    raise FileNotFoundError(f"Missing destination Quay credential: {missing_path}")
+
+
 def _build_signing_script(
     *,
     quay_url: str,
@@ -427,15 +448,6 @@ def run_custom_signing(
     quay_user = (QUAY_SECRET_MOUNT / "username").read_text().strip()
     quay_pass = (QUAY_SECRET_MOUNT / "password").read_text().strip()
 
-    dest_quay_user_path = DEST_QUAY_SECRET_MOUNT / "username"
-    dest_quay_pass_path = DEST_QUAY_SECRET_MOUNT / "password"
-    if dest_quay_user_path.exists() and dest_quay_pass_path.exists():
-        dest_quay_user = dest_quay_user_path.read_text().strip()
-        dest_quay_pass = dest_quay_pass_path.read_text().strip()
-    else:
-        dest_quay_user = quay_user
-        dest_quay_pass = quay_pass
-
     ssh_dir = Path("/tmp/.ssh")
     ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     id_rsa = ssh_dir / "id_rsa"
@@ -468,6 +480,10 @@ def run_custom_signing(
         if not (component_dir / "has_mac").exists():
             logger.info("No macOS content for component %s, skipping Mac signing...", name)
             continue
+
+        dest_quay_user, dest_quay_pass = read_destination_quay_credentials(
+            DEST_QUAY_SECRET_MOUNT, origin, name
+        )
 
         logger.info("Signing Mac binaries for component: %s", name)
 

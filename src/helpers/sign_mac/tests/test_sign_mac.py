@@ -44,6 +44,49 @@ def _setup_mounts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (quay / "password").write_text("qpass")
     monkeypatch.setattr(sign_mac, "QUAY_SECRET_MOUNT", quay)
 
+    dest_quay = tmp_path / "dest_quay"
+    dest_quay.mkdir(exist_ok=True)
+    (dest_quay / "-prod-username").write_text("dest-user")
+    (dest_quay / "-prod-password").write_text("dest-pass")
+    (dest_quay / "my-tenant-prod-username").write_text("dest-user")
+    (dest_quay / "my-tenant-prod-password").write_text("dest-pass")
+    monkeypatch.setattr(sign_mac, "DEST_QUAY_SECRET_MOUNT", dest_quay)
+
+
+def test_read_destination_quay_credentials_uses_component_pair(tmp_path: Path) -> None:
+    """Read component-specific destination credentials when both files exist."""
+    (tmp_path / "my-tenant-prod-username").write_text("component-user")
+    (tmp_path / "my-tenant-prod-password").write_text("component-pass")
+
+    assert sign_mac.read_destination_quay_credentials(tmp_path, "my-tenant", "prod") == (
+        "component-user",
+        "component-pass",
+    )
+
+
+def test_read_destination_quay_credentials_falls_back_to_generic_pair(
+    tmp_path: Path,
+) -> None:
+    """Read generic destination credentials when component files are absent."""
+    (tmp_path / "username").write_text("generic-user")
+    (tmp_path / "password").write_text("generic-pass")
+
+    assert sign_mac.read_destination_quay_credentials(tmp_path, "my-tenant", "prod") == (
+        "generic-user",
+        "generic-pass",
+    )
+
+
+def test_read_destination_quay_credentials_rejects_partial_component_pair(
+    tmp_path: Path,
+) -> None:
+    """Raise when only one component-specific credential file exists."""
+    username_path = tmp_path / "my-tenant-prod-username"
+    username_path.write_text("component-user")
+
+    with pytest.raises(FileNotFoundError, match="my-tenant-prod-password"):
+        sign_mac.read_destination_quay_credentials(tmp_path, "my-tenant", "prod")
+
 
 # ---------------------------------------------------------------------------
 # _get_entitlements_artifact_name
@@ -566,9 +609,9 @@ def test_run_custom_script_with_dest_quay(
     _patch_ssh_setup(monkeypatch)
 
     dest_quay = tmp_path / "dest_quay"
-    dest_quay.mkdir()
-    (dest_quay / "username").write_text("dest-user")
-    (dest_quay / "password").write_text("dest-pass")
+    dest_quay.mkdir(exist_ok=True)
+    (dest_quay / "my-tenant-prod-username").write_text("dest-user")
+    (dest_quay / "my-tenant-prod-password").write_text("dest-pass")
     monkeypatch.setattr(sign_mac, "DEST_QUAY_SECRET_MOUNT", dest_quay)
 
     comp_dir = tmp_path / "prod"
@@ -606,10 +649,11 @@ def test_run_custom_script_with_dest_quay(
     assert "UNSIGNED_REF=quay.io/org/unsigned/" in stdin_script
 
 
-def test_run_custom_script_dest_quay_falls_back_to_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("missing_key", ["username", "password"])
+def test_run_custom_script_requires_component_dest_quay_credentials(
+    missing_key: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When DEST_QUAY_SECRET_MOUNT is absent, dest creds fall back to source creds."""
+    """Missing component-specific destination credentials raise an error."""
     monkeypatch.setenv(
         "SNAPSHOT_JSON",
         json.dumps({"components": [{"name": "prod"}]}),
@@ -618,40 +662,64 @@ def test_run_custom_script_dest_quay_falls_back_to_source(
     _setup_mounts(tmp_path, monkeypatch)
     _patch_ssh_setup(monkeypatch)
 
-    # Point DEST_QUAY_SECRET_MOUNT at a non-existent directory
-    monkeypatch.setattr(sign_mac, "DEST_QUAY_SECRET_MOUNT", tmp_path / "no_such_mount")
+    dest_quay = tmp_path / "dest_quay"
+    dest_quay.mkdir(exist_ok=True)
+    (dest_quay / "my-tenant-prod-username").unlink(missing_ok=True)
+    (dest_quay / "my-tenant-prod-password").unlink(missing_ok=True)
+    if missing_key == "password":
+        (dest_quay / "my-tenant-prod-username").write_text("dest-user")
+    else:
+        (dest_quay / "my-tenant-prod-password").write_text("dest-pass")
+    monkeypatch.setattr(sign_mac, "DEST_QUAY_SECRET_MOUNT", dest_quay)
 
     comp_dir = tmp_path / "prod"
     comp_dir.mkdir()
     (comp_dir / "has_mac").touch()
     (comp_dir / "unsigned_mac_digest.txt").write_text("sha256:unsigned")
 
-    calls: list[list[str]] = []
-
-    def fake_subprocess_run(cmd, **kwargs):
-        calls.append((list(cmd), kwargs))
-        if cmd[0] == "scp" and "signed_digest_" in " ".join(cmd):
-            (comp_dir / "signed_mac_digest.txt").write_text("sha256:signed")
-        return mock.Mock(returncode=0)
-
-    with (
-        mock.patch("shutil.copy2"),
-        mock.patch("subprocess.run", side_effect=fake_subprocess_run),
-    ):
+    with pytest.raises(FileNotFoundError, match="my-tenant-prod-"):
         sign_mac.run_custom_signing(
             "quay.io/org",
             "uid-123",
             signing_script="/opt/sign.sh",
             dest_quay_url="quay.io/internal",
+            origin="my-tenant",
         )
 
-    ssh_calls = [(c, kw) for c, kw in calls if c[0] == "ssh"]
-    assert len(ssh_calls) >= 1
-    ssh_cmd, ssh_kwargs = ssh_calls[0]
-    stdin_script = ssh_kwargs.get("input", "")
-    # Falls back to source credentials (quser / qpass from _setup_mounts)
-    assert "QUAY_DEST_USER=quser" in stdin_script
-    assert "QUAY_DEST_PASS=qpass" in stdin_script
+
+def test_run_custom_script_falls_back_to_generic_dest_quay_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Generic destination credentials are used when component credentials are absent."""
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps({"components": [{"name": "prod"}]}))
+    monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+
+    dest_quay = sign_mac.DEST_QUAY_SECRET_MOUNT
+    (dest_quay / "my-tenant-prod-username").unlink()
+    (dest_quay / "my-tenant-prod-password").unlink()
+    (dest_quay / "username").write_text("legacy-user")
+    (dest_quay / "password").write_text("legacy-pass")
+
+    comp_dir = tmp_path / "prod"
+    comp_dir.mkdir()
+    (comp_dir / "has_mac").touch()
+    (comp_dir / "unsigned_mac_digest.txt").write_text("sha256:unsigned")
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch.object(sign_mac, "_run_custom_script") as run_script,
+    ):
+        sign_mac.run_custom_signing(
+            "quay.io/org",
+            "uid-123",
+            signing_script="/opt/sign.sh",
+            origin="my-tenant",
+        )
+
+    assert run_script.call_args.kwargs["dest_quay_user"] == "legacy-user"
+    assert run_script.call_args.kwargs["dest_quay_pass"] == "legacy-pass"
 
 
 def test_run_custom_script_does_not_scp_script(
