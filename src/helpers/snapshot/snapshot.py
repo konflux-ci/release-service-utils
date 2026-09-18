@@ -94,3 +94,15 @@ def component_label_value(component: dict[str, Any], label_name: str) -> str | N
         if label.get("name") == label_name:
             return label.get("value")
     return None
+
+
+def strip_component_metadata(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Remove `.metadata` from each component of *snapshot*, in place.
+
+    InternalRequest pipelines don't need component metadata (env_variables,
+    labels, etc.), and stripping it avoids "arg list too long" errors when the
+    snapshot JSON is passed as an InternalRequest parameter.
+    """
+    for component in snapshot.get("components", []):
+        component.pop("metadata", None)
+    return snapshot
