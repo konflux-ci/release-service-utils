@@ -44,6 +44,7 @@ from .process_file_updates import (  # noqa: F401
     sparse_dirs_from_paths,
     prepare_repository,
     resolve_target_file,
+    decode_seed_escapes,
     seed_target_file,
     apply_replacements_for_entry,
     process_all_paths,
