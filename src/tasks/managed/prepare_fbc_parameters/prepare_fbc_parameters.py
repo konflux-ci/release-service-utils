@@ -50,10 +50,31 @@ def render_fbc_fragment(
         check=True,
     )
     entries: list[dict[str, Any]] = []
-    for line in result.stdout.strip().splitlines():
-        line = line.strip()
+    decoder = json.JSONDecoder()
+    text = result.stdout
+    length = len(text)
+    idx = 0
+    while idx < length:
+        while idx < length and text[idx] in " \t\n\r":
+            idx += 1
+        if idx >= length:
+            break
+        if text[idx] == "{":
+            try:
+                obj, end = decoder.raw_decode(text, idx)
+                if isinstance(obj, dict):
+                    entries.append(obj)
+                idx = end
+                continue
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse JSON object at offset %d in opm output", idx)
+        nl = text.find("\n", idx)
+        line = text[idx : nl if nl != -1 else length].strip()
         if line:
-            entries.append(json.loads(line))
+            logger.debug("Skipping non-JSON line in opm output: %s", line)
+        idx = nl + 1 if nl != -1 else length
+    if not entries:
+        raise ValueError(f"opm render produced no catalog entries for {fbc_fragment}")
     logger.info("Rendered %d catalog entries from %s", len(entries), fbc_fragment)
     return entries
 
