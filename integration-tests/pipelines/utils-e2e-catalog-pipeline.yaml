@@ -18,7 +18,7 @@ spec:
       description: Konflux Snapshot JSON (utils component build).
     - name: catalogE2eRunnerImage
       type: string
-      default: "quay.io/redhat-user-workloads/rhtap-release-2-tenant/release-service-catalog:latest"
+      default: "quay.io/redhat-user-workloads-stage/konflux-release-service-tenant/release-service-catalog:latest"
       description: >-
         release-service-catalog image with /home/e2e/tests (SNAPSHOT.components[0].containerImage in
         the child catalog test PipelineRun). Optional; omit to use the default.
