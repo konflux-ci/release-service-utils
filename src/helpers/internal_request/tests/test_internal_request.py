@@ -42,13 +42,18 @@ def test_duration_to_seconds_rejects_invalid_format() -> None:
 
 def test_seconds_to_duration_formats_hms() -> None:
     """Format seconds as zero-padded XhYmZs."""
+    assert ir_module.seconds_to_duration(0) == "00h00m00s"
     assert ir_module.seconds_to_duration(45) == "00h00m45s"
     assert ir_module.seconds_to_duration(3000) == "00h50m00s"
+    assert ir_module.seconds_to_duration(3600) == "01h00m00s"
     assert ir_module.seconds_to_duration(3661) == "01h01m01s"
+    assert ir_module.seconds_to_duration(3900) == "01h05m00s"
 
 
 def test_seconds_to_duration_round_trips_duration_to_seconds() -> None:
     """seconds_to_duration output parses back to the original seconds."""
+    assert ir_module.duration_to_seconds(ir_module.seconds_to_duration(3300)) == 3300
+    assert ir_module.duration_to_seconds(ir_module.seconds_to_duration(3600)) == 3600
     assert ir_module.duration_to_seconds(ir_module.seconds_to_duration(7500)) == 7500
 
 
