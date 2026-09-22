@@ -446,11 +446,23 @@ def resolve_target_file(repo_cwd: Path, entry_path: str) -> Path:
     return target_file
 
 
+def decode_seed_escapes(seed: str) -> str:
+    r"""Expand catalog seed escapes the way bash ``echo -e`` did.
+
+    ReleasePlanAdmission seeds often store newlines as the two characters
+    ``\n`` inside YAML single-quoted strings. The former bash task wrote
+    those with ``echo -e "${seed}"``. Real newlines are left unchanged.
+    """
+    if "\\" not in seed:
+        return seed
+    return seed.replace(r"\n", "\n").replace(r"\t", "\t")
+
+
 def seed_target_file(entry: dict[str, Any], target_file: Path, repo_cwd: Path) -> None:
     """Create or overwrite *target_file* when the path entry includes a seed value."""
     seed = entry.get("seed") or ""
     if isinstance(seed, str):
-        seed = seed.strip('"')
+        seed = decode_seed_escapes(seed.strip('"'))
     logger.info("%s", seed)
     if not seed:
         return

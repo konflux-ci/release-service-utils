@@ -1064,6 +1064,19 @@ def test_seed_target_file_skips_when_no_seed(tmp_path: Path) -> None:
     stage.assert_not_called()
 
 
+def test_decode_seed_escapes_echo_e_newlines() -> None:
+    r"""Literal ``\n`` becomes a newline; existing newlines stay."""
+    assert (
+        process_file_updates.decode_seed_escapes(
+            "indexImage: \\nname: my-addon\\nrelatedImages: []"
+        )
+        == "indexImage: \nname: my-addon\nrelatedImages: []"
+    )
+    assert process_file_updates.decode_seed_escapes("indexImage:\n\n") == "indexImage:\n\n"
+    assert process_file_updates.decode_seed_escapes("plain") == "plain"
+    assert process_file_updates.decode_seed_escapes("a\\tb") == "a\tb"
+
+
 def test_seed_target_file_writes_and_stages(tmp_path: Path) -> None:
     """Seed content is written and staged with git."""
     repo = tmp_path / "repo"
@@ -1087,6 +1100,35 @@ def test_seed_target_file_writes_and_stages(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "content\n"
     stage.assert_called_once_with(repo, ["dir/new.yaml"], "", commit=False)
     status.assert_called_once_with(repo)
+
+
+def test_seed_target_file_decodes_catalog_escapes(tmp_path: Path) -> None:
+    r"""Catalog ``\n`` seeds are written as real newlines."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "addons" / "my-addon.yaml"
+    with (
+        mock.patch.object(
+            process_file_updates.process_file_updates.vcs_git, "index_add_commit"
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates.vcs_git,
+            "working_tree_status",
+            return_value="",
+        ),
+    ):
+        process_file_updates.seed_target_file(
+            {
+                "path": "addons/my-addon.yaml",
+                "seed": "indexImage: \\nname: my-addon\\nrelatedImages: []",
+            },
+            target,
+            repo,
+        )
+    assert (
+        target.read_text(encoding="utf-8")
+        == "indexImage: \nname: my-addon\nrelatedImages: []\n"
+    )
 
 
 def test_seed_target_file_propagates_git_add_failure(tmp_path: Path) -> None:
@@ -2137,6 +2179,44 @@ def test_process_all_paths_yaml_tooling_seed_then_replacement(tmp_path: Path) ->
     assert stage.call_count == 2
     staged_paths = [call.args[1][0] for call in stage.call_args_list]
     assert staged_paths == ["addons/new-addon.yaml", "addons/new-addon.yaml"]
+
+
+def test_process_all_paths_yaml_tooling_echo_e_seed(tmp_path: Path) -> None:
+    r"""Catalog ``\n`` seeds become valid YAML so replacements can run."""
+    _require_yq()
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+    target = repo / "addons" / "my-addon.yaml"
+    manifest = tmp_path / "paths.json"
+    manifest.write_text("[]\n", encoding="utf-8")
+    paths = [
+        {
+            "path": "addons/my-addon.yaml",
+            "seed": "indexImage: \\nname: my-addon\\nrelatedImages: []",
+            "replacements": [
+                {
+                    "key": ".indexImage",
+                    "replacement": "|indexImage:.*|indexImage: Tom|",
+                },
+            ],
+        }
+    ]
+
+    with (
+        mock.patch.object(
+            process_file_updates.process_file_updates.vcs_git, "index_add_commit"
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates.vcs_git,
+            "working_tree_status",
+            return_value="",
+        ),
+    ):
+        state, early = process_file_updates.process_all_paths(paths, manifest, repo, tmp_path)
+
+    assert early is None
+    assert state.replacements_performed == 1
+    assert "indexImage: Tom" in target.read_text(encoding="utf-8")
 
 
 def test_apply_replacements_yaml_tooling_complex_deploy_fixture(tmp_path: Path) -> None:
