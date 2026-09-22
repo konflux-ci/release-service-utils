@@ -22,9 +22,9 @@
 #     Same pipeline parameter name as the catalog IntegrationTestScenario (PIPELINE_USED).
 #
 # Optional (omit env vars to use Tekton defaults from the resolved pipeline YAML):
-#   NAMESPACE (default rhtap-release-2-tenant only for kubectl; not a pipeline param).
+#   NAMESPACE (default konflux-release-service-tenant only for kubectl; not a pipeline param).
 #   CATALOG_REPO, CATALOG_REF, DEST_REPO_PREFIX, CATALOG_E2E_RUNNER_IMAGE, VAULT_PASSWORD_SECRET_NAME,
-#   GITHUB_TOKEN_SECRET_NAME, KUBECONFIG_SECRET_NAME, E2E_WAIT_TIMEOUT (pipeline param e2eWaitTimeout).
+#   GITHUB_TOKEN_SECRET_NAME, E2E_WAIT_TIMEOUT (pipeline param e2eWaitTimeout).
 #   With --wait, E2E_WAIT_TIMEOUT is required (kubectl wait --timeout); pick a duration that fits your run
 #   (the pipeline default for e2eWaitTimeout is in utils-e2e-catalog-pipeline.yaml).
 #   RUN_TEST_KEEP_PIPELINERUN=1  With --wait, skip deleting the PipelineRun when finished (debugging).
@@ -35,6 +35,7 @@
 #   orchestrationKubeconfigSecretName to that name, then patches the Secret with an ownerReference to the
 #   PipelineRun so the Secret is garbage-collected when the PipelineRun is deleted (--wait deletes the PLR
 #   when finished). If PipelineRun creation fails before the patch, the script deletes the Secret on exit.
+#   The child catalog PipelineRun uses in-cluster auth (no kubeconfig Secret).
 #
 # Options:
 #   --dry-run          kubectl create --dry-run=client -o yaml (no PipelineRun created)
@@ -91,7 +92,7 @@ if [[ "${SNAP_GIT_URL}" == https://github.com/* && "${SNAP_GIT_URL}" != *.git ]]
   SNAP_GIT_URL="${SNAP_GIT_URL}.git"
 fi
 
-NAMESPACE="${NAMESPACE:-rhtap-release-2-tenant}"
+NAMESPACE="${NAMESPACE:-konflux-release-service-tenant}"
 readonly _UTILS_PIPELINE_PATH_IN_REPO='integration-tests/pipelines/utils-e2e-catalog-pipeline.yaml'
 
 # Optional spec.params: omit unset env vars so Tekton uses pipeline defaults. A param set to the
@@ -145,7 +146,6 @@ optional_plr_param_add_if_set destRepoPrefix "${DEST_REPO_PREFIX:-}"
 optional_plr_param_add_if_set catalogE2eRunnerImage "${CATALOG_E2E_RUNNER_IMAGE:-}"
 optional_plr_param_add_if_set VAULT_PASSWORD_SECRET_NAME "${VAULT_PASSWORD_SECRET_NAME:-}"
 optional_plr_param_add_if_set GITHUB_TOKEN_SECRET_NAME "${GITHUB_TOKEN_SECRET_NAME:-}"
-optional_plr_param_add_if_set KUBECONFIG_SECRET_NAME "${KUBECONFIG_SECRET_NAME:-}"
 optional_plr_param_add_if_set e2eWaitTimeout "${E2E_WAIT_TIMEOUT:-}"
 
 PR_JSON=$(jq -n \

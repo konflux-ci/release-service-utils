@@ -479,7 +479,7 @@ def test_build_catalog_e2e_pipelinerun_shape() -> None:
     """``_build_catalog_e2e_pipelinerun`` wires snapshot and parent metadata."""
     snap = rs._build_snapshot(runner="r", url="u", rev="v")
     m = rs._build_catalog_e2e_pipelinerun(
-        ns="rhtap-release-2-tenant",
+        ns="konflux-release-service-tenant",
         child_plr_name="utils-e2e-catalog-uid1",
         parent="parent-plr",
         suite="my-suite",
@@ -488,7 +488,6 @@ def test_build_catalog_e2e_pipelinerun_shape() -> None:
         pipeline_used="pipe-a",
         vault_password_secret_name="vp",
         github_token_secret_name="gt",
-        kubeconfig_secret_name="kc",
     )
     assert m["kind"] == "PipelineRun"
     assert m["metadata"]["name"] == "utils-e2e-catalog-uid1"
@@ -501,6 +500,7 @@ def test_build_catalog_e2e_pipelinerun_shape() -> None:
     assert params["PIPELINE_TEST_SUITE_VARS"] == '{"var":"val"}'
     assert params["PIPELINE_USED"] == "pipe-a"
     assert params["VAULT_PASSWORD_SECRET_NAME"] == "vp"
+    assert "KUBECONFIG_SECRET_NAME" not in params
     assert "SNAPSHOT" in params
     ref_params = {p["name"]: p["value"] for p in m["spec"]["pipelineRef"]["params"]}
     assert ref_params["url"] == "https://github.com/konflux-ci/release-service-catalog.git"

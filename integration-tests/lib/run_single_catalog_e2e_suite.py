@@ -12,7 +12,7 @@ Used by ``utils-e2e-catalog-pipeline`` task ``run-catalog-e2e`` (this file:
 Required env:
   CATALOG_GIT_URL, CATALOG_GIT_REVISION, CATALOG_E2E_RUNNER_IMAGE,
   PIPELINE_TEST_SUITE, PIPELINE_USED,
-  VAULT_PASSWORD_SECRET_NAME, GITHUB_TOKEN_SECRET_NAME, KUBECONFIG_SECRET_NAME,
+  VAULT_PASSWORD_SECRET_NAME, GITHUB_TOKEN_SECRET_NAME,
   ORCHESTRATOR_PIPELINE_RUN_UID — orchestrator PLR ``metadata.uid`` (pipeline sets
   ``$(context.pipelineRun.uid)``); child PLR name is ``utils-e2e-catalog-<uid>``
   (same suffix as the temp GitHub fork).
@@ -27,10 +27,6 @@ Optional env:
   pipeline sets this from the parent PipelineRun metadata.namespace. Unset
   uses the in-cluster serviceaccount namespace, else
   ``konflux-release-service-tenant``.
-
-``KUBECONFIG_SECRET_NAME`` is the Secret **name** passed to the child catalog
-``PipelineRun`` as pipeline param ``KUBECONFIG_SECRET_NAME``. The child catalog
-pipeline treats a missing kubeconfig Secret as in-cluster auth.
 
 Optional:
   E2E_WAIT_TIMEOUT — max wait for the child catalog PipelineRun, in seconds
@@ -300,7 +296,6 @@ def _build_catalog_e2e_pipelinerun(
     pipeline_used: str,
     vault_password_secret_name: str,
     github_token_secret_name: str,
-    kubeconfig_secret_name: str,
 ) -> dict[str, object]:
     """Build the child catalog e2e PipelineRun manifest (metadata, pipelineRef, params)."""
     return {
@@ -340,7 +335,6 @@ def _build_catalog_e2e_pipelinerun(
                 {"name": "PIPELINE_USED", "value": pipeline_used},
                 {"name": "VAULT_PASSWORD_SECRET_NAME", "value": vault_password_secret_name},
                 {"name": "GITHUB_TOKEN_SECRET_NAME", "value": github_token_secret_name},
-                {"name": "KUBECONFIG_SECRET_NAME", "value": kubeconfig_secret_name},
             ],
         },
     }
@@ -362,7 +356,6 @@ def main() -> None:
     child_plr_name = f"utils-e2e-catalog-{orch_uid}"
     vault = os.environ.get("VAULT_PASSWORD_SECRET_NAME", "e2e-test-vault-password")
     gh = os.environ.get("GITHUB_TOKEN_SECRET_NAME", "e2e-test-github-token")
-    kc = os.environ.get("KUBECONFIG_SECRET_NAME", "e2e-test-service-account-kubeconfig")
 
     snap = _build_snapshot(runner=runner, url=url, rev=rev)
     plr_manifest = _build_catalog_e2e_pipelinerun(
@@ -375,7 +368,6 @@ def main() -> None:
         pipeline_used=used,
         vault_password_secret_name=vault,
         github_token_secret_name=gh,
-        kubeconfig_secret_name=kc,
     )
 
     path: Path | None = None
