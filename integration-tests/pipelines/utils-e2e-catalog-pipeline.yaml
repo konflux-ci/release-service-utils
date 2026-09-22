@@ -18,7 +18,7 @@ spec:
       description: Konflux Snapshot JSON (utils component build).
     - name: catalogE2eRunnerImage
       type: string
-      default: "quay.io/redhat-user-workloads/rhtap-release-2-tenant/release-service-catalog:latest"
+      default: "quay.io/redhat-user-workloads-stage/konflux-release-service-tenant/release-service-catalog:latest"
       description: >-
         release-service-catalog image with /home/e2e/tests (SNAPSHOT.components[0].containerImage in
         the child catalog test PipelineRun). Optional; omit to use the default.
@@ -55,12 +55,6 @@ spec:
     - name: GITHUB_TOKEN_SECRET_NAME
       type: string
       default: e2e-test-github-token
-    - name: KUBECONFIG_SECRET_NAME
-      type: string
-      default: e2e-test-service-account-kubeconfig
-      description: >-
-        Secret name (key kubeconfig) passed to the child catalog e2e-tests-staging-pipeline (same param
-        name as catalog ITS). Missing Secret: the child pipeline uses in-cluster auth.
     - name: orchestrationKubeconfigSecretName
       type: string
       default: e2e-test-konflux-api-kubeconfig
@@ -377,8 +371,6 @@ spec:
           value: $(params.VAULT_PASSWORD_SECRET_NAME)
         - name: GITHUB_TOKEN_SECRET_NAME
           value: $(params.GITHUB_TOKEN_SECRET_NAME)
-        - name: KUBECONFIG_SECRET_NAME
-          value: $(params.KUBECONFIG_SECRET_NAME)
         - name: PIPELINE_TEST_SUITE_VARS
           value: $(params.PIPELINE_TEST_SUITE_VARS)
         - name: orchestrationKubeconfigSecretName
@@ -397,7 +389,6 @@ spec:
           - name: PIPELINE_USED
           - name: VAULT_PASSWORD_SECRET_NAME
           - name: GITHUB_TOKEN_SECRET_NAME
-          - name: KUBECONFIG_SECRET_NAME
           - name: PIPELINE_TEST_SUITE_VARS
           - name: orchestrationKubeconfigSecretName
           - name: e2eWaitTimeout
@@ -434,7 +425,6 @@ spec:
               export PIPELINE_USED="$(params.PIPELINE_USED)"
               export VAULT_PASSWORD_SECRET_NAME="$(params.VAULT_PASSWORD_SECRET_NAME)"
               export GITHUB_TOKEN_SECRET_NAME="$(params.GITHUB_TOKEN_SECRET_NAME)"
-              export KUBECONFIG_SECRET_NAME="$(params.KUBECONFIG_SECRET_NAME)"
               export PARENT_PIPELINE_RUN="$(params.parentPipelineRun)"
               export E2E_WAIT_TIMEOUT="$(params.e2eWaitTimeout)"
               exec python3 /home/integration-tests/lib/run_single_catalog_e2e_suite.py

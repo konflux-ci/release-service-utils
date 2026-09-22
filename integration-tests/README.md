@@ -55,15 +55,15 @@ Files under `integration-tests/lib/` are copied into the utils image at `/home/i
   sets **`KUBECONFIG`** to it; if the Secret is missing, kubectl uses **in-cluster** auth (the
   PipelineRun service account).
 
-- **`VAULT_PASSWORD_SECRET_NAME`**, **`GITHUB_TOKEN_SECRET_NAME`**, **`KUBECONFIG_SECRET_NAME`**:
+- **`VAULT_PASSWORD_SECRET_NAME`**, **`GITHUB_TOKEN_SECRET_NAME`**:
   pipeline parameters (same names as catalog ITS); values are **Kubernetes Secret names** passed
-  through to the **child** catalog **`e2e-tests-staging-pipeline`** (keys `password`, `token`,
-  `kubeconfig`). Those Secrets must exist in the **child namespace**. The child catalog pipeline
-  treats a missing kubeconfig Secret as in-cluster auth.
+  through to the **child** catalog **`e2e-tests-staging-pipeline`** (keys `password`, `token`).
+  Those Secrets must exist in the **child namespace**. The child catalog pipeline uses **in-cluster**
+  auth (no kubeconfig Secret).
 
 - **`PIPELINE_TEST_SUITE`** / **`PIPELINE_USED`**: must match a real `integration-tests/<dir>/` and RPA `pipelines/managed/<name>/` pairing, as for catalog’s own integration tests.
 
-- **`e2eWaitTimeout`**, **`catalogE2eRunnerImage`**: optional pipeline params; defaults are in `utils-e2e-catalog-pipeline.yaml` (same pattern as other optional Tekton params).
+- **`e2eWaitTimeout`**, **`catalogE2eRunnerImage`**: optional pipeline params; defaults are in `utils-e2e-catalog-pipeline.yaml` (same pattern as other optional Tekton params). Default runner image is stage quay `…/konflux-release-service-tenant/release-service-catalog:latest`.
 
 ---
 
@@ -85,8 +85,7 @@ optional params to use pipeline defaults.
    `e2e-test-github-token`) exists for clone/push/`finally`.
 
    Also ensure the e2e Secrets the child needs exist there (defaults `e2e-test-vault-password`,
-   `e2e-test-github-token`; kubeconfig Secret is optional for in-cluster catalog steps), or
-   override the corresponding env vars when invoking **`run-test.sh`**.
+   `e2e-test-github-token`), or override the corresponding env vars when invoking **`run-test.sh`**.
 
 2. **Catalog fork/branch for this pipeline** (clone for find-affected + patch/push)
 
