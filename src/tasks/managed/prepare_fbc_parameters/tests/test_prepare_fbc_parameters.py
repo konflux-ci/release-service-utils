@@ -286,10 +286,10 @@ def test_iib_sa_stage() -> None:
 
 @mock.patch(f"{TASK}.prepare_fbc_parameters.run_cmd")
 def test_render_fbc_fragment(mock_run_cmd: mock.MagicMock) -> None:
-    """Parse opm render stdout into catalog entry dicts."""
+    """Parse opm render pretty-printed stdout into catalog entry dicts."""
     stdout = (
-        '{"schema":"olm.package","name":"pkg-a"}\n'
-        '{"schema":"olm.bundle","image":"q.io/b@sha256:x"}\n'
+        '{\n    "schema": "olm.package",\n    "name": "pkg-a"\n}\n'
+        '{\n    "schema": "olm.bundle",\n    "image": "q.io/b@sha256:x"\n}\n'
     )
     mock_run_cmd.return_value = subprocess.CompletedProcess(
         args=[],
@@ -307,6 +307,71 @@ def test_render_fbc_fragment(mock_run_cmd: mock.MagicMock) -> None:
         ["opm", "render", "registry.io/img@sha256:abc"],
         check=True,
     )
+
+
+@mock.patch(f"{TASK}.prepare_fbc_parameters.run_cmd")
+def test_render_fbc_fragment_skips_non_json_lines(mock_run_cmd: mock.MagicMock) -> None:
+    """Non-JSON text from opm render (warnings, deprecation notices) is skipped."""
+    stdout = (
+        "WARN: some deprecation notice\n"
+        '{\n    "schema": "olm.package",\n    "name": "pkg-a"\n}\n'
+        "time=... level=warning msg=something\n"
+        '{\n    "schema": "olm.bundle",\n    "image": "q.io/b@sha256:x"\n}\n'
+        "\n"
+    )
+    mock_run_cmd.return_value = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout=stdout,
+        stderr="",
+    )
+
+    entries = prepare_fbc_parameters.render_fbc_fragment("registry.io/img@sha256:abc")
+    assert len(entries) == 2
+    assert entries[0]["name"] == "pkg-a"
+    assert entries[1]["schema"] == "olm.bundle"
+
+
+@mock.patch(f"{TASK}.prepare_fbc_parameters.run_cmd")
+def test_render_fbc_fragment_skips_json_scalars(mock_run_cmd: mock.MagicMock) -> None:
+    """JSON scalars (numbers, strings, booleans) in opm output are ignored."""
+    stdout = '404\n"some string"\ntrue\nnull\n' '{"schema": "olm.package", "name": "pkg-a"}\n'
+    mock_run_cmd.return_value = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout=stdout, stderr=""
+    )
+
+    entries = prepare_fbc_parameters.render_fbc_fragment("registry.io/img@sha256:abc")
+    assert len(entries) == 1
+    assert entries[0]["name"] == "pkg-a"
+
+
+@mock.patch(f"{TASK}.prepare_fbc_parameters.run_cmd")
+def test_render_fbc_fragment_ignores_embedded_json_in_logs(
+    mock_run_cmd: mock.MagicMock,
+) -> None:
+    """JSON objects embedded inside log lines are not treated as catalog entries."""
+    stdout = (
+        'WARN: bad bundle {"schema": "olm.bundle", "image": "evil.io/img@sha256:f"}\n'
+        '{"schema": "olm.package", "name": "pkg-a"}\n'
+    )
+    mock_run_cmd.return_value = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout=stdout, stderr=""
+    )
+
+    entries = prepare_fbc_parameters.render_fbc_fragment("registry.io/img@sha256:abc")
+    assert len(entries) == 1
+    assert entries[0]["name"] == "pkg-a"
+
+
+@mock.patch(f"{TASK}.prepare_fbc_parameters.run_cmd")
+def test_render_fbc_fragment_empty_output_raises(mock_run_cmd: mock.MagicMock) -> None:
+    """Raise ValueError when opm render produces no catalog entries."""
+    mock_run_cmd.return_value = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="WARN: nothing useful\n", stderr=""
+    )
+
+    with pytest.raises(ValueError, match="no catalog entries"):
+        prepare_fbc_parameters.render_fbc_fragment("registry.io/img@sha256:abc")
 
 
 # --- fetch_ir_opt_in_results ---
