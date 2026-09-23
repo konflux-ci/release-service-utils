@@ -1,5 +1,7 @@
 """Helpers for parsing and normalizing container image references."""
 
+from __future__ import annotations
+
 from .image_ref import (  # noqa: F401
     convert_to_quay,
     convert_to_registry,
@@ -8,6 +10,7 @@ from .image_ref import (  # noqa: F401
     registry,
     repository,
     resolve_quay_digest_to_git_sha,
+    split_digest_qualified_ref,
     split_image_ref,
     strip_tag_and_digest,
     translate_delivery_repo,
