@@ -11,6 +11,22 @@ _CGW_PRODUCTS_PREPROD = "https://developers.qa.redhat.com/products"
 _CDN_DOWNLOADS_PREPROD = "https://access.stage.redhat.com/downloads"
 
 
+def component_content_type(component: dict[str, Any]) -> str:
+    """Return contentGateway.contentType, else top-level contentType, else empty.
+
+    A missing, null, or empty nested type falls back to the top-level
+    field so an explicit empty ``contentGateway.contentType`` cannot
+    hide a usable top-level type.
+    """
+    content_gateway_cfg = component.get("contentGateway")
+    if isinstance(content_gateway_cfg, dict) and "contentType" in content_gateway_cfg:
+        content_type = content_gateway_cfg["contentType"]
+        if content_type is not None and str(content_type):
+            return str(content_type)
+    content_type = component.get("contentType")
+    return str(content_type) if content_type else ""
+
+
 def cdn_env(data: dict[str, Any]) -> str:
     """Return the CDN environment from *data*, defaulting to production."""
     return str(data.get("cdn", {}).get("env", "production"))
