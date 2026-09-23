@@ -2022,13 +2022,17 @@ wheels = [
 
 [[package]]
 name = "pulp-tool"
-version = "1.1.1.dev14+ge7d820847.d20260916"
-source = { git = "https://github.com/konflux-ci/pulp-tool.git#e7d8208471d6c123e9aa8a02b3f2e149891ec877" }
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "python-json-logger" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/49/d3/8878ff90da6519beb5e718667dbe33c3445faf0a021faf9e6f75b438552f/pulp_tool-1.2.0.tar.gz", hash = "sha256:97c7549c133edb8466ac2ac9abb0e37b61dbd9b0ed3023b3b3cc6beaa2451ee4", size = 450248, upload-time = "2026-09-18T12:38:48.010755Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/17/5a/3ba4e27cb1f64820903911bd6d2b92da2794d117f56ea770eef498d9fb70/pulp_tool-1.2.0-py3-none-any.whl", hash = "sha256:4ba2482586adb3adc2ed98d08578c54297a4ac1774f4c02a5cc3b5067cb4d5d5", size = 172362, upload-time = "2026-09-18T12:38:46.482505Z" },
 ]
 
 [[package]]
@@ -2568,7 +2572,7 @@ requires-dist = [
     { name = "pubtools-pyxis", specifier = "==1.3.8" },
     { name = "pubtools-sign", specifier = "==1.0.6" },
     { name = "pulp-cli", specifier = "==0.36.3" },
-    { name = "pulp-tool", git = "https://github.com/konflux-ci/pulp-tool.git" },
+    { name = "pulp-tool", specifier = "==1.2.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-gitlab", specifier = ">=4.0" },
     { name = "pyyaml", specifier = ">=6.0.1" },
