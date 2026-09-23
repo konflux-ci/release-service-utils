@@ -11,6 +11,8 @@ from release_service_utils.helpers import http_client
 from release_service_utils.helpers.logger import logger
 
 _QUAY_SHA_TAG = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_HEX_LEN = 64
+_DIGEST_QUALIFIED_IMAGE_RE = re.compile(rf"[^\s@]+@sha256:[0-9a-f]{{{_SHA256_HEX_LEN}}}")
 _MAX_QUAY_TAG_PAGES = 50
 
 # (registry host prefix, quay.io temp-namespace prefix) pairs used by
@@ -38,6 +40,20 @@ def split_image_ref(image: str) -> tuple[str, str]:
     if "@" not in image:
         raise ValueError(f"image reference missing digest separator '@': {image!r}")
     repo, digest = image.split("@", 1)
+    return repo, digest
+
+
+def split_digest_qualified_ref(image: str) -> tuple[str, str]:
+    """Split a digest-qualified image into ``(repository, digest)``.
+
+    Requires a nonempty repository with no ``@`` or whitespace, a single
+    ``@`` separator, ``sha256:``, and exactly 64 hexadecimal digest
+    characters. Raises ``ValueError`` when the reference is not
+    digest-qualified.
+    """
+    if not _DIGEST_QUALIFIED_IMAGE_RE.fullmatch(image):
+        raise ValueError(f"image reference must be digest-qualified: {image!r}")
+    repo, digest = image.rsplit("@", 1)
     return repo, digest
 
 

@@ -53,7 +53,6 @@ from release_service_utils.helpers.subprocess_cmd import run_cmd
 
 PROG = "apply_mapping.py"
 
-_CONTAINER_IMAGE_RE = re.compile(r".+@sha256:[0-9a-f]+")
 _OCI_IMAGE_CONFIG_MEDIA_TYPE = "application/vnd.oci.image.config.v1+json"
 _DOCKER_IMAGE_CONFIG_MEDIA_TYPE = "application/vnd.docker.container.image.v1+json"
 
@@ -474,11 +473,13 @@ def process_component(
     """Mutate ``component`` in place: attach metadata, expand tags, translate registry URLs."""
     name = component.get("name")
     container_image = component.get("containerImage") or ""
-    if not _CONTAINER_IMAGE_RE.fullmatch(container_image):
+    try:
+        image_ref.split_digest_qualified_ref(container_image)
+    except ValueError as exc:
         raise ValueError(
             f"Component {name} contains an invalid containerImage value. "
             f"sha reference is required: {container_image}"
-        )
+        ) from exc
 
     git_sha = _git_revision_str(component)
     build_sha = _digest_sha(container_image)

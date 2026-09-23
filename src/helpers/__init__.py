@@ -1,5 +1,7 @@
 """Reusable Python helpers for release task scripts."""
 
+from __future__ import annotations
+
 __all__ = [
     "advisory_data",
     "authentication",
@@ -24,6 +26,7 @@ __all__ = [
     "push_artifacts",
     "pulp_client",
     "push_unsigned",
+    "pypi_purl",
     "pyxis_api",
     "redact",
     "release_notes_purl",
