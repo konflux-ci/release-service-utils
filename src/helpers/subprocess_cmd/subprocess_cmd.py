@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,15 @@ from typing import Any
 from release_service_utils.helpers import tekton
 
 RunCmd = Callable[..., str]
+
+
+def _append_command_failure(stderr_path: Path, argv: list[str]) -> None:
+    """Record a failed command on the stderr log and the process stderr stream."""
+    failure = f"\ncommand exited with failure: {' '.join(argv)}\n"
+    with open(stderr_path, "a", encoding="utf-8", errors="replace") as errf:
+        errf.write(failure)
+    sys.stderr.write(failure)
+    sys.stderr.flush()
 
 
 def run_cmd(
@@ -24,7 +34,7 @@ def run_cmd(
     check: bool = True,
     stream_stdout: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run *cmd*; capture stdout as text; optionally append stderr to *stderr_path*.
+    """Run *cmd*; capture stdout as text; optionally tee stderr to *stderr_path*.
 
     By default stdout is captured (piped) and only becomes available once the
     child exits, matching the historical behavior callers rely on for parsing
@@ -33,21 +43,28 @@ def run_cmd(
     stdout is inherited from this process instead of buffered, letting it
     stream straight to the Tekton step log in real time like the old bash
     tasks did. ``result.stdout`` is ``None`` when *stream_stdout* is set.
+
+    When *stderr_path* is set, child stderr is appended to that file *and*
+    copied to this process's stderr (bash ``2> >(tee -a file >&2)``). That keeps
+    a copy for Tekton result failures without hiding live child progress from
+    the step log. ``PYTHONUNBUFFERED=1`` is also set so child Python processes
+    flush logs immediately when there is no TTY.
     """
     # Child must inherit pod env (PATH, KUBECONFIG, etc.); only overlay *env*.
     merged: dict[str, str] = {**os.environ, **dict(env or {})}
+    merged.setdefault("PYTHONUNBUFFERED", "1")
+    argv = [str(x) for x in cmd]
     err_f: Any = subprocess.PIPE
-    fh: Any = None
+    tee_proc: subprocess.Popen[bytes] | None = None
     try:
         if stderr_path is not None:
-            fh = open(
-                stderr_path,
-                "a",
-                encoding="utf-8",
-                errors="replace",
+            # tee copies stdin to the log file and to fd 2 (Tekton step stderr).
+            tee_proc = subprocess.Popen(
+                ["tee", "-a", str(stderr_path)],
+                stdin=subprocess.PIPE,
+                stdout=2,
             )
-            err_f = fh
-        argv = [str(x) for x in cmd]
+            err_f = tee_proc.stdin
         try:
             return subprocess.run(
                 argv,
@@ -61,17 +78,13 @@ def run_cmd(
             )
         except subprocess.CalledProcessError:
             if stderr_path is not None:
-                with open(
-                    stderr_path,
-                    "a",
-                    encoding="utf-8",
-                    errors="replace",
-                ) as errf:
-                    errf.write(f"\ncommand exited with failure: {' '.join(argv)}\n")
+                _append_command_failure(stderr_path, argv)
             raise
     finally:
-        if fh is not None:
-            fh.close()
+        if tee_proc is not None:
+            if tee_proc.stdin is not None:
+                tee_proc.stdin.close()
+            tee_proc.wait()
 
 
 def run_cmd_text(
