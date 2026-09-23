@@ -386,6 +386,135 @@ def test_merge_updated_artifacts_normalizes_invalid_content_and_artifact_rows() 
     assert artifacts[0]["purl"] == "pkg:generic/app@1.0"
 
 
+def test_updated_binary_or_generic_entries_preserves_pypi_purl() -> None:
+    """Keep a populated pkg:pypi row instead of replacing it with pkg:generic."""
+    data = {
+        "releaseNotes": {
+            "content": {
+                "artifacts": [
+                    {
+                        "component": "test_package",
+                        "architecture": "noarch",
+                        "os": "any",
+                        "purl": "pkg:pypi/test_package@1.0.0",
+                    },
+                ],
+            },
+        },
+    }
+    component = {
+        "name": "test_package",
+        "contentType": "generic",
+        "staged": {"version": "1.0.0"},
+        "files": [{"arch": "noarch", "os": "any", "source": "test_package.whl"}],
+    }
+    updated = rnp_module._updated_binary_or_generic_entries(
+        data,
+        component,
+        checksum_map=[
+            {"component": "test_package", "files": {"test_package.whl": "sha256:abc"}}
+        ],
+        cgw_base_url="https://developers.redhat.com/products",
+        cdn_base_url="https://access.redhat.com/downloads",
+    )
+    assert updated == [
+        {
+            "component": "test_package",
+            "architecture": "noarch",
+            "os": "any",
+            "purl": "pkg:pypi/test_package@1.0.0",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "purl",
+    [
+        "pkg:pypi/test_package",
+        "pkg:pypi/test_package@",
+        "pkg:pypi/",
+        "not-a-purl",
+    ],
+)
+def test_updated_binary_or_generic_entries_repairs_invalid_pypi_purl(purl: str) -> None:
+    """Replace malformed or unversioned pkg:pypi values via the normal update path."""
+    data = {
+        "releaseNotes": {
+            "content": {
+                "artifacts": [
+                    {
+                        "component": "test_package",
+                        "architecture": "noarch",
+                        "os": "any",
+                        "purl": purl,
+                    },
+                ],
+            },
+        },
+    }
+    component = {
+        "name": "test_package",
+        "contentType": "generic",
+        "staged": {"version": "1.0.0"},
+        "files": [{"arch": "noarch", "os": "any", "source": "test_package.whl"}],
+    }
+    updated = rnp_module._updated_binary_or_generic_entries(
+        data,
+        component,
+        checksum_map=[
+            {"component": "test_package", "files": {"test_package.whl": "sha256:abc"}}
+        ],
+        cgw_base_url="https://developers.redhat.com/products",
+        cdn_base_url="https://access.redhat.com/downloads",
+    )
+    assert len(updated) == 1
+    assert updated[0]["purl"].startswith("pkg:generic/test_package@1.0.0")
+    assert "filename=test_package.whl" in updated[0]["purl"]
+
+
+@pytest.mark.parametrize(
+    "purl",
+    [
+        "pkg:pypi/other_package@1.0.0",
+        "pkg:pypi/test_package@0.9.0",
+    ],
+)
+def test_updated_binary_or_generic_entries_repairs_mismatched_pypi_purl(purl: str) -> None:
+    """Rebuild a pkg:pypi row whose package name or version does not match."""
+    data = {
+        "releaseNotes": {
+            "content": {
+                "artifacts": [
+                    {
+                        "component": "test_package",
+                        "architecture": "noarch",
+                        "os": "any",
+                        "purl": purl,
+                    },
+                ],
+            },
+        },
+    }
+    component = {
+        "name": "test_package",
+        "contentType": "generic",
+        "staged": {"version": "1.0.0"},
+        "files": [{"arch": "noarch", "os": "any", "source": "test_package.whl"}],
+    }
+    updated = rnp_module._updated_binary_or_generic_entries(
+        data,
+        component,
+        checksum_map=[
+            {"component": "test_package", "files": {"test_package.whl": "sha256:abc"}}
+        ],
+        cgw_base_url="https://developers.redhat.com/products",
+        cdn_base_url="https://access.redhat.com/downloads",
+    )
+    assert len(updated) == 1
+    assert updated[0]["purl"].startswith("pkg:generic/test_package@1.0.0")
+    assert "filename=test_package.whl" in updated[0]["purl"]
+
+
 def test_updated_binary_or_generic_entries_uses_content_gateway_version_and_url() -> None:
     """CGW components use productVersionName and the Developer Portal download base."""
     data = {
@@ -755,6 +884,64 @@ def test_update_artifact_purls_requires_checksum_map(tmp_path: Path) -> None:
         )
 
 
+def test_update_artifact_purls_preserves_pypi_when_other_artifact_needs_purl(
+    tmp_path: Path,
+) -> None:
+    """Keep a versioned Python pkg:pypi PURL while populating a blank generic row."""
+    data = {
+        "cdn": {"env": "production"},
+        "mapping": {
+            "components": [
+                {
+                    "name": "test_package",
+                    "contentType": "generic",
+                    "staged": {"version": "1.0.0"},
+                },
+                {
+                    "name": "app",
+                    "contentType": "generic",
+                    "staged": {"version": "1.0"},
+                    "files": [{"arch": "x86_64", "os": "linux", "source": "app.tgz"}],
+                },
+            ]
+        },
+        "releaseNotes": {
+            "content": {
+                "artifacts": [
+                    {
+                        "component": "test_package",
+                        "architecture": "noarch",
+                        "os": "any",
+                        "purl": "pkg:pypi/test_package@1.0.0",
+                    },
+                    {
+                        "component": "app",
+                        "architecture": "x86_64",
+                        "os": "linux",
+                        "purl": "placeholder",
+                    },
+                ]
+            }
+        },
+    }
+    data_file = tmp_path / "data.json"
+    _write_data(data_file, data)
+    checksum_map = [{"component": "app", "files": {"app.tgz": "sha256:abc"}}]
+    with _patch_oci_update(checksum_map):
+        rnp_module.update_artifact_purls(
+            data_file,
+            checksum_map_param="oci:checksum",
+        )
+
+    artifacts = json.loads(data_file.read_text(encoding="utf-8"))["releaseNotes"]["content"][
+        "artifacts"
+    ]
+    by_name = {row["component"]: row for row in artifacts}
+    assert by_name["test_package"]["purl"] == "pkg:pypi/test_package@1.0.0"
+    assert by_name["app"]["purl"].startswith("pkg:generic/app@1.0")
+    assert "filename=app.tgz" in by_name["app"]["purl"]
+
+
 def test_update_artifact_purls_updates_binary_artifact_purl(tmp_path: Path) -> None:
     """Populate PURLs for generic/binary artifacts from checksum_map."""
     data = _generic_mapping_data()
@@ -1104,15 +1291,6 @@ def test_update_artifact_purls_treats_non_list_components_as_empty(tmp_path: Pat
     assert data_file.read_text(encoding="utf-8") == original_text
 
 
-def test_component_content_type_prefers_content_gateway() -> None:
-    """Prefer contentGateway.contentType over the top-level contentType field."""
-    component = {
-        "contentType": "image",
-        "contentGateway": {"contentType": "disk-image"},
-    }
-    assert rnp_module._component_content_type(component) == "disk-image"
-
-
 def test_staged_files_by_component_edge_cases() -> None:
     """Skip invalid snapshot rows and treat missing staged.files as an empty list."""
     assert rnp_module._staged_files_by_component({"components": "not-a-list"}) == {}
@@ -1247,6 +1425,29 @@ def test_update_artifact_purls_non_list_components_after_purl_gate(
             checksum_map_param="oci:checksum",
         )
     assert data_file.read_text(encoding="utf-8") == original_text
+
+
+def test_update_artifact_purls_uses_top_level_when_nested_type_empty(
+    tmp_path: Path,
+) -> None:
+    """Populate PURLs when contentGateway.contentType is empty and top-level is generic."""
+    data = _generic_mapping_data(
+        component_extra={"contentGateway": {"contentType": ""}},
+    )
+    data_file = tmp_path / "data.json"
+    _write_data(data_file, data)
+    checksum_map = [{"component": "app", "files": {"app.tgz": "sha256:abc"}}]
+    with _patch_oci_update(checksum_map):
+        rnp_module.update_artifact_purls(
+            data_file,
+            checksum_map_param="oci:checksum",
+        )
+
+    purl = json.loads(data_file.read_text(encoding="utf-8"))["releaseNotes"]["content"][
+        "artifacts"
+    ][0]["purl"]
+    assert "pkg:generic/app@1.0" in purl
+    assert "filename=app.tgz" in purl
 
 
 def test_update_artifact_purls_uses_content_gateway_content_type(tmp_path: Path) -> None:
