@@ -407,6 +407,15 @@ spec:
                 valueFrom:
                   fieldRef:
                     fieldPath: metadata.namespace
+              # Keep this as env. Putting it inline in the script as
+              # export PIPELINE_TEST_SUITE_VARS="$(params.PIPELINE_TEST_SUITE_VARS)"
+              # breaks because the JSON quotes clash with the bash quotes e.g.
+              # {"PTSV_BUILD_PIPELINE": "docker-build-multi-platform-oci-ta"}
+              # quotes get stripped and the test silently uses defaults.
+              # {"PTSV_COMPONENTS": "component component2"}
+              # the space splits the line: `component2}': not a valid identifier.
+              - name: PIPELINE_TEST_SUITE_VARS
+                value: $(params.PIPELINE_TEST_SUITE_VARS)
             script: |
               #!/usr/bin/env bash
               set -euo pipefail
@@ -421,7 +430,6 @@ spec:
               export CATALOG_GIT_URL="$(params.catalogGitUrl)"
               export CATALOG_GIT_REVISION="$(params.catalogGitRevision)"
               export PIPELINE_TEST_SUITE="$(params.PIPELINE_TEST_SUITE)"
-              export PIPELINE_TEST_SUITE_VARS="$(params.PIPELINE_TEST_SUITE_VARS)"
               export PIPELINE_USED="$(params.PIPELINE_USED)"
               export VAULT_PASSWORD_SECRET_NAME="$(params.VAULT_PASSWORD_SECRET_NAME)"
               export GITHUB_TOKEN_SECRET_NAME="$(params.GITHUB_TOKEN_SECRET_NAME)"
