@@ -274,6 +274,9 @@ against these before requesting review:
    replicating old bash formatting.
 7. **Module-level constants go at the top of the file**, not inline near
    where they're first used.
+8. **Keep Tekton logs live.** Long-running CLIs: `run_cmd(..., stream_stdout=True)`.
+   File copies of stderr: `stderr_path=` (tees to the step). If output is
+   captured, log `e.stderr` on failure.
 
 ---
 
