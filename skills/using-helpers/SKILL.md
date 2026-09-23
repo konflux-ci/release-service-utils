@@ -106,7 +106,7 @@ pytest.
 | `tekton` | Tekton result files, step errors, CLI parsing (`require_env`, `result_paths_from_env`) | `import tekton` |
 | `retry` | Exponential backoff for transient failures | `import retry` |
 | `redact` | Strip credentials from text before logging/results | `from redact import redact_secrets` |
-| `subprocess_cmd` | Run subprocess commands with optional stderr log capture | `import subprocess_cmd` |
+| `subprocess_cmd` | Run subprocesses; `stream_stdout=True` for live Tekton logs; `stderr_path=` tees to file **and** the step (never file-only) | `import subprocess_cmd` |
 | `kubectl` | Kubernetes ConfigMap fetch via kubectl CLI | `import kubectl` |
 | `internal_request` | Write internal-request Tekton result paths | `import internal_request` |
 
@@ -192,7 +192,8 @@ paths unless matching an existing task pattern.
 2. Need Tekton results or CLI parsing? → `tekton`
 3. Need HTTP GET/PATCH with retries? → `http_client`
 4. Need Kerberos / mounted secrets? → `authentication`
-5. Need subprocess with stderr capture? → `subprocess_cmd`
+5. Need subprocess? → `subprocess_cmd` (`stream_stdout=True` for live
+   Tekton logs; `stderr_path=` tees to file and the step, never file-only)
 6. Need git/GitHub/GitLab? → `vcs.*`
 7. Logic reads/interprets fields from a shared domain object (e.g. a snapshot
    component's `public` flag)? → put it in that object's helper (e.g.

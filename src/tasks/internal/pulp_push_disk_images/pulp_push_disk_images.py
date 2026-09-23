@@ -134,6 +134,9 @@ def process_component(
         if not isinstance(entry, dict):
             raise ValueError("staged.files entries must be objects")
 
+    label = str(component.get("name") or pull_spec)
+    logger.info("Pulling disk image for %s (%s)", label, pull_spec)
+
     with tempfile.TemporaryDirectory() as download_dir:
         download = Path(download_dir)
         wanted_sources = [
@@ -148,20 +151,32 @@ def process_component(
 
         try:
             oras_utils.oras_pull(str(pull_spec), download, stderr_path=stderr_path)
+            logger.info("oras pull finished for %s", label)
             missing = [src for src in wanted_sources if not _is_staged(src)]
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError as exc:
             # Not a flat, single-blob OCI artifact (what `oras pull` expects and what
             # production gets from bootc-image-builder) -- try it as a normal, potentially
             # multi-layer container image instead (e.g. a docker-build-oci-ta e2e fixture).
+            logger.warning(
+                "oras pull failed for %s (exit %s); trying skopeo fallback",
+                label,
+                exc.returncode,
+            )
             missing = wanted_sources
 
         if missing:
+            logger.info(
+                "Extracting missing files via skopeo for %s: %s",
+                label,
+                ", ".join(str(src) for src in missing),
+            )
             oras_utils.extract_disk_image_files(
                 str(pull_spec),
                 missing,
                 download,
                 stderr_path=stderr_path,
             )
+            logger.info("skopeo extraction finished for %s", label)
 
         for entry in staged_files:
             source = require_staged_files_field(entry, "source")
@@ -169,6 +184,7 @@ def process_component(
             source_path = download / oras_utils.safe_relative_path(str(source))
             gz_path = Path(str(source_path) + ".gz")
             if gz_path.is_file():
+                logger.info("Decompressing %s for %s", gz_path.name, label)
                 run_cmd(["gzip", "-d", str(gz_path)], cwd=download, check=True)
             dest_file = destination / oras_utils.safe_relative_path(str(filename))
             if dest_file.exists():
@@ -178,8 +194,10 @@ def process_component(
                 )
             if source_path.is_file():
                 shutil.move(str(source_path), dest_file)
+                logger.info("Staged %s -> %s", source, dest_file)
             else:
                 logger.warning("didn't find mapped file: %s", source)
+        logger.info("Finished staging %s", label)
 
 
 def process_component_for_developer_portal(
@@ -207,6 +225,11 @@ def process_component_for_developer_portal(
         cmd_env["HTTPS_PROXY"] = "http://squid.corp.redhat.com:3128"
         logger.info("Using squid proxy for preprod CGW access")
 
+    logger.info(
+        "Publishing %s to Developer Portal / CGW (prefix %s)",
+        product_name,
+        file_prefix,
+    )
     run_cmd(
         [
             "developer_portal_wrapper",
@@ -229,6 +252,7 @@ def process_component_for_developer_portal(
         check=True,
         stream_stdout=True,
     )
+    logger.info("Developer Portal publish finished for %s", product_name)
 
 
 def run_push(
@@ -290,6 +314,9 @@ def run_push(
         "EXODUS_GW_URL": exodus_url,
         "EXODUS_PULP_HOOK_ENABLED": "True",
         "EXODUS_GW_TIMEOUT": "7200",
+        # Child Python wrappers (pulp_push_wrapper, pubtools-pulp-push) block-buffer
+        # stdout/stderr when there is no TTY; unbuffered mode keeps Tekton logs live.
+        "PYTHONUNBUFFERED": "1",
     }
 
     authentication.setup_docker_config(
@@ -317,6 +344,12 @@ def run_push(
 
     with tempfile.TemporaryDirectory() as disk_dir_name:
         disk_image_dir = Path(disk_dir_name)
+        component_count = sum(1 for component in components if isinstance(component, dict))
+        logger.info(
+            "Processing %d disk-image component(s) (concurrent_limit=%d)",
+            component_count,
+            concurrent_limit,
+        )
 
         def _run_one(component: dict[str, Any]) -> None:
             process_component(
@@ -335,6 +368,7 @@ def run_push(
             for future in as_completed(futures):
                 future.result()
 
+        logger.info("All components staged; writing staged.yaml")
         staged = build_staged_payload(disk_image_dir, str(version))
         staged_yaml = disk_image_dir / "staged.yaml"
         staged_yaml.write_text(
@@ -346,6 +380,10 @@ def run_push(
             encoding="utf-8",
         )
 
+        logger.info(
+            "Starting pulp_push_wrapper for %s (large disk images can take hours)",
+            disk_image_dir,
+        )
         run_cmd(
             [
                 "pulp_push_wrapper",
@@ -368,6 +406,7 @@ def run_push(
             check=True,
             stream_stdout=True,
         )
+        logger.info("pulp_push_wrapper finished")
 
         for component in components:
             if not isinstance(component, dict):
