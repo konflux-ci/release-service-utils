@@ -10,7 +10,7 @@ dependencies = [
     "requests",
     "requests-kerberos",
     "jinja2",
-    "check-jsonschema",
+    "check-jsonschema<=0.38.0",
     "jsonschema>=4.23",
     "jinja2-ansible-filters",
     "packaging",

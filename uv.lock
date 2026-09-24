@@ -2554,7 +2554,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "check-jsonschema" },
+    { name = "check-jsonschema", specifier = "<=0.38.0" },
     { name = "confluent-kafka" },
     { name = "diffused-lib", specifier = "==0.5.0" },
     { name = "gitpython", specifier = ">=3.1.40" },
