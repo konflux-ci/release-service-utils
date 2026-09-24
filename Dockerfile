@@ -136,16 +136,22 @@ RUN ARCH=$(uname -m) && \
         rsync --help > /dev/null; \
     fi
 
-# Install Python dependencies using uv
+# Install from uv.lock into system Python. --frozen uses the lock as is without re-resolving.
+# --system installs to site-packages so python3 scripts find packages without a venv.
+# --no-emit-project excludes the project from the export to avoid git URL conflicts.
 COPY . ./
-RUN pip install . && \
+RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt && \
+    # install locked deps into system Python
+    uv pip install --system -r /tmp/requirements.txt && \
+    # install release-service-utils, --no-deps skips re-resolving since all dependencies are already installed above
+    uv pip install --system --no-deps . && \
     # Remove PyPI's python-qpid-proton so the system RPM (python3-qpid-proton) takes precedence.
     # The PyPI wheel bundles its own OpenSSL which doesn't use the system CA trust store.
-    pip uninstall -y python-qpid-proton && \
-    # pip install/uninstall above can clobber the RPM's files on disk (no manylinux wheel
-    # exists for python-qpid-proton, so pip's behavior here is inconsistent build-to-build).
+    uv pip uninstall --system python-qpid-proton && \
+    # uv pip install/uninstall above can clobber the RPM's files on disk (no manylinux wheel
+    # exists for python-qpid-proton, so uv pip's behavior here is inconsistent build-to-build).
     # Reinstall the RPM to guarantee its files are actually present afterward, regardless
-    # of what pip did to the shared site-packages path.
+    # of what uv pip did to the shared site-packages path.
     dnf reinstall -y python3-qpid-proton
 
 # remove gcc, required only for compiling gssapi indirect dependency of pubtools-pulp via pushsource
