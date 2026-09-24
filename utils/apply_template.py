@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
+"""Render a Jinja template to a JSON file using a two-pass Jinja environment."""
+
 from __future__ import annotations
 
 import traceback
 
 import yaml
-from jinja2 import Template, DebugUndefined, exceptions
+from jinja2 import DebugUndefined, exceptions
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 from jinja2_ansible_filters import AnsibleCoreFiltersExtension
 import argparse
 import json
@@ -15,13 +18,21 @@ from typing import Any
 
 LOGGER = logging.getLogger("apply_template")
 
+# Both passes are sandboxed. Undefined handling matches the previous two
+# Template() calls: pass 1 used DebugUndefined so unknown placeholders stay
+# as ``{{ name }}`` for pass 2; pass 2 used the default Undefined so leftover
+# missing names render empty instead of being written into the advisory.
+_JINJA_ENV_FIRST = ImmutableSandboxedEnvironment(
+    extensions=[AnsibleCoreFiltersExtension],
+    undefined=DebugUndefined,
+)
+_JINJA_ENV_SECOND = ImmutableSandboxedEnvironment(
+    extensions=[AnsibleCoreFiltersExtension],
+)
+
 
 def setup_argparser() -> argparse.Namespace:  # pragma: no cover
-    """Setup argument parser
-
-    :return: Initialized argument parser
-    """
-
+    """Build and return the CLI argument parser."""
     parser = argparse.ArgumentParser(description="Applies a template.")
 
     # Create mutually exclusive group for data input
@@ -57,9 +68,7 @@ def render_template_to_json_file(
     *,
     verbose: bool = False,
 ) -> None:
-    """
-    Two-pass Jinja render of *template_path* with *template_data*; write JSON to
-    *output_path*.
+    """Render *template_path* with *template_data* and write JSON to *output_path*.
 
     YAML is used as an intermediate representation; output is JSON so values like
     version strings are not corrupted by YAML type coercion.
@@ -68,13 +77,9 @@ def render_template_to_json_file(
     setup_logger(level=log_level)
 
     with open(template_path, encoding="utf-8") as template_file:
-        # DebugUndefined renders undefined variables as empty strings
-        # instead of raising errors.
-        template = Template(
-            template_file.read(),
-            extensions=[AnsibleCoreFiltersExtension],
-            undefined=DebugUndefined,
-        )
+        # DebugUndefined leaves unknown placeholders as ``{{ name }}`` so a
+        # second pass can expand Jinja contributed in advisory text fields.
+        template = _JINJA_ENV_FIRST.from_string(template_file.read())
     LOGGER.info("Rendering 1st pass")
     try:
         content = template.render(template_data)
@@ -85,17 +90,25 @@ def render_template_to_json_file(
         # we use this traceback to get the line number
         LOGGER.error(traceback.format_exc())
         raise jexc
+    except exceptions.SecurityError:
+        LOGGER.exception("Disallowed expression in 1st pass render:")
+        LOGGER.error(traceback.format_exc())
+        raise
 
     # try 2nd pass
     LOGGER.info("Rendering 2nd pass")
     try:
-        content = Template(content).render(template_data)
+        content = _JINJA_ENV_SECOND.from_string(content).render(template_data)
         LOGGER.debug(content)
     except exceptions.TemplateSyntaxError as jexc:
         LOGGER.exception("Exception with Template Syntax:")
         # we use this traceback to get the line number
         LOGGER.error(traceback.format_exc())
         raise jexc
+    except exceptions.SecurityError:
+        LOGGER.exception("Disallowed expression in 2nd pass render:")
+        LOGGER.error(traceback.format_exc())
+        raise
 
     try:
         # load to check it is valid yaml
@@ -147,9 +160,11 @@ def setup_logger(level: int = logging.INFO, log_format: Any = None):
     """Set up and configure logger with stdout and stderr handlers.
 
     Logs at passed level to stdout, ERROR and above to stderr.
+
     Args:
         level: Minimum logging level for stdout (default: logging.INFO)
         log_format: Logging message format (default: standard format)
+
     """
     if log_format is None:
         log_format = "%(asctime)s [%(name)s] %(levelname)s %(message)s"
