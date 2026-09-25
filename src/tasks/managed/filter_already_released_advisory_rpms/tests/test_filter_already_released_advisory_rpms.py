@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
+from release_service_utils.helpers.rpm_utils import RpmNevra
 from release_service_utils.tasks.managed.filter_already_released_advisory_rpms import (
     filter_already_released_advisory_rpms as filt,
 )
@@ -262,28 +263,6 @@ def _mock_run_cmd_for_oras_and_rpm(
     return MagicMock(side_effect=side_effect)
 
 
-class TestShouldExcludeFile:
-    """Test file exclusion by pattern."""
-
-    def test_matches_pattern(self) -> None:
-        """File containing an exclude pattern is excluded."""
-        assert filt.should_exclude_file(
-            "hello-debuginfo-1.0.rpm", ["-debuginfo-", "-debugsource-"]
-        )
-
-    def test_no_match(self) -> None:
-        """Normal file is not excluded."""
-        assert not filt.should_exclude_file("hello-1.0.rpm", ["-debuginfo-", "-debugsource-"])
-
-    def test_empty_patterns(self) -> None:
-        """Empty pattern list excludes nothing."""
-        assert not filt.should_exclude_file("hello-1.0.rpm", [])
-
-    def test_whitespace_pattern(self) -> None:
-        """Whitespace-only patterns are skipped."""
-        assert not filt.should_exclude_file("hello-1.0.rpm", ["", " "])
-
-
 class TestDetermineEnvironment:
     """Test environment determination."""
 
@@ -324,7 +303,7 @@ class TestExtractRpmMetadata:
         )
         with patch.object(filt.subprocess_cmd, "run_cmd", mock_run):
             result = filt.extract_rpm_metadata(tmp_path / "hello.rpm")
-        assert result == filt.RpmNevra(
+        assert result == RpmNevra(
             name="hello",
             epoch="0",
             version="2.12",
@@ -347,15 +326,15 @@ class TestExtractRpmMetadata:
         assert result.epoch == "0"
 
     def test_failure_returns_none(self, tmp_path: Path) -> None:
-        """Non-zero return code returns None."""
+        """Non-zero return code returns None even when the filename is parseable."""
         mock_run = MagicMock(
             return_value=subprocess.CompletedProcess(args=[], returncode=1, stdout="")
         )
         with patch.object(filt.subprocess_cmd, "run_cmd", mock_run):
-            assert filt.extract_rpm_metadata(tmp_path / "bad.rpm") is None
+            assert filt.extract_rpm_metadata(tmp_path / "hello-1.0-1.el9.x86_64.rpm") is None
 
     def test_bad_output_returns_none(self, tmp_path: Path) -> None:
-        """Malformed output returns None."""
+        """Malformed output returns None even when the filename is parseable."""
         mock_run = MagicMock(
             return_value=subprocess.CompletedProcess(
                 args=[],
@@ -364,13 +343,13 @@ class TestExtractRpmMetadata:
             )
         )
         with patch.object(filt.subprocess_cmd, "run_cmd", mock_run):
-            assert filt.extract_rpm_metadata(tmp_path / "bad.rpm") is None
+            assert filt.extract_rpm_metadata(tmp_path / "hello-1.0-1.el9.x86_64.rpm") is None
 
     def test_os_error_returns_none(self, tmp_path: Path) -> None:
-        """OSError (missing binary) returns None."""
+        """OSError (missing binary) returns None even when the filename is parseable."""
         mock_run = MagicMock(side_effect=OSError("not found"))
         with patch.object(filt.subprocess_cmd, "run_cmd", mock_run):
-            assert filt.extract_rpm_metadata(tmp_path / "bad.rpm") is None
+            assert filt.extract_rpm_metadata(tmp_path / "hello-1.0-1.el9.x86_64.rpm") is None
 
 
 class TestBuildRpmEntries:
@@ -647,7 +626,7 @@ class TestEntriesToIrPayload:
             component_name="comp1",
             rpm_filename="hello-1.0-1.el9.x86_64.rpm",
             sha256="abc123",
-            nevra=filt.RpmNevra("hello", "0", "1.0", "1.el9", "x86_64"),
+            nevra=RpmNevra("hello", "0", "1.0", "1.el9", "x86_64"),
             purl="pkg:rpm/redhat/hello@1.0-1.el9?arch=x86_64",
             target_repo={
                 "repository_name": "x86_64",
@@ -689,7 +668,7 @@ class TestEntriesToRpmsMap:
             component_name=component,
             rpm_filename=rpm,
             sha256=sha,
-            nevra=filt.RpmNevra("hello", "0", "1.0", "1.el9", "x86_64"),
+            nevra=RpmNevra("hello", "0", "1.0", "1.el9", "x86_64"),
             purl="pkg:rpm/redhat/hello@1.0-1.el9?arch=x86_64",
             target_repo={"repository_name": repo_name},
         )
@@ -903,6 +882,16 @@ class TestValidatePulpDigests:
         pulp = MagicMock(spec=filt.PulpClient)
         pulp.check_digest.return_value = filt.PulpDigestStatus.MATCH
         filt.validate_pulp_digests([self._rpm_entry()], pulp)
+        pulp.check_digest.assert_called_once_with(
+            "myrepo",
+            "hello",
+            "0",
+            "1.0",
+            "1.el9",
+            "x86_64",
+            "abc",
+            fallback_to_latest=True,
+        )
 
     def test_mismatch_raises(self) -> None:
         """Raise on digest mismatch."""
@@ -1010,7 +999,7 @@ class TestRun:
         with (
             patch.object(filt.subprocess_cmd, "run_cmd", mock_run),
             patch.object(filt.file_helper, "sha256", return_value="sha"),
-            patch.object(filt, "make_pulp_client", return_value=MagicMock()),
+            patch.object(filt.PulpClient, "from_config", return_value=MagicMock()),
         ):
             filt.run(cfg, res)
 
@@ -1037,7 +1026,7 @@ class TestRun:
         with (
             patch.object(filt.subprocess_cmd, "run_cmd", mock_run),
             patch.object(filt.file_helper, "sha256", return_value="sha"),
-            patch.object(filt, "make_pulp_client", return_value=MagicMock()),
+            patch.object(filt.PulpClient, "from_config", return_value=MagicMock()),
         ):
             filt.run(cfg, res)
 
@@ -1078,7 +1067,7 @@ class TestRun:
         with (
             patch.object(filt.subprocess_cmd, "run_cmd", mock_run),
             patch.object(filt.file_helper, "sha256", return_value="sha"),
-            patch.object(filt, "make_pulp_client", return_value=MagicMock()),
+            patch.object(filt.PulpClient, "from_config", return_value=MagicMock()),
             patch.object(filt, "validate_pulp_digests") as mock_validate,
         ):
             filt.run(cfg, res)
@@ -1125,7 +1114,7 @@ class TestRun:
         with (
             patch.object(filt.subprocess_cmd, "run_cmd", mock_run),
             patch.object(filt.file_helper, "sha256", return_value="sha"),
-            patch.object(filt, "make_pulp_client", return_value=MagicMock()),
+            patch.object(filt.PulpClient, "from_config", return_value=MagicMock()),
             patch.object(filt, "validate_pulp_digests") as mock_validate,
         ):
             filt.run(cfg, res)
@@ -1234,7 +1223,7 @@ class TestRun:
         with (
             patch.object(filt.subprocess_cmd, "run_cmd", mock_run),
             patch.object(filt.file_helper, "sha256", return_value="sha"),
-            patch.object(filt, "make_pulp_client", return_value=MagicMock()),
+            patch.object(filt.PulpClient, "from_config", return_value=MagicMock()),
             patch.object(
                 filt,
                 "validate_pulp_digests",
@@ -1263,53 +1252,6 @@ class TestRun:
             pytest.raises(RuntimeError, match="No filter_results_artifact"),
         ):
             filt.run(cfg, res)
-
-
-class TestMakePulpClient:
-    """Test PulpClient construction."""
-
-    def test_builds_client_with_basic_auth(self, tmp_path: Path) -> None:
-        """Build a PulpClient using basic auth credentials."""
-        pulp_config = {
-            "base_url": "https://pulp.example.com",
-            "username": "user",
-            "password": "pass",
-            "client_id": "",
-            "client_secret": "",
-        }
-        ctx = filt.LoadedContext(
-            snapshot={},
-            data={},
-            origin="test",
-            pulp_config=pulp_config,
-            base_url="https://pulp.example.com",
-            environment="production",
-            advisory_secret_name="secret",
-        )
-
-        mock_session = MagicMock()
-        with (
-            patch.object(
-                filt.http_client, "get_retry_session", return_value=mock_session
-            ) as mock_get_session,
-            patch(
-                "release_service_utils.tasks.managed.filter_already_released_advisory_rpms"
-                ".filter_already_released_advisory_rpms.PulpAuth"
-            ) as mock_auth_cls,
-        ):
-            client = filt.make_pulp_client(ctx, "test-domain")
-
-        mock_get_session.assert_called_once_with(
-            total=3,
-            connect=3,
-            read=3,
-            status=2,
-            backoff_factor=0.4,
-            allowed_methods=frozenset({"GET", "POST"}),
-        )
-        mock_auth_cls.assert_called_once_with(pulp_config)
-        assert mock_session.auth == mock_auth_cls.return_value
-        assert isinstance(client, filt.PulpClient)
 
 
 class TestMain:
