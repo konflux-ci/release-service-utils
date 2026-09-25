@@ -181,6 +181,8 @@ def test_run_push_calls_wrappers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     # log instead of being buffered/hidden until they exit.
     assert kwargs_by_cmd["pulp_push_wrapper"]["stream_stdout"] is True
     assert kwargs_by_cmd["developer_portal_wrapper"]["stream_stdout"] is True
+    assert env_by_cmd["pulp_push_wrapper"]["PYTHONUNBUFFERED"] == "1"
+    assert env_by_cmd["developer_portal_wrapper"]["PYTHONUNBUFFERED"] == "1"
 
     docker_config = json.loads((tmp_path / ".docker" / "config.json").read_text())
     assert docker_config == {"auths": {"quay.io": {"auth": "abc"}}}
@@ -468,6 +470,44 @@ def test_process_component_missing_fields(component: dict[str, object], match: s
             Path("/tmp/disk"),
             stderr_path=Path("/tmp/stderr.txt"),
         )
+
+
+def test_process_component_logs_pull_and_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Phase logs mark oras pull start/finish and the staged destination path."""
+    caplog.set_level("INFO")
+
+    def fake_run_cmd(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[0] == "select-oci-auth":
+            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+        if cmd[0] == "oras":
+            cwd = kwargs.get("cwd")
+            assert cwd is not None
+            Path(cwd, "disk.qcow2").write_text("data", encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        pulp_push_disk_images.pulp_push_disk_images.oras_utils.subprocess_cmd,
+        "run_cmd",
+        fake_run_cmd,
+    )
+
+    component = _valid_component()
+    component["name"] = "bootc-cuda-gcp-disk-image-3-5"
+    pulp_push_disk_images.pulp_push_disk_images.process_component(
+        component,
+        tmp_path / "disk",
+        stderr_path=tmp_path / "stderr.txt",
+        run_cmd=fake_run_cmd,
+    )
+
+    text = caplog.text
+    assert "Pulling disk image for bootc-cuda-gcp-disk-image-3-5" in text
+    assert "oras pull finished for bootc-cuda-gcp-disk-image-3-5" in text
+    assert "Staged disk.qcow2" in text
+    assert "Finished staging bootc-cuda-gcp-disk-image-3-5" in text
 
 
 def test_process_component_rejects_non_list_staged_files(tmp_path: Path) -> None:
