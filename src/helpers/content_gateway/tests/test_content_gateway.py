@@ -5,6 +5,60 @@ from __future__ import annotations
 from release_service_utils.helpers.content_gateway import content_gateway
 
 
+def test_component_content_type_prefers_content_gateway() -> None:
+    """Prefer contentGateway.contentType over the top-level contentType field."""
+    assert (
+        content_gateway.component_content_type(
+            {
+                "contentType": "image",
+                "contentGateway": {"contentType": "disk-image"},
+            }
+        )
+        == "disk-image"
+    )
+
+
+def test_component_content_type_falls_back_to_top_level() -> None:
+    """Use top-level contentType when contentGateway has none."""
+    assert (
+        content_gateway.component_content_type({"contentGateway": {}, "contentType": "binary"})
+        == "binary"
+    )
+
+
+def test_component_content_type_empty_nested_falls_back() -> None:
+    """Fall back to top-level contentType when the nested type is empty."""
+    assert (
+        content_gateway.component_content_type(
+            {
+                "contentType": "binary",
+                "contentGateway": {"contentType": ""},
+            }
+        )
+        == "binary"
+    )
+
+
+def test_component_content_type_null_nested_falls_back() -> None:
+    """Fall back to top-level contentType when the nested type is null."""
+    assert (
+        content_gateway.component_content_type(
+            {
+                "contentType": "binary",
+                "contentGateway": {"contentType": None},
+            }
+        )
+        == "binary"
+    )
+
+
+def test_component_content_type_empty_when_unset() -> None:
+    """Return empty when neither contentGateway nor top-level type is set."""
+    assert content_gateway.component_content_type({}) == ""
+    assert content_gateway.component_content_type({"contentGateway": {}}) == ""
+    assert content_gateway.component_content_type({"contentGateway": "bad"}) == ""
+
+
 def test_cdn_base_urls_production() -> None:
     """Production CDN env uses public CGW and CDN download hosts."""
     data = {"cdn": {"env": "production"}}
