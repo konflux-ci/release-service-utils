@@ -29,6 +29,7 @@ dependencies = [
     "pulp-tool==1.2.0",
     "jq",
     "kubernetes>=28.0",
+    "RestrictedPython>=7.0",
 ]
 
 [tool.black]

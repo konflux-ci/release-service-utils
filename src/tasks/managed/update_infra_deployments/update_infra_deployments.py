@@ -7,9 +7,15 @@ import re
 import shutil
 import subprocess
 import sys
+import warnings
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
+
+from RestrictedPython import compile_restricted, safe_globals
+from RestrictedPython.Eval import default_guarded_getitem
+from RestrictedPython.Guards import safer_getattr
 
 from release_service_utils.helpers import file
 from release_service_utils.helpers import image_ref
@@ -74,8 +80,17 @@ def _github_app_ids(
     return app_id, installation_id
 
 
-def _update_script_from_data(data: dict[str, Any]) -> str | None:
-    """Return the infra update bash script from *data*, or `None` when absent."""
+def _sandboxed_script_from_data(data: dict[str, Any]) -> str | None:
+    """Return the sandboxed Python update script from *data*, or ``None``."""
+    raw = data.get("infraDeploymentUpdates")
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
+def _bash_script_from_data(data: dict[str, Any]) -> str | None:
+    """Return the legacy bash update script from *data*, or ``None``."""
     raw = data.get("infra-deployment-update-script")
     if raw is None:
         return None
@@ -97,6 +112,209 @@ def _run_update_script(script: str, repo_dir: Path) -> None:
         print(proc.stdout, end="")
     if proc.stderr:
         print(proc.stderr, end="", file=sys.stderr)
+
+
+class InfraReplacementError(Exception):
+    """Raised when a sandboxed replacement operation fails."""
+
+
+def _validate_path(relative: str, clone_dir: Path) -> Path:
+    """Resolve *relative* inside *clone_dir* and reject path traversal."""
+    if not relative or relative.startswith("/"):
+        raise InfraReplacementError(f"absolute paths are not allowed: {relative!r}")
+    resolved = (clone_dir / relative).resolve()
+    clone_resolved = clone_dir.resolve()
+    if not str(resolved).startswith(str(clone_resolved) + "/"):
+        raise InfraReplacementError(f"path traversal detected: {relative!r}")
+    return resolved
+
+
+def _extract_image_tag(container_image: str) -> str:
+    """Return the OCI tag from a container image reference.
+
+    Handles ``registry/repo:tag@sha256:digest`` and ``registry/repo:tag``.
+    Returns an empty string when no tag is present (digest-only reference).
+    """
+    without_digest = container_image.split("@")[0]
+    parts = without_digest.rsplit(":", 1)
+    if len(parts) < 2:
+        return ""
+    candidate = parts[1]
+    if "/" in candidate:
+        return ""
+    return candidate
+
+
+def _normalize_oci_tag(tag_value: str) -> str:
+    """Apply OCI semver normalization: ``_`` becomes ``+``."""
+    return tag_value.replace("_", "+")
+
+
+def _replace_on_line_after(content: str, regex: str, value: str, after_pattern: str) -> str:
+    """Replace *regex* with *value* only on lines after an *after_pattern* match."""
+    compiled = re.compile(regex)
+    after_re = re.compile(after_pattern)
+    lines = content.splitlines(keepends=True)
+    result: list[str] = []
+    matched_after = False
+    for line in lines:
+        if matched_after:
+            line = compiled.sub(value, line)
+            matched_after = False
+        if after_re.search(line):
+            matched_after = True
+        result.append(line)
+    return "".join(result)
+
+
+def _replace_nth_match(content: str, regex: str, value: str, n: int) -> str:
+    """Replace only the *n*-th match (1-based) of *regex* with *value*."""
+    compiled = re.compile(regex)
+    count = 0
+
+    def _replacer(m: re.Match[str]) -> str:
+        nonlocal count
+        count += 1
+        if count == n:
+            return compiled.sub(value, m.group(0))
+        return m.group(0)
+
+    return compiled.sub(_replacer, content)
+
+
+def _read(file_path: str, *, clone_dir: Path) -> str:
+    """Read and return the contents of a file in the cloned repo."""
+    target = _validate_path(file_path, clone_dir)
+    if not target.exists():
+        raise InfraReplacementError(f"file not found: {file_path!r}")
+    return target.read_text(encoding="utf-8")
+
+
+def _write(file_path: str, content: str, *, clone_dir: Path) -> None:
+    """Write *content* to a file in the cloned repo."""
+    target = _validate_path(file_path, clone_dir)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    logger.info("Wrote %s", file_path)
+
+
+def _replace(
+    file_path: str,
+    regex: str,
+    value: str,
+    *,
+    clone_dir: Path,
+    revision: str,
+    after: str | None = None,
+    occurrence: int | None = None,
+) -> None:
+    """Apply a regex substitution on a file in the cloned repo."""
+    if after is not None and occurrence is not None:
+        raise InfraReplacementError("after and occurrence are mutually exclusive")
+
+    resolved_value = value.replace(_REVISION_PLACEHOLDER, revision)
+    target = _validate_path(file_path, clone_dir)
+    if not target.exists():
+        raise InfraReplacementError(f"file not found: {file_path!r}")
+
+    try:
+        re.compile(regex)
+    except re.error as exc:
+        raise InfraReplacementError(f"invalid regex {regex!r}: {exc}") from exc
+
+    content = target.read_text(encoding="utf-8")
+
+    if after is not None:
+        try:
+            re.compile(after)
+        except re.error as exc:
+            raise InfraReplacementError(f"invalid after regex {after!r}: {exc}") from exc
+        new_content = _replace_on_line_after(content, regex, resolved_value, after)
+    elif occurrence is not None:
+        if occurrence < 1:
+            raise InfraReplacementError(f"occurrence must be >= 1, got {occurrence}")
+        new_content = _replace_nth_match(content, regex, resolved_value, occurrence)
+    else:
+        new_content = re.sub(regex, resolved_value, content)
+
+    target.write_text(new_content, encoding="utf-8")
+    logger.info("Updated %s", file_path)
+
+
+def _tag(
+    component_name: str,
+    filter_regex: str,
+    *,
+    snapshot_data: dict[str, Any],
+) -> str:
+    """Look up a tag from a snapshot component's container image."""
+    components = snapshot_data.get("components")
+    if not isinstance(components, list):
+        components = []
+    for comp in components:
+        if not isinstance(comp, dict):
+            continue
+        if comp.get("name") != component_name:
+            continue
+        image = str(comp.get("containerImage", ""))
+        raw_tag = _extract_image_tag(image)
+        if not raw_tag:
+            raise InfraReplacementError(
+                f"component {component_name!r} has no image tag" f" in {image!r}"
+            )
+        normalized = _normalize_oci_tag(raw_tag)
+        try:
+            if re.fullmatch(filter_regex, normalized):
+                return normalized
+        except re.error as exc:
+            raise InfraReplacementError(
+                f"invalid filter regex {filter_regex!r}: {exc}"
+            ) from exc
+        raise InfraReplacementError(
+            f"tag {normalized!r} does not match filter {filter_regex!r}"
+        )
+    raise InfraReplacementError(f"component {component_name!r} not found in snapshot")
+
+
+def execute_infra_updates(
+    script_text: str,
+    clone_dir: Path,
+    snapshot_data: dict[str, Any],
+    revision: str,
+) -> None:
+    """Compile and execute *script_text* in a RestrictedPython sandbox.
+
+    Available functions: ``read()``, ``write()``, ``replace()``, ``tag()``.
+    """
+    logger.info("Compiling infra update script with RestrictedPython")
+    try:
+        byte_code = compile_restricted(script_text, "<infra-update>", "exec")
+    except SyntaxError as exc:
+        raise InfraReplacementError(f"script compilation failed: {exc}") from exc
+
+    restricted = safe_globals.copy()
+    restricted["read"] = partial(_read, clone_dir=clone_dir)
+    restricted["write"] = partial(_write, clone_dir=clone_dir)
+    restricted["replace"] = partial(_replace, clone_dir=clone_dir, revision=revision)
+    restricted["tag"] = partial(_tag, snapshot_data=snapshot_data)
+    restricted["_getattr_"] = safer_getattr
+    restricted["_getitem_"] = default_guarded_getitem
+    restricted["_getiter_"] = iter
+    restricted["_write_"] = lambda x: x
+    restricted["__builtins__"] = {
+        k: v
+        for k, v in restricted.get("__builtins__", {}).items()
+        if k not in {"__import__", "open", "exec", "eval", "compile"}
+    }
+
+    logger.info("Executing sandboxed infra update script")
+    try:
+        exec(byte_code, restricted, {})  # noqa: S102
+    except InfraReplacementError:
+        raise
+    except Exception as exc:
+        raise InfraReplacementError(f"script execution failed: {exc}") from exc
+    logger.info("Infra update script completed successfully")
 
 
 def _extract_old_revision_from_diff(diff_text: str) -> str:
@@ -306,10 +524,20 @@ def run_update_infra_deployments(params: TaskParams) -> None:
     data_path = params.data_dir / params.data_json_path
     logger.info("Loading data from %s", data_path)
     data = file.load_json_dict(data_path)
-    script = _update_script_from_data(data)
-    if script is None:
-        logger.info("No script provided via 'infra-deployment-update-script' key in data")
+
+    sandboxed_script = _sandboxed_script_from_data(data)
+    bash_script = _bash_script_from_data(data)
+
+    if sandboxed_script is None and bash_script is None:
+        logger.info("No update script configured in data")
         return
+    if bash_script is not None and sandboxed_script is None:
+        warnings.warn(
+            "'infra-deployment-update-script' is deprecated, use"
+            " 'infraDeploymentUpdates' instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     target_repo = str(data.get("targetGHRepo", params.default_target_repo)).strip()
     params.work_dir.mkdir(parents=True, exist_ok=True)
@@ -334,7 +562,13 @@ def run_update_infra_deployments(params: TaskParams) -> None:
         snap.revision,
         snap.origin_repo,
     )
-    _run_patched_script(script, snap.revision, clone_dir)
+
+    if sandboxed_script is not None:
+        snapshot_data = file.load_json_dict(snapshot_file)
+        execute_infra_updates(sandboxed_script, clone_dir, snapshot_data, snap.revision)
+    else:
+        _run_patched_script(bash_script, snap.revision, clone_dir)
+
     apply_result = _collect_apply_result(snap, clone_dir)
     _create_or_update_pr(
         params,
