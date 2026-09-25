@@ -120,6 +120,11 @@ TASK_GROUP_LABEL = "internal-services.appstudio.openshift.io/group-id"
 CLEANUP_PROPAGATION_SLEEP_SECONDS = 5
 # Extra poll budget before the PipelineRun starts (operator reconcile and scheduling).
 SPAWN_OVERHEAD_SECONDS = 300
+# Base interval for the exponential backoff used while polling IR status.
+IR_POLL_BASE_SLEEP_SECONDS = 5
+# Upper bound on the poll interval: backoff grows 5, 10, 20, ... up to this
+# cap, then polls at this fixed interval for the remainder of the wait.
+IR_POLL_MAX_SLEEP_SECONDS = 300
 EXIT_FAILED = 21
 EXIT_TIMEOUT = 124
 _DURATION_RE = re.compile(r"^(\d+)h(\d+)m(\d+)s$")
@@ -364,10 +369,17 @@ def wait_for_completion(
     label_selector: str | None = None,
     timeout: int = 600,
     k8s_api: k8s_client.CustomObjectsApi | None = None,
+    poll_base_sleep_seconds: int = IR_POLL_BASE_SLEEP_SECONDS,
+    poll_max_sleep_seconds: int = IR_POLL_MAX_SLEEP_SECONDS,
 ) -> None:
     """Block until InternalRequests complete or *timeout* seconds elapse.
 
-    One of *name* or *label_selector* must be set, but not both.
+    One of *name* or *label_selector* must be set, but not both. Polls with
+    exponential backoff starting at *poll_base_sleep_seconds* (5, 10, 20, ...)
+    capped at *poll_max_sleep_seconds* (default 300s / 5 minutes), so quickly
+    completing InternalRequests are observed promptly while long-running ones
+    settle into a bounded fixed-interval poll instead of backing off
+    unboundedly.
 
     Raises:
         ValueError: When neither or both selectors are provided.
@@ -446,13 +458,14 @@ def wait_for_completion(
 
         raise _InternalRequestNotComplete()
 
-    # Enough attempts for the full timeout at the minimum 5s backoff interval.
-    max_attempts = max(timeout // 5 + 1, 2)
+    # Enough attempts for the full timeout at the minimum backoff interval.
+    max_attempts = max(timeout // poll_base_sleep_seconds + 1, 2)
     retry.retry_with_exponential_backoff(
         _poll_once,
         max_attempts=max_attempts,
         retry_on=_InternalRequestNotComplete,
-        base_sleep_seconds=5,
+        base_sleep_seconds=poll_base_sleep_seconds,
+        max_sleep_seconds=poll_max_sleep_seconds,
     )
 
 
