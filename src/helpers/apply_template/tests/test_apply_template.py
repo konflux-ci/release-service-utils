@@ -1,19 +1,17 @@
-"""Test template application."""
+"""Tests for apply_template helper."""
 
 from __future__ import annotations
 
-import tempfile
 import json
 import os
+import tempfile
+from unittest.mock import MagicMock, patch
 
+import pytest
 from jinja2 import TemplateSyntaxError
 from jinja2.exceptions import SecurityError
 
-import pytest
-
-from unittest.mock import patch, MagicMock
-
-from utils.apply_template import setup_argparser, main
+from release_service_utils.helpers.apply_template import main, setup_argparser
 
 
 @patch(
@@ -21,7 +19,7 @@ from utils.apply_template import setup_argparser, main
     ["apply_template", "--data", "{}", "--template", "somefile", "-o", "newfile"],
 )
 def test_setup_argparser_proper_args():
-    """Parse --data, --template, and --output."""
+    """Parse data, template, and output arguments correctly."""
     args_out = setup_argparser()
     assert args_out.data == "{}"
     assert args_out.template == "somefile"
@@ -41,7 +39,7 @@ def test_setup_argparser_proper_args():
     ],
 )
 def test_setup_argparser_data_file_arg():
-    """Parse --data-file instead of --data."""
+    """Parse data-file argument instead of inline data."""
     args_out = setup_argparser()
     assert args_out.data_file == "datafile.json"
     assert args_out.data is None
@@ -50,31 +48,26 @@ def test_setup_argparser_data_file_arg():
 
 
 def test_setup_argparser_improper_args():
-    """Exit when required arguments are missing."""
+    """Exit with code 2 when required arguments are missing."""
     with pytest.raises(SystemExit) as e:
         setup_argparser()
     assert e.value.code == 2
 
 
 @patch("builtins.open")
-@patch("utils.apply_template._JINJA_ENV_FIRST.from_string")
-@patch("utils.apply_template._JINJA_ENV_SECOND.from_string")
-@patch("utils.apply_template.setup_argparser")
+@patch("jinja2.Template.render")
+@patch("release_service_utils.helpers.apply_template.apply_template.setup_argparser")
 def test_apply_template_advisory_template(
-    mock_argparser: MagicMock,
-    mock_from_string_second: MagicMock,
-    mock_from_string_first: MagicMock,
-    mock_open: MagicMock,
-) -> None:
-    """Write JSON from a mocked two-pass render."""
+    mock_argparser: MagicMock, mock_render: MagicMock, mock_open: MagicMock
+):
+    """Render template and write output as JSON."""
     args = MagicMock()
     args.template = "templates/advisory.yaml.jinja"
     args.data = "{}"
     args.output = "somefile"
     args.verbose = True
     mock_argparser.return_value = args
-    mock_from_string_first.return_value.render.return_value = "foo: bar"
-    mock_from_string_second.return_value.render.return_value = "foo: bar"
+    mock_render.return_value = "foo: bar"
     mock_open1 = MagicMock()
     mock_open2 = MagicMock()
     mock_open.side_effect = [mock_open1, mock_open2]
@@ -90,9 +83,9 @@ def test_apply_template_advisory_template(
     assert json.loads(written) == {"foo": "bar"}
 
 
-@patch("utils.apply_template.setup_argparser")
+@patch("release_service_utils.helpers.apply_template.apply_template.setup_argparser")
 def test_apply_template_with_data_file(mock_argparser: MagicMock):
-    """Render the advisory template from a JSON data file."""
+    """Load template data from file and render advisory template."""
     _, data_filename = tempfile.mkstemp(suffix=".json")
     _, output_filename = tempfile.mkstemp()
 
@@ -160,9 +153,9 @@ def test_apply_template_with_data_file(mock_argparser: MagicMock):
         os.remove(output_filename)
 
 
-@patch("utils.apply_template.setup_argparser")
+@patch("release_service_utils.helpers.apply_template.apply_template.setup_argparser")
 def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
-    """Render a full advisory, including a 2nd-pass Jinja partial in synopsis."""
+    """Render full advisory template with long strings and partial templates."""
     _, filename = tempfile.mkstemp()
 
     # Confirm that long strings with spaces aren't broken up in a weird way
@@ -244,9 +237,9 @@ def test_apply_template_advisory_template_in_full(mock_argparser: MagicMock):
         os.remove(filename)
 
 
-@patch("utils.apply_template.setup_argparser")
+@patch("release_service_utils.helpers.apply_template.apply_template.setup_argparser")
 def test_apply_template_advisory_template_fail_syntax_error(mock_argparser: MagicMock):
-    """Raise TemplateSyntaxError for invalid Jinja in an advisory field."""
+    """Raise TemplateSyntaxError when template has syntax errors."""
     _, filename = tempfile.mkstemp()
 
     # error in this partial template
@@ -289,7 +282,7 @@ def test_apply_template_advisory_template_fail_syntax_error(mock_argparser: Magi
         os.remove(filename)
 
 
-@patch("utils.apply_template.setup_argparser")
+@patch("release_service_utils.helpers.apply_template.apply_template.setup_argparser")
 def test_apply_template_restricts_private_attribute_access(
     mock_argparser: MagicMock,
 ) -> None:
@@ -342,7 +335,7 @@ def test_apply_template_restricts_private_attribute_access(
         os.remove(filename)
 
 
-@patch("utils.apply_template.setup_argparser")
+@patch("release_service_utils.helpers.apply_template.apply_template.setup_argparser")
 def test_apply_template_second_pass_renders_missing_vars_empty(
     mock_argparser: MagicMock,
 ) -> None:
