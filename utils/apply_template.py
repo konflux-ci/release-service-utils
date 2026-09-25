@@ -7,7 +7,7 @@ import traceback
 
 import yaml
 from jinja2 import DebugUndefined, exceptions
-from jinja2.sandbox import ImmutableSandboxedEnvironment
+from jinja2.sandbox import SandboxedEnvironment
 from jinja2_ansible_filters import AnsibleCoreFiltersExtension
 import argparse
 import json
@@ -18,15 +18,19 @@ from typing import Any
 
 LOGGER = logging.getLogger("apply_template")
 
-# Both passes are sandboxed. Undefined handling matches the previous two
-# Template() calls: pass 1 used DebugUndefined so unknown placeholders stay
-# as ``{{ name }}`` for pass 2; pass 2 used the default Undefined so leftover
-# missing names render empty instead of being written into the advisory.
-_JINJA_ENV_FIRST = ImmutableSandboxedEnvironment(
+# Both passes are sandboxed so private/dunder attribute access is blocked.
+# Use SandboxedEnvironment rather than ImmutableSandboxedEnvironment: the
+# latter also blocks list.append / dict updates, which existing RPM advisory
+# templates rely on in the 2nd pass. Undefined handling matches the previous
+# two Template() calls: pass 1 used DebugUndefined so unknown placeholders
+# stay as ``{{ name }}`` for pass 2; pass 2 used the default Undefined so
+# leftover missing names render empty instead of being written into the
+# advisory.
+_JINJA_ENV_FIRST = SandboxedEnvironment(
     extensions=[AnsibleCoreFiltersExtension],
     undefined=DebugUndefined,
 )
-_JINJA_ENV_SECOND = ImmutableSandboxedEnvironment(
+_JINJA_ENV_SECOND = SandboxedEnvironment(
     extensions=[AnsibleCoreFiltersExtension],
 )
 

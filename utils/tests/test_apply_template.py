@@ -393,3 +393,64 @@ def test_apply_template_second_pass_renders_missing_vars_empty(
 
     finally:
         os.remove(filename)
+
+
+@patch("utils.apply_template.setup_argparser")
+def test_apply_template_second_pass_allows_list_append(
+    mock_argparser: MagicMock,
+) -> None:
+    """Keep RPM-style list.append working in 2nd-pass advisory fields.
+
+    ImmutableSandboxedEnvironment treats list.append as unsafe. Existing
+    advisory templates mutate nested lists that way, e.g.
+    ``src['rpms'][rpm_key]['arches'].append(artifact.architecture)``.
+    """
+    _, filename = tempfile.mkstemp()
+
+    synopsis = (
+        "arches "
+        "{% set rpm_key = 'pkg' %}"
+        "{% set _ = src['rpms'][rpm_key]['arches'].append("
+        "artifact.architecture) %}"
+        "{{ src['rpms'][rpm_key]['arches'] | join(',') }}"
+    )
+    try:
+        args = MagicMock()
+        args.template = "templates/advisory.yaml.jinja"
+        args.data = json.dumps(
+            {
+                "advisory_name": "advisory",
+                "advisory_ship_date": "today",
+                "src": {"rpms": {"pkg": {"arches": ["x86_64"]}}},
+                "artifact": {"architecture": "s390x"},
+                "advisory": {
+                    "spec": {
+                        "product_id": 1,
+                        "product_name": "name",
+                        "product_version": "version",
+                        "product_stream": "stream",
+                        "cpe": "cpe:/id",
+                        "type": "RHEA",
+                        "topic": "topic",
+                        "description": "description",
+                        "solution": "solution",
+                        "synopsis": synopsis,
+                        "references": ["testing"],
+                        "content": {},
+                    }
+                },
+            }
+        )
+
+        args.output = filename
+        mock_argparser.return_value = args
+
+        main()
+
+        with open(filename, "r") as f:
+            result = json.load(f)
+
+        assert result["spec"]["synopsis"] == "arches x86_64,s390x"
+
+    finally:
+        os.remove(filename)
