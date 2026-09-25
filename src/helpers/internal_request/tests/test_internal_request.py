@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 from collections.abc import Generator
 from pathlib import Path
 from unittest import mock
@@ -122,8 +123,11 @@ def test_build_payload_includes_required_fields() -> None:
     )
 
 
-def test_cleanup_existing_requests_deletes_matching_irs(k8s_api: mock.MagicMock) -> None:
+def test_cleanup_existing_requests_deletes_matching_irs(
+    k8s_api: mock.MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Delete existing InternalRequests and wait for removal."""
+    monkeypatch.setattr(socket, "gethostname", lambda: "my-taskrun-pod")
     k8s_api.list_namespaced_custom_object.return_value = {
         "items": [{"metadata": {"name": "old-ir-1"}}],
     }
@@ -136,10 +140,12 @@ def test_cleanup_existing_requests_deletes_matching_irs(k8s_api: mock.MagicMock)
             k8s_api=k8s_api,
         )
 
+    creator_hash = ir_module._hash_pod_name("my-taskrun-pod")
     list_call = k8s_api.list_namespaced_custom_object.call_args
     assert list_call.kwargs["label_selector"] == (
         f"{ir_module.PIPELINERUN_UID_LABEL}=uid-123,"
-        f"{ir_module.PIPELINE_NAME_LABEL}=create-advisory"
+        f"{ir_module.PIPELINE_NAME_LABEL}=create-advisory,"
+        f"{ir_module.CREATOR_POD_LABEL}!={creator_hash}"
     )
 
     del_call = k8s_api.delete_namespaced_custom_object.call_args
@@ -160,9 +166,10 @@ def test_cleanup_existing_requests_skips_without_pipelinerun_uid(
 
 
 def test_cleanup_existing_requests_skips_when_no_matching_items(
-    k8s_api: mock.MagicMock,
+    k8s_api: mock.MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Skip deletion when no existing InternalRequests are found."""
+    monkeypatch.setattr(socket, "gethostname", lambda: "my-taskrun-pod")
     k8s_api.list_namespaced_custom_object.return_value = {"items": []}
 
     ir_module.cleanup_existing_requests(
@@ -175,8 +182,11 @@ def test_cleanup_existing_requests_skips_when_no_matching_items(
     k8s_api.delete_namespaced_custom_object.assert_not_called()
 
 
-def test_cleanup_existing_requests_skips_non_dict_items(k8s_api: mock.MagicMock) -> None:
+def test_cleanup_existing_requests_skips_non_dict_items(
+    k8s_api: mock.MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Ignore list entries that are not InternalRequest objects."""
+    monkeypatch.setattr(socket, "gethostname", lambda: "my-taskrun-pod")
     k8s_api.list_namespaced_custom_object.return_value = {
         "items": ["not-a-dict", {"metadata": {"name": "old-ir-1"}}],
     }
@@ -193,8 +203,11 @@ def test_cleanup_existing_requests_skips_non_dict_items(k8s_api: mock.MagicMock)
     assert del_call.kwargs["name"] == "old-ir-1"
 
 
-def test_cleanup_existing_requests_skips_invalid_ir_name(k8s_api: mock.MagicMock) -> None:
+def test_cleanup_existing_requests_skips_invalid_ir_name(
+    k8s_api: mock.MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Ignore InternalRequests whose metadata name is missing or not a string."""
+    monkeypatch.setattr(socket, "gethostname", lambda: "my-taskrun-pod")
     k8s_api.list_namespaced_custom_object.return_value = {
         "items": [
             {"metadata": {}},
@@ -580,3 +593,213 @@ def test_default_k8s_api_falls_back_to_kubeconfig() -> None:
     kubeconfig.assert_called_once()
     api_cls.assert_called_once()
     assert result is api_cls.return_value
+
+
+# --- creator-pod tests ---
+
+
+def test_hash_pod_name_returns_16_hex_chars() -> None:
+    """Hash a pod name to the first 16 hex characters of its MD5."""
+    result = ir_module._hash_pod_name("my-taskrun-pod-retry0")
+    assert len(result) == 16
+    assert all(c in "0123456789abcdef" for c in result)
+
+
+def test_hash_pod_name_stable_across_calls() -> None:
+    """Return the same hash for the same input."""
+    assert ir_module._hash_pod_name("pod-a") == ir_module._hash_pod_name("pod-a")
+
+
+def test_hash_pod_name_differs_for_different_pods() -> None:
+    """Return different hashes for different pod names."""
+    assert ir_module._hash_pod_name("pod-retry0") != ir_module._hash_pod_name("pod-retry1")
+
+
+def test_build_payload_includes_creator_pod_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stamp the creator-pod label on the IR when hostname is available."""
+    monkeypatch.setattr(socket, "gethostname", lambda: "my-taskrun-pod-retry0")
+    payload = ir_module.build_payload(
+        pipeline="sign-image",
+        params={
+            "taskGitUrl": "https://example.test/catalog",
+            "taskGitRevision": "main",
+        },
+        labels={},
+        pipeline_git_url="https://example.test/catalog",
+        pipeline_git_revision="main",
+        pipeline_timeout="1h0m0s",
+        task_timeout="0h55m0s",
+        finally_timeout="0h5m0s",
+        service_account=None,
+    )
+
+    assert payload["metadata"]["labels"][ir_module.CREATOR_POD_LABEL] == "63c88cfb6d882bb8"
+
+
+def test_build_payload_omits_creator_pod_label_when_no_hostname(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not add a creator-pod label when hostname is empty."""
+    monkeypatch.setattr(socket, "gethostname", lambda: "")
+    payload = ir_module.build_payload(
+        pipeline="sign-image",
+        params={
+            "taskGitUrl": "https://example.test/catalog",
+            "taskGitRevision": "main",
+        },
+        labels={},
+        pipeline_git_url="https://example.test/catalog",
+        pipeline_git_revision="main",
+        pipeline_timeout="1h0m0s",
+        task_timeout="0h55m0s",
+        finally_timeout="0h5m0s",
+        service_account=None,
+    )
+
+    assert ir_module.CREATOR_POD_LABEL not in payload["metadata"]["labels"]
+
+
+def test_cleanup_with_creator_pod_excludes_current_pod(
+    k8s_api: mock.MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Include creator-pod!= in the selector to preserve sibling IRs."""
+    monkeypatch.setattr(socket, "gethostname", lambda: "my-taskrun-pod-retry0")
+    k8s_api.list_namespaced_custom_object.return_value = {"items": []}
+
+    ir_module.cleanup_existing_requests(
+        pipeline="sign-image",
+        labels={ir_module.PIPELINERUN_UID_LABEL: "uid-abc"},
+        k8s_api=k8s_api,
+    )
+
+    list_call = k8s_api.list_namespaced_custom_object.call_args
+    expected_selector = (
+        f"{ir_module.PIPELINERUN_UID_LABEL}=uid-abc,"
+        f"{ir_module.PIPELINE_NAME_LABEL}=sign-image,"
+        f"{ir_module.CREATOR_POD_LABEL}!=63c88cfb6d882bb8"
+    )
+    assert list_call.kwargs["label_selector"] == expected_selector
+
+
+def test_cleanup_skipped_when_hostname_not_set(
+    k8s_api: mock.MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Skip cleanup with a warning when pod hostname is empty."""
+    monkeypatch.setattr(socket, "gethostname", lambda: "")
+
+    with mock.patch.object(ir_module.logger, "warning") as warning:
+        ir_module.cleanup_existing_requests(
+            pipeline="sign-image",
+            labels={ir_module.PIPELINERUN_UID_LABEL: "uid-abc"},
+            k8s_api=k8s_api,
+        )
+
+    warning.assert_called_once()
+    assert "Cleanup skipped" in warning.call_args[0][0]
+    assert "pod hostname" in warning.call_args[0][0]
+    k8s_api.list_namespaced_custom_object.assert_not_called()
+    k8s_api.delete_namespaced_custom_object.assert_not_called()
+
+
+def test_cleanup_defaults_to_hostname(
+    k8s_api: mock.MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Use socket.gethostname() when creator_pod is not passed."""
+    monkeypatch.setattr(socket, "gethostname", lambda: "my-tekton-pod-retry0")
+    k8s_api.list_namespaced_custom_object.return_value = {"items": []}
+
+    ir_module.cleanup_existing_requests(
+        pipeline="sign-image",
+        labels={ir_module.PIPELINERUN_UID_LABEL: "uid-abc"},
+        k8s_api=k8s_api,
+    )
+
+    list_call = k8s_api.list_namespaced_custom_object.call_args
+    expected_selector = (
+        f"{ir_module.PIPELINERUN_UID_LABEL}=uid-abc,"
+        f"{ir_module.PIPELINE_NAME_LABEL}=sign-image,"
+        f"{ir_module.CREATOR_POD_LABEL}!=14d1e4d0e4a083ef"
+    )
+    assert list_call.kwargs["label_selector"] == expected_selector
+
+
+def test_cleanup_deletes_orphans_from_prior_retry(
+    k8s_api: mock.MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Delete IRs from a prior retry attempt (different creator-pod hash)."""
+    monkeypatch.setattr(socket, "gethostname", lambda: "my-taskrun-pod-retry1")
+    k8s_api.list_namespaced_custom_object.return_value = {
+        "items": [{"metadata": {"name": "orphan-ir-1"}}],
+    }
+    k8s_api.get_namespaced_custom_object.side_effect = ApiException(status=404)
+
+    with mock.patch.object(ir_module.time, "sleep"):
+        ir_module.cleanup_existing_requests(
+            pipeline="sign-image",
+            labels={ir_module.PIPELINERUN_UID_LABEL: "uid-abc"},
+            k8s_api=k8s_api,
+        )
+
+    del_call = k8s_api.delete_namespaced_custom_object.call_args
+    assert del_call.kwargs["name"] == "orphan-ir-1"
+
+
+def test_create_resolves_creator_pod_from_hostname(
+    k8s_api: mock.MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolve creator_pod from socket.gethostname() for cleanup and payload."""
+    monkeypatch.setattr(socket, "gethostname", lambda: "my-pod")
+    with (
+        mock.patch.object(ir_module, "cleanup_existing_requests") as cleanup,
+        mock.patch.object(
+            ir_module,
+            "create_internal_request",
+            return_value="sign-image-abc",
+        ) as create_ir,
+    ):
+        ir_module.create(
+            "sign-image",
+            params={
+                "taskGitUrl": "https://example.test/catalog",
+                "taskGitRevision": "main",
+            },
+            sync=False,
+            k8s_api=k8s_api,
+        )
+
+        cleanup.assert_called_once()
+        assert "creator_pod" not in cleanup.call_args.kwargs
+
+        payload = create_ir.call_args.args[0]
+        assert payload["metadata"]["labels"][ir_module.CREATOR_POD_LABEL] == "cc2458f69023bd75"
+
+
+def test_create_stamps_hostname_on_payload(
+    k8s_api: mock.MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stamp hostname hash as creator-pod label on the payload."""
+    monkeypatch.setattr(socket, "gethostname", lambda: "tekton-pod-xyz")
+    with (
+        mock.patch.object(ir_module, "cleanup_existing_requests") as cleanup,
+        mock.patch.object(
+            ir_module,
+            "create_internal_request",
+            return_value="sign-image-abc",
+        ) as create_ir,
+    ):
+        ir_module.create(
+            "sign-image",
+            params={
+                "taskGitUrl": "https://example.test/catalog",
+                "taskGitRevision": "main",
+            },
+            sync=False,
+            k8s_api=k8s_api,
+        )
+
+        cleanup.assert_called_once()
+
+        payload = create_ir.call_args.args[0]
+        assert payload["metadata"]["labels"][ir_module.CREATOR_POD_LABEL] == "52c289bf10c6be51"
