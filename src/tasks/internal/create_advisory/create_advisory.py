@@ -16,15 +16,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from gitlab import Gitlab
+from gitlab.exceptions import GitlabError
 
 from jsonschema.validators import validator_for
 from jsonschema import ValidationError
@@ -38,6 +44,7 @@ from release_service_utils.helpers import authentication
 from release_service_utils.helpers import file
 from release_service_utils.helpers import http_client
 from release_service_utils.helpers.internal_request import internal_request_results
+from release_service_utils.helpers.logger import logger
 from release_service_utils.helpers import subprocess_cmd
 from release_service_utils.helpers import tekton
 
@@ -46,6 +53,25 @@ from release_service_utils.helpers.vcs import gitlab
 
 PROG = "create_advisory.py"
 ADVISORY_TEMPLATE_PATH = Path("/home/templates/advisory.yaml.jinja")
+# Stay below the create-advisory InternalRequest task timeout (01h00m00s).
+_ADVISORY_MR_MERGE_TIMEOUT_SECONDS = 3300
+# Subprocess/git failures append here; on error the tail is copied into RESULT_RESULT.
+_COMMAND_LOG_PATH = Path("/tmp/create_advisory_command_log.txt")
+_GITLAB_API_SCOPE_HINT = (
+    "gitlab_access_token lacks GitLab API scope; grant api and read_api on the "
+    "PAT stored in advisory_secret (read_repository/write_repository are not "
+    "enough for merge request operations)"
+)
+
+
+def _reraise_gitlab_api_error(exc: GitlabError) -> None:
+    """Raise a clear advisory error when the GitLab token lacks API scopes."""
+    if gitlab.is_insufficient_scope_error(exc):
+        raise tekton.CheckStepError(
+            "accessing the GitLab API",
+            RuntimeError(_GITLAB_API_SCOPE_HINT),
+        ) from exc
+    raise
 
 
 def _clone_advisory_repo(
@@ -61,6 +87,12 @@ def _clone_advisory_repo(
     )
     # Sparse checkout: only this tenant's advisories plus repo schema (for validation).
     sparse_dirs = [f"data/advisories/{origin}", "schema"]
+    logger.info(
+        "cloning advisory repository %s at %s (sparse: %s)",
+        credentials.git_repo,
+        gitlab.DEFAULT_BRANCH,
+        ", ".join(sparse_dirs),
+    )
     repo_root = gitlab.clone_project_sparse(
         credentials.git_repo,
         gitlab.DEFAULT_BRANCH,
@@ -69,6 +101,7 @@ def _clone_advisory_repo(
         stderr_path=stderr_path,
     )
     advisory_base = repo_root / "data" / "advisories" / origin
+    logger.info("cloned advisory repository to %s", repo_root)
     return repo_root, advisory_base
 
 
@@ -166,9 +199,9 @@ def _write_initial_content_file(
     return content_file
 
 
-def _customer_portal_url(url_prefix: str, errata_type: str, errata_name: str) -> str:
-    # Errata name is metadata.name or portal id "YYYY:NNNN" depending on caller path.
-    return f"{url_prefix}/{errata_type}-{errata_name}"
+def _customer_portal_url(url_prefix: str, advisory_type: str, advisory_name: str) -> str:
+    # Advisory name is metadata.name or portal id "YYYY:NNNN" depending on caller path.
+    return f"{url_prefix}/{advisory_type}-{advisory_name}"
 
 
 def _write_success_results(
@@ -180,6 +213,11 @@ def _write_success_results(
     result_paths["result"].write_text("Success", encoding="utf-8")
     result_paths["advisory_url"].write_text(customer_portal_url, encoding="utf-8")
     result_paths["advisory_internal_url"].write_text(gitlab_raw_url, encoding="utf-8")
+    logger.info(
+        "wrote advisory results portal=%s internal=%s",
+        customer_portal_url,
+        gitlab_raw_url,
+    )
 
 
 def _finish_if_all_content_already_published(
@@ -206,7 +244,14 @@ def _finish_if_all_content_already_published(
 
     # Newest advisories first (by directory mtime). For each, drop rows already
     # published there; stop early if nothing remains to release.
-    for year_num_subdir in advisory_data.list_existing_advisory_subdirs(advisory_base):
+    existing_subdirs = advisory_data.list_existing_advisory_subdirs(advisory_base)
+    logger.info(
+        "checking whether advisory content is already published by walking "
+        "%d existing advisories under %s",
+        len(existing_subdirs),
+        advisory_base,
+    )
+    for year_num_subdir in existing_subdirs:
         candidate_yaml = advisory_base / year_num_subdir / "advisory.yaml"
         yaml_doc = advisory_data.load_advisory_yaml(candidate_yaml)
         existing_rows = advisory_data.spec_content_array_from_advisory_yaml(
@@ -243,15 +288,22 @@ def _finish_if_all_content_already_published(
                 raise RuntimeError(msg)
             published_path = repo_root / latest_advisory_file
             published_doc = advisory_data.load_advisory_yaml(published_path)
-            errata_type = advisory_data.get_advisory_spec_type(published_doc)
-            errata_name = advisory_data.get_advisory_metadata_name(published_doc)
+            advisory_type = advisory_data.get_advisory_spec_type(published_doc)
+            advisory_name = advisory_data.get_advisory_metadata_name(published_doc)
             _write_success_results(
                 result_paths,
-                customer_portal_url=_customer_portal_url(url_prefix, errata_type, errata_name),
+                customer_portal_url=_customer_portal_url(
+                    url_prefix, advisory_type, advisory_name
+                ),
                 gitlab_raw_url=gitlab.raw_file_url(git_repo, latest_advisory_file),
+            )
+            logger.info(
+                "all advisory content already published in %s",
+                latest_advisory_file,
             )
             return True
 
+    logger.info("advisory content is not fully published yet; continuing")
     return False
 
 
@@ -291,6 +343,7 @@ def _build_merged_advisory_with_signing_key(
     *,
     stderr_path: Path,
 ) -> dict[str, Any]:
+    logger.info("building advisory payload and reading signing key from %s", config_map_name)
     # Deep copy so we never mutate the `decoded` dict held by the caller.
     merged = json.loads(json.dumps(decoded))
     merged_content_rows = json.loads(content_file.read_text(encoding="utf-8"))
@@ -314,6 +367,7 @@ def _resolve_live_id_number(
     # Caller may pre-assign live_id; otherwise reserve the next number from Errata Tool.
     live_id_param = decoded.get("live_id")
     if live_id_param is None:
+        logger.info("reserving a new Errata live_id")
         errata_api = authentication.read_mounted_text(errata_mount, "errata_api")
         return _reserve_errata_live_id(
             errata_api,
@@ -321,6 +375,7 @@ def _resolve_live_id_number(
             stderr_path=stderr_path,
             krb5_template=krb5_template,
         )
+    logger.info("using pre-assigned live_id %s", live_id_param)
     return int(live_id_param)
 
 
@@ -358,6 +413,12 @@ def _render_and_validate_advisory_yaml(
     """Apply the Jinja template, validate schema, return repo-relative YAML path."""
     rendered_json_path = new_advisory_dir / "advisory.json"
     new_advisory_yaml_path = new_advisory_dir / "advisory.yaml"
+    logger.info(
+        "rendering advisory.yaml from %s for portal id %s into %s",
+        ADVISORY_TEMPLATE_PATH,
+        portal_advisory_id,
+        new_advisory_yaml_path,
+    )
 
     # Template expects a wrapped shape and portal id like "2025:1602" (year + live id).
     wrapped_advisory = advisory_data.template_data_for_apply(merged)
@@ -392,28 +453,605 @@ def _render_and_validate_advisory_yaml(
             fh.write(message)
         raise ValueError(f"schema validation failed for {new_advisory_yaml_path}") from err
 
-    return new_advisory_yaml_path.relative_to(repo_root).as_posix()
+    yaml_repo_path = new_advisory_yaml_path.relative_to(repo_root).as_posix()
+    logger.info("validated advisory yaml at %s", yaml_repo_path)
+    return yaml_repo_path
 
 
-def _commit_and_push_new_advisory(
+def _advisory_source_branch(origin: str, content_file: Path) -> str:
+    """Return a stable branch name from *origin* and remaining advisory content."""
+    digest = hashlib.sha256(
+        content_file.read_text(encoding="utf-8").strip().encode("utf-8")
+    ).hexdigest()[:12]
+    safe_origin = re.sub(r"[^a-zA-Z0-9-]", "-", origin).strip("-")
+    branch = f"konflux-advisory-{safe_origin}-{digest}"
+    return branch[:255]
+
+
+def _advisory_merge_request_title(
+    component_group: str,
+    internal_request_pr_name: str,
+) -> str:
+    """Build the MR title for a new advisory."""
+    return (
+        f"[Konflux Release] new advisory for {component_group} "
+        f"({internal_request_pr_name})"
+    )
+
+
+def _advisory_merge_request_description(
+    component_group: str,
+    internal_request_pr_name: str,
+    task_run_name: str,
+) -> str:
+    """Build the MR description for a new advisory."""
+    return (
+        f"Konflux advisory creation for {component_group}.\n\n"
+        f"PipelineRun: {internal_request_pr_name}\n"
+        f"TaskRun: {task_run_name}\n"
+    )
+
+
+def _advisory_yaml_path_from_merge_request(merge_request: Any) -> str | None:
+    """Return the repo-relative advisory YAML path from MR changes, if any."""
+    changes = merge_request.changes()
+    for change in changes.get("changes", []):
+        new_path = change.get("new_path") or ""
+        if new_path.endswith("/advisory.yaml") and "data/advisories/" in new_path:
+            return new_path
+    return None
+
+
+def _sync_main_and_finish_if_published(
+    *,
+    repo_root: Path,
+    work_dir: Path,
+    decoded: dict[str, Any],
+    advisory_base: Path,
+    content_list_path: str,
+    content_type: str,
+    git_repo: str,
+    url_prefix: str,
+    stderr_path: Path,
+    result_paths: dict[str, Path],
+    skip_if_main_sha: str | None = None,
+) -> bool:
+    """Refresh *main* and re-run idempotency after a concurrent merge.
+
+    When *skip_if_main_sha* matches ``origin/main`` after sync, skip the walk —
+    the tree is unchanged since the caller last checked.
+    """
+    git.sync_to_origin_main(repo_root, stderr_path=stderr_path)
+    main_ref = f"origin/{gitlab.DEFAULT_BRANCH}"
+    current_main_sha = git.rev_parse(repo_root, main_ref, stderr_path=stderr_path)
+    if skip_if_main_sha is not None and current_main_sha == skip_if_main_sha:
+        logger.info(
+            "%s unchanged at %s; skipping published-content walk",
+            main_ref,
+            current_main_sha,
+        )
+        return False
+    content_file = _write_initial_content_file(work_dir, decoded, content_list_path)
+    return _finish_if_all_content_already_published(
+        repo_root=repo_root,
+        advisory_base=advisory_base,
+        content_file=content_file,
+        content_list_path=content_list_path,
+        content_type=content_type,
+        git_repo=git_repo,
+        url_prefix=url_prefix,
+        stderr_path=stderr_path,
+        result_paths=result_paths,
+    )
+
+
+def _write_success_from_published_yaml(
     repo_root: Path,
     yaml_repo_path: str,
-    component_group: str,
+    git_repo: str,
+    url_prefix: str,
+    result_paths: dict[str, Path],
     *,
     stderr_path: Path,
 ) -> None:
-    git.commit_and_push(
+    """Load a merged advisory YAML from *main* and write success results."""
+    git.sync_to_origin_main(repo_root, stderr_path=stderr_path)
+    published_doc = advisory_data.load_advisory_yaml(repo_root / yaml_repo_path)
+    advisory_type = advisory_data.get_advisory_spec_type(published_doc)
+    advisory_name = advisory_data.get_advisory_metadata_name(published_doc)
+    _write_success_results(
+        result_paths,
+        customer_portal_url=_customer_portal_url(url_prefix, advisory_type, advisory_name),
+        gitlab_raw_url=gitlab.raw_file_url(git_repo, yaml_repo_path),
+    )
+
+
+def _release_claimed_work(
+    gitlab_client: Gitlab,
+    credentials: gitlab.GitLabCredentials,
+    source_branch: str | None,
+    merge_request: Any | None = None,
+) -> None:
+    """Best-effort cleanup of a claimed branch and optional merge request."""
+    if source_branch is None:
+        return
+
+    if merge_request is None:
+        try:
+            merge_request = gitlab.find_open_merge_request_by_source_branch(
+                gitlab_client,
+                credentials.git_repo,
+                source_branch,
+            )
+        except Exception as exc:
+            logger.warning(
+                "failed to look up merge request for branch %s during cleanup: %s",
+                source_branch,
+                exc,
+                exc_info=True,
+            )
+
+    if merge_request is not None:
+        try:
+            gitlab.cleanup_merge_request_branch(
+                gitlab_client,
+                credentials.git_repo,
+                merge_request,
+                source_branch,
+            )
+        except Exception as exc:
+            logger.warning(
+                "failed to clean up merge request for branch %s: %s",
+                source_branch,
+                exc,
+                exc_info=True,
+            )
+        return
+
+    try:
+        gitlab.delete_remote_branch(
+            gitlab_client,
+            credentials.git_repo,
+            source_branch,
+        )
+    except Exception as exc:
+        logger.warning(
+            "failed to delete claimed branch %s: %s",
+            source_branch,
+            exc,
+            exc_info=True,
+        )
+
+
+def _is_claim_only_branch(
+    repo_root: Path,
+    source_branch: str,
+    *,
+    stderr_path: Path,
+) -> bool:
+    """Return True when *source_branch* still points at the same commit as main."""
+    branch_sha = git.remote_branch_sha(
+        repo_root,
+        source_branch,
+        stderr_path=stderr_path,
+    )
+    if branch_sha is None:
+        return False
+    main_sha = git.remote_branch_sha(
+        repo_root,
+        gitlab.DEFAULT_BRANCH,
+        stderr_path=stderr_path,
+    )
+    if main_sha is None:
+        return False
+    return main_sha == branch_sha
+
+
+def _recover_after_merge_request_wait_timeout(
+    *,
+    gitlab_client: Gitlab,
+    credentials: gitlab.GitLabCredentials,
+    repo_root: Path,
+    work_dir: Path,
+    decoded: dict[str, Any],
+    advisory_base: Path,
+    content_list_path: str,
+    content_type: str,
+    source_branch: str,
+    component_group: str,
+    internal_request_pr_name: str,
+    task_run_name: str,
+    url_prefix: str,
+    stderr_path: Path,
+    result_paths: dict[str, Path],
+) -> bool:
+    """Sync main, rerun idempotency, and join advisory work on *source_branch*.
+
+    Used after an MR wait times out or when the branch could not be claimed.
+    Claim-only branches are deleted; branches with advisory commits get an MR.
+    """
+    if _is_claim_only_branch(
+        repo_root,
+        source_branch,
+        stderr_path=stderr_path,
+    ):
+        _release_claimed_work(
+            gitlab_client,
+            credentials,
+            source_branch,
+        )
+    if _sync_main_and_finish_if_published(
+        repo_root=repo_root,
+        work_dir=work_dir,
+        decoded=decoded,
+        advisory_base=advisory_base,
+        content_list_path=content_list_path,
+        content_type=content_type,
+        git_repo=credentials.git_repo,
+        url_prefix=url_prefix,
+        stderr_path=stderr_path,
+        result_paths=result_paths,
+    ):
+        return True
+    if not git.remote_branch_exists(
+        repo_root,
+        source_branch,
+        stderr_path=stderr_path,
+    ):
+        return False
+    if _is_claim_only_branch(
+        repo_root,
+        source_branch,
+        stderr_path=stderr_path,
+    ):
+        return False
+    merge_request = gitlab.get_or_create_merge_request(
+        gitlab_client,
+        credentials.git_repo,
+        source_branch=source_branch,
+        target_branch=gitlab.DEFAULT_BRANCH,
+        title=_advisory_merge_request_title(
+            component_group,
+            internal_request_pr_name,
+        ),
+        description=_advisory_merge_request_description(
+            component_group,
+            internal_request_pr_name,
+            task_run_name,
+        ),
+    )
+    _finish_from_merged_merge_request(
+        gitlab_client=gitlab_client,
+        credentials=credentials,
+        repo_root=repo_root,
+        merge_request=merge_request,
+        source_branch=source_branch,
+        url_prefix=url_prefix,
+        stderr_path=stderr_path,
+        result_paths=result_paths,
+    )
+    return True
+
+
+def _finish_from_merged_merge_request(
+    *,
+    gitlab_client: Gitlab,
+    credentials: gitlab.GitLabCredentials,
+    repo_root: Path,
+    merge_request: Any,
+    source_branch: str,
+    url_prefix: str,
+    stderr_path: Path,
+    result_paths: dict[str, Path],
+    yaml_repo_path: str | None = None,
+    advisory_type: str | None = None,
+    advisory_name: str | None = None,
+) -> str:
+    """Merge *merge_request* and write success only after the YAML is on main.
+
+    Auto-merge can leave the MR open until CI finishes. Do not trust known
+    *advisory_type* / *advisory_name* alone — sync main and require the file.
+    """
+    mr_url = getattr(merge_request, "web_url", None) or str(getattr(merge_request, "iid", "?"))
+    logger.info(
+        "merging advisory merge request %s from branch %s",
+        mr_url,
+        source_branch,
+    )
+    gitlab.push_merge_request_to_main(
+        gitlab_client,
+        credentials.git_repo,
+        merge_request,
+        source_branch,
+        timeout_seconds=_ADVISORY_MR_MERGE_TIMEOUT_SECONDS,
+    )
+    if not gitlab.merge_request_is_merged(merge_request):
+        msg = f"merge request {mr_url} is not merged"
+        err = RuntimeError(msg)
+        raise tekton.CheckStepError("merging the advisory merge request", err) from err
+    if yaml_repo_path is None:
+        yaml_repo_path = _advisory_yaml_path_from_merge_request(merge_request)
+    if yaml_repo_path is None:
+        msg = f"merge request {mr_url} does not contain an advisory.yaml path"
+        err = RuntimeError(msg)
+        raise tekton.CheckStepError("merging the advisory merge request", err) from err
+    # Confirm the advisory landed on main before reporting Success. Known
+    # type/name from this run is not enough while an MR may still be open.
+    git.sync_to_origin_main(repo_root, stderr_path=stderr_path)
+    published_path = repo_root / yaml_repo_path
+    if not published_path.is_file():
+        msg = f"advisory {yaml_repo_path} not found on main after merging {mr_url}"
+        err = RuntimeError(msg)
+        raise tekton.CheckStepError("merging the advisory merge request", err) from err
+    if advisory_type and advisory_name:
+        _write_success_results(
+            result_paths,
+            customer_portal_url=_customer_portal_url(url_prefix, advisory_type, advisory_name),
+            gitlab_raw_url=gitlab.raw_file_url(credentials.git_repo, yaml_repo_path),
+        )
+    else:
+        _write_success_from_published_yaml(
+            repo_root,
+            yaml_repo_path,
+            credentials.git_repo,
+            url_prefix,
+            result_paths,
+            stderr_path=stderr_path,
+        )
+    return yaml_repo_path
+
+
+def _try_finish_via_existing_merge_request(
+    *,
+    gitlab_client: Gitlab,
+    credentials: gitlab.GitLabCredentials,
+    repo_root: Path,
+    work_dir: Path,
+    decoded: dict[str, Any],
+    advisory_base: Path,
+    content_list_path: str,
+    content_type: str,
+    source_branch: str,
+    component_group: str,
+    internal_request_pr_name: str,
+    task_run_name: str,
+    url_prefix: str,
+    stderr_path: Path,
+    result_paths: dict[str, Path],
+) -> bool:
+    """Wait for an in-flight MR when *source_branch* already exists.
+
+    Return True when success results were written from the merged advisory.
+    """
+    logger.info(
+        "checking for an in-flight merge request on branch %s",
+        source_branch,
+    )
+    try:
+        merge_request = gitlab.find_open_merge_request_by_source_branch(
+            gitlab_client,
+            credentials.git_repo,
+            source_branch,
+        )
+    except GitlabError as exc:
+        if gitlab.is_transient_gitlab_error(exc):
+            logger.warning("transient GitLab error while looking up merge request: %s", exc)
+            merge_request = None
+        else:
+            _reraise_gitlab_api_error(exc)
+    branch_exists = git.remote_branch_exists(
+        repo_root,
+        source_branch,
+        stderr_path=stderr_path,
+    )
+    if merge_request is None and not branch_exists:
+        # Fresh create path: the caller already walked main after clone. Concurrent
+        # publishes while we claimed are handled by the post-claim sync check.
+        logger.info(
+            "no open merge request or remote branch %s; continuing",
+            source_branch,
+        )
+        return False
+
+    if merge_request is None:
+        logger.info("waiting for an open merge request on branch %s", source_branch)
+        try:
+            merge_request = gitlab.wait_for_open_merge_request_by_source_branch(
+                gitlab_client,
+                credentials.git_repo,
+                source_branch,
+                timeout_seconds=_ADVISORY_MR_MERGE_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            return _recover_after_merge_request_wait_timeout(
+                gitlab_client=gitlab_client,
+                credentials=credentials,
+                repo_root=repo_root,
+                work_dir=work_dir,
+                decoded=decoded,
+                advisory_base=advisory_base,
+                content_list_path=content_list_path,
+                content_type=content_type,
+                source_branch=source_branch,
+                component_group=component_group,
+                internal_request_pr_name=internal_request_pr_name,
+                task_run_name=task_run_name,
+                url_prefix=url_prefix,
+                stderr_path=stderr_path,
+                result_paths=result_paths,
+            )
+
+    _finish_from_merged_merge_request(
+        gitlab_client=gitlab_client,
+        credentials=credentials,
+        repo_root=repo_root,
+        merge_request=merge_request,
+        source_branch=source_branch,
+        url_prefix=url_prefix,
+        stderr_path=stderr_path,
+        result_paths=result_paths,
+    )
+    return True
+
+
+def _claim_source_branch(
+    repo_root: Path,
+    source_branch: str,
+    *,
+    stderr_path: Path,
+) -> tuple[bool, str | None]:
+    """Create *source_branch* on the remote when no other run owns it yet.
+
+    Return ``(True, claim_commit_sha)`` when this run created the branch.
+    """
+    logger.info("claiming source branch %s", source_branch)
+    logger.info("syncing local clone to origin/%s", gitlab.DEFAULT_BRANCH)
+    git.sync_to_origin_main(repo_root, stderr_path=stderr_path)
+    main_ref = f"origin/{gitlab.DEFAULT_BRANCH}"
+    logger.info("checking out branch %s from %s", source_branch, main_ref)
+    git.checkout(
+        repo_root,
+        source_branch,
+        start_point=main_ref,
+        reset=True,
+        stderr_path=stderr_path,
+    )
+    claim_commit_sha = git.rev_parse(repo_root, "HEAD", stderr_path=stderr_path)
+    logger.info("pushing new branch %s at %s", source_branch, claim_commit_sha)
+    try:
+        git.push_new_branch(repo_root, source_branch, stderr_path=stderr_path)
+    except subprocess.CalledProcessError:
+        if git.remote_branch_exists(
+            repo_root,
+            source_branch,
+            stderr_path=stderr_path,
+        ):
+            logger.info("branch %s already exists on the remote", source_branch)
+            return False, None
+        raise
+    logger.info("claimed branch %s at %s", source_branch, claim_commit_sha)
+    return True, claim_commit_sha
+
+
+def _commit_and_merge_new_advisory(
+    gitlab_client: Gitlab,
+    credentials: gitlab.GitLabCredentials,
+    repo_root: Path,
+    yaml_repo_path: str,
+    source_branch: str,
+    component_group: str,
+    internal_request_pr_name: str,
+    task_run_name: str,
+    url_prefix: str,
+    result_paths: dict[str, Path],
+    *,
+    advisory_type: str,
+    advisory_name: str,
+    claim_commit_sha: str | None = None,
+    claim_holder: dict[str, Any] | None = None,
+    stderr_path: Path,
+) -> str:
+    """Commit on *source_branch*, open an MR, and merge it to *main*.
+
+    Return the repo-relative advisory YAML path from the merged MR.
+    """
+    commit_message = f"[Konflux Release] new advisory for {component_group}"
+    logger.info(
+        "committing %s on branch %s",
+        yaml_repo_path,
+        source_branch,
+    )
+    git.checkout(
+        repo_root,
+        source_branch,
+        stderr_path=stderr_path,
+    )
+    git.index_add_commit(
         repo_root,
         [yaml_repo_path],
-        f"[Konflux Release] new advisory for {component_group}",
-        gitlab.DEFAULT_BRANCH,
-        retries=5,
+        commit_message,
         stderr_path=stderr_path,
+    )
+    logger.info("pushing branch %s", source_branch)
+    try:
+        git.push(repo_root, source_branch, stderr_path=stderr_path)
+    except subprocess.CalledProcessError as push_error:
+        remote_sha = git.remote_branch_sha(
+            repo_root,
+            source_branch,
+            stderr_path=stderr_path,
+        )
+        if remote_sha is None:
+            raise
+        local_sha = git.rev_parse(repo_root, "HEAD", stderr_path=stderr_path)
+        if claim_commit_sha is not None and remote_sha == claim_commit_sha:
+            raise push_error
+        if remote_sha != local_sha:
+            merge_request = gitlab.wait_for_open_merge_request_by_source_branch(
+                gitlab_client,
+                credentials.git_repo,
+                source_branch,
+                timeout_seconds=_ADVISORY_MR_MERGE_TIMEOUT_SECONDS,
+            )
+            remote_yaml_path = _advisory_yaml_path_from_merge_request(merge_request)
+            if remote_yaml_path is not None and remote_yaml_path != yaml_repo_path:
+                return _finish_from_merged_merge_request(
+                    gitlab_client=gitlab_client,
+                    credentials=credentials,
+                    repo_root=repo_root,
+                    merge_request=merge_request,
+                    source_branch=source_branch,
+                    url_prefix=url_prefix,
+                    stderr_path=stderr_path,
+                    result_paths=result_paths,
+                )
+            if remote_yaml_path != yaml_repo_path:
+                msg = (
+                    f"branch {source_branch} exists but its merge request does not "
+                    f"contain {yaml_repo_path}"
+                )
+                err = RuntimeError(msg)
+                raise tekton.CheckStepError(
+                    "joining the competing advisory merge request",
+                    err,
+                ) from err
+
+    logger.info("creating or reusing merge request for branch %s", source_branch)
+    merge_request = gitlab.get_or_create_merge_request(
+        gitlab_client,
+        credentials.git_repo,
+        source_branch=source_branch,
+        target_branch=gitlab.DEFAULT_BRANCH,
+        title=_advisory_merge_request_title(
+            component_group,
+            internal_request_pr_name,
+        ),
+        description=_advisory_merge_request_description(
+            component_group,
+            internal_request_pr_name,
+            task_run_name,
+        ),
+    )
+    if claim_holder is not None:
+        claim_holder["merge_request"] = merge_request
+    return _finish_from_merged_merge_request(
+        gitlab_client=gitlab_client,
+        credentials=credentials,
+        repo_root=repo_root,
+        merge_request=merge_request,
+        source_branch=source_branch,
+        url_prefix=url_prefix,
+        stderr_path=stderr_path,
+        result_paths=result_paths,
+        yaml_repo_path=yaml_repo_path,
+        advisory_type=advisory_type,
+        advisory_name=advisory_name,
     )
 
 
 def _create_new_advisory(
     *,
+    gitlab_client: Gitlab,
     credentials: gitlab.GitLabCredentials,
     repo_root: Path,
     advisory_base: Path,
@@ -423,13 +1061,22 @@ def _create_new_advisory(
     advisory_number_segment: str,
     portal_advisory_id: str,
     ship_date: str,
+    source_branch: str,
     url_prefix: str,
     work_dir: Path,
     stderr_path: Path,
     result_paths: dict[str, Path],
     params: dict[str, str],
+    claim_commit_sha: str | None = None,
+    claim_holder: dict[str, Any] | None = None,
 ) -> None:
     new_advisory_dir = advisory_base / year / advisory_number_segment
+    logger.info(
+        "creating new advisory %s in %s on branch %s",
+        portal_advisory_id,
+        new_advisory_dir,
+        source_branch,
+    )
     new_advisory_dir.mkdir(parents=True, exist_ok=True)
 
     yaml_repo_path = _render_and_validate_advisory_yaml(
@@ -441,20 +1088,26 @@ def _create_new_advisory(
         work_dir=work_dir,
         stderr_path=stderr_path,
     )
-    _commit_and_push_new_advisory(
+    advisory_type = str(merged.get("type") or decoded.get("type") or "")
+    if not advisory_type:
+        msg = "advisory type is required to build the customer portal URL"
+        raise ValueError(msg)
+    _commit_and_merge_new_advisory(
+        gitlab_client,
+        credentials,
         repo_root,
         yaml_repo_path,
+        source_branch,
         params["component_group"],
-        stderr_path=stderr_path,
-    )
-
-    advisory_type = str(decoded.get("type", ""))
-    _write_success_results(
+        params["internal_request_pr_name"],
+        params["task_run_name"],
+        url_prefix,
         result_paths,
-        customer_portal_url=_customer_portal_url(
-            url_prefix, advisory_type, portal_advisory_id
-        ),
-        gitlab_raw_url=gitlab.raw_file_url(credentials.git_repo, yaml_repo_path),
+        advisory_type=advisory_type,
+        advisory_name=portal_advisory_id,
+        claim_commit_sha=claim_commit_sha,
+        claim_holder=claim_holder,
+        stderr_path=stderr_path,
     )
 
 
@@ -469,6 +1122,11 @@ def run_create_advisory(
     krb5_template: Path = Path("/etc/krb5.conf"),
 ) -> None:
     """Run the full workflow. Raises on failure; `main` maps exceptions to result files."""
+    logger.info(
+        "create advisory workflow starting for origin=%s content_type=%s",
+        params["origin"],
+        params["content_type"],
+    )
     credentials = gitlab.read_credentials_from_mount(advisory_secret)
     # Internal-request child results are written before work begins so partial runs
     # still expose pipeline/task run names to the parent.
@@ -481,6 +1139,8 @@ def run_create_advisory(
     gitlab.configure_git_oauth2_auth(credentials.access_token)
 
     work_dir = Path(tempfile.mkdtemp(prefix="create-advisory-"))
+    claim_holder: dict[str, Any] = {"branch": None, "merge_request": None}
+    gitlab_client: Gitlab | None = None
     try:
         # Dotted path into decoded JSON / advisory YAML spec (e.g. `.content.images`).
         content_list_path = advisory_data.spec_content_json_pointer(params["content_type"])
@@ -491,11 +1151,20 @@ def run_create_advisory(
             stderr_path=stderr_path,
         )
         content_file = _write_initial_content_file(work_dir, decoded, content_list_path)
+        logger.info("wrote advisory content file %s", content_file)
 
         ship_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         year = ship_date.split("-", 1)[0]
         url_prefix = advisory_data.advisory_url_prefix(credentials.git_repo)
 
+        # Capture origin/main before the walk. A concurrent advisory may merge
+        # during or after this inspection; the post-claim sync must see that SHA
+        # change and walk again instead of treating main as already checked.
+        checked_main_sha = git.rev_parse(
+            repo_root,
+            f"origin/{gitlab.DEFAULT_BRANCH}",
+            stderr_path=stderr_path,
+        )
         # Idempotency: skip create when every content row is already on an advisory.
         if _finish_if_all_content_already_published(
             repo_root=repo_root,
@@ -510,6 +1179,32 @@ def run_create_advisory(
         ):
             return
 
+        logger.info(
+            "connecting to GitLab API at %s",
+            gitlab.normalize_gitlab_url(credentials.gitlab_host),
+        )
+        gitlab_client = gitlab.client_from_credentials(credentials)
+        source_branch = _advisory_source_branch(params["origin"], content_file)
+        logger.info("using advisory source branch %s", source_branch)
+        if _try_finish_via_existing_merge_request(
+            gitlab_client=gitlab_client,
+            credentials=credentials,
+            repo_root=repo_root,
+            work_dir=work_dir,
+            decoded=decoded,
+            advisory_base=advisory_base,
+            content_list_path=content_list_path,
+            content_type=params["content_type"],
+            source_branch=source_branch,
+            component_group=params["component_group"],
+            internal_request_pr_name=params["internal_request_pr_name"],
+            task_run_name=params["task_run_name"],
+            url_prefix=url_prefix,
+            stderr_path=stderr_path,
+            result_paths=result_paths,
+        ):
+            logger.info("finished from an existing advisory merge request")
+            return
         merged = _build_merged_advisory_with_signing_key(
             decoded,
             content_file,
@@ -517,6 +1212,57 @@ def run_create_advisory(
             params["config_map_name"],
             stderr_path=stderr_path,
         )
+        claimed, claim_commit_sha = _claim_source_branch(
+            repo_root,
+            source_branch,
+            stderr_path=stderr_path,
+        )
+        if not claimed:
+            if _recover_after_merge_request_wait_timeout(
+                gitlab_client=gitlab_client,
+                credentials=credentials,
+                repo_root=repo_root,
+                work_dir=work_dir,
+                decoded=decoded,
+                advisory_base=advisory_base,
+                content_list_path=content_list_path,
+                content_type=params["content_type"],
+                source_branch=source_branch,
+                component_group=params["component_group"],
+                internal_request_pr_name=params["internal_request_pr_name"],
+                task_run_name=params["task_run_name"],
+                url_prefix=url_prefix,
+                stderr_path=stderr_path,
+                result_paths=result_paths,
+            ):
+                return
+            msg = (
+                f"could not claim branch {source_branch} and no merge request "
+                "is in progress"
+            )
+            err = RuntimeError(msg)
+            raise tekton.CheckStepError("claiming the advisory source branch", err) from err
+        claim_holder["branch"] = source_branch
+        if _sync_main_and_finish_if_published(
+            repo_root=repo_root,
+            work_dir=work_dir,
+            decoded=decoded,
+            advisory_base=advisory_base,
+            content_list_path=content_list_path,
+            content_type=params["content_type"],
+            git_repo=credentials.git_repo,
+            url_prefix=url_prefix,
+            stderr_path=stderr_path,
+            result_paths=result_paths,
+            skip_if_main_sha=checked_main_sha,
+        ):
+            _release_claimed_work(
+                gitlab_client,
+                credentials,
+                claim_holder["branch"],
+            )
+            claim_holder["branch"] = None
+            return
         # Reserve only after idempotency check — avoids consuming Errata ids on no-ops.
         live_num = _resolve_live_id_number(
             decoded,
@@ -535,8 +1281,10 @@ def run_create_advisory(
             stderr_path=stderr_path,
         )
         portal_advisory_id = f"{year}:{advisory_number_segment}"
+        logger.info("reserved advisory number %s", portal_advisory_id)
 
         _create_new_advisory(
+            gitlab_client=gitlab_client,
             credentials=credentials,
             repo_root=repo_root,
             advisory_base=advisory_base,
@@ -546,13 +1294,28 @@ def run_create_advisory(
             advisory_number_segment=advisory_number_segment,
             portal_advisory_id=portal_advisory_id,
             ship_date=ship_date,
+            source_branch=source_branch,
             url_prefix=url_prefix,
             work_dir=work_dir,
             stderr_path=stderr_path,
             result_paths=result_paths,
             params=params,
+            claim_commit_sha=claim_commit_sha,
+            claim_holder=claim_holder,
         )
+        claim_holder["branch"] = None
+        claim_holder["merge_request"] = None
+        logger.info("create advisory workflow completed successfully")
     finally:
+        if gitlab_client is not None and (
+            claim_holder.get("branch") or claim_holder.get("merge_request")
+        ):
+            _release_claimed_work(
+                gitlab_client,
+                credentials,
+                claim_holder.get("branch"),
+                claim_holder.get("merge_request"),
+            )
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
@@ -596,13 +1359,14 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     program_basename = str(Path((argv or sys.argv)[0]).name)
-    # Subprocess/git failures append here; on error the tail is copied into RESULT_RESULT.
-    command_log_path = Path("/tmp/create_advisory_command_log.txt")
+    command_log_path = _COMMAND_LOG_PATH
     command_log_path.write_text("", encoding="utf-8")
 
     # Placeholders so error handlers can always overwrite URL result files.
     path_advisory_url.write_text("", encoding="utf-8")
     path_advisory_internal_url.write_text("", encoding="utf-8")
+
+    logger.info("create advisory task starting")
 
     try:
         # ADVISORY_JSON may be gzip+base64 from the parent pipeline (see advisory_data).
@@ -620,16 +1384,41 @@ def main(argv: list[str] | None = None) -> int:
             decoded=decoded,
         )
     except Exception as e:
+        logger.error(
+            "create advisory workflow failed: %s",
+            e,
+            exc_info=True,
+        )
+        # Best-effort: never let log inspection block writing RESULT_RESULT.
+        failure_command_log: Path | None = command_log_path
+        try:
+            if command_log_path.is_file():
+                log_lines = command_log_path.read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                ).splitlines()
+                if log_lines:
+                    logger.error(
+                        "recent command output:\n%s",
+                        "\n".join(log_lines[-20:]),
+                    )
+        except OSError as log_error:
+            logger.error(
+                "failed to read command log %s: %s",
+                command_log_path,
+                log_error,
+            )
+            failure_command_log = None
         tekton.write_failure_result(
             path_step_result,
             program_basename,
             e,
-            command_log_path=command_log_path,
+            command_log_path=failure_command_log,
             workflow_action="running the advisory workflow",
         )
     # Tekton step succeeds; operators read failure detail from RESULT_RESULT.
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())

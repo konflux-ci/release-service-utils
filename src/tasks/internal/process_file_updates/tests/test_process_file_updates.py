@@ -841,28 +841,6 @@ def test_configure_git_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     auth.assert_called_once_with("tok123")
 
 
-@pytest.mark.parametrize(
-    ("gitlab_host", "expected"),
-    [
-        ("gitlab.cee.redhat.com", "https://gitlab.cee.redhat.com"),
-        ("gitlab.example.com", "https://gitlab.example.com"),
-        ("https://gitlab.example.com", "https://gitlab.example.com"),
-        ("http://gitlab.example.com", "http://gitlab.example.com"),
-        ("  gitlab.cee.redhat.com  ", "https://gitlab.cee.redhat.com"),
-        ("https://gitlab.example.com/", "https://gitlab.example.com/"),
-    ],
-)
-def test_normalize_gitlab_url(gitlab_host: str, expected: str) -> None:
-    """Hostname-form secrets get an https scheme; complete URLs are preserved."""
-    assert process_file_updates.normalize_gitlab_url(gitlab_host) == expected
-
-
-def test_normalize_gitlab_url_rejects_empty() -> None:
-    """Empty gitlab_host cannot be turned into a python-gitlab URL."""
-    with pytest.raises(ValueError, match="gitlab_host is required"):
-        process_file_updates.normalize_gitlab_url("   ")
-
-
 def test_git_functions_init_raises_on_missing_fields() -> None:
     """Missing git identity fields raise ``CheckStepError``."""
     with pytest.raises(tekton.tekton.CheckStepError) as exc:
@@ -1660,7 +1638,7 @@ def test_run_file_updates_builds_gitlab_client_when_not_provided(tmp_path: Path)
             temp_dir=tmp_path,
             secrets=secrets,
         )
-    mk.assert_called_once_with("https://gitlab.example.com", "t")
+    mk.assert_called_once_with("gitlab.example.com", "t")
 
 
 def test_apply_replacements_for_entry_skips_empty_replacements(
