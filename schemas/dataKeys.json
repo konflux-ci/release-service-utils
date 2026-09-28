@@ -405,6 +405,10 @@
         "workerCount": {
           "type": "integer",
           "description": "The value to use as the WORKERS parameter in the verify-conforma task"
+        },
+        "effectiveTime": {
+          "type": "string",
+          "description": "The value to use as the EFFECTIVE_TIME parameter in the verify-conforma task"
         }
       }
     },
