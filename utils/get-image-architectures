@@ -88,9 +88,8 @@ else
     # Normalize entries that are OCI artifacts or otherwise carry no platform.
     # Some image indexes (e.g. disk-image artifacts built with `buildah manifest
     # add --artifact`) reference child manifests that expose `artifactType` and
-    # have no `platform` field. Default those to linux/amd64 so downstream
-    # consumers always receive a populated `platform`, matching the behaviour of
-    # the top-level OCI-artifact branch above.
+    # have no `platform` field. Default those to linux/amd64, matching the
+    # existing top-level OCI-artifact fallback.
     manifests=$(jq '
         .manifests[] += {multiarch: true}
         | .manifests |= map(
@@ -102,23 +101,28 @@ else
             else . end
         )
     ' <<< "$RAW_OUTPUT")
-    # Deduplicate: when an image index contains both gzip and zstd:chunked
-    # manifests per architecture (dual-compression), keep only the non-zstd
-    # entry per (architecture, os). If all entries for a platform are zstd,
-    # keep the first one so the error surfaces downstream rather than
+    # Deduplicate normal image manifests while preserving artifacts and
+    # manifests with unknown platforms. If all image manifests for a platform
+    # are zstd, keep the first so the error surfaces downstream rather than
     # silently returning nothing.
     # Ref: ADR 0070 (konflux-ci/architecture)
     jq -cr '.manifests[]' <<< "$manifests" | jq -cs '
+        def keep_separate:
+            .platform.architecture == null or .platform.os == null or
+            .platform.architecture == "unknown" or .platform.os == "unknown" or
+            .artifactType != null;
         group_by(.platform.architecture + "/" + .platform.os)
         | map(
-            if (.[0].platform.architecture == null or .[0].platform.os == null or
-                .[0].platform.architecture == "unknown" or .[0].platform.os == "unknown")
-            then .[]
-            else
-                (map(select(.annotations["io.github.containers.compression.zstd"] == null)) | .[0])
-                // .[0]
-            end
+            (map(select(keep_separate))) as $separate
+            | (map(select(keep_separate | not))) as $images
+            | $separate + (
+                if ($images | length) == 0 then []
+                else [($images
+                    | (map(select(.annotations["io.github.containers.compression.zstd"] == null)) | .[0])
+                    // $images[0])]
+                end
+            )
         )
-        | .[]
+        | .[][]
     '
 fi

@@ -732,10 +732,7 @@ def test_process_component_missing_platform_defaults_to_amd64() -> None:
     )
 
     # Component was processed without raising KeyError; metadata is populated.
-    assert (
-        component["metadata"]["media_type"]
-        == "application/vnd.oci.image.config.v1+json"
-    )
+    assert component["metadata"]["media_type"] == "application/vnd.oci.image.config.v1+json"
 
 
 def test_process_component_standard_image_metadata() -> None:
