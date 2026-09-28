@@ -391,10 +391,52 @@ def test_wait_for_completion_handles_running_before_success(
     ):
         wait_for_completion(name="ir-1", timeout=600, k8s_api=k8s_api)
 
-    sleep.assert_called_once_with(5)
+    sleep.assert_called_once_with(ir_module.IR_POLL_BASE_SLEEP_SECONDS)
     assert output_path.read_text(encoding="utf-8") == (
         '{"name": "ir-1", "pipelineRun": "pr-1"}\n'
     )
+
+
+def test_wait_for_completion_caps_backoff_at_poll_max_sleep_seconds(
+    tmp_path: Path, k8s_api: mock.MagicMock
+) -> None:
+    """Backoff growth stops at ``poll_max_sleep_seconds`` for long-running IRs."""
+    running_body = {
+        "metadata": {"name": "ir-1"},
+        "status": {
+            "conditions": [{"reason": "Running"}],
+            "pipelineRun": "pr-running",
+        },
+    }
+    succeeded_body = {
+        "metadata": {"name": "ir-1"},
+        "status": {
+            "conditions": [{"reason": "Succeeded"}],
+            "pipelineRun": "pr-1",
+        },
+    }
+    k8s_api.get_namespaced_custom_object.side_effect = [
+        running_body,
+        running_body,
+        running_body,
+        running_body,
+        succeeded_body,
+    ]
+    output_patch, _ = _patch_ir_output_path(tmp_path)
+
+    with (
+        output_patch,
+        mock.patch.object(retry.retry.time, "sleep") as sleep,
+        mock.patch.object(ir_module.time, "time", return_value=0),
+    ):
+        wait_for_completion(
+            name="ir-1",
+            timeout=100_000,
+            k8s_api=k8s_api,
+            poll_max_sleep_seconds=20,
+        )
+
+    assert [call.args[0] for call in sleep.call_args_list] == [5, 10, 20, 20]
 
 
 def test_wait_for_completion_writes_output_json_on_success(

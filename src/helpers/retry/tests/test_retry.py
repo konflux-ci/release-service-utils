@@ -68,3 +68,22 @@ def test_retry_with_exponential_backoff_rejects_zero_attempts() -> None:
     """``max_attempts`` must be at least 1."""
     with pytest.raises(ValueError, match=">= 1"):
         retry.retry_with_exponential_backoff(lambda: None, max_attempts=0)
+
+
+def test_retry_with_exponential_backoff_caps_sleep_at_max_sleep_seconds() -> None:
+    """Backoff growth stops once ``max_sleep_seconds`` is reached."""
+    sleeps: list[float] = []
+
+    def _op() -> None:
+        raise ValueError("still failing")
+
+    with pytest.raises(ValueError, match="still failing"):
+        retry.retry_with_exponential_backoff(
+            _op,
+            max_attempts=6,
+            retry_on=ValueError,
+            base_sleep_seconds=5,
+            max_sleep_seconds=20,
+            sleep_fn=sleeps.append,
+        )
+    assert sleeps == [5, 10, 20, 20, 20]
