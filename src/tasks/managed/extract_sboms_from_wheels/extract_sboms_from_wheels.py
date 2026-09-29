@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Extract Fromager-generated SBOMs from Python wheels.
+"""Extract Red Hat SBOMs from Python wheels.
 
-Walks ``*.whl`` files under a data directory, pulls SBOM files from each
-wheel's ``.dist-info/sboms/`` path, and writes them into ``<data_dir>/sboms``
-for a later Atlas/TPA upload step.
+Walks ``*.whl`` files under a data directory, pulls ``redhat.spdx.json`` from
+each wheel's ``.dist-info/sboms/`` path, and writes it into ``<data_dir>/sboms``
+for a later Atlas/TPA upload step. Other SBOM files in the wheel are ignored:
+only the Red Hat-generated SBOM is known to pass Atlas validation.
 """
 
 from __future__ import annotations
@@ -14,22 +15,20 @@ from pathlib import Path
 from release_service_utils.helpers import file, tekton
 from release_service_utils.helpers.logger import logger
 
-_SBOM_MARKER = ".dist-info/sboms/"
+_SBOM_MEMBER_SUFFIX = ".dist-info/sboms/redhat.spdx.json"
 SBOMS_SUBDIR = "sboms"
 
 
 def _is_sbom_zip_member(name: str) -> bool:
-    """Return True if *name* is a file under ``.dist-info/sboms/``."""
-    if name.endswith("/"):
-        return False
-    return _SBOM_MARKER in name
+    """Return True if *name* is ``redhat.spdx.json`` under ``.dist-info/sboms/``."""
+    return name.endswith(_SBOM_MEMBER_SUFFIX)
 
 
 def extract_sboms_from_wheel(wheel: Path, sboms_dir: Path) -> int:
-    """Extract SBOM files from *wheel* into *sboms_dir*.
+    """Extract ``redhat.spdx.json`` from *wheel* into *sboms_dir*.
 
-    Returns the number of SBOM files written. Wheels with no SBOMs are
-    skipped (count ``0``) after a log message.
+    Returns the number of SBOM files written. Wheels with no matching SBOM
+    are skipped (count ``0``) after a log message.
     """
     wheel_name = wheel.name.removesuffix(".whl")
     with zipfile.ZipFile(wheel) as zf:
@@ -50,11 +49,11 @@ def extract_sboms_from_wheel(wheel: Path, sboms_dir: Path) -> int:
 
 
 def run(data_dir: Path, files_dir: str) -> int:
-    """Extract SBOMs from every wheel under *data_dir* / *files_dir*.
+    """Extract ``redhat.spdx.json`` from every wheel under *data_dir* / *files_dir*.
 
     Writes extracted files to ``data_dir / sboms``. Raises ``ValueError`` if
     *files_dir* is not relative to *data_dir*, and ``RuntimeError`` when no
-    SBOM is found in any wheel.
+    matching SBOM is found in any wheel.
     """
     wheels_dir = file.resolve_path_under_base(data_dir, files_dir)
     sboms_dir = data_dir / SBOMS_SUBDIR

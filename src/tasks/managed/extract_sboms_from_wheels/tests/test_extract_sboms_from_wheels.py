@@ -9,8 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-from release_service_utils.tasks.managed.extract_sboms_from_wheels.extract_sboms_from_wheels import (  # noqa: E501
+from release_service_utils.tasks.managed.extract_sboms_from_wheels import (
     extract_sboms_from_wheel,
     main,
     run,
@@ -48,7 +47,7 @@ def _write_wheel(
 def _wheel_with_sbom(
     wheels_dir: Path,
     name: str = "test_package-1.0.0-py3-none-any.whl",
-    sbom_member: str = "test_package-1.0.0.dist-info/sboms/sbom.spdx.json",
+    sbom_member: str = "test_package-1.0.0.dist-info/sboms/redhat.spdx.json",
     content: str = _SBOM,
 ) -> Path:
     """Create a wheel containing one SBOM file and return its path."""
@@ -67,18 +66,19 @@ def test_extract_sboms_from_wheel_one_sbom(tmp_path: Path) -> None:
     count = extract_sboms_from_wheel(wheel, sboms_dir)
 
     assert count == 1
-    out = sboms_dir / "test_package-1.0.0-py3-none-any-sbom.spdx.json"
+    out = sboms_dir / "test_package-1.0.0-py3-none-any-redhat.spdx.json"
     assert out.read_text(encoding="utf-8") == _SBOM
 
 
-def test_extract_sboms_from_wheel_multiple_sboms(tmp_path: Path) -> None:
-    """Extract every SBOM file from a wheel that contains more than one."""
+def test_extract_sboms_from_wheel_ignores_other_sboms(tmp_path: Path) -> None:
+    """Extract only redhat.spdx.json and leave other SBOM files in the wheel."""
     sboms_dir = tmp_path / "sboms"
     sboms_dir.mkdir()
     wheel = tmp_path / "pkg-1.0-py3-none-any.whl"
     _write_wheel(
         wheel,
         {
+            "pkg-1.0.dist-info/sboms/redhat.spdx.json": _SBOM,
             "pkg-1.0.dist-info/sboms/sbom.spdx.json": _SBOM,
             "pkg-1.0.dist-info/sboms/sbom.cdx.json": '{"bomFormat":"CycloneDX"}',
         },
@@ -86,9 +86,9 @@ def test_extract_sboms_from_wheel_multiple_sboms(tmp_path: Path) -> None:
 
     count = extract_sboms_from_wheel(wheel, sboms_dir)
 
-    assert count == 2
-    assert (sboms_dir / "pkg-1.0-py3-none-any-sbom.spdx.json").is_file()
-    assert (sboms_dir / "pkg-1.0-py3-none-any-sbom.cdx.json").is_file()
+    assert count == 1
+    assert (sboms_dir / "pkg-1.0-py3-none-any-redhat.spdx.json").is_file()
+    assert list(sboms_dir.iterdir()) == [sboms_dir / "pkg-1.0-py3-none-any-redhat.spdx.json"]
 
 
 def test_extract_sboms_from_wheel_skips_directory_entries(tmp_path: Path) -> None:
@@ -98,14 +98,25 @@ def test_extract_sboms_from_wheel_skips_directory_entries(tmp_path: Path) -> Non
     wheel = tmp_path / "pkg-1.0-py3-none-any.whl"
     _write_wheel(
         wheel,
-        members={"pkg-1.0.dist-info/sboms/sbom.spdx.json": _SBOM},
+        members={"pkg-1.0.dist-info/sboms/redhat.spdx.json": _SBOM},
         directory_entries=("pkg-1.0.dist-info/sboms/",),
     )
 
     count = extract_sboms_from_wheel(wheel, sboms_dir)
 
     assert count == 1
-    assert list(sboms_dir.iterdir()) == [sboms_dir / "pkg-1.0-py3-none-any-sbom.spdx.json"]
+    assert list(sboms_dir.iterdir()) == [sboms_dir / "pkg-1.0-py3-none-any-redhat.spdx.json"]
+
+
+def test_extract_sboms_from_wheel_only_non_redhat_sbom(tmp_path: Path) -> None:
+    """Return 0 when the wheel has SBOM files other than redhat.spdx.json."""
+    sboms_dir = tmp_path / "sboms"
+    sboms_dir.mkdir()
+    wheel = tmp_path / "pkg-1.0-py3-none-any.whl"
+    _write_wheel(wheel, {"pkg-1.0.dist-info/sboms/sbom.spdx.json": _SBOM})
+
+    assert extract_sboms_from_wheel(wheel, sboms_dir) == 0
+    assert list(sboms_dir.iterdir()) == []
 
 
 def test_extract_sboms_from_wheel_no_sboms(tmp_path: Path) -> None:
@@ -135,22 +146,18 @@ def test_extract_sboms_from_wheel_ignores_unrelated_paths(tmp_path: Path) -> Non
     assert extract_sboms_from_wheel(wheel, sboms_dir) == 0
 
 
-def test_extract_sboms_from_wheel_nested_sbom(tmp_path: Path) -> None:
-    """Extract an SBOM nested under ``.dist-info/sboms/``."""
+def test_extract_sboms_from_wheel_ignores_nested_redhat_sbom(tmp_path: Path) -> None:
+    """Ignore redhat.spdx.json that is not directly under ``.dist-info/sboms/``."""
     sboms_dir = tmp_path / "sboms"
     sboms_dir.mkdir()
     wheel = tmp_path / "pkg-1.0-py3-none-any.whl"
     _write_wheel(
         wheel,
-        {"pkg-1.0.dist-info/sboms/nested/sbom.spdx.json": _SBOM},
+        {"pkg-1.0.dist-info/sboms/nested/redhat.spdx.json": _SBOM},
     )
 
-    count = extract_sboms_from_wheel(wheel, sboms_dir)
-
-    assert count == 1
-    assert (sboms_dir / "pkg-1.0-py3-none-any-sbom.spdx.json").read_text(
-        encoding="utf-8"
-    ) == _SBOM
+    assert extract_sboms_from_wheel(wheel, sboms_dir) == 0
+    assert list(sboms_dir.iterdir()) == []
 
 
 def test_run_extracts_from_matching_wheels(tmp_path: Path) -> None:
@@ -166,7 +173,7 @@ def test_run_extracts_from_matching_wheels(tmp_path: Path) -> None:
 
     assert found == 1
     sboms = tmp_path / "sboms"
-    assert (sboms / "test_package-1.0.0-py3-none-any-sbom.spdx.json").is_file()
+    assert (sboms / "test_package-1.0.0-py3-none-any-redhat.spdx.json").is_file()
 
 
 def test_run_skips_non_file_whl_paths(tmp_path: Path) -> None:
@@ -254,8 +261,10 @@ def test_main_missing_files_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 def test_dunder_main_invokes_main() -> None:
     """Running the package as a module calls main()."""
     module = "release_service_utils.tasks.managed.extract_sboms_from_wheels"
-    with patch(f"{TASK}.main", return_value=0) as mock_main:
-        with pytest.raises(SystemExit) as exc:
-            runpy.run_module(module, run_name="__main__")
+    with (
+        patch(f"{TASK}.main", return_value=0) as mock_main,
+        pytest.raises(SystemExit) as exc,
+    ):
+        runpy.run_module(module, run_name="__main__")
     assert exc.value.code == 0
     mock_main.assert_called_once_with()
