@@ -145,10 +145,73 @@ If your change adds or removes a key to the data struct, the schema must be upda
 
 When modifying the Dockerfile:
 
+- **SHA-256 verification required**: All binaries downloaded via curl MUST have their SHA-256 checksums verified before installation. This prevents compromised or tampered binaries from being installed. See "Updating Binary Versions and SHA-256 Checksums" section below for the process.
 - **curl `-f` flag**: All `curl` commands that download binaries must include `-f` (fail on HTTP errors). Without it, curl silently succeeds on 404/500 and can save an HTML error page as the "binary".
 - **Sanity checks**: Every binary installed in the Dockerfile (via curl download, multi-stage `COPY`, or gunzip) must have a post-install sanity check. This catches corrupt or wrong-architecture binaries at build time rather than in production.
   - **Compiled binaries**: run `<binary> version`, `<binary> --version`, or `<binary> --help` — whichever the tool supports.
   - **Shell scripts**: use `bash -n <path>` to syntax-check the script without executing it.
+
+### Updating Binary Versions and SHA-256 Checksums
+
+The Dockerfile downloads several binaries (yq, kubectl, opm, glab, gh, syft, kubectl-ka, cosign3, uv, exodus-rsync) over curl and verifies each download's SHA-256 against checksums pinned in the Dockerfile. When bumping a binary's version, you must also update its SHA-256 checksums for all supported architectures.
+
+Use the `scripts/update_binary_shas.py` script to automate this process (requires Python 3.10+, uses only standard library):
+
+```bash
+# Update a single binary to a specific version
+python3 scripts/update_binary_shas.py yq 4.35.0
+
+# Refresh SHA-256s for all binaries at their current versions
+# (useful after manually changing a VERSION ARG)
+python3 scripts/update_binary_shas.py --refresh
+
+# Update all binaries to their latest released versions
+python3 scripts/update_binary_shas.py --all-latest
+```
+
+The script:
+1. Downloads the binary artifact(s) for all supported architectures
+2. Computes SHA-256 checksums
+3. Verifies the computed checksums against the project's official checksums file (when available)
+4. **Automatically updates the Dockerfile** with the new VERSION ARG and SHA-256 values
+
+**After running the script:**
+1. Review the changes with `git diff Dockerfile` to verify the updates
+2. Test the build locally to ensure the new binary downloads and passes its sanity check:
+   ```bash
+   # Build the full image to verify all changes
+   docker build -f Dockerfile .
+   ```
+3. Commit the changes with appropriate commit message (see Commit Message Formatting section)
+
+**When to update checksums:**
+- **Before bumping a binary version**: Use the script to get the new version's checksums
+- **When adding a new binary**: 
+  1. Add a `BinaryMetadata` entry to the script's `BINARIES` dict with the binary's download URL pattern, checksums URL (if available), and supported architectures
+  2. Run the script to generate initial checksums: `python3 scripts/update_binary_shas.py <binary> <version>`
+  3. Update the Dockerfile to include SHA-256 verification using the generated checksums
+  4. All new binaries MUST follow this pattern - no binary should be downloaded without checksum verification
+- **After a security advisory**: Use `--refresh` to verify current checksums haven't changed, or update to a patched version
+- **Regular maintenance**: Use `--all-latest` to see what updates are available (review carefully before applying)
+
+**Security model:**
+
+The script verifies checksums against official sources when available:
+
+- **With official checksums** (yq, kubectl, glab, gh, syft, cosign3, uv):
+  - Downloads the binary and computes SHA-256 locally
+  - Downloads official checksums file from the project's release
+  - Verifies computed SHA matches official SHA
+  - Protects against both corruption and tampering
+
+- **Without official checksums** (opm, kubectl-ka, exodus-rsync):
+  - Downloads the binary and computes SHA-256 locally
+  - **No verification** - the script will warn: `[WARN] No official checksums available, using locally computed SHA-256`
+  - Only protects against corruption (truncated downloads, network errors)
+  - Does not protect against deliberate tampering (compromised release, MITM)
+  - For first-time updates, manually verify these binaries through other means (GPG signatures, build from source, etc.)
+
+Once a SHA is pinned in the Dockerfile, the container build process verifies every download against it, preventing future substitution.
 
 ## Testing
 
