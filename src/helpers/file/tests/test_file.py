@@ -67,6 +67,14 @@ def test_load_json_dict_rejects_non_object(tmp_path: Path) -> None:
         file.load_json_dict(path)
 
 
+def test_load_json_dict_invalid_json_names_the_file(tmp_path: Path) -> None:
+    """Malformed JSON raises `JSONDecodeError` with the file path in the message."""
+    path = tmp_path / "data.json"
+    path.write_text("not json}", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError, match=f"File is not valid JSON: {path}"):
+        file.load_json_dict(path)
+
+
 def test_resolve_path_under_base_relative_file(tmp_path: Path) -> None:
     """A normal relative path resolves under *base*."""
     target = tmp_path / "uid" / "charon.env"
