@@ -5,9 +5,8 @@ from __future__ import annotations
 
 import os
 
-import kubectl
-import tekton
-from logger import logger
+from release_service_utils.helpers import kubectl, tekton
+from release_service_utils.helpers.logger import logger
 
 
 def parse_namespaced_resource(value: str) -> tuple[str, str]:
