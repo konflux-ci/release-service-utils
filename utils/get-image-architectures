@@ -85,21 +85,11 @@ elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.docker.distribu
         '{"platform": {"architecture": $ARGS.named["architecture"], "os": $ARGS.named["os"]}, "digest": $ARGS.named["digest"], "multiarch": false}'
 else
     # Multi arch
-    # Normalize entries that are OCI artifacts or otherwise carry no platform.
-    # Some image indexes (e.g. disk-image artifacts built with `buildah manifest
-    # add --artifact`) reference child manifests that expose `artifactType` and
-    # have no `platform` field. Default those to linux/amd64, matching the
-    # existing top-level OCI-artifact fallback.
+    # Add multiarch metadata, then deduplicate before applying platform defaults.
+    # Some indexes contain platform-less manifests, which must not be grouped
+    # with real linux/amd64 images just because of the fallback below.
     manifests=$(jq '
         .manifests[] += {multiarch: true}
-        | .manifests |= map(
-            if (.platform == null or .artifactType != null)
-            then . + {platform: ((.platform // {}) + {
-                architecture: (.platform.architecture // "amd64"),
-                os: (.platform.os // "linux")
-            })}
-            else . end
-        )
     ' <<< "$RAW_OUTPUT")
     # Deduplicate normal image manifests while preserving artifacts and
     # manifests with unknown platforms. If all image manifests for a platform
@@ -124,5 +114,11 @@ else
             )
         )
         | .[][]
+        | if (.platform == null or .artifactType != null)
+          then . + {platform: ((.platform // {}) + {
+              architecture: (.platform.architecture // "amd64"),
+              os: (.platform.os // "linux")
+          })}
+          else . end
     '
 fi
