@@ -12,49 +12,17 @@ version, which is written to the Tekton result.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from pathlib import Path
 
-from release_service_utils.helpers import skopeo, tekton
+from release_service_utils.helpers import tekton
 from release_service_utils.helpers.file import load_json_dict
 from release_service_utils.helpers.logger import logger
-from release_service_utils.helpers.subprocess_cmd import run_cmd_text
+from release_service_utils.helpers.ocp_version import resolve_ocp_version
 
 PROG = "get_ocp_version.py"
 
 _VERSION_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+$")
-_MULTI_ARCH_MEDIA_TYPES = {
-    "application/vnd.oci.image.index.v1+json",
-    "application/vnd.docker.distribution.manifest.list.v2+json",
-}
-
-
-def _base_name_tag(manifest: dict) -> str:
-    """Return the tag portion of a manifest's base-image annotation.
-
-    The `org.opencontainers.image.base.name` annotation has the form
-    `registry/path:vX.Y`; only the text after the last colon is kept,
-    mirroring the original `cut -d: -f2` behavior.
-    """
-    annotations = manifest.get("annotations") or {}
-    base_name = annotations.get("org.opencontainers.image.base.name") or ""
-    return base_name.rsplit(":", 1)[-1] if base_name else ""
-
-
-def resolve_ocp_version(fbc_fragment: str) -> str:
-    """Return the OCP version tag for *fbc_fragment*, resolving multi-arch images."""
-    manifest = json.loads(skopeo.inspect(fbc_fragment, raw=True, check=True).stdout)
-
-    if manifest.get("mediaType") in _MULTI_ARCH_MEDIA_TYPES:
-        logger.info("  Multiplatform image detected, extracting manifest")
-        arch_output = run_cmd_text(["get-image-architectures", fbc_fragment])
-        platforms = [json.loads(line) for line in arch_output.splitlines() if line.strip()]
-        manifest_image_sha = platforms[0]["digest"]
-        fbc_fragment = f"{fbc_fragment.rsplit('@', 1)[0]}@{manifest_image_sha}"
-        manifest = json.loads(skopeo.inspect(fbc_fragment, raw=True, check=True).stdout)
-
-    return _base_name_tag(manifest)
 
 
 def validate_ocp_versions(snapshot: dict) -> str:
