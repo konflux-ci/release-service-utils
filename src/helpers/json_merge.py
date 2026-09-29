@@ -41,6 +41,34 @@ _MERGE_DEEP_UNION_ARRAYS_PROGRAM = jq.compile("""
     """)
 
 
+# Mirrors the jq from the update-cr-status bash task: objects are
+# merged recursively (jq's ``*``, same as jq_multiply), arrays present on
+# both sides are concatenated with no dedup or sort, and any other type has
+# ``b``'s value win unless it is ``null`` or ``false`` (jq's ``//``), in
+# which case ``a``'s value is kept.
+_MERGE_CONCAT_ARRAYS_PROGRAM = jq.compile("""
+    def merge_result(a; b):
+      # Store current values as $base and get all unique keys from both objects
+      a as $base | b as $new |
+      ($base | keys) + ($new | keys) | unique |
+      # Process each key and build the merged result
+      reduce .[] as $key ({}; . + {($key): (
+        # Case 1: Both values are arrays - concatenate them
+        if ($new[$key] | type == "array") and ($base[$key] | type == "array")
+        then $base[$key] + $new[$key]
+        else
+          # Case 2: Both values are objects - merge them recursively
+          if ($new[$key] | type == "object") and ($base[$key] | type == "object")
+          then $base[$key] * $new[$key]
+          # Case 3: Default - use new value or fall back to base value
+          else $new[$key] // $base[$key]
+          end
+        end
+      )});
+    .[0] as $first | .[1] as $second | merge_result($first; $second)
+    """)
+
+
 def unique_sorted(values: list[Any]) -> list[Any]:
     """Sort ``values`` and drop duplicates, mirroring ``jq``'s ``unique``."""
     return _UNIQUE_PROGRAM.input_value(values).first()
@@ -68,3 +96,14 @@ def merge_deep_union_arrays(a: dict, b: dict) -> dict:
     ``b``'s value is ``None``, in which case ``a``'s value is kept.
     """
     return _MERGE_DEEP_UNION_ARRAYS_PROGRAM.input_value([a, b]).first()
+
+
+def merge_concat_arrays(a: dict, b: dict) -> dict:
+    """Recursively merge two JSON objects, concatenating arrays instead of unioning them.
+
+    Mirrors the jq from the update-cr-status bash task: object values
+    are merged recursively, array values are concatenated with no dedup or
+    sort, and any other type has ``b``'s value win unless it is ``None`` or
+    ``False``, in which case ``a``'s value is kept.
+    """
+    return _MERGE_CONCAT_ARRAYS_PROGRAM.input_value([a, b]).first()
