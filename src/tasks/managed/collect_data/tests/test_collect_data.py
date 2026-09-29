@@ -473,6 +473,37 @@ class TestCollect:
         assert result.pipeline_metadata["org"] == "unknown"
 
     @patch("release_service_utils.tasks.managed.collect_data.collect_data.get_resource_dict")
+    def test_logs_fetched_resources(
+        self,
+        mock_get: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Test fetched CRs and the snapshot spec are written to the log."""
+        mock_get.side_effect = _resource_side_effect
+
+        with caplog.at_level(logging.INFO, logger="release"):
+            collect(
+                release="default/my-release",
+                release_plan="default/my-rp",
+                release_plan_admission="default/my-rpa",
+                release_service_config="default/my-rsc",
+                snapshot="default/my-snap",
+                subdirectory="uid123",
+            )
+
+        logged = caplog.text
+        assert "Release:" in logged
+        assert '"name": "my-release"' in logged
+        assert "ReleasePlan:" in logged
+        assert '"name": "my-rp"' in logged
+        assert "ReleasePlanAdmission:" in logged
+        assert '"name": "my-rpa"' in logged
+        assert "ReleaseServiceConfig:" in logged
+        assert '"name": "my-rsc"' in logged
+        assert "Snapshot spec:" in logged
+        assert '"componentGroup": "myapp"' in logged
+
+    @patch("release_service_utils.tasks.managed.collect_data.collect_data.get_resource_dict")
     def test_disallowed_key_raises(self, mock_get: MagicMock) -> None:
         """Test disallowed key raises."""
 
