@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import verify_access_to_resources
+from release_service_utils.tasks.managed import verify_access_to_resources
 
 
 def test_parse_namespaced_resource_valid() -> None:
@@ -37,7 +37,7 @@ def test_parse_namespaced_resource_empty_name() -> None:
         verify_access_to_resources.parse_namespaced_resource("ns/")
 
 
-@patch("verify_access_to_resources.kubectl.auth_can_i", return_value=True)
+@patch("release_service_utils.helpers.kubectl.auth_can_i", return_value=True)
 def test_run_all_access_granted(mock_auth: MagicMock) -> None:
     """Succeed when all access checks pass without internal services."""
     verify_access_to_resources.run(
@@ -51,7 +51,7 @@ def test_run_all_access_granted(mock_auth: MagicMock) -> None:
     assert mock_auth.call_count == 5
 
 
-@patch("verify_access_to_resources.kubectl.auth_can_i", return_value=True)
+@patch("release_service_utils.helpers.kubectl.auth_can_i", return_value=True)
 def test_run_with_internal_services(mock_auth: MagicMock) -> None:
     """Check internalrequest creation when requireInternalServices is true."""
     verify_access_to_resources.run(
@@ -66,7 +66,7 @@ def test_run_with_internal_services(mock_auth: MagicMock) -> None:
     mock_auth.assert_any_call("create", "internalrequest", namespace="target-ns")
 
 
-@patch("verify_access_to_resources.kubectl.auth_can_i", return_value=True)
+@patch("release_service_utils.helpers.kubectl.auth_can_i", return_value=True)
 def test_run_correct_namespaces(mock_auth: MagicMock) -> None:
     """Verify each resource is checked against the correct namespace."""
     verify_access_to_resources.run(
@@ -95,7 +95,7 @@ def test_run_correct_namespaces(mock_auth: MagicMock) -> None:
     mock_auth.assert_any_call("create", "internalrequest", namespace="target-ns")
 
 
-@patch("verify_access_to_resources.kubectl.auth_can_i")
+@patch("release_service_utils.helpers.kubectl.auth_can_i")
 def test_run_read_denied_raises(mock_auth: MagicMock) -> None:
     """Fail when a resource read check returns False."""
     mock_auth.side_effect = [True, True, False, True, True]
@@ -110,7 +110,7 @@ def test_run_read_denied_raises(mock_auth: MagicMock) -> None:
         )
 
 
-@patch("verify_access_to_resources.kubectl.auth_can_i")
+@patch("release_service_utils.helpers.kubectl.auth_can_i")
 def test_run_internal_request_denied_raises(mock_auth: MagicMock) -> None:
     """Fail when internalrequest creation is denied."""
     mock_auth.side_effect = [True, True, True, True, True, False]
@@ -125,7 +125,7 @@ def test_run_internal_request_denied_raises(mock_auth: MagicMock) -> None:
         )
 
 
-@patch("verify_access_to_resources.kubectl.auth_can_i", return_value=True)
+@patch("release_service_utils.helpers.kubectl.auth_can_i", return_value=True)
 def test_main_success(mock_auth: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
     """Exit zero when all resources are accessible."""
     monkeypatch.setenv("PARAM_RELEASE", "origin-ns/my-release")
@@ -137,7 +137,7 @@ def test_main_success(mock_auth: MagicMock, monkeypatch: pytest.MonkeyPatch) -> 
     assert verify_access_to_resources.main() == 0
 
 
-@patch("verify_access_to_resources.kubectl.auth_can_i", return_value=True)
+@patch("release_service_utils.helpers.kubectl.auth_can_i", return_value=True)
 def test_main_require_internal_services_true(
     mock_auth: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -152,7 +152,7 @@ def test_main_require_internal_services_true(
     assert mock_auth.call_count == 6
 
 
-@patch("verify_access_to_resources.kubectl.auth_can_i", return_value=True)
+@patch("release_service_utils.helpers.kubectl.auth_can_i", return_value=True)
 def test_main_require_internal_services_defaults_to_false(
     mock_auth: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
