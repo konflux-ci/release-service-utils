@@ -206,6 +206,12 @@ def _write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def _log_json(label: str, data: Any) -> None:
+    """Log a JSON document at info level."""
+    logger.info("%s:", label)
+    logger.info("%s", json.dumps(data, indent=2))
+
+
 def collect(
     *,
     release: str,
@@ -218,20 +224,25 @@ def collect(
     """Fetch K8s resources, merge data, and return computed results."""
     ns, name = release.split("/", 1)
     release_json = get_resource_dict("release", ns, name)
+    _log_json("Release", release_json)
 
     ns, name = release_plan.split("/", 1)
     release_plan_json = get_resource_dict("releaseplan", ns, name)
+    _log_json("ReleasePlan", release_plan_json)
 
     ns, name = release_plan_admission.split("/", 1)
     rpa_json = get_resource_dict("releaseplanadmission", ns, name)
+    _log_json("ReleasePlanAdmission", rpa_json)
 
     ns, name = release_service_config.split("/", 1)
     rsc_json = get_resource_dict("releaseserviceconfig", ns, name)
+    _log_json("ReleaseServiceConfig", rsc_json)
 
     logger.info("Fetching Snapshot Spec")
     snapshot_namespace, snapshot_name = snapshot.split("/", 1)
     snapshot_json = get_resource_dict("snapshot", snapshot_namespace, snapshot_name)
     snapshot_spec = transform_snapshot_spec(snapshot_json.get("spec", {}))
+    _log_json("Snapshot spec", snapshot_spec)
 
     labels = snapshot_json.get("metadata", {}).get("labels", {})
     snapshot_build_id = labels.get("appstudio.openshift.io/build-pipelinerun", "")
