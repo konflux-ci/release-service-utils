@@ -43,7 +43,7 @@ from pathlib import Path
 
 from release_service_utils.helpers import authentication
 from release_service_utils.helpers import file as file_utils
-from release_service_utils.helpers import retry
+from release_service_utils.helpers import gssapi_ssh
 
 PROG = "generate_checksums.py"
 
@@ -54,28 +54,6 @@ CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 SHARED_DIR = Path(os.environ.get("SHARED_DIR", "/shared"))
 
 logger = logging.getLogger(__name__)
-
-
-class _SSHConnectionError(Exception):
-    """Transient SSH connection failure (exit code 255)."""
-
-
-def _run_ssh_command(cmd: list[str], *, max_attempts: int = 3) -> None:
-    """Run an SSH/SCP command, retrying on transient connection errors (RC 255)."""
-
-    def _attempt() -> None:
-        result = subprocess.run(cmd, check=False)
-        if result.returncode == 255:
-            logger.warning("SSH connection failed (exit 255), will retry: %s", shlex.join(cmd))
-            raise _SSHConnectionError(f"SSH connection failed (exit 255): {shlex.join(cmd)}")
-        if result.returncode != 0:
-            raise subprocess.CalledProcessError(result.returncode, cmd)
-
-    retry.retry_with_exponential_backoff(
-        _attempt,
-        max_attempts=max_attempts,
-        retry_on=_SSHConnectionError,
-    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -127,22 +105,11 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
 
     _kinit(checksum_user, kerberos_realm, keytab_b64)
 
-    ssh_dir = Path("/tmp/.ssh")
-    ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    known_hosts = ssh_dir / "known_hosts"
-    shutil.copy2(str(CHECKSUM_CREDENTIALS_MOUNT / "fingerprint"), str(known_hosts))
-    known_hosts.chmod(0o600)
-
-    ssh_opts = [
-        "-o",
-        "UserKnownHostsFile=/tmp/.ssh/known_hosts",
-        "-o",
-        "GSSAPIAuthentication=yes",
-        "-o",
-        "GSSAPIDelegateCredentials=yes",
-        "-o",
-        "IdentitiesOnly=yes",
-    ]
+    known_hosts = gssapi_ssh.install_known_hosts(
+        CHECKSUM_CREDENTIALS_MOUNT / "fingerprint",
+        Path("/tmp/.ssh"),
+    )
+    ssh_opts = gssapi_ssh.ssh_options(known_hosts, identities_only=True)
 
     shared_snapshot = SHARED_DIR / "snapshot.json"
     if shared_snapshot.exists():
@@ -193,7 +160,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
     remote_target = f"{checksum_user}@{checksum_host}"
 
     try:
-        _run_ssh_command(
+        gssapi_ssh.run_ssh(
             [
                 "ssh",
                 *ssh_opts,
@@ -201,7 +168,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
                 "mkdir -p " + shlex.quote(remote_checksum_dir),
             ]
         )
-        _run_ssh_command(
+        gssapi_ssh.run_ssh(
             [
                 "scp",
                 *ssh_opts,
@@ -211,7 +178,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
         )
 
         logger.info("Signing merged sha256sum.txt with --clearsign")
-        _run_ssh_command(
+        gssapi_ssh.run_ssh(
             [
                 "ssh",
                 *ssh_opts,
@@ -233,7 +200,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
         )
 
         logger.info("Signing merged sha256sum.txt with --gpgsign")
-        _run_ssh_command(
+        gssapi_ssh.run_ssh(
             [
                 "ssh",
                 *ssh_opts,
@@ -257,7 +224,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
         first_ready_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(sha_sums_path), str(first_ready_dir / "sha256sum.txt"))
 
-        _run_ssh_command(
+        gssapi_ssh.run_ssh(
             [
                 "scp",
                 *ssh_opts,
@@ -266,7 +233,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
             ]
         )
 
-        _run_ssh_command(
+        gssapi_ssh.run_ssh(
             [
                 "scp",
                 *ssh_opts,

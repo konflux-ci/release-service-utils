@@ -12,6 +12,7 @@ __all__ = [
     "extract_artifacts",
     "file",
     "generate_checksums",
+    "gssapi_ssh",
     "http_client",
     "iib",
     "image_ref",
