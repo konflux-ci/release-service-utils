@@ -29,6 +29,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
+      - name: Test get-image-architectures
+        run: bash utils/tests/test_get_image_architectures
       - name: Black Lint
         uses: psf/black@87928e6d6761a4a6d22250e1fee5601b3998086e  # stable
       - name: Setup python environment for flake8 check

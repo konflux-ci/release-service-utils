@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Test platform-less artifact handling and multiarch deduplication.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEST_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEST_DIR"' EXIT
+mkdir -p "$TEST_DIR/bin"
+
+cat > "$TEST_DIR/bin/skopeo" <<'MOCK_SKOPEO'
+#!/usr/bin/env bash
+set -euo pipefail
+cat "$GET_IMAGE_ARCHITECTURES_FIXTURE"
+MOCK_SKOPEO
+chmod +x "$TEST_DIR/bin/skopeo"
+export PATH="$TEST_DIR/bin:$PATH"
+
+cat > "$TEST_DIR/index.json" <<'INDEX'
+{
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    {
+      "digest": "sha256:amd64-gzip",
+      "platform": {"architecture": "amd64", "os": "linux"}
+    },
+    {
+      "digest": "sha256:amd64-zstd",
+      "platform": {"architecture": "amd64", "os": "linux"},
+      "annotations": {"io.github.containers.compression.zstd": "true"}
+    },
+    {
+      "digest": "sha256:arm64",
+      "platform": {"architecture": "arm64", "os": "linux"}
+    },
+    {
+      "digest": "sha256:attestation",
+      "platform": {"architecture": "unknown", "os": "unknown"}
+    },
+    {"digest": "sha256:disk-image-1", "artifactType": "application/example.disk-image"},
+    {"digest": "sha256:disk-image-2", "artifactType": "application/example.disk-image"},
+    {"digest": "sha256:platformless-ordinary"}
+  ]
+}
+INDEX
+
+export GET_IMAGE_ARCHITECTURES_FIXTURE="$TEST_DIR/index.json"
+output=$("$SCRIPT_DIR/../get-image-architectures" example.com/test/index:latest)
+
+assert_manifest() {
+    local digest=$1
+    local architecture=$2
+    local os=$3
+
+    jq -se --arg digest "$digest" --arg architecture "$architecture" --arg os "$os" \
+        'any(.[]; .digest == $digest and .platform.architecture == $architecture and .platform.os == $os)' \
+        <<< "$output" >/dev/null
+}
+
+for digest in sha256:amd64-gzip sha256:arm64 sha256:attestation \
+    sha256:disk-image-1 sha256:disk-image-2 sha256:platformless-ordinary; do
+    jq -se --arg digest "$digest" 'any(.[]; .digest == $digest)' <<< "$output" >/dev/null
+done
+
+assert_manifest sha256:amd64-gzip amd64 linux
+assert_manifest sha256:arm64 arm64 linux
+assert_manifest sha256:attestation unknown unknown
+assert_manifest sha256:disk-image-1 amd64 linux
+assert_manifest sha256:disk-image-2 amd64 linux
+assert_manifest sha256:platformless-ordinary amd64 linux
+
+# The existing dual-compression deduplication must still choose the gzip entry.
+if jq -se 'any(.[]; .digest == "sha256:amd64-zstd")' <<< "$output" >/dev/null; then
+    printf '%s\n' "zstd duplicate was not removed" >&2
+    exit 1
+fi
+
+count=$(jq -s 'length' <<< "$output")
+if [[ "$count" -ne 6 ]]; then
+    printf 'expected 6 manifests after deduplication, got %s\n' "$count" >&2
+    exit 1
+fi
+
+printf '%s\n' "get-image-architectures regression tests passed"
