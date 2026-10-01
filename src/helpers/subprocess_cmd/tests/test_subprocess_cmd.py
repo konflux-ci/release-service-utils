@@ -41,6 +41,33 @@ def test_run_cmd_stderr_path_on_success(tmp_path) -> None:
     assert log.read_text(encoding="utf-8") == ""
 
 
+def test_run_cmd_tees_stderr_to_path_and_console(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """Child stderr is appended to *stderr_path* and copied to the process stderr.
+
+    Matches bash ``2> >(tee -a file >&2)`` so Tekton step logs stay live.
+    """
+    log = tmp_path / "log.txt"
+    subprocess_cmd.run_cmd(
+        ["sh", "-c", "echo live-err >&2"],
+        stderr_path=log,
+        check=True,
+    )
+    assert "live-err" in log.read_text(encoding="utf-8")
+    captured = capfd.readouterr()
+    assert "live-err" in captured.err
+
+
+def test_run_cmd_sets_pythonunbuffered() -> None:
+    """Child processes inherit PYTHONUNBUFFERED so Python wrappers flush logs."""
+    result = subprocess_cmd.run_cmd(
+        ["python3", "-c", "import os; print(os.environ.get('PYTHONUNBUFFERED', ''))"],
+        check=True,
+    )
+    assert result.stdout.strip() == "1"
+
+
 def test_run_cmd_captures_stderr_when_no_path_given() -> None:
     """Stderr is captured in the return value when no stderr_path is provided."""
     r = subprocess_cmd.run_cmd(["sh", "-c", "echo error-msg >&2"], check=True)
