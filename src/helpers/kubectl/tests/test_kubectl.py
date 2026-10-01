@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +12,7 @@ from release_service_utils.helpers.kubectl import (
     ConfigMapNotFoundError,
     auth_can_i,
     get_configmap,
+    patch_resource,
 )
 
 
@@ -155,3 +157,101 @@ def test_auth_can_i_raises_falls_back_to_stdout_when_no_stderr() -> None:
         mock_run.return_value = MagicMock(returncode=1, stdout="some output", stderr="")
         with pytest.raises(RuntimeError, match="some output"):
             auth_can_i("get", "release", name="r", namespace="ns")
+
+
+def test_patch_builds_full_command() -> None:
+    """Build the kubectl patch command with every optional flag."""
+    with patch("release_service_utils.helpers.kubectl.kubectl.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        patch_resource(
+            "release",
+            "my-rel",
+            namespace="ns",
+            patch_file=Path("/tmp/patch.json"),
+            subresource="status",
+            warnings_as_errors=True,
+        )
+
+    mock_run.assert_called_once_with(
+        [
+            "kubectl",
+            "--warnings-as-errors=true",
+            "patch",
+            "release",
+            "-n",
+            "ns",
+            "my-rel",
+            "--type=merge",
+            "--subresource",
+            "status",
+            "--patch-file",
+            "/tmp/patch.json",
+        ],
+        check=False,
+    )
+
+
+def test_patch_minimal_command() -> None:
+    """Omit the optional flags when they are not requested."""
+    with patch("release_service_utils.helpers.kubectl.kubectl.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        patch_resource("release", "my-rel", namespace="ns", patch_file=Path("p.json"))
+
+    mock_run.assert_called_once_with(
+        [
+            "kubectl",
+            "patch",
+            "release",
+            "-n",
+            "ns",
+            "my-rel",
+            "--type=merge",
+            "--patch-file",
+            "p.json",
+        ],
+        check=False,
+    )
+
+
+def test_patch_custom_patch_type() -> None:
+    """Pass a non-default patch type through to --type."""
+    with patch("release_service_utils.helpers.kubectl.kubectl.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        patch_resource(
+            "release",
+            "my-rel",
+            namespace="ns",
+            patch_file=Path("p.json"),
+            patch_type="json",
+        )
+
+    mock_run.assert_called_once_with(
+        [
+            "kubectl",
+            "patch",
+            "release",
+            "-n",
+            "ns",
+            "my-rel",
+            "--type=json",
+            "--patch-file",
+            "p.json",
+        ],
+        check=False,
+    )
+
+
+def test_patch_raises_includes_stderr_in_message() -> None:
+    """Include stderr content in the RuntimeError message."""
+    with patch("release_service_utils.helpers.kubectl.kubectl.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="forbidden")
+        with pytest.raises(RuntimeError, match="forbidden"):
+            patch_resource("release", "my-rel", namespace="ns", patch_file=Path("p.json"))
+
+
+def test_patch_raises_falls_back_to_stdout_when_no_stderr() -> None:
+    """Use stdout in the error message when stderr is empty."""
+    with patch("release_service_utils.helpers.kubectl.kubectl.run_cmd") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="some output", stderr="")
+        with pytest.raises(RuntimeError, match="some output"):
+            patch_resource("release", "r", namespace="ns", patch_file=Path("p.json"))
