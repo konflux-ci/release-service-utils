@@ -630,6 +630,82 @@ def test_run_prepare_duplicate_packages(
         )
 
 
+# --- check_fbc_opt_in retry ---
+
+
+@mock.patch(f"{TASK}.prepare_fbc_parameters.time.sleep")
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.fetch_results")
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.create")
+def test_check_fbc_opt_in_retries_on_failure(
+    mock_ir_create: mock.MagicMock,
+    mock_fetch: mock.MagicMock,
+    mock_sleep: mock.MagicMock,
+) -> None:
+    """Retry on first failure, succeed on second attempt."""
+    mock_ir_create.side_effect = [RuntimeError("transient"), "ir-ok"]
+    mock_fetch.return_value = {
+        "optInResults": json.dumps([{"containerImage": "a", "fbcOptIn": True}]),
+    }
+
+    results = prepare_fbc_parameters.check_fbc_opt_in(
+        ["quay.io/bundle"],
+        "iib-service-account-prod",
+        "production",
+        "http://localhost",
+        "main",
+        "uid-123",
+        "task-uid",
+        max_retries=3,
+        retry_delay_seconds=10,
+    )
+    assert results == [{"containerImage": "a", "fbcOptIn": True}]
+    assert mock_ir_create.call_count == 2
+    mock_sleep.assert_called_once_with(10)
+
+
+@mock.patch(f"{TASK}.prepare_fbc_parameters.time.sleep")
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.create")
+def test_check_fbc_opt_in_exhausts_retries(
+    mock_ir_create: mock.MagicMock,
+    mock_sleep: mock.MagicMock,
+) -> None:
+    """Raise last error after all retry attempts are exhausted."""
+    mock_ir_create.side_effect = RuntimeError("permanent")
+
+    with pytest.raises(RuntimeError, match="permanent"):
+        prepare_fbc_parameters.check_fbc_opt_in(
+            ["quay.io/bundle"],
+            "iib-service-account-prod",
+            "production",
+            "http://localhost",
+            "main",
+            "uid-123",
+            "task-uid",
+            max_retries=2,
+            retry_delay_seconds=5,
+        )
+    assert mock_ir_create.call_count == 2
+    mock_sleep.assert_called_once_with(5)
+
+
+@pytest.mark.parametrize("bad_value", [0, -1])
+def test_check_fbc_opt_in_rejects_non_positive_max_retries(
+    bad_value: int,
+) -> None:
+    """Raise ValueError when max_retries is zero or negative."""
+    with pytest.raises(ValueError, match="max_retries must be >= 1"):
+        prepare_fbc_parameters.check_fbc_opt_in(
+            ["quay.io/bundle"],
+            "iib-service-account-prod",
+            "production",
+            "http://localhost",
+            "main",
+            "uid-123",
+            "task-uid",
+            max_retries=bad_value,
+        )
+
+
 # --- main ---
 
 
