@@ -2,7 +2,7 @@
 
 from .push_artifacts_to_storage import (  # noqa: F401
     DEFAULT_DATA_DIR,
-    RESULTS_DIR,
+    TEMP_DIR,
     ROK_ACCESS_PATH,
     main,
     pull_component_artifacts,
