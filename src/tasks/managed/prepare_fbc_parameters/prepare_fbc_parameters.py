@@ -326,7 +326,7 @@ def run_prepare(
             ValueError("Validation failed"),
         )
 
-    iib_sa = select_iib_service_account(mode == "stagedIndex")
+    iib_sa = select_iib_service_account(mode == "stagedIndex" or pyxis_server == "stage")
     logger.info("IIB service account: %s", iib_sa)
 
     opt_in_results = check_fbc_opt_in(
