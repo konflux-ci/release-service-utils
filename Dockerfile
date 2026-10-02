@@ -189,6 +189,7 @@ RUN ln -s /home/src/tasks/managed/cleanup_workspace/cleanup_workspace.py /home/s
     ln -s /home/src/tasks/managed/extract_checksums_from_image/extract_checksums_from_image.py /home/scripts/python/tasks/managed/extract_checksums_from_image.py && \
     ln -s /home/src/tasks/managed/publish_to_nrrc/publish_to_nrrc.py /home/scripts/python/tasks/managed/publish_to_nrrc.py && \
     ln -s /home/src/tasks/managed/rh_direct_sign_image/rh_direct_sign_image.py /home/scripts/python/tasks/managed/rh_direct_sign_image.py && \
+    ln -s /home/src/tasks/managed/sign_image_cosign_keyless/sign_image_cosign_keyless.py /home/scripts/python/tasks/managed/sign_image_cosign_keyless.py && \
     ln -s /home/src/tasks/managed/direct_sign_index_image/direct_sign_index_image.py /home/scripts/python/tasks/managed/direct_sign_index_image.py && \
     ln -s /home/src/tasks/managed/request_advisory_creation/request_advisory_creation.py /home/scripts/python/tasks/managed/request_advisory_creation.py && \
     ln -s /home/src/tasks/managed/embargo_check/embargo_check.py /home/scripts/python/tasks/managed/embargo_check.py && \
