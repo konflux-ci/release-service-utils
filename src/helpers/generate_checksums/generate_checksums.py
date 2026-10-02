@@ -19,6 +19,10 @@ CLI arguments:
 
 Secret mounts:
   ``CHECKSUM_CREDENTIALS_MOUNT``  (default: ``/mnt/checksum_credentials``)
+    Required files: ``user``, ``host``, ``keytab``, ``fingerprint``
+    Optional files: ``bastion_host``, ``bastion_fingerprint`` — when both contain
+    values, the checksum host is reached via ``ProxyJump`` through the bastion, and
+    both the bastion's and the checksum host's keys are trusted via ``known_hosts``
 
 Other env vars:
   ``AUTHOR``             – release author for rpm-sign (set by task from ``params.author``)
@@ -127,11 +131,57 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
 
     _kinit(checksum_user, kerberos_realm, keytab_b64)
 
+    bastion_host_path = CHECKSUM_CREDENTIALS_MOUNT / "bastion_host"
+    bastion_fingerprint_path = CHECKSUM_CREDENTIALS_MOUNT / "bastion_fingerprint"
+    if bastion_host_path.exists() != bastion_fingerprint_path.exists():
+        raise RuntimeError(
+            "checksum-credentials secret must provide both 'bastion_host' and "
+            "'bastion_fingerprint' together, or neither"
+        )
+    bastion_host = ""
+    bastion_fingerprint = ""
+    if bastion_host_path.exists():
+        bastion_host = bastion_host_path.read_text().strip()
+        bastion_fingerprint = bastion_fingerprint_path.read_text().strip()
+        if not bastion_host or not bastion_fingerprint:
+            raise RuntimeError(
+                "checksum-credentials secret must provide non-empty 'bastion_host' "
+                "and 'bastion_fingerprint' values"
+            )
+
+    known_hosts_content = (CHECKSUM_CREDENTIALS_MOUNT / "fingerprint").read_text().rstrip("\n")
+    if bastion_host:
+        known_hosts_content += "\n" + bastion_fingerprint
+    known_hosts_content += "\n"
+
     ssh_dir = Path("/tmp/.ssh")
     ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     known_hosts = ssh_dir / "known_hosts"
-    shutil.copy2(str(CHECKSUM_CREDENTIALS_MOUNT / "fingerprint"), str(known_hosts))
+    known_hosts.write_text(known_hosts_content)
     known_hosts.chmod(0o600)
+
+    if bastion_host:
+        # ProxyJump's implicit jump-host connection checks the default
+        # UserKnownHostsFile location, so add the required keys there without
+        # replacing trust entries created by other tasks.
+        default_ssh_dir = Path.home() / ".ssh"
+        default_ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        default_known_hosts = default_ssh_dir / "known_hosts"
+        existing_content = (
+            default_known_hosts.read_text() if default_known_hosts.exists() else ""
+        )
+        existing_entries = existing_content.splitlines()
+        entries_to_add = [
+            entry
+            for entry in known_hosts_content.splitlines()
+            if entry not in existing_entries
+        ]
+        if entries_to_add:
+            with default_known_hosts.open("a") as known_hosts_file:
+                if existing_content and not existing_content.endswith("\n"):
+                    known_hosts_file.write("\n")
+                known_hosts_file.write("\n".join(entries_to_add) + "\n")
+        default_known_hosts.chmod(0o600)
 
     ssh_opts = [
         "-o",
@@ -143,6 +193,8 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
         "-o",
         "IdentitiesOnly=yes",
     ]
+    if bastion_host:
+        ssh_opts += ["-o", f"ProxyJump={checksum_user}@{bastion_host}"]
 
     shared_snapshot = SHARED_DIR / "snapshot.json"
     if shared_snapshot.exists():
