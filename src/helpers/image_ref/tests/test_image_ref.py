@@ -34,6 +34,35 @@ def test_split_image_ref_no_digest() -> None:
         image_ref.split_image_ref("quay.io/org/img:latest")
 
 
+def test_split_digest_qualified_ref_valid() -> None:
+    """Accept a nonempty repository plus a 64-hex sha256 digest."""
+    digest = "sha256:" + "a" * 64
+    repo, parsed = image_ref.split_digest_qualified_ref(f"quay.io/org/img:1.0@{digest}")
+    assert repo == "quay.io/org/img:1.0"
+    assert parsed == digest
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "quay.io/org/repo:latest",
+        "quay.io/org/repo@latest",
+        "quay.io/org/repo@sha256:",
+        "quay.io/org/repo@sha256:abc",
+        "quay.io/org/repo@sha256:" + "a" * 63,
+        "quay.io/org/repo@sha256:" + "a" * 65,
+        "@sha256:" + "a" * 64,
+        "repo@junk@sha256:" + "a" * 64,
+        "quay.io/org/repo@junk@sha256:" + "a" * 64,
+        "quay.io/org/repo @sha256:" + "a" * 64,
+    ],
+)
+def test_split_digest_qualified_ref_rejects_malformed(image: str) -> None:
+    """Reject extra '@', whitespace, empty repo, and a digest of the wrong length."""
+    with pytest.raises(ValueError, match="digest-qualified"):
+        image_ref.split_digest_qualified_ref(image)
+
+
 class TestRegistry:
     """Test image_ref.registry()."""
 

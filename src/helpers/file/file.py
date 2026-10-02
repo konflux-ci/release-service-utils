@@ -9,11 +9,13 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
+import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 
 def load_json_dict(path: Path) -> dict[str, Any]:
@@ -26,7 +28,10 @@ def load_json_dict(path: Path) -> dict[str, Any]:
     return data
 
 
+# 64 KiB reads used by ``read_bounded`` and ``decompress_gzip_bounded``.
 _GZIP_READ_CHUNK_SIZE = 64 * 1024
+# Uncompressed ZIP-member cap used by wheel SBOM extraction.
+MAX_SBOM_UNCOMPRESSED_BYTES = 16 * 1024 * 1024
 _ARCHIVE_TYPE = re.compile(r"(gzip compressed data|POSIX tar archive)")
 
 
@@ -81,6 +86,61 @@ def resolve_path_under_base(base: Path, relative: str | Path) -> Path:
     return candidate
 
 
+def contained_regular_files(root: Path, pattern: str = "*") -> list[Path]:
+    """Return regular files under *root* matching *pattern*.
+
+    Rejects symbolic-link entries and any path whose resolved target
+    escapes *root* before callers compare, open, or copy the file.
+    Non-file matches such as directories are skipped.
+    """
+    base = root.resolve()
+    files: list[Path] = []
+    for path in sorted(root.rglob(pattern)):
+        if path.is_symlink() or not path.resolve().is_relative_to(base):
+            raise ValueError(f"source path must stay under {root}: {path}")
+        if path.is_file():
+            files.append(path)
+    return files
+
+
+def swap_directory(
+    source: Path | None,
+    dest: Path,
+    *,
+    remove: bool = False,
+) -> Path | None:
+    """Replace *dest* with *source*.
+
+    Moves the previous *dest* aside first. If putting *source* in place
+    fails, restore that previous directory. When *remove* is false, the
+    caller owns the returned backup and must delete it after a later
+    commit step succeeds. When *remove* is true, delete the previous
+    *dest* after a successful swap. *source* may be None to remove
+    *dest* without putting anything in its place. Rejects a symbolic
+    link or non-directory *dest* so replacement cannot follow an in-tree
+    link and delete unrelated data.
+    """
+    if dest.is_symlink() or (dest.exists() and not dest.is_dir()):
+        raise ValueError(f"destination must be a directory: {dest}")
+    outgoing: Path | None = None
+    if dest.exists():
+        outgoing = Path(tempfile.mkdtemp(prefix=f".{dest.name}-outgoing-", dir=dest.parent))
+        outgoing.rmdir()
+        dest.rename(outgoing)
+    try:
+        if source is not None:
+            source.rename(dest)
+    except OSError:
+        if outgoing is not None and outgoing.exists() and not dest.exists():
+            outgoing.rename(dest)
+        raise
+    if remove:
+        if outgoing is not None:
+            shutil.rmtree(outgoing, ignore_errors=True)
+        return None
+    return outgoing
+
+
 def make_tempfile_path(
     prefix: str,
     data: bytes | None = None,
@@ -110,8 +170,34 @@ def encode_json_gzip_b64(value: Any) -> str:
     return base64.standard_b64encode(gzip.compress(raw)).decode("ascii")
 
 
+def require_zip_member_size(info: zipfile.ZipInfo, *, max_bytes: int) -> None:
+    """Reject a ZIP member whose declared uncompressed size exceeds *max_bytes*."""
+    if info.file_size > max_bytes:
+        raise ValueError(
+            f"ZIP member {info.filename!r} exceeds {max_bytes} uncompressed bytes"
+        )
+
+
+def read_bounded(handle: BinaryIO, *, max_bytes: int) -> bytes:
+    """Read *handle* in ``_GZIP_READ_CHUNK_SIZE`` chunks.
+
+    Reads at most *max_bytes* of output; raises `ValueError` if the
+    size would exceed that limit.
+    """
+    output = bytearray()
+    while True:
+        chunk = handle.read(_GZIP_READ_CHUNK_SIZE)
+        if not chunk:
+            break
+        output.extend(chunk)
+        if len(output) > max_bytes:
+            msg = f"read data exceeds {max_bytes} bytes"
+            raise ValueError(msg)
+    return bytes(output)
+
+
 def decompress_gzip_bounded(data: bytes, *, max_bytes: int) -> bytes:
-    """Decompress gzip *data* in chunks.
+    """Decompress gzip *data* in ``_GZIP_READ_CHUNK_SIZE`` chunks.
 
     Reads at most *max_bytes* of output; raises `ValueError` if the
     decompressed size would exceed that limit (gzip bomb protection).

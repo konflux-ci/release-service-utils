@@ -16,6 +16,12 @@ apply_mapping = apply_mapping_pkg.apply_mapping
 
 TASK = "release_service_utils.tasks.managed.apply_mapping.apply_mapping"
 
+
+def _sha256(prefix: str) -> str:
+    """Return a 64-hex ``sha256:`` digest that starts with *prefix*."""
+    return "sha256:" + prefix.ljust(64, "0")
+
+
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
@@ -665,7 +671,7 @@ def test_extract_manifest_info_oci_version_falls_back_to_labels() -> None:
 def _base_component(**overrides: Any) -> dict:
     component = {
         "name": "comp1",
-        "containerImage": "registry.io/repo@sha256:abcdef1234567890",
+        "containerImage": f"registry.io/repo@{_sha256('abcdef1234567890')}",
         "repositories": [{"url": "registry.io/dest", "tags": ["latest"]}],
     }
     component.update(overrides)
@@ -675,7 +681,7 @@ def _base_component(**overrides: Any) -> dict:
 def test_process_component_invalid_container_image_raises() -> None:
     """A containerImage without a sha256 digest raises ``ValueError``."""
     component = _base_component(containerImage="registry.io/repo:latest")
-    with pytest.raises(ValueError, match="invalid containerImage value"):
+    with pytest.raises(ValueError, match="invalid containerImage value") as exc_info:
         apply_mapping.process_component(
             component,
             default_tags=[],
@@ -688,6 +694,8 @@ def test_process_component_invalid_container_image_raises() -> None:
             get_arch_fn=_fake_get_arch(),
             format_date_fn=_fake_format_date,
         )
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert "digest-qualified" in str(exc_info.value.__cause__)
 
 
 def test_process_component_no_architectures_raises() -> None:
@@ -1199,7 +1207,7 @@ def test_process_component_git_sha_and_short_sha_substitution() -> None:
 def test_process_component_digest_sha_substitution() -> None:
     """digest_sha substitutes the hex digest of the containerImage."""
     component = _base_component(
-        containerImage="registry.io/repo@sha256:123456",
+        containerImage=f"registry.io/repo@{_sha256('123456')}",
         repositories=[{"url": "registry.io/dest", "tags": ["foo-{{ digest_sha }}"]}],
     )
     apply_mapping.process_component(
@@ -1214,7 +1222,7 @@ def test_process_component_digest_sha_substitution() -> None:
         get_arch_fn=_fake_get_arch(),
         format_date_fn=_fake_format_date,
     )
-    assert component["repositories"][0]["tags"] == ["foo-123456"]
+    assert component["repositories"][0]["tags"] == ["foo-" + "123456".ljust(64, "0")]
 
 
 def test_process_component_uses_component_timestamp_format_override() -> None:
@@ -1327,7 +1335,7 @@ def test_process_component_jinja_substitution_multiple_variables() -> None:
         get_arch_fn=_fake_get_arch(),
         format_date_fn=_fake_format_date,
     )
-    assert component["version"] == "def456-abcdef1234567890"
+    assert component["version"] == "def456-" + "abcdef1234567890".ljust(64, "0")
 
 
 def test_process_component_jinja_substitution_oci_version_in_version_field() -> None:
@@ -1433,7 +1441,7 @@ def test_process_component_jinja_substitution_all_substitute_map_variables() -> 
     )
     assert component["unstableFields"]["gitSha"] == "abcdef1234567890"
     assert component["unstableFields"]["gitShortSha"] == "abcdef1"
-    assert component["unstableFields"]["digestSha"] == "abcdef1234567890"
+    assert component["unstableFields"]["digestSha"] == "abcdef1234567890".ljust(64, "0")
     assert component["unstableFields"]["ociVersion"] == "2.0.0"
     assert component["unstableFields"]["buildTimestamp"] == "2024-01-15T10:30:00Z|%Y-%m-%d"
     assert component["unstableFields"]["releaseTimestamp"] == "20250831 12:00:00|%Y-%m-%d"
@@ -1552,12 +1560,12 @@ def test_process_components_additional_tags_label_expands_per_component() -> Non
         "components": [
             _base_component(
                 name="comp1",
-                containerImage="registry.io/repo1@sha256:abcdef1234567890",
+                containerImage=f"registry.io/repo1@{_sha256('abcdef1234567890')}",
                 repositories=[{"url": "repo-a", "tags": []}],
             ),
             _base_component(
                 name="comp2",
-                containerImage="registry.io/repo2@sha256:abcdef1234567890",
+                containerImage=f"registry.io/repo2@{_sha256('abcdef1234567890')}",
                 repositories=[{"url": "repo-b", "tags": []}],
             ),
         ]
@@ -1717,7 +1725,7 @@ def test_apply_mapping_full_merge_writes_snapshot(tmp_path: Path) -> None:
         snapshot_path,
         {
             "components": [
-                {"name": "comp1", "containerImage": "registry.io/repo@sha256:abc123"}
+                {"name": "comp1", "containerImage": f"registry.io/repo@{_sha256('abc123')}"},
             ]
         },
     )
@@ -1758,7 +1766,11 @@ def test_apply_mapping_fail_on_empty_result_false_with_components_does_not_raise
     data_path = tmp_path / "data.json"
     _write_json(
         snapshot_path,
-        {"components": [{"name": "comp1", "containerImage": "registry.io/repo@sha256:abc"}]},
+        {
+            "components": [
+                {"name": "comp1", "containerImage": f"registry.io/repo@{_sha256('abc')}"}
+            ]
+        },
     )
     _write_json(
         data_path,
