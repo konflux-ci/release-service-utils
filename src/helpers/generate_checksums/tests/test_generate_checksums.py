@@ -18,13 +18,23 @@ from release_service_utils.helpers import generate_checksums
 # ---------------------------------------------------------------------------
 
 
-def _setup_checksum_creds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def _setup_checksum_creds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    bastion_host: str | None = None,
+    bastion_fingerprint: str | None = None,
+) -> Path:
     mount = tmp_path / "checksum_creds"
     mount.mkdir()
     (mount / "user").write_text("csuser")
     (mount / "host").write_text("cshost.example.com")
     (mount / "fingerprint").write_text("ssh-rsa AAAA...")
     (mount / "keytab").write_bytes(base64.b64encode(b"fake-keytab"))
+    if bastion_host is not None:
+        (mount / "bastion_host").write_text(bastion_host)
+    if bastion_fingerprint is not None:
+        (mount / "bastion_fingerprint").write_text(bastion_fingerprint)
     monkeypatch.setattr(
         generate_checksums.generate_checksums, "CHECKSUM_CREDENTIALS_MOUNT", mount
     )
@@ -324,6 +334,128 @@ def test_run_cleans_up_remote_dir_on_signing_failure(
     assert any(
         "rm -rf" in " ".join(str(c) for c in cmd) for cmd in cleanup_calls
     ), "remote cleanup rm -rf should have been called"
+
+
+def test_run_adds_proxyjump_and_both_fingerprints_when_bastion_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ProxyJump and both known_hosts entries are set when bastion creds are present."""
+    monkeypatch.setattr(
+        generate_checksums.generate_checksums, "CONTENT_DIR", tmp_path / "artifacts"
+    )
+    monkeypatch.setattr(
+        generate_checksums.generate_checksums, "SHARED_DIR", tmp_path / "shared"
+    )
+    (tmp_path / "shared").mkdir()
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps({"components": [{"name": "prod"}]}))
+    monkeypatch.setenv("AUTHOR", "testuser")
+    monkeypatch.setenv("SIGNING_KEY_NAME", "testkey")
+    _setup_checksum_creds(
+        tmp_path,
+        monkeypatch,
+        bastion_host="bastion.example.com",
+        bastion_fingerprint="ssh-rsa BBBB...",
+    )
+    _patch_checksum_ssh(monkeypatch)
+
+    ready_dir = _make_ready_dir(
+        tmp_path / "artifacts",
+        "prod",
+        {"binary-linux-amd64.tar.gz": b"archive content"},
+    )
+
+    with mock.patch.object(generate_checksums.generate_checksums, "_kinit"):
+        calls = _mock_subprocess_for_run(monkeypatch, ready_dir)
+        generate_checksums.run("IPA.REDHAT.COM", "uid-123")
+
+    assert any(
+        "ProxyJump=csuser@bastion.example.com" in " ".join(str(c) for c in cmd)
+        for cmd in calls
+    ), "ProxyJump option should be present on ssh/scp commands"
+
+    known_hosts_content = Path("/tmp/.ssh/known_hosts").read_text()
+    assert "ssh-rsa AAAA..." in known_hosts_content
+    assert "ssh-rsa BBBB..." in known_hosts_content
+
+
+def test_run_no_proxyjump_when_bastion_not_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No ProxyJump option and only the checksum host's fingerprint when bastion unset."""
+    monkeypatch.setattr(
+        generate_checksums.generate_checksums, "CONTENT_DIR", tmp_path / "artifacts"
+    )
+    monkeypatch.setattr(
+        generate_checksums.generate_checksums, "SHARED_DIR", tmp_path / "shared"
+    )
+    (tmp_path / "shared").mkdir()
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps({"components": [{"name": "prod"}]}))
+    monkeypatch.setenv("AUTHOR", "testuser")
+    monkeypatch.setenv("SIGNING_KEY_NAME", "testkey")
+    _setup_checksum_creds(tmp_path, monkeypatch)
+    _patch_checksum_ssh(monkeypatch)
+
+    ready_dir = _make_ready_dir(
+        tmp_path / "artifacts",
+        "prod",
+        {"binary-linux-amd64.tar.gz": b"archive content"},
+    )
+
+    with mock.patch.object(generate_checksums.generate_checksums, "_kinit"):
+        calls = _mock_subprocess_for_run(monkeypatch, ready_dir)
+        generate_checksums.run("IPA.REDHAT.COM", "uid-123")
+
+    assert not any(
+        "ProxyJump" in " ".join(str(c) for c in cmd) for cmd in calls
+    ), "ProxyJump option should not be present when no bastion is configured"
+
+    known_hosts_content = Path("/tmp/.ssh/known_hosts").read_text()
+    assert "ssh-rsa AAAA..." in known_hosts_content
+    assert "ssh-rsa BBBB..." not in known_hosts_content
+
+
+def test_run_raises_when_bastion_host_without_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RuntimeError is raised when bastion_host is set without bastion_fingerprint."""
+    monkeypatch.setattr(
+        generate_checksums.generate_checksums, "CONTENT_DIR", tmp_path / "artifacts"
+    )
+    monkeypatch.setattr(
+        generate_checksums.generate_checksums, "SHARED_DIR", tmp_path / "shared"
+    )
+    (tmp_path / "shared").mkdir()
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps({"components": [{"name": "prod"}]}))
+    monkeypatch.setenv("AUTHOR", "testuser")
+    monkeypatch.setenv("SIGNING_KEY_NAME", "testkey")
+    _setup_checksum_creds(tmp_path, monkeypatch, bastion_host="bastion.example.com")
+    _patch_checksum_ssh(monkeypatch)
+
+    with mock.patch.object(generate_checksums.generate_checksums, "_kinit"):
+        with pytest.raises(RuntimeError, match="bastion_host.*bastion_fingerprint"):
+            generate_checksums.run("IPA.REDHAT.COM", "uid-123")
+
+
+def test_run_raises_when_bastion_fingerprint_without_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RuntimeError is raised when bastion_fingerprint is set without bastion_host."""
+    monkeypatch.setattr(
+        generate_checksums.generate_checksums, "CONTENT_DIR", tmp_path / "artifacts"
+    )
+    monkeypatch.setattr(
+        generate_checksums.generate_checksums, "SHARED_DIR", tmp_path / "shared"
+    )
+    (tmp_path / "shared").mkdir()
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps({"components": [{"name": "prod"}]}))
+    monkeypatch.setenv("AUTHOR", "testuser")
+    monkeypatch.setenv("SIGNING_KEY_NAME", "testkey")
+    _setup_checksum_creds(tmp_path, monkeypatch, bastion_fingerprint="ssh-rsa BBBB...")
+    _patch_checksum_ssh(monkeypatch)
+
+    with mock.patch.object(generate_checksums.generate_checksums, "_kinit"):
+        with pytest.raises(RuntimeError, match="bastion_host.*bastion_fingerprint"):
+            generate_checksums.run("IPA.REDHAT.COM", "uid-123")
 
 
 # ---------------------------------------------------------------------------
