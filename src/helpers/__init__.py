@@ -29,6 +29,7 @@ __all__ = [
     "redact",
     "release_notes_purl",
     "retry",
+    "retry_safety",
     "sign_mac",
     "sign_windows",
     "skopeo",
