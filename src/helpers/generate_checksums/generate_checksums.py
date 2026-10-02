@@ -19,6 +19,10 @@ CLI arguments:
 
 Secret mounts:
   ``CHECKSUM_CREDENTIALS_MOUNT``  (default: ``/mnt/checksum_credentials``)
+    Required files: ``user``, ``host``, ``keytab``, ``fingerprint``
+    Optional files: ``bastion_host``, ``bastion_fingerprint`` — when both are present,
+    the checksum host is reached via ``ProxyJump`` through the bastion, and both the
+    bastion's and the checksum host's keys are trusted via ``known_hosts``
 
 Other env vars:
   ``AUTHOR``             – release author for rpm-sign (set by task from ``params.author``)
@@ -127,10 +131,22 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
 
     _kinit(checksum_user, kerberos_realm, keytab_b64)
 
+    bastion_host_path = CHECKSUM_CREDENTIALS_MOUNT / "bastion_host"
+    bastion_fingerprint_path = CHECKSUM_CREDENTIALS_MOUNT / "bastion_fingerprint"
+    if bastion_host_path.exists() != bastion_fingerprint_path.exists():
+        raise RuntimeError(
+            "checksum-credentials secret must provide both 'bastion_host' and "
+            "'bastion_fingerprint' together, or neither"
+        )
+    bastion_host = bastion_host_path.read_text().strip() if bastion_host_path.exists() else ""
+
     ssh_dir = Path("/tmp/.ssh")
     ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     known_hosts = ssh_dir / "known_hosts"
-    shutil.copy2(str(CHECKSUM_CREDENTIALS_MOUNT / "fingerprint"), str(known_hosts))
+    known_hosts_content = (CHECKSUM_CREDENTIALS_MOUNT / "fingerprint").read_text().rstrip("\n")
+    if bastion_host:
+        known_hosts_content += "\n" + bastion_fingerprint_path.read_text().rstrip("\n")
+    known_hosts.write_text(known_hosts_content + "\n")
     known_hosts.chmod(0o600)
 
     ssh_opts = [
@@ -143,6 +159,8 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
         "-o",
         "IdentitiesOnly=yes",
     ]
+    if bastion_host:
+        ssh_opts += ["-o", f"ProxyJump={checksum_user}@{bastion_host}"]
 
     shared_snapshot = SHARED_DIR / "snapshot.json"
     if shared_snapshot.exists():
