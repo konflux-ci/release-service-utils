@@ -145,6 +145,17 @@ class TestWriteResultsFile:
         results_file = results_dir / "push-artifacts-results.json"
         assert json.loads(results_file.read_text()) == {"artifacts": []}
 
+    def test_custom_results_filename(self, tmp_path: Path) -> None:
+        """Write the requested filename without creating the default CDN results file."""
+        results_dir = tmp_path / "results"
+        write_results_file(
+            results_dir, ["artifact.zip"], results_file="sign-internal-oci.json"
+        )
+
+        results_file = results_dir / "sign-internal-oci.json"
+        assert json.loads(results_file.read_text()) == {"artifacts": ["artifact.zip"]}
+        assert not (results_dir / "push-artifacts-results.json").exists()
+
     def test_creates_parent_dirs(self, tmp_path: Path) -> None:
         """Test that parent directories are created."""
         results_dir = tmp_path / "deep" / "nested" / "results"
