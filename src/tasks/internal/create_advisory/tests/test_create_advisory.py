@@ -12,9 +12,12 @@ from unittest import mock
 
 import pytest
 import requests
-from release_service_utils.helpers import tekton
+import yaml
+from release_service_utils.helpers import advisory_data, internal_request, tekton
 from release_service_utils.tasks.internal import create_advisory
 from release_service_utils.helpers.vcs import gitlab
+from release_service_utils.tasks.managed import request_advisory_creation
+from release_service_utils.tasks.managed.populate_release_notes import populate_release_notes
 
 TASK = "release_service_utils.tasks.internal.create_advisory"
 
@@ -1389,6 +1392,168 @@ def test_run_create_advisory_happy_path_writes_portal_url(
     url = results["advisory_url"].read_text(encoding="utf-8")
     assert url.startswith("https://access.redhat.com/errata/RHSA-")
     assert url.endswith(":1234")
+
+
+def test_rpm_epoch_survives_advisory_submission_and_rendering(
+    tmp_path: Path, creds: gitlab.GitLabCredentials
+) -> None:
+    """Preserve generated RPM epoch PURLs through both create-advisory tasks and YAML."""
+    data = {
+        "sign": {"configMapName": "signing-config"},
+        "mapping": {"components": [{"name": "bind--main", "contentType": "rpm"}]},
+        "pulp": {"domain": "public-hummingbird"},
+        "signOptions": {"signKeyAlias": {"key": "hummingbird-signing-key"}},
+        "releaseNotes": {
+            "product_id": 123,
+            "product_name": "Hummingbird",
+            "product_version": "1.0",
+            "product_stream": "hummingbird-1.0",
+            "cpe": "cpe:/a:redhat:hummingbird:1.0",
+            "type": "RHSA",
+            "synopsis": "Test synopsis",
+            "topic": "Test topic",
+            "description": "Test description",
+            "solution": "Test solution",
+            "references": ["https://example.com/notes"],
+            "cves": [
+                {"key": "CVE-2026-1234", "component": "bind--main", "packages": ["bind"]}
+            ],
+        },
+    }
+    rpms = []
+    for arch, repo_names in [
+        ("x86_64", ["x86_64"]),
+        ("aarch64", ["aarch64"]),
+        ("noarch", ["x86_64", "aarch64"]),
+        ("x86_64", ["source"]),
+        ("x86_64", []),
+    ]:
+        rpms.append(
+            {
+                "rpmname": "bind",
+                "epoch": "32",
+                "version": "9.20.27",
+                "release": "0.1.hum1",
+                "arch": arch,
+                "distro": "hummingbird",
+                "sbomPath": "sboms/bind.sbom",
+                "attestationPath": "attestations/bind.att",
+                "targetRepos": [
+                    {
+                        "repository_id": f"hbird-{repo_name}-id",
+                        "repository_name": repo_name,
+                        "distro": "hummingbird",
+                    }
+                    for repo_name in repo_names
+                ],
+            }
+        )
+    snapshot = {
+        "componentGroup": "hummingbird",
+        "components": [{"name": "bind--main", "rpmsToPublish": rpms}],
+    }
+    populate_release_notes.populate_artifacts(data, snapshot)
+    artifacts = data["releaseNotes"]["content"]["artifacts"]
+    assert len(artifacts) == 6
+    assert all("&epoch=32&" in artifact["purl"] for artifact in artifacts)
+    (tmp_path / "data.json").write_text(json.dumps(data), encoding="utf-8")
+    (tmp_path / "snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
+    (tmp_path / "rpa.json").write_text(
+        json.dumps({"spec": {"origin": "test-origin"}}), encoding="utf-8"
+    )
+    request_params = request_advisory_creation.TaskParams(
+        data_dir=tmp_path,
+        data_path=Path("data.json"),
+        snapshot_path=Path("snapshot.json"),
+        release_plan_admission_path=Path("rpa.json"),
+        results_dir_path=Path("results"),
+        environment="stage",
+        request_pipeline="create-advisory",
+        synchronously="true",
+        pipeline_run_uid="uid",
+        task_git_url="https://example.com/catalog.git",
+        task_git_revision="main",
+        task_name="create-advisory",
+        checksum_map="",
+        dockerconfig_path=tmp_path / "dockerconfig",
+        advisory_url_result=tmp_path / "request-url",
+        advisory_internal_url_result=tmp_path / "request-internal-url",
+    )
+    with (
+        mock.patch.object(internal_request, "create", return_value="ir-epoch") as submit,
+        mock.patch.object(
+            internal_request, "fetch_results", return_value={"result": "Success"}
+        ),
+    ):
+        request_advisory_creation.run_request_advisory_creation(request_params)
+    submit.assert_called_once()
+    submitted_params = submit.call_args.kwargs["params"]
+    assert submitted_params["contentType"] == "rpm"
+    decoded = advisory_data.decode_advisory_param(submitted_params["advisory_json"])
+    assert decoded["content"]["artifacts"] == artifacts
+    assert json.loads((tmp_path / "data.json").read_text(encoding="utf-8")) == data
+
+    errata = tmp_path / "errata"
+    _write_errata_mount(errata)
+    repo = tmp_path / "repo"
+    schema_dir = repo / "schema"
+    schema_dir.mkdir(parents=True)
+    (schema_dir / "advisory.json").write_text(json.dumps(_catalog_schema()), encoding="utf-8")
+    base = repo / "data" / "advisories" / "test-origin"
+    base.mkdir(parents=True)
+    template = Path(__file__).resolve().parents[5] / "templates" / "advisory.yaml.jinja"
+    results = {
+        "result": tmp_path / "result",
+        "advisory_url": tmp_path / "url",
+        "advisory_internal_url": tmp_path / "internal-url",
+        "internal_pr_name": tmp_path / "pr",
+        "internal_task_run_name": tmp_path / "tr",
+    }
+    with (
+        mock.patch.object(
+            create_advisory.create_advisory.gitlab,
+            "read_credentials_from_mount",
+            return_value=creds,
+        ),
+        mock.patch.object(
+            create_advisory.create_advisory, "_clone_advisory_repo", return_value=(repo, base)
+        ),
+        mock.patch.object(
+            create_advisory.create_advisory.subprocess_cmd,
+            "run_cmd",
+            return_value=mock.MagicMock(stdout=_configmap_signing_key_stdout("fallback-key")),
+        ),
+        mock.patch.object(
+            create_advisory.create_advisory, "_reserve_errata_live_id", return_value=1234
+        ),
+        mock.patch.object(
+            create_advisory.create_advisory.git,
+            "origin_main_has_path_matching",
+            return_value=False,
+        ),
+        mock.patch.object(create_advisory.create_advisory, "ADVISORY_TEMPLATE_PATH", template),
+        mock.patch.object(create_advisory.create_advisory.git, "commit_and_push") as push,
+    ):
+        create_advisory.create_advisory.run_create_advisory(
+            advisory_secret=tmp_path / "gitlab",
+            errata_mount=errata,
+            stderr_path=tmp_path / "e.log",
+            result_paths=results,
+            params={
+                "component_group": submitted_params["componentGroup"],
+                "origin": submitted_params["origin"],
+                "config_map_name": submitted_params["config_map_name"],
+                "content_type": submitted_params["contentType"],
+                "internal_request_pr_name": "pr",
+                "task_run_name": "tr",
+            },
+            decoded=decoded,
+        )
+    assert results["result"].read_text(encoding="utf-8") == "Success"
+    push.assert_called_once()
+    yaml_path = repo / push.call_args.args[1][0]
+    document = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    assert document["spec"]["content"]["artifacts"] == artifacts
 
 
 def test_main_uses_secret_mount_env_overrides(
