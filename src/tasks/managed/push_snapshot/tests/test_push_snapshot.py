@@ -421,7 +421,7 @@ class TestPushImage:
                 ),
                 call(
                     "reg.io/img@sha256:art1",
-                    "prod.io/repo:v1.0",
+                    "prod.io/repo@sha256:art1",
                     from_auth=source_auth,
                     to_auth=dest_file,
                     recursive=False,
@@ -495,7 +495,7 @@ class TestPushImage:
                 ),
                 call(
                     "reg.io/img@sha256:art1",
-                    "prod.io/repo:v1.0",
+                    "prod.io/repo@sha256:art1",
                     from_auth=source_auth,
                     to_auth=dest_file,
                     recursive=False,
@@ -503,6 +503,93 @@ class TestPushImage:
             ]
         )
         assert mock_oras.call_count == 2
+        assert result["url"] == "prod.io/repo:v1.0"
+
+    def test_copies_multiple_artifacts_to_digest_reference(self, tmp_path: Path) -> None:
+        """Copy multiple artifacts to the digest reference to prevent overwrites.
+
+        When multiple artifacts exist, they should be copied to the pushed image's
+        digest reference rather than the tag reference. This prevents each artifact
+        from overwriting the previous one at the tag.
+        """
+        source_auth = tmp_path / "src_auth.json"
+        source_auth.write_text('{"auths":{}}', encoding="utf-8")
+
+        with patch(f"{TASK}.create_dest_auth_file") as mock_dest_auth:
+            dest_file = tmp_path / "dest_auth.json"
+            dest_file.write_text('{"auths":{}}', encoding="utf-8")
+            mock_dest_auth.return_value = dest_file
+
+            resolve_calls = [0]
+
+            def resolve_side_effect(ref, **kwargs):
+                resolve_calls[0] += 1
+                if resolve_calls[0] == 1:
+                    return None
+                return "sha256:pushed123"
+
+            with patch(f"{TASK}.oras_utils.oras_resolve", side_effect=resolve_side_effect):
+                with patch(f"{TASK}.create_combined_docker_config") as mock_config:
+                    config_dir = tmp_path / "docker"
+                    config_dir.mkdir()
+                    (config_dir / "config.json").write_text("{}")
+                    mock_config.return_value = config_dir
+
+                    with patch(
+                        f"{TASK}._discover_artifacts_with_retry",
+                        return_value=[
+                            {
+                                "digest": "sha256:art1",
+                                "artifactType": "application/sarif+json",
+                            },
+                            {
+                                "digest": "sha256:art2",
+                                "artifactType": "application/sarif+json",
+                            },
+                        ],
+                    ):
+                        with patch(f"{TASK}.oras_utils.oras_cp") as mock_oras:
+                            result = push_snapshot.push_image(
+                                push_snapshot.PushJob(
+                                    origin_digest="sha256:abc",
+                                    name="comp1",
+                                    container_image="reg.io/img@sha256:abc",
+                                    repository_url="prod.io/repo",
+                                    tag="v1.0",
+                                    platform="",
+                                    source_auth_file=source_auth,
+                                    retries=0,
+                                    copy_bundle_migrations=True,
+                                )
+                            )
+
+        mock_oras.assert_has_calls(
+            [
+                call(
+                    "reg.io/img@sha256:abc",
+                    "prod.io/repo:v1.0",
+                    from_auth=source_auth,
+                    to_auth=dest_file,
+                    recursive=False,
+                    platform="",
+                ),
+                call(
+                    "reg.io/img@sha256:art1",
+                    "prod.io/repo@sha256:art1",
+                    from_auth=source_auth,
+                    to_auth=dest_file,
+                    recursive=False,
+                ),
+                call(
+                    "reg.io/img@sha256:art2",
+                    "prod.io/repo@sha256:art2",
+                    from_auth=source_auth,
+                    to_auth=dest_file,
+                    recursive=False,
+                ),
+            ]
+        )
+        assert mock_oras.call_count == 3
         assert result["url"] == "prod.io/repo:v1.0"
 
     def test_retries_on_failure(self, tmp_path: Path) -> None:
