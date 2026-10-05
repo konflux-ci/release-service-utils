@@ -379,9 +379,21 @@ def generate_purl_rpm(
     distro: str,
     repository_id: str,
     vendor: str = "redhat",
+    *,
+    epoch: str | int | None = None,
 ) -> str:
-    """Generate an RPM Package URL."""
+    """Generate an RPM Package URL with a qualifier for a nonzero epoch.
+
+    Omit absent or zero epochs to preserve existing PURL identities. Accept
+    epoch as a keyword argument to preserve positional calls, including vendor.
+    """
+    normalized_epoch = int(epoch or 0)
+    if normalized_epoch < 0:
+        raise ValueError("RPM epoch must be non-negative")
+
     purl = f"pkg:rpm/{vendor}/{name}@{version}-{release}?arch={arch}"
+    if normalized_epoch:
+        purl += f"&epoch={normalized_epoch}"
     # Distro and repository_id are only added when non empty.
     if distro:
         purl += f"&distro={distro}"
