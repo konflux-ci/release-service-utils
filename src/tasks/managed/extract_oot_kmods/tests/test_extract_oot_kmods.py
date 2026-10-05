@@ -19,7 +19,6 @@ from release_service_utils.tasks.managed.extract_oot_kmods.extract_oot_kmods imp
     extract_single_arch,
     get_image_architectures,
     main,
-    resolve_arch_name,
     run,
 )
 
@@ -299,50 +298,6 @@ def test_extract_layer_nested_envfile(tmp_path: Path) -> None:
     )
     assert result is True
     assert (dest / "envfile").exists()
-
-
-# -- resolve_arch_name -------------------------------------------------
-
-
-def test_resolve_arch_name_from_envfile(tmp_path: Path) -> None:
-    """ARCH from envfile overrides platform_arch."""
-    (tmp_path / "envfile").write_text("ARCH=x86_64\n")
-    assert resolve_arch_name(tmp_path, "amd64") == "x86_64"
-
-
-def test_resolve_arch_name_multi_platform(tmp_path: Path) -> None:
-    """ARCH=MULTI_PLATFORM falls back to platform_arch."""
-    (tmp_path / "envfile").write_text("ARCH=MULTI_PLATFORM\n")
-    assert resolve_arch_name(tmp_path, "amd64") == "amd64"
-
-
-def test_resolve_arch_name_no_envfile(tmp_path: Path) -> None:
-    """Missing envfile falls back to platform_arch."""
-    assert resolve_arch_name(tmp_path, "arm64") == "arm64"
-
-
-def test_resolve_arch_name_empty_arch(tmp_path: Path) -> None:
-    """Empty ARCH= falls back to platform_arch."""
-    (tmp_path / "envfile").write_text("ARCH=\nOTHER=val\n")
-    assert resolve_arch_name(tmp_path, "ppc64le") == "ppc64le"
-
-
-def test_resolve_arch_name_no_arch_line(tmp_path: Path) -> None:
-    """Envfile without ARCH line falls back to platform_arch."""
-    (tmp_path / "envfile").write_text("VERSION=1.0\nVENDOR=test\n")
-    assert resolve_arch_name(tmp_path, "s390x") == "s390x"
-
-
-def test_resolve_arch_name_double_quoted(tmp_path: Path) -> None:
-    """Double-quoted ARCH value has quotes stripped."""
-    (tmp_path / "envfile").write_text('ARCH="x86_64"\n')
-    assert resolve_arch_name(tmp_path, "amd64") == "x86_64"
-
-
-def test_resolve_arch_name_single_quoted(tmp_path: Path) -> None:
-    """Single-quoted ARCH value has quotes stripped."""
-    (tmp_path / "envfile").write_text("ARCH='aarch64'\n")
-    assert resolve_arch_name(tmp_path, "arm64") == "aarch64"
 
 
 # -- extract_single_arch -----------------------------------------------

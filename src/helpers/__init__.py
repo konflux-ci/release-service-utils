@@ -20,6 +20,7 @@ __all__ = [
     "kubectl",
     "logger",
     "ocp_version",
+    "oot_kmods",
     "oras_utils",
     "osidb",
     "push_artifacts",
