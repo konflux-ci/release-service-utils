@@ -270,7 +270,13 @@ def _process_component_rpms(
             distro = repo_obj.get("distro", "")
 
             purl = advisory_data.generate_purl_rpm(
-                nevra.name, nevra.version, nevra.release, nevra.arch, distro, repo_id
+                nevra.name,
+                nevra.version,
+                nevra.release,
+                nevra.arch,
+                distro,
+                repo_id,
+                epoch=nevra.epoch,
             )
 
             results.append(
