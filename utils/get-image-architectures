@@ -85,24 +85,40 @@ elif [ $(jq -r '.mediaType' <<< $RAW_OUTPUT) == "application/vnd.docker.distribu
         '{"platform": {"architecture": $ARGS.named["architecture"], "os": $ARGS.named["os"]}, "digest": $ARGS.named["digest"], "multiarch": false}'
 else
     # Multi arch
-    manifests=$(jq '.manifests[] += {multiarch: true}' <<< "$RAW_OUTPUT")
-    # Deduplicate: when an image index contains both gzip and zstd:chunked
-    # manifests per architecture (dual-compression), keep only the non-zstd
-    # entry per (architecture, os). If all entries for a platform are zstd,
-    # keep the first one so the error surfaces downstream rather than
+    # Add multiarch metadata, then deduplicate before applying platform defaults.
+    # Some indexes contain platform-less manifests, which must not be grouped
+    # with real linux/amd64 images just because of the fallback below.
+    manifests=$(jq '
+        .manifests[] += {multiarch: true}
+    ' <<< "$RAW_OUTPUT")
+    # Deduplicate normal image manifests while preserving artifacts and
+    # manifests with unknown platforms. If all image manifests for a platform
+    # are zstd, keep the first so the error surfaces downstream rather than
     # silently returning nothing.
     # Ref: ADR 0070 (konflux-ci/architecture)
     jq -cr '.manifests[]' <<< "$manifests" | jq -cs '
+        def keep_separate:
+            .platform.architecture == null or .platform.os == null or
+            .platform.architecture == "unknown" or .platform.os == "unknown" or
+            .artifactType != null;
         group_by(.platform.architecture + "/" + .platform.os)
         | map(
-            if (.[0].platform.architecture == null or .[0].platform.os == null or
-                .[0].platform.architecture == "unknown" or .[0].platform.os == "unknown")
-            then .[]
-            else
-                (map(select(.annotations["io.github.containers.compression.zstd"] == null)) | .[0])
-                // .[0]
-            end
+            (map(select(keep_separate))) as $separate
+            | (map(select(keep_separate | not))) as $images
+            | $separate + (
+                if ($images | length) == 0 then []
+                else [($images
+                    | (map(select(.annotations["io.github.containers.compression.zstd"] == null)) | .[0])
+                    // $images[0])]
+                end
+            )
         )
-        | .[]
+        | .[][]
+        | if (.platform == null or .artifactType != null)
+          then . + {platform: ((.platform // {}) + {
+              architecture: (.platform.architecture // "amd64"),
+              os: (.platform.os // "linux")
+          })}
+          else . end
     '
 fi
