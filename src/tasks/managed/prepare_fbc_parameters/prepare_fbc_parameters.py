@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -209,8 +210,12 @@ def check_fbc_opt_in(
     task_run_uid: str,
     *,
     timeout: int = 3600,
+    max_retries: int = 3,
+    retry_delay_seconds: int = 30,
 ) -> list[dict[str, Any]]:
     """Create check-fbc-opt-in InternalRequest and return results."""
+    if max_retries < 1:
+        raise ValueError(f"max_retries must be >= 1, got {max_retries}")
     params: dict[str, str] = {
         "containerImages": json.dumps(bundle_images),
         "iibServiceAccountSecret": iib_service_account_secret,
@@ -230,16 +235,36 @@ def check_fbc_opt_in(
     task_timeout = seconds_to_duration(timeout)
     wait_timeout = timeout + SPAWN_OVERHEAD_SECONDS
 
-    ir_name = internal_request.create(
-        "check-fbc-opt-in",
-        params=params,
-        labels=labels,
-        sync=True,
-        timeout=wait_timeout,
-        pipeline_timeout=pipeline_timeout,
-        task_timeout=task_timeout,
-    )
-    logger.info("InternalRequest '%s' completed.", ir_name)
+    last_error: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            logger.info("Validation attempt %d/%d...", attempt, max_retries)
+            ir_name = internal_request.create(
+                "check-fbc-opt-in",
+                params=params,
+                labels=labels,
+                sync=True,
+                timeout=wait_timeout,
+                pipeline_timeout=pipeline_timeout,
+                task_timeout=task_timeout,
+            )
+            logger.info("InternalRequest '%s' completed.", ir_name)
+            break
+        except Exception as exc:
+            last_error = exc
+            if attempt < max_retries:
+                logger.warning(
+                    "Attempt %d/%d failed: %s. Retrying in %ds...",
+                    attempt,
+                    max_retries,
+                    exc,
+                    retry_delay_seconds,
+                )
+                time.sleep(retry_delay_seconds)
+            else:
+                logger.error("All %d validation attempts failed", max_retries)
+    else:
+        raise last_error  # type: ignore[misc]
     return fetch_ir_opt_in_results(ir_name)
 
 
@@ -252,6 +277,8 @@ def run_prepare(
     task_git_revision: str,
     pipeline_run_uid: str,
     task_run_uid: str = "",
+    max_retries: int = 3,
+    retry_delay_seconds: int = 30,
 ) -> dict[str, str]:
     """Orchestrate all validation phases and return Tekton results."""
     snapshot = file.load_json_dict(snapshot_path)
@@ -338,6 +365,8 @@ def run_prepare(
         pipeline_run_uid,
         task_run_uid,
         timeout=request_timeout,
+        max_retries=max_retries,
+        retry_delay_seconds=retry_delay_seconds,
     )
     logger.info("Opt-in results: %s", json.dumps(opt_in_results))
 
@@ -385,6 +414,8 @@ def main() -> int:
     task_git_revision = os.environ.get("TASK_GIT_REVISION", "")
     pipeline_run_uid = os.environ.get("PIPELINE_RUN_UID", "")
     task_run_uid = os.environ.get("TASK_RUN_UID", "")
+    max_retries = int(os.environ.get("PARAM_MAX_RETRIES", "3"))
+    retry_delay_seconds = int(os.environ.get("PARAM_RETRY_DELAY_SECONDS", "30"))
 
     if not task_git_url:
         raise tekton.CheckStepError(
@@ -405,6 +436,8 @@ def main() -> int:
         task_git_revision=task_git_revision,
         pipeline_run_uid=pipeline_run_uid,
         task_run_uid=task_run_uid,
+        max_retries=max_retries,
+        retry_delay_seconds=retry_delay_seconds,
     )
 
     fbc_opt_in_path.write_text(
