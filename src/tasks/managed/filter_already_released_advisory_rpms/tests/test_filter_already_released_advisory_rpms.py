@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import dataclasses
+import gzip
 import json
 import shutil
 import subprocess
@@ -187,8 +189,6 @@ def _nevra_from_filename(fname: str) -> tuple[str, str, str, str]:
     """
     is_src = fname.endswith(".src.rpm")
     base = Path(fname).stem
-    if is_src:
-        base = Path(base).stem
     parts = base.rsplit(".", 1)
     arch = parts[1] if len(parts) > 1 else "x86_64"
     nvr = parts[0]
@@ -205,6 +205,8 @@ def _mock_run_cmd_for_oras_and_rpm(
     rpm_files: list[str],
     ir_results: dict | None = None,
     filter_tarball: Path | None = None,
+    *,
+    rpm_epoch: str = "0",
 ) -> MagicMock:
     """Return a mock for ``subprocess_cmd.run_cmd`` handling oras, rpm, IR, and kubectl."""
     if ir_results is None:
@@ -244,7 +246,7 @@ def _mock_run_cmd_for_oras_and_rpm(
             return subprocess.CompletedProcess(
                 args=cmd,
                 returncode=0,
-                stdout=f"{name}|0|{version}|{release}|{arch}\n",
+                stdout=f"{name}|{rpm_epoch}|{version}|{release}|{arch}\n",
             )
         if cmd[0] == "internal-request":
             return subprocess.CompletedProcess(
@@ -362,12 +364,14 @@ class TestBuildRpmEntries:
         default_excludes: list[str] | None = None,
         default_architectures: list[str] | None = None,
         components: list[dict] | None = None,
+        *,
+        rpm_epoch: str = "0",
     ) -> list[filt.RpmEntry]:
         if components is None:
             components = [{"containerImage": "quay.io/test/img@sha256:abc", "name": "comp1"}]
         snapshot = _snapshot(components)
         data = _data(rpm_repos=_rpm_repos() if rpm_repos is None else rpm_repos)
-        mock_run = _mock_run_cmd_for_oras_and_rpm(rpm_files)
+        mock_run = _mock_run_cmd_for_oras_and_rpm(rpm_files, rpm_epoch=rpm_epoch)
 
         with (
             patch.object(filt.subprocess_cmd, "run_cmd", mock_run),
@@ -418,6 +422,34 @@ class TestBuildRpmEntries:
         assert entries[0].target_repo.get("repository_name") == "source"
         assert entries[0].nevra.arch == "src"
         assert "arch=src" in entries[0].purl
+
+    @pytest.mark.parametrize("arch", ["x86_64", "aarch64", "noarch", "src"])
+    @pytest.mark.parametrize("rpm_epoch", ["32", "0", "(none)", ""])
+    def test_epoch_in_advisory_purls(self, arch: str, rpm_epoch: str) -> None:
+        """Preserve nonzero epochs and legacy identities across repository mappings."""
+        entries = self._run_build([f"bind-9.20.27-0.1.hum1.{arch}.rpm"], rpm_epoch=rpm_epoch)
+        expected_repo_arches = ["x86_64", "aarch64"] if arch == "noarch" else [arch]
+        assert [entry.target_repo["repository_id"] for entry in entries] == [
+            f"rpm-{repo_arch}" for repo_arch in expected_repo_arches
+        ]
+        epoch = "32" if rpm_epoch == "32" else "0"
+        epoch_qualifier = "&epoch=32" if epoch == "32" else ""
+        for entry, repo_arch in zip(entries, expected_repo_arches):
+            assert entry.nevra == filt.RpmNevra("bind", epoch, "9.20.27", "0.1.hum1", arch)
+            assert entry.purl == (
+                f"pkg:rpm/redhat/bind@9.20.27-0.1.hum1?arch={arch}"
+                f"{epoch_qualifier}&distro=el9&repository_id=rpm-{repo_arch}"
+            )
+
+    def test_epoch_distinguishes_otherwise_identical_rpms(self) -> None:
+        """Distinguish epochs zero and 32 for the same RPM name, version, and release."""
+        rpm_files = ["bind-9.20.27-0.1.hum1.x86_64.rpm"]
+        zero = self._run_build(rpm_files, rpm_epoch="0")[0]
+        nonzero = self._run_build(rpm_files, rpm_epoch="32")[0]
+        assert dataclasses.replace(zero.nevra, epoch="32") == nonzero.nevra
+        assert zero.rpm_filename == nonzero.rpm_filename
+        assert zero.target_repo == nonzero.target_repo
+        assert zero.purl != nonzero.purl
 
     def test_excludes_debuginfo(self) -> None:
         """Debug RPMs are excluded."""
@@ -1034,6 +1066,98 @@ class TestRun:
         snap = json.loads(cfg.snapshot_file.read_text(encoding="utf-8"))
         assert len(snap["components"]) == 1
         assert "rpmsToPublish" in snap["components"][0]
+
+    @pytest.mark.parametrize("arch", ["x86_64", "aarch64", "noarch", "src"])
+    @pytest.mark.parametrize("already_released", [False, True])
+    def test_epoch_survives_filtering(
+        self, tmp_path: Path, arch: str, already_released: bool
+    ) -> None:
+        """Carry extracted epoch through the IR, snapshot, and released-RPM digest checks."""
+        rpm_filename = f"bind-9.20.27-0.1.hum1.{arch}.rpm"
+        target_repos = [
+            {key: value for key, value in repo.items() if key != "arch"}
+            for repo in _rpm_repos()
+            if repo["arch"] == arch or (arch == "noarch" and repo["arch"] != "src")
+        ]
+        expected_payload = [
+            {
+                "name": "c1",
+                "purl": (
+                    f"pkg:rpm/redhat/bind@9.20.27-0.1.hum1?arch={arch}"
+                    f"&epoch=32&distro=el9&repository_id={repo['repository_id']}"
+                ),
+                "repository_name": repo["repository_name"],
+                "rpm": rpm_filename,
+                "sha256": "sha",
+                "rpmname": "bind",
+                "epoch": "32",
+                "version": "9.20.27",
+                "release": "0.1.hum1",
+                "arch": arch,
+                "targetRepo": repo,
+            }
+            for repo in target_repos
+        ]
+        tarball = _make_filter_tarball(
+            tmp_path,
+            unreleased=[] if already_released else expected_payload,
+            in_advisory=expected_payload if already_released else [],
+        )
+        cfg, res = _make_config_and_results(
+            tmp_path,
+            snapshot=_snapshot([{"containerImage": "quay.io/t/i@sha256:a", "name": "c1"}]),
+            data=_data(rpm_repos=_rpm_repos()),
+            default_architectures=["x86_64", "aarch64"],
+        )
+        mock_run = _mock_run_cmd_for_oras_and_rpm(
+            [rpm_filename], filter_tarball=tarball, rpm_epoch="32"
+        )
+        pulp = MagicMock(spec=filt.PulpClient)
+        pulp.check_digest.return_value = filt.PulpDigestStatus.MATCH
+        with (
+            patch.object(filt.subprocess_cmd, "run_cmd", mock_run),
+            patch.object(filt.file_helper, "sha256", return_value="sha"),
+            patch.object(filt.PulpClient, "from_config", return_value=pulp),
+        ):
+            filt.run(cfg, res)
+
+        ir_commands = [
+            call.args[0]
+            for call in mock_run.call_args_list
+            if call.args[0][0] == "internal-request"
+        ]
+        assert len(ir_commands) == 1
+        encoded_snapshot = next(
+            arg.removeprefix("transformedSnapshot=")
+            for arg in ir_commands[0]
+            if arg.startswith("transformedSnapshot=")
+        )
+        assert (
+            json.loads(gzip.decompress(base64.b64decode(encoded_snapshot))) == expected_payload
+        )
+        snapshot = json.loads(cfg.snapshot_file.read_text(encoding="utf-8"))
+        assert res.skip_release.read_text(encoding="utf-8") == str(already_released).lower()
+        if already_released:
+            assert snapshot["components"] == []
+            assert [call.args for call in pulp.check_digest.call_args_list] == [
+                (repo["repository_name"], "bind", "32", "9.20.27", "0.1.hum1", arch, "sha")
+                for repo in target_repos
+            ]
+        else:
+            pulp.check_digest.assert_not_called()
+            assert snapshot["components"][0]["rpmsToPublish"] == [
+                {
+                    "rpm": rpm_filename,
+                    "sha256": "sha",
+                    "rpmname": "bind",
+                    "epoch": "32",
+                    "version": "9.20.27",
+                    "release": "0.1.hum1",
+                    "arch": arch,
+                    "targetRepos": [repo],
+                }
+                for repo in target_repos
+            ]
 
     def test_in_advisory_rpms_validated(self, tmp_path: Path) -> None:
         """In-advisory RPMs trigger Pulp digest validation."""
