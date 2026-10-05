@@ -504,13 +504,14 @@ class TestRunPrepare:
         assert meta["targetIndex"] == "registry/target:v4.14"
 
     @mock.patch(f"{TASK}.time.time", return_value=1234567890)
-    def test_multiple_components(self, _mock_time: mock.MagicMock, tmp_path: Path) -> None:
-        """All components in the snapshot are processed."""
+    def test_multi_ocp_intersecting(self, _mock_time: mock.MagicMock, tmp_path: Path) -> None:
+        """Three components with overlapping OCP versions resolve correctly."""
         snapshot_path = _make_snapshot(
             tmp_path,
             components=[
-                {"name": "a", "ocpVersion": ["v4.14"]},
-                {"name": "b", "ocpVersion": ["v4.14", "v4.15"]},
+                {"name": "comp1", "ocpVersion": ["v4.17", "v4.18", "v4.19"]},
+                {"name": "comp2", "ocpVersion": ["v4.18", "v4.19"]},
+                {"name": "comp3", "ocpVersion": ["v4.19", "v4.20"]},
             ],
         )
         data_path = _make_data(tmp_path)
@@ -518,8 +519,23 @@ class TestRunPrepare:
         prepare_fbc_snapshot.run_prepare(snapshot_path=snapshot_path, data_path=data_path)
 
         result = json.loads(snapshot_path.read_text(encoding="utf-8"))
-        assert len(result["components"][0]["ocpVersionMetadata"]) == 1
-        assert len(result["components"][1]["ocpVersionMetadata"]) == 2
+        c1, c2, c3 = result["components"]
+
+        assert len(c1["ocpVersionMetadata"]) == 3
+        assert len(c2["ocpVersionMetadata"]) == 2
+        assert len(c3["ocpVersionMetadata"]) == 2
+
+        for comp, expected_versions in [
+            (c1, ["v4.17", "v4.18", "v4.19"]),
+            (c2, ["v4.18", "v4.19"]),
+            (c3, ["v4.19", "v4.20"]),
+        ]:
+            versions = [m["version"] for m in comp["ocpVersionMetadata"]]
+            assert versions == expected_versions
+            for meta in comp["ocpVersionMetadata"]:
+                v = meta["version"]
+                assert meta["updatedFromIndex"].endswith(f":{v}")
+                assert meta["targetIndex"].endswith(f":{v}")
 
     @mock.patch(f"{TASK}.time.time", return_value=1234567890)
     def test_scalar_ocp_version(self, _mock_time: mock.MagicMock, tmp_path: Path) -> None:
