@@ -2574,6 +2574,7 @@ name = "release-service-utils"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "boto3" },
     { name = "check-jsonschema" },
     { name = "confluent-kafka" },
     { name = "diffused-lib" },
@@ -2613,6 +2614,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "boto3" },
     { name = "check-jsonschema", specifier = "<=0.38.0" },
     { name = "confluent-kafka" },
     { name = "diffused-lib", specifier = "==0.5.0" },
