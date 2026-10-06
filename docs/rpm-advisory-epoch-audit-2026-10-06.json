@@ -1,0 +1,107 @@
+{
+  "advisory_repository_commit": "4e32c72d2897ea435f241da68b8d81c45b37af1e",
+  "captured_at_utc": "2026-10-06T15:40:43.220449+00:00",
+  "format": "rpm-advisory-epoch-audit-summary-v1",
+  "full_audit_sha256": "0f4d305169341799322244bb78a37fab340d50ecd4ce8654bf298497481a2563",
+  "local_rehearsal": {
+    "after": {
+      "advisories": 2965,
+      "blocked": 0,
+      "changed_advisories": 0,
+      "rpm_entries": 48298,
+      "statuses": {
+        "already-correct": 5932,
+        "verified-zero": 42366
+      }
+    },
+    "before": {
+      "advisories": 2965,
+      "blocked": 0,
+      "changed_advisories": 420,
+      "rpm_entries": 48298,
+      "statuses": {
+        "change": 5932,
+        "verified-zero": 42366
+      }
+    },
+    "both_matching_paths_passed": true,
+    "environment": "local disposable copy; no staging/production publication",
+    "epoch_only_difference_remained_distinct": true,
+    "performed_at": "2026-10-06T15:43:42.614499+00:00",
+    "producer_purls_checked": 48165,
+    "repeat_apply_noop": true,
+    "rollback_original_bytes_verified": true,
+    "selection": "RPM advisories with every entry verified by the captured public metadata"
+  },
+  "notes": [
+    "All RPM advisory product fields and repository IDs were verified to be Hummingbird.",
+    "The full audit remains blocked. Unresolved public entries are absent from the captured public primary metadata; private entries lack captured metadata. No epoch was guessed.",
+    "The full per-row report remains local because it includes private package identities. This aggregate report contains no private package names or advisory contents.",
+    "One unresolved public RPM, python-rpm-macros-3.15-1.hum1.noarch.rpm, also returned HTTP 404 at its expected published repository location. This check does not establish the availability of every unresolved RPM.",
+    "Local rehearsal used an independently copied, fully verified subset and restored its original bytes. The authoritative advisory checkout was left unchanged."
+  ],
+  "private_repository_metadata_not_captured": {
+    "repositories": 6,
+    "rpm_entries": 31
+  },
+  "product_name": "Red Hat Hardened Images",
+  "product_stream": "hummingbird-1",
+  "production_execution": "not performed",
+  "public_repository_statuses": {
+    "public-hummingbird-aarch64-rpms": {
+      "change": 2757,
+      "unresolved": 1128,
+      "verified-zero": 19947
+    },
+    "public-hummingbird-source-rpms": {
+      "change": 405,
+      "unresolved": 90,
+      "verified-zero": 2564
+    },
+    "public-hummingbird-x86_64-rpms": {
+      "change": 2770,
+      "unresolved": 1136,
+      "verified-zero": 20035
+    }
+  },
+  "repository_evidence": [
+    {
+      "packages": 22641,
+      "primary_location": "repodata/55a2ec405b269194ea80410572fe025a3dd10e656082b506a96265948166d9db-primary.xml.gz",
+      "primary_sha256": "55a2ec405b269194ea80410572fe025a3dd10e656082b506a96265948166d9db",
+      "repomd_sha256": "82c3d3e7a401ebbc87413b231e3a1d8765193a9ebb7a551959e50511496ca402",
+      "repository_id": "public-hummingbird-aarch64-rpms",
+      "source": "https://packages.redhat.com/api/pulp-content/public-hummingbird/aarch64/"
+    },
+    {
+      "packages": 2962,
+      "primary_location": "repodata/d95fa20a9933643a9451779fce163637623e5e90488e3aebcb811d00a6b3e932-primary.xml.gz",
+      "primary_sha256": "d95fa20a9933643a9451779fce163637623e5e90488e3aebcb811d00a6b3e932",
+      "repomd_sha256": "58834fa8491ef32caf281c505d3793cc63d2adeea8e994b27c9f9eeb4f332c0b",
+      "repository_id": "public-hummingbird-source-rpms",
+      "source": "https://packages.redhat.com/api/pulp-content/public-hummingbird/source/"
+    },
+    {
+      "packages": 22742,
+      "primary_location": "repodata/cc787470e3e9a4c2aa541c70c9d42e24d3c14214b9ef0686d8a8a7c7b6fb3491-primary.xml.gz",
+      "primary_sha256": "cc787470e3e9a4c2aa541c70c9d42e24d3c14214b9ef0686d8a8a7c7b6fb3491",
+      "repomd_sha256": "e9b04e0a9be2a0dc6701bcaccf831cbceea31ad71a84b30d8641bb2144009405",
+      "repository_id": "public-hummingbird-x86_64-rpms",
+      "source": "https://packages.redhat.com/api/pulp-content/public-hummingbird/x86_64/"
+    }
+  ],
+  "rpm_advisories": 3064,
+  "scope": "data/advisories/hummingbird-tenant",
+  "staging_tekton_validation": "pending",
+  "summary": {
+    "advisories": 34097,
+    "blocked": 2385,
+    "changed_advisories": 420,
+    "rpm_entries": 50863,
+    "statuses": {
+      "change": 5932,
+      "unresolved": 2385,
+      "verified-zero": 42546
+    }
+  }
+}

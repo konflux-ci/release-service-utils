@@ -20,3 +20,9 @@ Add or change a pinned dependency:
 ```bash
 uv add "package-name==version"
 ```
+
+## RPM Advisory Epoch Migration
+
+Use the offline migration utility to audit and backfill verified epochs in historical
+RPM advisory PURLs. See [the migration procedure](docs/rpm-advisory-epoch-migration.md)
+for evidence preparation, dry-run reporting, compatibility, staging validation and rollback.
