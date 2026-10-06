@@ -48,7 +48,6 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 
 - Conventional commits: `(chore|docs|feat|fix|refactor|revert|style|test)(<JIRA-id>): <lowercase message>`
 - Max 72 characters for both title and body lines. Enforced by gitlint in CI.
-- All commits must be cryptographically signed (`git commit -S`).
 - When generating commits with the assistance of an AI tool, add an `Assisted-by: <AI-agent>` trailer.
 
 ## Key Patterns
