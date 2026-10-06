@@ -134,9 +134,14 @@ def oras_pull(
     pull_spec: str,
     download_dir: Path,
     *,
+    platform: str | None = None,
     stderr_path: Path | None = None,
 ) -> None:
-    """Pull an OCI artifact into *download_dir* using select-oci-auth and oras."""
+    """Pull an OCI artifact into *download_dir* using select-oci-auth and oras.
+
+    When *platform* is given (e.g. ``"linux/amd64"``), passes ``--platform``
+    to select a single architecture from a multi-arch manifest list/index.
+    """
     auth_file = file.make_tempfile_path("oras-auth-")
     try:
         auth_out = subprocess_cmd.run_cmd(
@@ -145,14 +150,12 @@ def oras_pull(
             check=True,
         ).stdout
         auth_file.write_text(auth_out, encoding="utf-8")
+        cmd: list[str | Path] = ["oras", "pull", "--registry-config", str(auth_file)]
+        if platform:
+            cmd += ["--platform", platform]
+        cmd.append(str(pull_spec))
         subprocess_cmd.run_cmd(
-            [
-                "oras",
-                "pull",
-                "--registry-config",
-                str(auth_file),
-                str(pull_spec),
-            ],
+            cmd,
             cwd=download_dir,
             stderr_path=stderr_path,
             check=True,
