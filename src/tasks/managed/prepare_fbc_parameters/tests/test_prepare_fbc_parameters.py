@@ -630,6 +630,71 @@ def test_run_prepare_duplicate_packages(
         )
 
 
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.fetch_results")
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.create")
+@mock.patch(f"{TASK}.prepare_fbc_parameters.render_fbc_fragment")
+def test_run_prepare_multi_ocp_intersecting(
+    mock_render: mock.MagicMock,
+    mock_ir_create: mock.MagicMock,
+    mock_fetch: mock.MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Two components with overlapping OCP versions produce correct results."""
+    snap_path, data_path = _setup_run_prepare(
+        tmp_path,
+        components=[
+            {
+                "name": "comp0",
+                "containerImage": "reg.io/img0@sha256:a",
+                "ocpVersion": ["v4.17", "v4.18"],
+            },
+            {
+                "name": "comp1",
+                "containerImage": "reg.io/img1@sha256:b",
+                "ocpVersion": ["v4.18", "v4.19"],
+            },
+        ],
+        data=_make_data(allowed_packages=["pkg-a", "pkg-b"]),
+    )
+
+    mock_render.side_effect = [
+        _catalog_entries(["pkg-a"], ["quay.io/bundle-a"]),
+        _catalog_entries(["pkg-b"], ["quay.io/bundle-b"]),
+    ]
+    mock_ir_create.return_value = "test-ir-name"
+    mock_fetch.return_value = {
+        "optInResults": json.dumps(
+            [
+                {"containerImage": "quay.io/bundle-a", "fbcOptIn": True},
+                {"containerImage": "quay.io/bundle-b", "fbcOptIn": True},
+            ]
+        ),
+    }
+
+    results = prepare_fbc_parameters.run_prepare(
+        snap_path,
+        data_path,
+        task_git_url="http://localhost",
+        task_git_revision="main",
+        pipeline_run_uid="uid-123",
+    )
+
+    mock_render.assert_has_calls(
+        [mock.call("reg.io/img0@sha256:a"), mock.call("reg.io/img1@sha256:b")]
+    )
+    assert mock_render.call_count == 2
+
+    created_images = json.loads(mock_ir_create.call_args.kwargs["params"]["containerImages"])
+    assert sorted(created_images) == ["quay.io/bundle-a", "quay.io/bundle-b"]
+
+    assert results["fbcOptIn"] == "true"
+    assert results["validationPassed"] == "true"
+    assert results["mustPublishIndexImage"] == "true"
+    assert results["mustSignIndexImage"] == "true"
+    assert results["mustOverwriteFromIndexImage"] == "true"
+    assert results["iibServiceAccountSecret"] == "iib-service-account-prod"
+
+
 # --- check_fbc_opt_in retry ---
 
 
