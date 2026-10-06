@@ -6,12 +6,13 @@ import json
 import os
 import stat
 from pathlib import Path
+import importlib
 from unittest import mock
 
 import pytest
 import requests
 
-from . import github
+github = importlib.import_module("release_service_utils.helpers.vcs.github")
 
 
 def _session() -> github.GitHubAppSession:
@@ -37,7 +38,7 @@ def test_run_gh_command_sets_token(monkeypatch: pytest.MonkeyPatch) -> None:
         captured_env.update(kwargs.get("env", {}))
         return mock.MagicMock(stdout="output", returncode=0)
 
-    monkeypatch.setattr("vcs.github.subprocess.run", fake_run)
+    monkeypatch.setattr("release_service_utils.helpers.vcs.github.subprocess.run", fake_run)
     result = github.run_gh_command(["gh", "api", "/repos/org/repo"], gh_token="test-token")
     assert captured_env.get("GH_TOKEN") == "test-token"
     assert result.stdout == "output"
@@ -228,6 +229,39 @@ def test_create_pull_request_returns_422_json() -> None:
     assert "already exists" in out["message"]
 
 
+def test_create_pull_request_raises_for_other_statuses() -> None:
+    """Statuses other than 201 and 422 are raised normally."""
+    session = _session()
+    response = mock.MagicMock(status_code=500)
+    response.json.return_value = {"message": "server error"}
+    response.raise_for_status.side_effect = requests.HTTPError("boom")
+    with mock.patch.object(github, "api_request", return_value=response):
+        with pytest.raises(requests.HTTPError, match="boom"):
+            github.create_pull_request(
+                session,
+                "org/infra",
+                head_branch="my-app",
+                title="my-app update",
+            )
+
+
+def test_create_pull_request_returns_json_after_raise_for_status_check() -> None:
+    """Non-201/422 responses still return JSON when raise_for_status does not fail."""
+    session = _session()
+    response = mock.MagicMock(status_code=204)
+    response.json.return_value = {"message": "ok"}
+    response.raise_for_status = mock.MagicMock()
+    with mock.patch.object(github, "api_request", return_value=response):
+        out = github.create_pull_request(
+            session,
+            "org/infra",
+            head_branch="my-app",
+            title="my-app update",
+        )
+    assert out == {"message": "ok"}
+    response.raise_for_status.assert_called_once()
+
+
 def test_find_open_pull_request_by_branch_found() -> None:
     """Return the open PR whose head ref matches the branch."""
     session = _session()
@@ -258,6 +292,101 @@ def test_pull_request_url_for_commit_sha() -> None:
     with mock.patch.object(github, "_get_json", return_value=payload):
         url = github.pull_request_url_for_commit_sha(session, "abc123")
     assert url.endswith("/pull/2")
+
+
+def test_bearer_token_session() -> None:
+    """Construct a bearer-token GitHub session."""
+    session = github.bearer_token_session(" test-token ")
+    assert session.api_url == "https://api.github.com"
+    assert session.token == "test-token"
+
+
+def test_bearer_token_session_custom_api_url() -> None:
+    """Custom GitHub API URLs are normalized."""
+    session = github.bearer_token_session("tok", api_url="https://ghe.example/api/v3/")
+    assert session.api_url == "https://ghe.example/api/v3"
+
+
+def test_api_url_and_headers_helpers() -> None:
+    """Low-level URL and header helpers normalize and merge values."""
+    session = _session()
+    assert github._api_url(session, "/user") == "https://api.github.com/user"
+    assert (
+        github._api_url(session, "https://other.example/user") == "https://other.example/user"
+    )
+    assert github._auth_headers(session, None) == {"Authorization": "Bearer tok"}
+    assert github._api_headers(session, {"Accept": "override"})["Accept"] == "override"
+    assert (
+        github._api_headers(session, None)["X-GitHub-Api-Version"] == github.GITHUB_API_VERSION
+    )
+
+
+def test_get_authenticated_user_login() -> None:
+    """Read the authenticated GitHub login from `/user`."""
+    with mock.patch.object(github, "_get_json", return_value={"login": "bot-user"}):
+        assert github.get_authenticated_user_login(_session()) == "bot-user"
+
+
+def test_get_authenticated_user_login_missing_raises() -> None:
+    """Missing login in the GitHub user payload raises."""
+    with mock.patch.object(github, "_get_json", return_value={}):
+        with pytest.raises(RuntimeError, match="did not include a login"):
+            github.get_authenticated_user_login(_session())
+
+
+def test_list_issue_comments() -> None:
+    """Return one page of issue comments."""
+    payload = [{"id": 1, "body": "hello"}]
+    with mock.patch.object(github, "_get_json", return_value=payload) as get_json:
+        out = github.list_issue_comments(_session(), "org/repo", 12, page=2)
+    assert out == payload
+    assert "page=2" in get_json.call_args.args[1]
+
+
+def test_list_issue_comments_wrong_type_raises() -> None:
+    """A non-list comments payload raises a type error."""
+    with mock.patch.object(github, "_get_json", return_value={"id": 1}):
+        with pytest.raises(TypeError, match="expected comment list"):
+            github.list_issue_comments(_session(), "org/repo", 12)
+
+
+def test_list_issue_comments_non_object_entry_raises() -> None:
+    """Each decoded comment entry must be an object."""
+    with mock.patch.object(github, "_get_json", return_value=["bad-entry"]):
+        with pytest.raises(TypeError, match="expected comment object"):
+            github.list_issue_comments(_session(), "org/repo", 12)
+
+
+def test_list_issue_comments_non_object_user_raises() -> None:
+    """A decoded comment user field must be an object when present."""
+    payload = [{"id": 1, "body": "hello", "user": "bad-user"}]
+    with mock.patch.object(github, "_get_json", return_value=payload):
+        with pytest.raises(TypeError, match="expected comment user object"):
+            github.list_issue_comments(_session(), "org/repo", 12)
+
+
+def test_create_issue_comment() -> None:
+    """Create an issue comment and return the JSON body."""
+    response = mock.MagicMock()
+    response.json.return_value = {"id": 7}
+    response.raise_for_status = mock.MagicMock()
+    with mock.patch.object(github, "api_request", return_value=response) as request:
+        out = github.create_issue_comment(_session(), "org/repo", 12, "hello")
+    assert out == {"id": 7}
+    request.assert_called_once()
+    response.raise_for_status.assert_called_once()
+
+
+def test_update_issue_comment() -> None:
+    """Update an issue comment and return the JSON body."""
+    response = mock.MagicMock()
+    response.json.return_value = {"id": 7}
+    response.raise_for_status = mock.MagicMock()
+    with mock.patch.object(github, "api_request", return_value=response) as request:
+        out = github.update_issue_comment(_session(), 7, "hello")
+    assert out == {"id": 7}
+    request.assert_called_once()
+    response.raise_for_status.assert_called_once()
 
 
 def test_pull_request_url_for_commit_sha_no_items() -> None:

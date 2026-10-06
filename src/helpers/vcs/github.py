@@ -23,6 +23,8 @@ from release_service_utils.helpers import http_client
 from . import git
 
 logger = logging.getLogger(__name__)
+GITHUB_API_ACCEPT = "application/vnd.github+json"
+GITHUB_API_VERSION = "2022-11-28"
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,32 @@ def _auth_headers(
     return headers
 
 
+def bearer_token_session(
+    token: str,
+    *,
+    api_url: str = "https://api.github.com",
+) -> GitHubAppSession:
+    """Return a GitHub session that authenticates with a bearer token."""
+    return GitHubAppSession(api_url=api_url.rstrip("/"), token=token.strip())
+
+
+def _api_headers(
+    session: GitHubAppSession,
+    extra_headers: dict[str, str] | None,
+) -> dict[str, str]:
+    """Build standard GitHub API headers for *session*."""
+    headers = _auth_headers(
+        session,
+        {
+            "Accept": GITHUB_API_ACCEPT,
+            "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        },
+    )
+    if extra_headers:
+        headers.update(extra_headers)
+    return headers
+
+
 def _get_json(
     session: GitHubAppSession,
     path: str,
@@ -112,7 +140,7 @@ def _get_json(
     """Perform a GitHub REST GET via `http_client.get_text` and parse JSON."""
     text = http_client.get_text(
         _api_url(session, path),
-        headers=_auth_headers(session, extra_headers),
+        headers=_api_headers(session, extra_headers),
         timeout=60,
     )
     return json.loads(text)
@@ -128,12 +156,89 @@ def api_request(
 ) -> requests.Response:
     """Call the GitHub REST API for POST/PATCH relative to *session.api_url*."""
     return requests.request(
-        method,
+        method.upper(),
         _api_url(session, path),
-        headers=_auth_headers(session, extra_headers),
+        headers=_api_headers(session, extra_headers),
         json=json_body,
         timeout=60,
     )
+
+
+def get_authenticated_user_login(session: GitHubAppSession) -> str:
+    """Return the GitHub login for *session*."""
+    body = _get_json(
+        session,
+        "/user",
+        extra_headers={"Accept": GITHUB_API_ACCEPT},
+    )
+    login = str(body.get("login") or "").strip()
+    if not login:
+        raise RuntimeError("GitHub user response did not include a login")
+    return login
+
+
+def list_issue_comments(
+    session: GitHubAppSession,
+    owner_repo: str,
+    issue_number: int,
+    *,
+    per_page: int = 100,
+    page: int = 1,
+) -> list[dict[str, Any]]:
+    """Return one page of issue comments for *issue_number*."""
+    comments = _get_json(
+        session,
+        f"/repos/{owner_repo}/issues/{issue_number}/comments?per_page={per_page}&page={page}",
+        extra_headers={"Accept": GITHUB_API_ACCEPT},
+    )
+    if not isinstance(comments, list):
+        msg = (
+            f"expected comment list for {owner_repo}#{issue_number}, "
+            f"got {type(comments).__name__}"
+        )
+        raise TypeError(msg)
+    for comment in comments:
+        if not isinstance(comment, dict):
+            msg = f"expected comment object for {owner_repo}#{issue_number}"
+            raise TypeError(msg)
+        user = comment.get("user")
+        if user is not None and not isinstance(user, dict):
+            msg = f"expected comment user object for {owner_repo}#{issue_number}"
+            raise TypeError(msg)
+    return comments
+
+
+def create_issue_comment(
+    session: GitHubAppSession,
+    owner_repo: str,
+    issue_number: int,
+    body: str,
+) -> dict[str, Any]:
+    """Create and return an issue comment."""
+    response = api_request(
+        session,
+        "POST",
+        f"/repos/{owner_repo}/issues/{issue_number}/comments",
+        json_body={"body": body},
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def update_issue_comment(
+    session: GitHubAppSession,
+    comment_id: int,
+    body: str,
+) -> dict[str, Any]:
+    """Update and return an issue comment."""
+    response = api_request(
+        session,
+        "PATCH",
+        f"/issues/comments/{comment_id}",
+        json_body={"body": body},
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 def configure_git_askpass_auth(access_token: str) -> None:
