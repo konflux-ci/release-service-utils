@@ -206,6 +206,42 @@ def test_oras_pull_runs_select_oci_auth_and_oras(
     assert kwargs_list[1]["stream_stdout"] is True
 
 
+def test_oras_pull_with_platform_adds_platform_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Passing *platform* inserts ``--platform`` before the pull spec."""
+    calls: list[list[str]] = []
+
+    def fake_run_cmd(cmd, **_kwargs):  # type: ignore[no-untyped-def]
+        calls.append([str(x) for x in cmd])
+        if cmd[0] == "select-oci-auth":
+            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(oras_utils.subprocess_cmd, "run_cmd", fake_run_cmd)
+    oras_utils.oras_pull("quay.io/org/image@sha256:abc", tmp_path, platform="linux/amd64")
+
+    assert calls[1][-3:] == ["--platform", "linux/amd64", "quay.io/org/image@sha256:abc"]
+
+
+def test_oras_pull_without_platform_omits_platform_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No ``--platform`` flag is added when *platform* is not given."""
+    calls: list[list[str]] = []
+
+    def fake_run_cmd(cmd, **_kwargs):  # type: ignore[no-untyped-def]
+        calls.append([str(x) for x in cmd])
+        if cmd[0] == "select-oci-auth":
+            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(oras_utils.subprocess_cmd, "run_cmd", fake_run_cmd)
+    oras_utils.oras_pull("quay.io/org/image@sha256:abc", tmp_path)
+
+    assert "--platform" not in calls[1]
+
+
 def test_oras_pull_select_oci_auth_failure_is_logged_to_stderr_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -30,7 +30,7 @@ from release_service_utils.helpers import memory_throttle
 from release_service_utils.helpers import oras_utils
 from release_service_utils.helpers import subprocess_cmd
 import yaml
-from release_service_utils.helpers.file import load_json_dict
+from release_service_utils.helpers.file import load_json_dict, make_tempfile_path
 from release_service_utils.helpers.logger import logger
 
 PROG = "marketplacesvm_push_disk_images.py"
@@ -40,6 +40,20 @@ DEFAULT_WORKDIR = Path("/var/workdir")
 MEMORY_THRESHOLD = 80
 
 _EXTENSION_STRIP_RE = re.compile(r"\.[.a-zA-Z0-9]*$")
+
+# An index mediaType alone is not sufficient to mean multi-arch: it can
+# legally wrap a single manifest. See is_multiarch_manifest().
+MULTI_ARCH_MEDIA_TYPES = frozenset(
+    {
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.oci.image.index.v1+json",
+    }
+)
+
+_RH_ARCH_TO_OCI_PLATFORM = {
+    "x86_64": "linux/amd64",
+    "aarch64": "linux/arm64",
+}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -179,9 +193,80 @@ def parse_build_name(file_prefix: str) -> str:
 
 
 def parse_architecture(filename: str) -> str:
-    """Return architecture token from a staged filename (before extension)."""
-    without_ext = filename.rsplit(".", 1)[0]
-    return without_ext.rsplit("-", 1)[-1]
+    """Return architecture token from a staged filename (before extension(s))."""
+    return strip_extensions(filename).rsplit("-", 1)[-1]
+
+
+def rh_arch_to_oci_platform(arch: str) -> str:
+    """Map a Red Hat architecture name to an OCI ``os/arch`` platform string."""
+    return _RH_ARCH_TO_OCI_PLATFORM.get(arch, f"linux/{arch}")
+
+
+def is_multiarch_manifest(manifest: Mapping[str, Any]) -> bool:
+    """Return True if *manifest* is an OCI/Docker index wrapping >1 manifests.
+
+    An index mediaType alone is not sufficient, since it can legally wrap a
+    single manifest, so this only reports True when it actually contains more
+    than one manifest entry.
+    """
+    if manifest.get("mediaType") not in MULTI_ARCH_MEDIA_TYPES:
+        return False
+    return len(manifest.get("manifests") or []) > 1
+
+
+def validate_manifest_platforms(manifest: Mapping[str, Any], pullspec: str) -> None:
+    """Raise RuntimeError if any index entry lacks platform.architecture.
+
+    Some multi-arch OCI artifact indexes are built without per-manifest
+    platform metadata (see RHELOPC-2342), which makes oras ``--platform``
+    selection impossible. Fail loudly instead of guessing which manifest
+    belongs to which architecture.
+    """
+    entries = manifest.get("manifests") or []
+    if any((entry.get("platform") or {}).get("architecture") is None for entry in entries):
+        raise RuntimeError(
+            f"Multi-arch image index for {pullspec} has one or more manifests "
+            "without platform.architecture metadata; oras cannot select the "
+            "correct architecture."
+        )
+
+
+def staged_file_architectures(staged_files: Sequence[Any]) -> list[str]:
+    """Return the architecture parsed from each staged file's filename.
+
+    Raises RuntimeError if the same architecture appears more than once,
+    since that scenario is untested and its correct handling is undefined
+    for multi-arch images.
+    """
+    archs = [
+        parse_architecture(str(require_field(entry, "filename"))) for entry in staged_files
+    ]
+    counts: dict[str, int] = {}
+    for arch in archs:
+        counts[arch] = counts.get(arch, 0) + 1
+    duplicates = sorted(arch for arch, count in counts.items() if count > 1)
+    if duplicates:
+        raise RuntimeError(
+            "staged.files has more than one file for the same architecture, "
+            f"which is not supported for multi-arch images: {duplicates}"
+        )
+    return archs
+
+
+def fetch_manifest(pullspec: str) -> dict[str, Any]:
+    """Fetch and parse the OCI manifest for *pullspec* via oras.
+
+    Used to detect whether an artifact is a genuine multi-arch image index
+    before deciding whether to pull a single architecture or all of them.
+    """
+    auth_file = make_tempfile_path("oras-auth-")
+    try:
+        auth_out = subprocess_cmd.run_cmd(["select-oci-auth", pullspec], check=True).stdout
+        auth_file.write_text(auth_out, encoding="utf-8")
+        raw = oras_utils.oras_manifest_fetch(pullspec, auth_file)
+    finally:
+        auth_file.unlink(missing_ok=True)
+    return json.loads(raw)
 
 
 def image_type_for_filename(filename: str) -> str | None:
@@ -229,6 +314,11 @@ def prepare_component(
     Blocks on ``memory_throttle.wait_for_memory`` before pulling/decompressing,
     so a bounded number of large disk images are held in memory at once even
     when several worker threads are active concurrently.
+
+    A genuine multi-arch OCI image index (more than one manifest entry) is
+    pulled once per architecture found in ``staged.files``, each into its own
+    subdirectory, since ``oras pull`` only selects a single architecture at a
+    time via ``--platform``.
     """
     product_info = require_field(component, "productInfo")
     pullspec = str(require_field(component, "containerImage"))
@@ -263,18 +353,35 @@ def prepare_component(
 
         with tempfile.TemporaryDirectory(dir=workdir) as download_dir_name:
             download_dir = Path(download_dir_name)
-            oras_utils.oras_pull(pullspec, download_dir)
+            manifest = fetch_manifest(pullspec)
+            is_multiarch = is_multiarch_manifest(manifest)
+
+            if is_multiarch:
+                validate_manifest_platforms(manifest, pullspec)
+                for arch in staged_file_architectures(staged_files):
+                    arch_dir = download_dir / arch
+                    arch_dir.mkdir(parents=True, exist_ok=True)
+                    oras_utils.oras_pull(
+                        pullspec, arch_dir, platform=rh_arch_to_oci_platform(arch)
+                    )
+            else:
+                oras_utils.oras_pull(pullspec, download_dir)
 
             for entry in staged_files:
                 if not isinstance(entry, Mapping):
                     raise ValueError("staged.files entries must be objects")
                 source = str(require_field(entry, "source"))
                 filename = str(require_field(entry, "filename"))
-                source_path = download_dir / source
+                source_dir = (
+                    download_dir / parse_architecture(filename)
+                    if is_multiarch
+                    else download_dir
+                )
+                source_path = source_dir / source
 
                 if not source_path.is_file():
                     raise RuntimeError(
-                        f"Source file '{source}' for component '{filename}' "
+                        f"Source file '{source_path}' for component '{filename}' "
                         "was not found after oras pull."
                     )
 

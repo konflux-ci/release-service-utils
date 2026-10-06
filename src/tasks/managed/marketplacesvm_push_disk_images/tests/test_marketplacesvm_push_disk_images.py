@@ -43,6 +43,32 @@ def _patch_run_cmd(monkeypatch: pytest.MonkeyPatch, fake: Any) -> None:
     monkeypatch.setattr(m.subprocess_cmd, "run_cmd", fake)
 
 
+def _single_manifest() -> dict[str, Any]:
+    return {"mediaType": "application/vnd.oci.image.manifest.v1+json"}
+
+
+def _multiarch_manifest(archs: list[str] | None = None) -> dict[str, Any]:
+    archs = archs if archs is not None else ["amd64", "arm64"]
+    return {
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [
+            {"digest": f"sha256:{arch}", "platform": {"architecture": arch, "os": "linux"}}
+            for arch in archs
+        ],
+    }
+
+
+def _patch_fetch_manifest(
+    monkeypatch: pytest.MonkeyPatch, manifest: dict[str, Any] | None = None
+) -> None:
+    """Replace ``fetch_manifest`` so tests never hit a real registry.
+
+    Defaults to a plain, non-index manifest so most tests exercise the
+    single-arch pull path without opting in explicitly.
+    """
+    monkeypatch.setattr(m, "fetch_manifest", lambda _pullspec: manifest or _single_manifest())
+
+
 def _valid_credential() -> dict[str, Any]:
     return {"marketplace_account": "aws-na", "auth": {"token": "secret"}}
 
@@ -285,6 +311,102 @@ def test_parse_architecture() -> None:
     assert m.parse_architecture("test-product-amd-1.3-1732045201-x86_64.raw") == "x86_64"
 
 
+def test_parse_architecture_compound_extension() -> None:
+    """Architecture is resolved even with a two-part (e.g. .raw.gz) extension."""
+    assert m.parse_architecture("test-product-amd-1.3-1732045201-aarch64.raw.gz") == "aarch64"
+
+
+# --- multi-arch helpers ---
+
+
+def test_rh_arch_to_oci_platform_known_archs() -> None:
+    """x86_64 and aarch64 map to their OCI platform equivalents."""
+    assert m.rh_arch_to_oci_platform("x86_64") == "linux/amd64"
+    assert m.rh_arch_to_oci_platform("aarch64") == "linux/arm64"
+
+
+def test_rh_arch_to_oci_platform_unknown_arch_passthrough() -> None:
+    """Unrecognized architectures fall back to linux/<arch>."""
+    assert m.rh_arch_to_oci_platform("ppc64le") == "linux/ppc64le"
+
+
+def test_is_multiarch_manifest_true_for_index_with_multiple_manifests() -> None:
+    """A genuine multi-arch index (>1 manifest) is detected."""
+    assert m.is_multiarch_manifest(_multiarch_manifest()) is True
+
+
+def test_is_multiarch_manifest_false_for_single_manifest_index() -> None:
+    """An index mediaType wrapping only one manifest is not multi-arch."""
+    manifest = _multiarch_manifest(["amd64"])
+    assert m.is_multiarch_manifest(manifest) is False
+
+
+def test_is_multiarch_manifest_false_for_plain_manifest() -> None:
+    """A plain (non-index) manifest is not multi-arch."""
+    assert m.is_multiarch_manifest(_single_manifest()) is False
+
+
+def test_validate_manifest_platforms_passes_when_all_have_architecture() -> None:
+    """No error is raised when every manifest entry has platform.architecture."""
+    m.validate_manifest_platforms(_multiarch_manifest(), "quay.io/org/image@sha256:abc")
+
+
+def test_validate_manifest_platforms_raises_when_architecture_missing() -> None:
+    """RuntimeError is raised when any manifest entry lacks platform.architecture."""
+    manifest = {
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [
+            {"digest": "sha256:aaa"},
+            {"digest": "sha256:bbb", "platform": {"architecture": "arm64", "os": "linux"}},
+        ],
+    }
+    with pytest.raises(RuntimeError, match="without platform.architecture metadata"):
+        m.validate_manifest_platforms(manifest, "quay.io/org/image@sha256:abc")
+
+
+def test_staged_file_architectures_returns_parsed_archs() -> None:
+    """Architectures are parsed in staged.files order."""
+    staged_files = [
+        {"filename": "foo-1.3-1732045201-x86_64.raw.gz", "source": "disk.raw.gz"},
+        {"filename": "foo-1.3-1732045201-aarch64.raw.gz", "source": "disk.raw.gz"},
+    ]
+    assert m.staged_file_architectures(staged_files) == ["x86_64", "aarch64"]
+
+
+def test_staged_file_architectures_raises_on_duplicate_arch() -> None:
+    """RuntimeError is raised when two staged files share the same architecture."""
+    staged_files = [
+        {"filename": "foo-1.3-1732045201-x86_64.raw.gz", "source": "disk1.raw.gz"},
+        {"filename": "foo-1.3-1732045201-x86_64.qcow2.gz", "source": "disk2.qcow2.gz"},
+    ]
+    with pytest.raises(RuntimeError, match="more than one file for the same architecture"):
+        m.staged_file_architectures(staged_files)
+
+
+def test_fetch_manifest_parses_oras_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """fetch_manifest writes an auth file, fetches, parses JSON, then cleans up."""
+    created: list[Path] = []
+
+    def fake_run_cmd(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert cmd == ["select-oci-auth", "quay.io/org/image@sha256:abc"]
+        return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+
+    def fake_manifest_fetch(pullspec: str, auth_file: Path, **_kwargs: Any) -> str:
+        assert pullspec == "quay.io/org/image@sha256:abc"
+        created.append(auth_file)
+        assert auth_file.is_file()
+        return json.dumps(_multiarch_manifest())
+
+    _patch_run_cmd(monkeypatch, fake_run_cmd)
+    monkeypatch.setattr(m.oras_utils, "oras_manifest_fetch", fake_manifest_fetch)
+
+    manifest = m.fetch_manifest("quay.io/org/image@sha256:abc")
+    assert manifest == _multiarch_manifest()
+    assert not created[0].exists()
+
+
 def test_image_type_for_filename() -> None:
     """VHD and AMI types are detected; others return None."""
     assert m.image_type_for_filename("disk.vhd") == "VHD"
@@ -346,6 +468,7 @@ def test_prepare_component_raw_image(tmp_path: Path, monkeypatch: pytest.MonkeyP
         with gzip.open(gz_path, "wb") as handle:
             handle.write(b"raw-content")
 
+    _patch_fetch_manifest(monkeypatch)
     _patch_oras_pull(monkeypatch, fake_oras_pull)
     _patch_wait_for_memory(monkeypatch)
     m.prepare_component(component, disk_imgs, workdir)
@@ -383,6 +506,7 @@ def test_prepare_component_vhd_image(tmp_path: Path, monkeypatch: pytest.MonkeyP
         with gzip.open(gz_path, "wb") as handle:
             handle.write(b"vhd-content")
 
+    _patch_fetch_manifest(monkeypatch)
     _patch_oras_pull(monkeypatch, fake_oras_pull)
     _patch_wait_for_memory(monkeypatch)
     m.prepare_component(component, disk_imgs, workdir)
@@ -404,6 +528,7 @@ def test_prepare_component_missing_source(
     def fake_oras_pull(_pullspec: str, _download_dir: Path, **_kwargs: Any) -> None:
         return None
 
+    _patch_fetch_manifest(monkeypatch)
     _patch_oras_pull(monkeypatch, fake_oras_pull)
     _patch_wait_for_memory(monkeypatch)
     with pytest.raises(RuntimeError, match="was not found after oras pull"):
@@ -434,6 +559,7 @@ def test_prepare_component_duplicate_destination(
             with gzip.open(download_dir / name, "wb") as handle:
                 handle.write(b"x")
 
+    _patch_fetch_manifest(monkeypatch)
     _patch_oras_pull(monkeypatch, fake_oras_pull)
     _patch_wait_for_memory(monkeypatch)
     with pytest.raises(RuntimeError, match="Multiple files use the same destination"):
@@ -472,6 +598,7 @@ def test_prepare_component_non_mapping_staged_file_entry(
         with gzip.open(download_dir / "disk.raw.gz", "wb") as handle:
             handle.write(b"raw-content")
 
+    _patch_fetch_manifest(monkeypatch)
     _patch_oras_pull(monkeypatch, fake_oras_pull)
     _patch_wait_for_memory(monkeypatch)
     with pytest.raises(ValueError, match="staged.files entries must be objects"):
@@ -493,6 +620,7 @@ def test_prepare_component_skips_unsupported(
     def fake_oras_pull(_pullspec: str, download_dir: Path, **_kwargs: Any) -> None:
         (download_dir / "disk.qcow2").write_bytes(b"qcow")
 
+    _patch_fetch_manifest(monkeypatch)
     _patch_oras_pull(monkeypatch, fake_oras_pull)
     _patch_wait_for_memory(monkeypatch)
     m.prepare_component(component, disk_imgs, workdir)
@@ -501,6 +629,119 @@ def test_prepare_component_skips_unsupported(
     )
     assert resources["images"] == []
     assert "type" not in resources
+
+
+def test_prepare_component_multiarch_pulls_per_platform_into_subdirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A genuine multi-arch index pulls each architecture into its own subdir."""
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    disk_imgs = tmp_path / "starmap" / "CLOUD_IMAGES"
+    component = _valid_component(name="multiarch-disk")
+    component["staged"]["files"] = [
+        {"filename": "test-product-amd-1.3-1732045201-x86_64.raw.gz", "source": "disk.raw.gz"},
+        {
+            "filename": "test-product-amd-1.3-1732045201-aarch64.raw.gz",
+            "source": "disk.raw.gz",
+        },
+    ]
+    pull_calls: list[tuple[Path, str | None]] = []
+
+    def fake_oras_pull(_pullspec: str, download_dir: Path, **kwargs: Any) -> None:
+        pull_calls.append((download_dir, kwargs.get("platform")))
+        with gzip.open(download_dir / "disk.raw.gz", "wb") as handle:
+            handle.write(f"content-{kwargs.get('platform')}".encode())
+
+    _patch_fetch_manifest(monkeypatch, _multiarch_manifest())
+    _patch_oras_pull(monkeypatch, fake_oras_pull)
+    _patch_wait_for_memory(monkeypatch)
+    m.prepare_component(component, disk_imgs, workdir)
+
+    assert {platform for _, platform in pull_calls} == {"linux/amd64", "linux/arm64"}
+    assert len({download_dir for download_dir, _ in pull_calls}) == 2
+
+    dest = disk_imgs / "multiarch-disk"
+    x86 = dest / "test-product-amd-1.3-1732045201-x86_64.raw"
+    arm = dest / "test-product-amd-1.3-1732045201-aarch64.raw"
+    assert x86.read_bytes() == b"content-linux/amd64"
+    assert arm.read_bytes() == b"content-linux/arm64"
+    resources = yaml.safe_load((dest / "resources.yaml").read_text(encoding="utf-8"))
+    archs = {img["architecture"] for img in resources["images"]}
+    assert archs == {"x86_64", "aarch64"}
+
+
+def test_prepare_component_single_manifest_index_uses_plain_pull(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An index wrapping a single manifest falls back to a plain pull (no --platform)."""
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    disk_imgs = tmp_path / "starmap" / "CLOUD_IMAGES"
+    component = _valid_component()
+    pull_calls: list[dict[str, Any]] = []
+
+    def fake_oras_pull(_pullspec: str, download_dir: Path, **kwargs: Any) -> None:
+        pull_calls.append(kwargs)
+        with gzip.open(download_dir / "disk.raw.gz", "wb") as handle:
+            handle.write(b"raw-content")
+
+    _patch_fetch_manifest(monkeypatch, _multiarch_manifest(["amd64"]))
+    _patch_oras_pull(monkeypatch, fake_oras_pull)
+    _patch_wait_for_memory(monkeypatch)
+    m.prepare_component(component, disk_imgs, workdir)
+
+    assert len(pull_calls) == 1
+    assert pull_calls[0].get("platform") is None
+
+
+def test_prepare_component_multiarch_missing_platform_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A multi-arch index missing platform.architecture on any entry fails loudly."""
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    disk_imgs = tmp_path / "starmap" / "CLOUD_IMAGES"
+    component = _valid_component()
+    manifest = {
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [{"digest": "sha256:aaa"}, {"digest": "sha256:bbb"}],
+    }
+
+    def fail_oras_pull(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("oras pull should not run when platform metadata is missing")
+
+    _patch_fetch_manifest(monkeypatch, manifest)
+    _patch_oras_pull(monkeypatch, fail_oras_pull)
+    _patch_wait_for_memory(monkeypatch)
+    with pytest.raises(RuntimeError, match="without platform.architecture metadata"):
+        m.prepare_component(component, disk_imgs, workdir)
+
+
+def test_prepare_component_multiarch_duplicate_arch_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A multi-arch component with two staged files for the same arch fails loudly."""
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    disk_imgs = tmp_path / "starmap" / "CLOUD_IMAGES"
+    component = _valid_component()
+    component["staged"]["files"] = [
+        {"filename": "test-product-amd-1.3-1732045201-x86_64.raw.gz", "source": "disk.raw.gz"},
+        {
+            "filename": "test-product-amd-1.3-1732045201-x86_64.qcow2.gz",
+            "source": "disk.qcow2.gz",
+        },
+    ]
+
+    def fail_oras_pull(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("oras pull should not run before the duplicate-arch check")
+
+    _patch_fetch_manifest(monkeypatch, _multiarch_manifest())
+    _patch_oras_pull(monkeypatch, fail_oras_pull)
+    _patch_wait_for_memory(monkeypatch)
+    with pytest.raises(RuntimeError, match="more than one file for the same architecture"):
+        m.prepare_component(component, disk_imgs, workdir)
 
 
 # --- prepare_components ---
@@ -517,6 +758,7 @@ def test_prepare_components_aggregates_failures(
     def boom(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("pull failed")
 
+    _patch_fetch_manifest(monkeypatch)
     _patch_oras_pull(monkeypatch, boom)
     _patch_wait_for_memory(monkeypatch)
     with pytest.raises(RuntimeError, match="prepare_component failed for at least"):
@@ -538,6 +780,7 @@ def test_prepare_components_success(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         with gzip.open(download_dir / "disk.raw.gz", "wb") as handle:
             handle.write(b"ok")
 
+    _patch_fetch_manifest(monkeypatch)
     _patch_oras_pull(monkeypatch, fake_oras_pull)
     _patch_wait_for_memory(monkeypatch)
     m.prepare_components(
@@ -566,6 +809,7 @@ def test_prepare_components_throttles_memory_per_component(
     def counting_wait(threshold: int) -> None:
         calls.append(threshold)
 
+    _patch_fetch_manifest(monkeypatch)
     _patch_oras_pull(monkeypatch, fake_oras_pull)
     _patch_wait_for_memory(monkeypatch, counting_wait)
     m.prepare_components(
@@ -717,6 +961,7 @@ def test_run_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.delenv("CLOUD_CREDENTIALS", raising=False)
+    _patch_fetch_manifest(monkeypatch)
     _patch_oras_pull(monkeypatch, fake_oras_pull)
     _patch_run_cmd(monkeypatch, fake_run_cmd)
     _patch_wait_for_memory(monkeypatch)
@@ -754,6 +999,7 @@ def test_run_pre_push_true(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.delenv("CLOUD_CREDENTIALS", raising=False)
+    _patch_fetch_manifest(monkeypatch)
     _patch_oras_pull(monkeypatch, fake_oras_pull)
     _patch_run_cmd(monkeypatch, fake_run_cmd)
     _patch_wait_for_memory(monkeypatch)
