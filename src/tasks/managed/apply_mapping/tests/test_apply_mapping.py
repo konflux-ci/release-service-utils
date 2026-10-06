@@ -293,20 +293,44 @@ def test_component_increment_tag_flexible_whitespace() -> None:
 
 def test_substitute_value_from_substitute_map() -> None:
     """Plain variables are read from the substitute map."""
-    assert apply_mapping._substitute_value("git_sha", {"git_sha": "abc"}, {}) == "abc"
+    assert apply_mapping._substitute_value("git_sha", {"git_sha": "abc"}, {}, {}) == "abc"
 
 
 def test_substitute_value_from_labels() -> None:
     """``labels.<name>`` variables are read from the labels dict."""
     assert (
-        apply_mapping._substitute_value("labels.mylabel", {}, {"mylabel": "value"}) == "value"
+        apply_mapping._substitute_value("labels.mylabel", {}, {"mylabel": "value"}, {})
+        == "value"
+    )
+
+
+def test_substitute_value_from_annotations() -> None:
+    """``annotations.<name>`` variable are read from the annotations dict."""
+    assert (
+        apply_mapping._substitute_value(
+            "annotations.release-channel",
+            {},
+            {},
+            {"release-channel": "release-candidate"},
+        )
+        == "release-candidate"
+    )
+
+
+def test_substitute_value_annotations_dotted_key() -> None:
+    """Dotted annotation keys are resolved via the full suffix."""
+    assert (
+        apply_mapping._substitute_value(
+            "annotations.git.commit", {}, {}, {"git.commit": "abc123"}
+        )
+        == "abc123"
     )
 
 
 def test_substitute_value_missing_returns_empty_string() -> None:
     """Missing values return an empty string rather than raising."""
-    assert apply_mapping._substitute_value("unknown", {}, {}) == ""
-    assert apply_mapping._substitute_value("labels.missing", {}, {}) == ""
+    assert apply_mapping._substitute_value("unknown", {}, {}, {}) == ""
+    assert apply_mapping._substitute_value("labels.missing", {}, {}, {}) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +383,14 @@ def test_parse_additional_tags_label_rejects_invalid_characters() -> None:
 def test_translate_one_tag_substitutes_variable() -> None:
     """A simple variable reference is substituted."""
     result = apply_mapping.translate_one_tag(
-        "release-{{ git_sha }}", {"git_sha": "abc123"}, {}, "repo", [], {}, _fake_list_tags({})
+        "release-{{ git_sha }}",
+        {"git_sha": "abc123"},
+        {},
+        {},
+        "repo",
+        [],
+        {},
+        _fake_list_tags({}),
     )
     assert result == "release-abc123"
 
@@ -369,6 +400,7 @@ def test_translate_one_tag_multiple_variables() -> None:
     result = apply_mapping.translate_one_tag(
         "{{ git_short_sha }}-{{ oci_version }}",
         {"git_short_sha": "abc1234", "oci_version": "1_0"},
+        {},
         {},
         "repo",
         [],
@@ -384,6 +416,7 @@ def test_translate_one_tag_label_variable() -> None:
         "tag-{{ labels.mylabel }}",
         {},
         {"mylabel": "labelvalue"},
+        {},
         "repo",
         [],
         {},
@@ -392,10 +425,40 @@ def test_translate_one_tag_label_variable() -> None:
     assert result == "tag-labelvalue"
 
 
+def test_translate_one_tag_annotation_variable() -> None:
+    """An annotations.* reference is substituted from the annotations dict."""
+    result = apply_mapping.translate_one_tag(
+        "tag-{{ annotations.release-channel }}",
+        {},
+        {},
+        {"release-channel": "release-candidate"},
+        "repo",
+        [],
+        {},
+        _fake_list_tags({}),
+    )
+    assert result == "tag-release-candidate"
+
+
+def test_translate_one_tag_annotation_invalid_for_tag_raises() -> None:
+    """Annotation values that produce invalid tags raise ``ValueError``."""
+    with pytest.raises(ValueError, match="Invalid tag format"):
+        apply_mapping.translate_one_tag(
+            "{{ annotations.git.url }}",
+            {},
+            {},
+            {"git.url": "https://github.com/example/repo"},
+            "repo",
+            [],
+            {},
+            _fake_list_tags({}),
+        )
+
+
 def test_translate_one_tag_no_variables_passthrough() -> None:
     """A tag with no template variables is returned unchanged (after validation)."""
     result = apply_mapping.translate_one_tag(
-        "plain-tag", {}, {}, "repo", [], {}, _fake_list_tags({})
+        "plain-tag", {}, {}, {}, "repo", [], {}, _fake_list_tags({})
     )
     assert result == "plain-tag"
 
@@ -404,7 +467,7 @@ def test_translate_one_tag_unknown_variable_raises() -> None:
     """An unknown or empty substitution variable raises ``ValueError``."""
     with pytest.raises(ValueError, match="Substitution variable unknown or empty"):
         apply_mapping.translate_one_tag(
-            "{{ unknown_var }}", {}, {}, "repo", [], {}, _fake_list_tags({})
+            "{{ unknown_var }}", {}, {}, {}, "repo", [], {}, _fake_list_tags({})
         )
 
 
@@ -412,6 +475,7 @@ def test_translate_one_tag_incrementer() -> None:
     """``{{ incrementer }}`` is resolved via the injected list_tags_fn."""
     result = apply_mapping.translate_one_tag(
         "v1.0.0-{{ incrementer }}",
+        {},
         {},
         {},
         "repo",
@@ -429,6 +493,7 @@ def test_translate_one_tag_component_incrementer() -> None:
         "v1.0.0-{{ component-incrementer }}",
         {},
         {},
+        {},
         "repo-a",
         ["repo-a", "repo-b"],
         cache,
@@ -441,7 +506,14 @@ def test_translate_one_tag_invalid_result_raises() -> None:
     """A substituted value that produces an invalid tag raises ``ValueError``."""
     with pytest.raises(ValueError, match="Invalid tag format"):
         apply_mapping.translate_one_tag(
-            "{{ git_sha }}", {"git_sha": "bad sha!"}, {}, "repo", [], {}, _fake_list_tags({})
+            "{{ git_sha }}",
+            {"git_sha": "bad sha!"},
+            {},
+            {},
+            "repo",
+            [],
+            {},
+            _fake_list_tags({}),
         )
 
 
@@ -450,6 +522,7 @@ def test_translate_tags_deduplicates_preserving_order() -> None:
     result = apply_mapping.translate_tags(
         ["static", "{{ git_sha }}", "static"],
         {"git_sha": "static"},
+        {},
         {},
         "repo",
         [],
@@ -461,7 +534,9 @@ def test_translate_tags_deduplicates_preserving_order() -> None:
 
 def test_translate_tags_empty_list_returns_empty_list() -> None:
     """An empty tags list returns an empty list."""
-    assert apply_mapping.translate_tags([], {}, {}, "repo", [], {}, _fake_list_tags({})) == []
+    assert (
+        apply_mapping.translate_tags([], {}, {}, {}, "repo", [], {}, _fake_list_tags({})) == []
+    )
 
 
 def test_translate_tags_additional_tags_label_embedded_still_validates() -> None:
@@ -471,6 +546,7 @@ def test_translate_tags_additional_tags_label_embedded_still_validates() -> None
             ["v-{{ labels.konflux.additional-tags }}"],
             {},
             {"konflux.additional-tags": "1.58.2 1.58"},
+            {},
             "repo",
             [],
             {},
@@ -484,6 +560,7 @@ def test_translate_tags_additional_tags_label_deduplicates_with_literal_tag() ->
         ["v1", "{{ labels.konflux.additional-tags }}"],
         {},
         {"konflux.additional-tags": "v1 v2"},
+        {},
         "repo",
         [],
         {},
@@ -869,6 +946,50 @@ def test_process_component_non_standard_artifact_uses_annotations_only() -> None
     assert "labels" not in component.get("metadata", {})
     assert "env_variables" not in component.get("metadata", {})
     assert component["metadata"]["media_type"] == "application/vnd.cncf.helm.config.v1+json"
+
+
+def test_process_component_helm_chart_annotation_tags() -> None:
+    """Helm chart manifest annotations can drive release tag expansion."""
+    component = _base_component(
+        repositories=[
+            {
+                "url": "registry.io/helm-chart",
+                "tags": [
+                    "{{ annotations.release-channel }}",
+                    "build-{{ annotations.build-id }}",
+                    "{{ oci_version }}",
+                ],
+            }
+        ]
+    )
+
+    raw_manifest = {
+        "annotations": {
+            "release-channel": "release-candidate",
+            "build-id": "2.4.0-rc.1-abcdef1",
+            "org.opencontainers.image.version": "0.1.0+build",
+        },
+        "config": {"mediaType": "application/vnd.cncf.helm.config.v1+json"},
+    }
+
+    apply_mapping.process_component(
+        component,
+        default_tags=[],
+        default_timestamp_format="%s",
+        current_timestamp="20240101 00:00:00",
+        default_cgw_settings={},
+        add_implicit_timestamp_tag=False,
+        inspect_fn=_fake_inspect(raw_manifest),
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+    )
+
+    assert component["repositories"][0]["tags"] == [
+        "build-2.4.0-rc.1-abcdef1",
+        "release-candidate",
+        "0.1.0_build",
+    ]
 
 
 def test_process_component_no_metadata_added_when_nothing_present() -> None:
