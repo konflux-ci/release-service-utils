@@ -9,6 +9,7 @@ import os
 import time
 from pathlib import Path
 
+from packageurl import PackageURL
 from release_service_utils.helpers.advisory_data import advisory_data
 
 import pytest
@@ -472,3 +473,73 @@ def test_generate_purl_rpm_custom_vendor() -> None:
         "pkg", "1.0", "1.el9", "x86_64", "rhel", "repo-id", vendor="fedora"
     )
     assert purl.startswith("pkg:rpm/fedora/")
+
+
+@pytest.mark.parametrize(
+    ("name", "version", "epoch"),
+    [
+        ("bind", "9.20.27", "32"),
+        ("bind", "9.20.27", 32),
+        ("podman", "5.8.3", "5"),
+        ("podman", "5.8.3", 5),
+    ],
+)
+def test_generate_purl_rpm_nonzero_epoch(name: str, version: str, epoch: str | int) -> None:
+    """Include nonzero epoch without losing other RPM identity fields."""
+    purl = advisory_data.generate_purl_rpm(
+        name, version, "0.1.hum1", "x86_64", "hummingbird", "repo-id", epoch=epoch
+    )
+    assert purl == (
+        f"pkg:rpm/redhat/{name}@{version}-0.1.hum1"
+        f"?arch=x86_64&epoch={epoch}&distro=hummingbird&repository_id=repo-id"
+    )
+    parsed = PackageURL.from_string(purl)
+    assert parsed.version == f"{version}-0.1.hum1"
+    assert parsed.qualifiers == {
+        "arch": "x86_64",
+        "epoch": str(epoch),
+        "distro": "hummingbird",
+        "repository_id": "repo-id",
+    }
+
+
+@pytest.mark.parametrize("epoch", [None, "", 0, "0", "00"])
+def test_generate_purl_rpm_zero_or_absent_epoch(epoch: str | int | None) -> None:
+    """Preserve the legacy PURL exactly for absent or zero epochs."""
+    purl = advisory_data.generate_purl_rpm(
+        "hello", "1.0", "1.fc38", "x86_64", "hummingbird", "repo-id", epoch=epoch
+    )
+    assert purl == (
+        "pkg:rpm/redhat/hello@1.0-1.fc38"
+        "?arch=x86_64&distro=hummingbird&repository_id=repo-id"
+    )
+
+
+@pytest.mark.parametrize("epoch", ["032", " 32 "])
+def test_generate_purl_rpm_normalizes_epoch(epoch: str) -> None:
+    """Normalize nonzero epochs to a consistent decimal qualifier."""
+    purl = advisory_data.generate_purl_rpm(
+        "bind", "9.20.27", "0.1.hum1", "x86_64", "", "", epoch=epoch
+    )
+    assert purl == "pkg:rpm/redhat/bind@9.20.27-0.1.hum1?arch=x86_64&epoch=32"
+
+
+@pytest.mark.parametrize("epoch", [None, 32])
+def test_generate_purl_rpm_preserves_positional_vendor(epoch: int | None) -> None:
+    """Keep the seventh positional argument as vendor when epoch is supplied."""
+    purl = advisory_data.generate_purl_rpm(
+        "bind", "9.20.27", "0.1.hum1", "x86_64", "", "", "fedora", epoch=epoch
+    )
+    expected = "pkg:rpm/fedora/bind@9.20.27-0.1.hum1?arch=x86_64"
+    if epoch:
+        expected += "&epoch=32"
+    assert purl == expected
+
+
+@pytest.mark.parametrize("epoch", [-1, "-1", "invalid"])
+def test_generate_purl_rpm_rejects_invalid_epoch(epoch: str | int) -> None:
+    """Reject epochs that cannot identify an RPM package."""
+    with pytest.raises(ValueError):
+        advisory_data.generate_purl_rpm(
+            "bind", "9.20.27", "0.1.hum1", "x86_64", "", "", epoch=epoch
+        )
