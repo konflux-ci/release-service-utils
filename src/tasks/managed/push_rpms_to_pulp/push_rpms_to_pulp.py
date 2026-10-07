@@ -142,11 +142,11 @@ def build_rpm_repo_map(snapshot: dict[str, Any]) -> dict[str, list[str]]:
 
 
 def extract_from_signed(oci_artifact: str, files_dir: Path) -> None:
-    """Pull a signed-RPMs OCI artifact and unpack ``signed-rpms`` if present."""
+    """Fetch a signed-RPMs Trusted Artifact blob and unpack it if present."""
     oci_ref = oci_artifact.removeprefix("oci:")
-    logger.info("Extracting RPMs from signed RPMs OCI artifact: %s", oci_ref)
-    oras_utils.oras_pull(oci_ref, files_dir)
+    logger.info("Extracting RPMs from signed RPMs Trusted Artifact blob: %s", oci_ref)
     archive = files_dir / "signed-rpms"
+    oras_utils.oras_blob_fetch(oci_ref, archive)
     if archive.is_file():
         logger.info("Extracting signed-rpms archive")
         with tarfile.open(archive, "r:gz") as tf:
