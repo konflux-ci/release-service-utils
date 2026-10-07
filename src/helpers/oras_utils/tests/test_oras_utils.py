@@ -273,6 +273,27 @@ def test_oras_pull_raises_when_subprocess_fails(
     assert exc_info.value.returncode == 1
 
 
+def test_oras_pull_reuses_supplied_auth_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Use a caller-supplied auth file and leave it in place."""
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text('{"auths":{}}', encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run_cmd(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append([str(part) for part in cmd])
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(oras_utils.subprocess_cmd, "run_cmd", fake_run_cmd)
+    oras_utils.oras_pull("quay.io/org/image:tag", tmp_path, auth_file=auth_file)
+
+    assert calls == [
+        ["oras", "pull", "--registry-config", str(auth_file), "quay.io/org/image:tag"]
+    ]
+    assert auth_file.is_file()
+
+
 # ---------------------------------------------------------------------------
 # safe_extract_archive
 # ---------------------------------------------------------------------------

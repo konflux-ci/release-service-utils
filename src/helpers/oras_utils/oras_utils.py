@@ -170,22 +170,31 @@ def oras_pull(
     download_dir: Path,
     *,
     stderr_path: Path | None = None,
+    auth_file: Path | None = None,
 ) -> None:
-    """Pull an OCI artifact into *download_dir* using select-oci-auth and oras."""
-    auth_file = file.make_tempfile_path("oras-auth-")
+    """Pull an OCI artifact into *download_dir* using oras.
+
+    When *auth_file* is omitted, registry credentials are selected with
+    ``select-oci-auth`` and that temporary file is removed after the pull.
+    A caller-supplied *auth_file* is used as ``--registry-config`` and left
+    in place.
+    """
+    managed_auth = auth_file is None
+    auth_path = file.make_tempfile_path("oras-auth-") if managed_auth else auth_file
     try:
-        auth_out = subprocess_cmd.run_cmd(
-            ["select-oci-auth", str(pull_spec)],
-            stderr_path=stderr_path,
-            check=True,
-        ).stdout
-        auth_file.write_text(auth_out, encoding="utf-8")
+        if managed_auth:
+            auth_out = subprocess_cmd.run_cmd(
+                ["select-oci-auth", str(pull_spec)],
+                stderr_path=stderr_path,
+                check=True,
+            ).stdout
+            auth_path.write_text(auth_out, encoding="utf-8")
         subprocess_cmd.run_cmd(
             [
                 "oras",
                 "pull",
                 "--registry-config",
-                str(auth_file),
+                str(auth_path),
                 str(pull_spec),
             ],
             cwd=download_dir,
@@ -194,8 +203,8 @@ def oras_pull(
             stream_stdout=True,
         )
     finally:
-        # Always remove the auth file; subprocess failures still propagate to callers.
-        auth_file.unlink(missing_ok=True)
+        if managed_auth:
+            auth_path.unlink(missing_ok=True)
 
 
 def extract_disk_image_files(
