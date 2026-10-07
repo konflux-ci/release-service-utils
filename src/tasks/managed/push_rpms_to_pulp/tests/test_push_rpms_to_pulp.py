@@ -293,13 +293,13 @@ class TestPlacementFor:
 
 
 class TestExtractFromSigned:
-    """Test signed OCI artifact extraction."""
+    """Test signed Trusted Artifact blob extraction."""
 
-    def test_pulls_without_archive(self, tmp_path: Path) -> None:
-        """Oras pull is used and missing signed-rpms is ignored."""
-        with patch(f"{TASK}.oras_utils.oras_pull") as mock_pull:
+    def test_fetches_blob_without_archive(self, tmp_path: Path) -> None:
+        """Blob fetch is used and a missing signed-rpms file is ignored."""
+        with patch(f"{TASK}.oras_utils.oras_blob_fetch") as mock_fetch:
             task.extract_from_signed("oci:quay.io/a@sha256:1", tmp_path)
-        mock_pull.assert_called_once_with("quay.io/a@sha256:1", tmp_path)
+        mock_fetch.assert_called_once_with("quay.io/a@sha256:1", tmp_path / "signed-rpms")
 
     def test_extracts_archive(self, tmp_path: Path) -> None:
         """Unpack signed-rpms and remove the archive."""
@@ -308,13 +308,13 @@ class TestExtractFromSigned:
         rpm = inner / "hello-1.0-1.x86_64.rpm"
         rpm.write_bytes(b"rpm")
         archive = tmp_path / "signed-rpms"
-        with tarfile.open(archive, "w:gz") as tf:
-            tf.add(rpm, arcname="hello-1.0-1.x86_64.rpm")
 
-        def fake_pull(_ref: str, dest: Path) -> None:
-            dest.mkdir(parents=True, exist_ok=True)
+        def fake_fetch(_ref: str, dest: Path, *_args: object, **_kwargs: object) -> None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(dest, "w:gz") as tf:
+                tf.add(rpm, arcname="hello-1.0-1.x86_64.rpm")
 
-        with patch(f"{TASK}.oras_utils.oras_pull", side_effect=fake_pull):
+        with patch(f"{TASK}.oras_utils.oras_blob_fetch", side_effect=fake_fetch):
             task.extract_from_signed("quay.io/a@sha256:1", tmp_path)
         assert not archive.exists()
         assert (tmp_path / "hello-1.0-1.x86_64.rpm").is_file()
@@ -442,12 +442,17 @@ class TestRun:
         client.check_digest.return_value = PulpDigestStatus.NOT_FOUND
         client.upload_rpm.return_value = "/href/1"
 
-        def fake_pull(_image: str, dest: Path) -> None:
-            (dest / "hello-2.12.1-6.fc44.x86_64.rpm").write_bytes(b"")
+        def fake_fetch(_ref: str, dest: Path, *_args: object, **_kwargs: object) -> None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            rpm = dest.parent / "hello-2.12.1-6.fc44.x86_64.rpm"
+            rpm.write_bytes(b"")
+            with tarfile.open(dest, "w:gz") as tf:
+                tf.add(rpm, arcname=rpm.name)
+            rpm.unlink()
 
         with (
             patch(f"{TASK}.PulpClient.from_config", return_value=client),
-            patch(f"{TASK}.oras_utils.oras_pull", side_effect=fake_pull),
+            patch(f"{TASK}.oras_utils.oras_blob_fetch", side_effect=fake_fetch),
         ):
             task.run(cfg)
 
