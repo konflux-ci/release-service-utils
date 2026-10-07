@@ -5,7 +5,7 @@ description = "Konflux Release Service Utils"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "GitPython>=3.1.40",
+    "GitPython>=3.1.59",
     "PyYAML>=6.0.1",
     "requests",
     "requests-kerberos",
