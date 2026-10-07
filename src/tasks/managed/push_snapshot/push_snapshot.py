@@ -3,8 +3,12 @@
 
 For each component in the snapshot, copies container images (and optionally
 source containers and migration artifacts) to all configured destination
-repositories with the specified tags.  Pushes are executed concurrently via
-a thread pool.  Produces a JSON results file with image metadata.
+repositories with the specified tags.  Jobs are submitted to a thread pool
+and run concurrently, except that jobs copying the same underlying image
+content (tracked by content digest) are serialized against each other via a
+per-digest lock, since running them concurrently would race to upload the
+same layers to a destination that does not have them yet.  Produces a JSON
+results file with image metadata.
 """
 
 from __future__ import annotations
@@ -13,13 +17,14 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import time
 import re
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from release_service_utils.helpers import (
     authentication,
@@ -567,6 +572,35 @@ def _build_component_jobs(
     return jobs
 
 
+def _job_digest(job: PushJob | MigrationJob) -> str:
+    """Return the content digest a job copies, used to key its serialization lock."""
+    if isinstance(job, PushJob):
+        return job.origin_digest
+    return job.migration_digest
+
+
+def _run_job(
+    fn: Any,
+    job: PushJob | MigrationJob,
+    lock_for_digest: Callable[[str], threading.Lock],
+) -> tuple[dict[str, str] | None, str | None]:
+    """Run a single push/migration job, serialized against same-content jobs.
+
+    Acquires a lock keyed by the job's content digest before running it, so
+    that no two jobs copying the same underlying image content (whether from
+    the same component or different ones) ever upload concurrently to a
+    destination that does not have the content yet. Jobs with distinct
+    digests run fully in parallel. Returns a ``(result, error)`` pair.
+    """
+    try:
+        with lock_for_digest(_job_digest(job)):
+            result = fn(job)
+        return (result if isinstance(result, dict) else None), None
+    except Exception as exc:
+        logger.error("Push failed: %s", exc)
+        return None, str(exc)
+
+
 def run(
     snapshot_path: Path,
     data_path: Path,
@@ -598,10 +632,21 @@ def run(
     futures: list[Any] = []
     jobs_spawned = 0
 
-    def _submit_throttled(fn: Any, job: Any) -> None:
+    digest_locks: dict[str, threading.Lock] = {}
+    digest_locks_guard = threading.Lock()
+
+    def _lock_for_digest(digest: str) -> threading.Lock:
+        with digest_locks_guard:
+            lock = digest_locks.get(digest)
+            if lock is None:
+                lock = threading.Lock()
+                digest_locks[digest] = lock
+            return lock
+
+    def _submit_throttled(fn: Any, job: PushJob | MigrationJob) -> None:
         nonlocal jobs_spawned
         memory_throttle.wait_for_memory(MEMORY_THRESHOLD)
-        futures.append(executor.submit(fn, job))
+        futures.append(executor.submit(_run_job, fn, job, _lock_for_digest))
         jobs_spawned += 1
         if jobs_spawned % BURST_SIZE == 0:
             time.sleep(STABILIZATION_DELAY)
@@ -636,9 +681,11 @@ def run(
 
             for future in as_completed(futures):
                 try:
-                    result = future.result()
-                    if isinstance(result, dict):
+                    result, error = future.result()
+                    if result is not None:
                         push_results.append(result)
+                    if error is not None:
+                        failures.append(error)
                 except Exception as exc:
                     failures.append(str(exc))
                     logger.error("Push failed: %s", exc)
