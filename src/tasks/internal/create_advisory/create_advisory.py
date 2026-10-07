@@ -32,6 +32,7 @@ import requests
 from requests_kerberos import OPTIONAL, HTTPKerberosAuth
 import yaml
 
+from release_service_utils.helpers.logger import logger
 from release_service_utils.helpers import advisory_data
 from release_service_utils.helpers.apply_template import render_template_to_json_file
 from release_service_utils.helpers import authentication
@@ -204,6 +205,7 @@ def _finish_if_all_content_already_published(
     # Repo-relative path to the advisory that last removed rows from content_file.
     latest_advisory_file: str | None = None
 
+    logger.info("Checking existing advisories for already-published content")
     # Newest advisories first (by directory mtime). For each, drop rows already
     # published there; stop early if nothing remains to release.
     for year_num_subdir in advisory_data.list_existing_advisory_subdirs(advisory_base):
@@ -230,6 +232,13 @@ def _finish_if_all_content_already_published(
 
         rows_after = len(json.loads(content_file.read_text(encoding="utf-8")))
 
+        if rows_before != rows_after:
+            logger.info(
+                "Advisory %s matched %d of %d content rows",
+                year_num_subdir,
+                rows_before - rows_after,
+                rows_before,
+            )
         if rows_before > rows_after and latest_advisory_file is None:
             # Newest advisory that absorbed at least one of our rows — used for URLs
             # when the release is a no-op (everything already shipped).
@@ -241,6 +250,10 @@ def _finish_if_all_content_already_published(
             if not latest_advisory_file:
                 msg = "all content matched but latest advisory path was not set"
                 raise RuntimeError(msg)
+            logger.info(
+                "All content already published — reusing advisory %s",
+                latest_advisory_file,
+            )
             published_path = repo_root / latest_advisory_file
             published_doc = advisory_data.load_advisory_yaml(published_path)
             errata_type = advisory_data.get_advisory_spec_type(published_doc)
@@ -429,6 +442,11 @@ def _create_new_advisory(
     result_paths: dict[str, Path],
     params: dict[str, str],
 ) -> None:
+    logger.info(
+        "Creating new advisory %s for %s",
+        portal_advisory_id,
+        params["component_group"],
+    )
     new_advisory_dir = advisory_base / year / advisory_number_segment
     new_advisory_dir.mkdir(parents=True, exist_ok=True)
 
@@ -469,6 +487,12 @@ def run_create_advisory(
     krb5_template: Path = Path("/etc/krb5.conf"),
 ) -> None:
     """Run the full workflow. Raises on failure; `main` maps exceptions to result files."""
+    logger.info(
+        "Starting create-advisory: content_type=%s origin=%s component_group=%s",
+        params["content_type"],
+        params["origin"],
+        params["component_group"],
+    )
     credentials = gitlab.read_credentials_from_mount(advisory_secret)
     # Internal-request child results are written before work begins so partial runs
     # still expose pipeline/task run names to the parent.
@@ -620,6 +644,7 @@ def main(argv: list[str] | None = None) -> int:
             decoded=decoded,
         )
     except Exception as e:
+        logger.error("create-advisory failed: %s", e)
         tekton.write_failure_result(
             path_step_result,
             program_basename,
@@ -627,6 +652,8 @@ def main(argv: list[str] | None = None) -> int:
             command_log_path=command_log_path,
             workflow_action="running the advisory workflow",
         )
+    else:
+        logger.info("create-advisory completed successfully")
     # Tekton step succeeds; operators read failure detail from RESULT_RESULT.
     return 0
 
