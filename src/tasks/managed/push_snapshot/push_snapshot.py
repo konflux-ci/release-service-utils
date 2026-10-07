@@ -267,7 +267,7 @@ def push_image(job: PushJob) -> dict[str, str]:
                         "Copying %d attached artifacts for %s to %s",
                         len(artifacts),
                         job.container_image,
-                        dest_ref,
+                        job.repository_url,
                     )
                     for artifact in artifacts:
                         artifact_digest = artifact.get("digest")
@@ -277,14 +277,16 @@ def push_image(job: PushJob) -> dict[str, str]:
                             )
                             continue
                         artifact_ref = f"{job.container_image.split('@')[0]}@{artifact_digest}"
+                        dest_artifact_ref = f"{job.repository_url}@{artifact_digest}"
+
                         logger.info(
                             "Copying attached artifact: %s to %s",
                             artifact_ref,
-                            dest_ref,
+                            dest_artifact_ref,
                         )
                         oras_utils.oras_cp(
                             artifact_ref,
-                            dest_ref,
+                            dest_artifact_ref,
                             from_auth=job.source_auth_file,
                             to_auth=dest_auth_file,
                             recursive=False,
