@@ -8,11 +8,14 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
+from release_service_utils.helpers import tekton
 from release_service_utils.helpers.file.file import load_json_dict
 
 DEFAULT_SAFE_SUMMARY = "No unsafe operations were started."
+DEFAULT_RESULT_ENV_VAR = "RESULT_RETRY_SAFETY"
 MAX_RESULT_BYTES = 4096
 _STARTED_SUMMARY = "Unsafe operation started."
 _COMPLETED_SUMMARY = "Unsafe operation completed."
@@ -131,6 +134,71 @@ class RetrySafetyReport:
             summary=summary,
             details=dict(details),
         )
+
+
+@dataclass
+class RetrySafetyRecorder:
+    """Persist retry-safety updates for task scripts, including concurrent ones."""
+
+    result_path: Path | None
+    report: RetrySafetyReport
+    _lock: Lock = field(default_factory=Lock, init=False, repr=False, compare=False)
+
+    @classmethod
+    def from_env(
+        cls,
+        env_var_name: str = DEFAULT_RESULT_ENV_VAR,
+        *,
+        summary: str = DEFAULT_SAFE_SUMMARY,
+    ) -> RetrySafetyRecorder:
+        """Create a recorder when the result env var is present, otherwise a no-op one."""
+        raw_path = os.environ.get(env_var_name, "")
+        if not raw_path.strip():
+            return cls.disabled(summary=summary)
+
+        result_path = tekton.result_paths_from_env(env_var_name)[0]
+        return cls(
+            result_path=result_path,
+            report=initialize_result(result_path, summary=summary),
+        )
+
+    @classmethod
+    def disabled(
+        cls,
+        *,
+        summary: str = DEFAULT_SAFE_SUMMARY,
+    ) -> RetrySafetyRecorder:
+        """Create a recorder that tracks state in memory but writes no result file."""
+        report = RetrySafetyReport(summary=_normalized_summary(summary, DEFAULT_SAFE_SUMMARY))
+        return cls(result_path=None, report=report)
+
+    def mark_unsafe_operation_started(
+        self,
+        summary: str,
+        *,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Persist that an unsafe operation has started."""
+        with self._lock:
+            self.report.mark_unsafe_operation_started(summary, details=details)
+            self._write_locked()
+
+    def mark_unsafe_operation_completed(
+        self,
+        summary: str,
+        *,
+        count: int = 1,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Persist that one or more unsafe operations completed."""
+        with self._lock:
+            self.report.mark_unsafe_operation_completed(summary, count=count, details=details)
+            self._write_locked()
+
+    def _write_locked(self) -> None:
+        """Write the current report when a Tekton result path is configured."""
+        if self.result_path is not None:
+            write_result(self.result_path, self.report)
 
 
 def initialize_result(
