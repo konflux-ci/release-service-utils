@@ -18,7 +18,7 @@ import re
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from release_service_utils.helpers import (
@@ -27,6 +27,7 @@ from release_service_utils.helpers import (
     image_ref,
     memory_throttle,
     oras_utils,
+    retry_safety,
     retry,
     skopeo,
     subprocess_cmd,
@@ -59,6 +60,9 @@ class PushJob:
     source_auth_file: Path
     retries: int
     copy_bundle_migrations: bool
+    retry_safety_recorder: retry_safety.RetrySafetyRecorder = field(
+        default_factory=retry_safety.RetrySafetyRecorder.disabled
+    )
 
 
 @dataclass(frozen=True)
@@ -72,6 +76,9 @@ class MigrationJob:
     migration_tag: str
     source_auth_file: Path
     retries: int
+    retry_safety_recorder: retry_safety.RetrySafetyRecorder = field(
+        default_factory=retry_safety.RetrySafetyRecorder.disabled
+    )
 
 
 def select_oci_auth(reference: str) -> str:
@@ -304,6 +311,10 @@ def push_image(job: PushJob) -> dict[str, str]:
                         job.container_image, dest_ref, docker_config_dir, only="att,sbom"
                     )
 
+            job.retry_safety_recorder.mark_unsafe_operation_started(
+                "Started pushing snapshot image",
+                details={"name": job.name, "reference": dest_ref},
+            )
             retry.retry_with_exponential_backoff(
                 do_copy,
                 max_attempts=job.retries + 1,
@@ -312,6 +323,10 @@ def push_image(job: PushJob) -> dict[str, str]:
         finally:
             shutil.rmtree(docker_config_dir, ignore_errors=True)
 
+        job.retry_safety_recorder.mark_unsafe_operation_completed(
+            "Pushed snapshot image",
+            details={"name": job.name, "reference": dest_ref},
+        )
         return {"name": job.name, "url": dest_ref}
     finally:
         dest_auth_file.unlink(missing_ok=True)
@@ -341,6 +356,10 @@ def push_migration_artifact(job: MigrationJob) -> None:
             job.repository_url,
             job.migration_tag,
         )
+        job.retry_safety_recorder.mark_unsafe_operation_started(
+            "Started pushing migration artifact",
+            details={"name": job.name, "reference": dest_ref},
+        )
 
         def do_copy() -> None:
             oras_utils.oras_cp(
@@ -354,6 +373,10 @@ def push_migration_artifact(job: MigrationJob) -> None:
             do_copy,
             max_attempts=job.retries + 1,
             base_sleep_seconds=0,
+        )
+        job.retry_safety_recorder.mark_unsafe_operation_completed(
+            "Pushed migration artifact",
+            details={"name": job.name, "reference": dest_ref},
         )
     finally:
         dest_auth_file.unlink(missing_ok=True)
@@ -486,6 +509,7 @@ def _build_component_jobs(
     *,
     retries: int,
     copy_bundle_migrations: bool,
+    retry_safety_recorder: retry_safety.RetrySafetyRecorder,
 ) -> list[tuple[Any, PushJob | MigrationJob]]:
     """Build all push/migration jobs for a resolved component."""
     jobs: list[tuple[Any, PushJob | MigrationJob]] = []
@@ -508,6 +532,7 @@ def _build_component_jobs(
                         source_auth_file=resolved.source_auth_file,
                         retries=retries,
                         copy_bundle_migrations=False,
+                        retry_safety_recorder=retry_safety_recorder,
                     ),
                 )
             )
@@ -526,6 +551,7 @@ def _build_component_jobs(
                         source_auth_file=resolved.source_auth_file,
                         retries=retries,
                         copy_bundle_migrations=copy_bundle_migrations,
+                        retry_safety_recorder=retry_safety_recorder,
                     ),
                 )
             )
@@ -544,6 +570,7 @@ def _build_component_jobs(
                             source_auth_file=resolved.source_auth_file,
                             retries=retries,
                             copy_bundle_migrations=False,
+                            retry_safety_recorder=retry_safety_recorder,
                         ),
                     )
                 )
@@ -560,6 +587,7 @@ def _build_component_jobs(
                         migration_tag=resolved.migration_tag,
                         source_auth_file=resolved.source_auth_file,
                         retries=retries,
+                        retry_safety_recorder=retry_safety_recorder,
                     ),
                 )
             )
@@ -585,6 +613,7 @@ def run(
     data = file.load_json_dict(data_path)
 
     validate_snapshot(snapshot_data)
+    retry_safety_recorder = retry_safety.RetrySafetyRecorder.from_env()
 
     default_push_src = snapshot_helper.default_push_source_container(data)
     results_json: dict[str, Any] = {"images": []}
@@ -627,7 +656,10 @@ def run(
                 )
 
                 for fn, job in _build_component_jobs(
-                    resolved, retries=retries, copy_bundle_migrations=copy_bundle_migrations
+                    resolved,
+                    retries=retries,
+                    copy_bundle_migrations=copy_bundle_migrations,
+                    retry_safety_recorder=retry_safety_recorder,
                 ):
                     _submit_throttled(fn, job)
 

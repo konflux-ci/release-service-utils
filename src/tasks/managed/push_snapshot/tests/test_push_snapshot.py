@@ -7,7 +7,7 @@ import subprocess
 import types
 from collections.abc import Generator
 from pathlib import Path
-from unittest.mock import call, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -367,6 +367,41 @@ class TestPushImage:
             "reg.io/img@sha256:abc123", "prod.io/repo:v1.0", config_dir, only="att,sbom"
         )
         assert result == {"name": "comp1", "url": "prod.io/repo:v1.0"}
+
+    def test_does_not_mark_unsafe_before_local_setup_completes(self, tmp_path: Path) -> None:
+        """Do not mark retry safety unsafe when local auth setup fails."""
+        source_auth = tmp_path / "src_auth.json"
+        source_auth.write_text('{"auths":{}}', encoding="utf-8")
+        retry_safety_recorder = MagicMock()
+
+        with patch(f"{TASK}.create_dest_auth_file") as mock_dest_auth:
+            dest_file = tmp_path / "dest_auth.json"
+            dest_file.write_text('{"auths":{}}', encoding="utf-8")
+            mock_dest_auth.return_value = dest_file
+
+            with patch(f"{TASK}.oras_utils.oras_resolve", return_value=None):
+                with patch(
+                    f"{TASK}.create_combined_docker_config",
+                    side_effect=RuntimeError("docker config failed"),
+                ):
+                    with pytest.raises(RuntimeError, match="docker config failed"):
+                        push_snapshot.push_image(
+                            push_snapshot.PushJob(
+                                origin_digest="sha256:abc123",
+                                name="comp1",
+                                container_image="reg.io/img@sha256:abc123",
+                                repository_url="prod.io/repo",
+                                tag="v1.0",
+                                platform="",
+                                source_auth_file=source_auth,
+                                retries=0,
+                                copy_bundle_migrations=False,
+                                retry_safety_recorder=retry_safety_recorder,
+                            )
+                        )
+
+        retry_safety_recorder.mark_unsafe_operation_started.assert_not_called()
+        retry_safety_recorder.mark_unsafe_operation_completed.assert_not_called()
 
     def test_uses_oras_cp_with_artifacts(self, tmp_path: Path) -> None:
         """Use oras cp when attached artifacts are discovered."""

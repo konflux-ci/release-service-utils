@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, call, patch
 
 from create_container_image import (
     proxymap,
@@ -971,6 +971,68 @@ def test_create_or_update__skips_matching(mock_prepare, mock_find, mock_find_rep
     result = create_or_update(args)
 
     assert result == "exist123"
+
+
+@patch("create_container_image.create_container_image")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+def test_create_or_update__calls_before_remote_write_for_new_image(
+    mock_prepare,
+    mock_find,
+    mock_create,
+) -> None:
+    """Invoke the callback immediately before creating a new Pyxis image."""
+    mock_prepare.return_value = {"architecture": "amd64"}
+    mock_find.return_value = None
+    mock_create.return_value = "new123"
+    before_remote_write = MagicMock()
+
+    args = MagicMock()
+    args.rh_push = "false"
+    args.name = "quay.io/org/img"
+    args.tags = "v1.0"
+    args.is_latest = "false"
+    args.architecture_digest = "sha256:abc"
+    args.pyxis_url = PYXIS_URL
+    args.append_tags = "false"
+
+    result = create_or_update(args, before_remote_write=before_remote_write)
+
+    assert result == "new123"
+    assert before_remote_write.mock_calls == [call()]
+    assert mock_create.mock_calls[0] == call(args, {"architecture": "amd64"}, ["v1.0"])
+
+
+@patch("create_container_image.find_repo_in_image")
+@patch("create_container_image.find_image")
+@patch("create_container_image.prepare_parsed_data")
+def test_create_or_update__skips_callback_for_matching_image(
+    mock_prepare,
+    mock_find,
+    mock_find_repo,
+) -> None:
+    """Do not invoke the callback when no Pyxis write is needed."""
+    mock_prepare.return_value = {"architecture": "amd64"}
+    mock_find.return_value = {
+        "_id": "exist123",
+        "repositories": [{"repository": "org/img", "tags": [{"name": "v1.0"}]}],
+    }
+    mock_find_repo.return_value = 0
+    before_remote_write = MagicMock()
+
+    args = MagicMock()
+    args.rh_push = "false"
+    args.name = "quay.io/org/img"
+    args.tags = "v1.0"
+    args.is_latest = "false"
+    args.architecture_digest = "sha256:abc"
+    args.pyxis_url = PYXIS_URL
+    args.append_tags = "false"
+
+    result = create_or_update(args, before_remote_write=before_remote_write)
+
+    assert result == "exist123"
+    before_remote_write.assert_not_called()
 
 
 @patch("create_container_image.find_repo_in_image")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import tarfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -715,6 +715,60 @@ class TestRun:
             pytest.raises(RuntimeError, match="different digest"),
         ):
             task.run(cfg)
+
+
+class TestAddContentByRepo:
+    """Test retry-safety tracking for repository membership changes."""
+
+    def test_marks_retry_safety_around_repository_changes(self) -> None:
+        """Record start and completion around each Pulp repository modification."""
+        client = MagicMock()
+        retry_safety_recorder = MagicMock()
+        manager = MagicMock()
+        manager.attach_mock(retry_safety_recorder, "retry")
+        manager.attach_mock(client, "client")
+        ctx = task.PushContext(
+            client=client,
+            domain="mydomain",
+            chunk_size="100MB",
+            config_file=Path("/tmp/cli.toml"),
+            base_url="https://pulp.test",
+            docs=task.OutputDocs(),
+            timeout=30,
+            first_arch="x86_64",
+            retry_safety_recorder=retry_safety_recorder,
+        )
+
+        task.add_content_by_repo(
+            ctx,
+            {"x86_64": ["/href/1"], "source": ["/href/2"]},
+            ["x86_64", "aarch64", "source"],
+        )
+
+        assert [call.args for call in client.add_content.call_args_list] == [
+            ("x86_64", ["/href/1"], 30),
+            ("source", ["/href/2"], 30),
+        ]
+        assert manager.mock_calls == [
+            call.retry.mark_unsafe_operation_started(
+                "Started adding content to Pulp repository",
+                details={"repository": "x86_64"},
+            ),
+            call.client.add_content("x86_64", ["/href/1"], 30),
+            call.retry.mark_unsafe_operation_completed(
+                "Added content to Pulp repository",
+                details={"repository": "x86_64"},
+            ),
+            call.retry.mark_unsafe_operation_started(
+                "Started adding content to Pulp repository",
+                details={"repository": "source"},
+            ),
+            call.client.add_content("source", ["/href/2"], 30),
+            call.retry.mark_unsafe_operation_completed(
+                "Added content to Pulp repository",
+                details={"repository": "source"},
+            ),
+        ]
 
 
 class TestMain:

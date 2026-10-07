@@ -72,6 +72,10 @@ COMPONENT_EXTERNAL = {
 }
 
 
+def _retry_safety_recorder() -> MagicMock:
+    return MagicMock(spec=sign_item.__globals__["retry_safety"].RetrySafetyRecorder)
+
+
 # --- load_signing_secrets ---
 
 
@@ -504,6 +508,7 @@ def test_sign_item_skips_when_already_signed(
         rekor_key_path=None,
         retries=3,
         aws_env={},
+        retry_safety_recorder=_retry_safety_recorder(),
     )
 
     mock_cosign.assert_not_called()
@@ -531,6 +536,7 @@ def test_sign_item_calls_cosign_when_not_signed(
         rekor_key_path=None,
         retries=3,
         aws_env={},
+        retry_safety_recorder=_retry_safety_recorder(),
     )
 
     mock_cosign.assert_called_once()
@@ -568,6 +574,7 @@ def test_sign_item_passes_docker_config_to_verify(
         rekor_key_path=None,
         retries=3,
         aws_env={},
+        retry_safety_recorder=_retry_safety_recorder(),
     )
 
     verify_call_env = mock_check.call_args.kwargs["aws_env"]
@@ -600,6 +607,7 @@ def test_sign_item_with_rekor(
         rekor_key_path=rekor_key,
         retries=3,
         aws_env={},
+        retry_safety_recorder=_retry_safety_recorder(),
     )
 
     sign_kwargs = mock_cosign.call_args[1]
