@@ -59,6 +59,13 @@ def test_load_json_dict(tmp_path: Path) -> None:
     assert file.load_json_dict(path) == {"a": 1}
 
 
+def test_load_json_dict_missing_file(tmp_path: Path) -> None:
+    """A missing path raises ``FileNotFoundError``."""
+    path = tmp_path / "missing.json"
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        file.load_json_dict(path)
+
+
 def test_load_json_dict_rejects_non_object(tmp_path: Path) -> None:
     """A JSON array (non-object root) raises `TypeError`."""
     path = tmp_path / "data.json"
