@@ -20,6 +20,7 @@ from release_service_utils.helpers import (
     file,
     memory_throttle,
     pyxis_api,
+    retry_safety,
     retry,
     subprocess_cmd,
     tekton,
@@ -159,7 +160,10 @@ def download_sbom(job: ImageJob, retries: int) -> None:
         raise RuntimeError(f"SBOM file {output_path} was not created for image {job.image_id}")
 
 
-def upload_rpm_data(job: ImageJob) -> None:
+def upload_rpm_data(
+    job: ImageJob,
+    retry_safety_recorder: retry_safety.RetrySafetyRecorder,
+) -> None:
     """Validate one SPDX SBOM and upload its RPM data to Pyxis."""
     sbom_path = SBOM_DIR / f"{job.image_id}.json"
     if not sbom_path.is_file():
@@ -170,6 +174,10 @@ def upload_rpm_data(job: ImageJob) -> None:
         raise ValueError(f"{sbom_path}: not a valid SPDX SBOM")
 
     try:
+        retry_safety_recorder.mark_unsafe_operation_started(
+            "Started uploading RPM data to Pyxis",
+            details={"image_id": job.image_id},
+        )
         result = subprocess_cmd.run_cmd(
             [
                 "upload_rpm_data",
@@ -185,6 +193,10 @@ def upload_rpm_data(job: ImageJob) -> None:
     except subprocess.CalledProcessError as exc:
         _log_process_output(exc)
         raise
+    retry_safety_recorder.mark_unsafe_operation_completed(
+        "Uploaded RPM data to Pyxis",
+        details={"image_id": job.image_id},
+    )
     _log_process_output(result)
 
 
@@ -257,7 +269,13 @@ def run(pyxis_file: Path, concurrent_limit: int, retries: int) -> None:
         len(jobs),
         concurrent_limit,
     )
-    _run_phase(jobs, upload_rpm_data, concurrent_limit, "RPM data upload")
+    retry_safety_recorder = retry_safety.RetrySafetyRecorder.from_env()
+    _run_phase(
+        jobs,
+        partial(upload_rpm_data, retry_safety_recorder=retry_safety_recorder),
+        concurrent_limit,
+        "RPM data upload",
+    )
 
 
 def main() -> int:

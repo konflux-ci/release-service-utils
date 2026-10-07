@@ -46,6 +46,86 @@ def test_initialize_report_writes_default_safe_state(tmp_path: Path) -> None:
     assert retry_safety.load_result(result_path).to_dict() == report.to_dict()
 
 
+def test_retry_safety_recorder_from_env_returns_disabled_recorder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return a no-op recorder when the retry-safety result env var is absent."""
+    monkeypatch.delenv(retry_safety.DEFAULT_RESULT_ENV_VAR, raising=False)
+
+    recorder = retry_safety.RetrySafetyRecorder.from_env()
+
+    assert recorder.result_path is None
+    assert recorder.report.summary == retry_safety.DEFAULT_SAFE_SUMMARY
+
+
+def test_retry_safety_recorder_from_env_treats_whitespace_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return a no-op recorder when the retry-safety result env var is whitespace."""
+    monkeypatch.setenv(retry_safety.DEFAULT_RESULT_ENV_VAR, "   ")
+
+    with patch.object(retry_safety_module.tekton, "result_paths_from_env") as resolver:
+        recorder = retry_safety.RetrySafetyRecorder.from_env()
+
+    resolver.assert_not_called()
+    assert recorder.result_path is None
+    assert recorder.report.summary == retry_safety.DEFAULT_SAFE_SUMMARY
+
+
+def test_retry_safety_recorder_from_env_initializes_result_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Initialize and persist the retry-safety result when the env var is set."""
+    result_path = tmp_path / "retry-safety"
+    monkeypatch.setenv(retry_safety.DEFAULT_RESULT_ENV_VAR, str(result_path))
+
+    recorder = retry_safety.RetrySafetyRecorder.from_env()
+
+    assert recorder.result_path == result_path
+    assert retry_safety.load_result(result_path).to_dict() == recorder.report.to_dict()
+
+
+def test_retry_safety_recorder_from_env_uses_tekton_result_path_resolver(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve the configured result path through the shared Tekton helper."""
+    result_path = tmp_path / "retry-safety"
+    monkeypatch.setenv(retry_safety.DEFAULT_RESULT_ENV_VAR, str(result_path))
+
+    with patch.object(
+        retry_safety_module.tekton,
+        "result_paths_from_env",
+        return_value=(result_path,),
+    ) as result_paths_from_env:
+        recorder = retry_safety.RetrySafetyRecorder.from_env()
+
+    result_paths_from_env.assert_called_once_with(retry_safety.DEFAULT_RESULT_ENV_VAR)
+    assert recorder.result_path == result_path
+
+
+def test_retry_safety_recorder_persists_started_and_completed_updates(
+    tmp_path: Path,
+) -> None:
+    """Persist started and completed updates through the recorder API."""
+    result_path = tmp_path / "retry-safety"
+    recorder = retry_safety.RetrySafetyRecorder(
+        result_path=result_path,
+        report=retry_safety.initialize_result(result_path),
+    )
+
+    recorder.mark_unsafe_operation_started("Started push", details={"item": "a"})
+    recorder.mark_unsafe_operation_completed("Completed push", details={"item": "a"})
+
+    loaded = retry_safety.load_result(result_path)
+    assert loaded.is_safe_to_retry is False
+    assert loaded.unsafe_operation_in_progress is False
+    assert loaded.unsafe_operations_completed == 1
+    assert loaded.summary == "Completed push"
+    assert loaded.details == {"item": "a"}
+
+
 def test_initialize_report_uses_default_safe_summary_for_blank_input(
     tmp_path: Path,
 ) -> None:
