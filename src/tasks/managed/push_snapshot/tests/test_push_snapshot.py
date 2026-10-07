@@ -7,7 +7,7 @@ import subprocess
 import types
 from collections.abc import Generator
 from pathlib import Path
-from unittest.mock import call, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -234,59 +234,35 @@ class TestCosignCopy:
         call_kwargs = mock_run.call_args
         assert call_kwargs.kwargs["env"]["DOCKER_CONFIG"] == str(config_dir)
 
-    def test_calls_cosign_with_only_argument(self, tmp_path: Path) -> None:
-        """Invoke cosign copy with correct command args and the only argument when provided."""
-        config_dir = tmp_path / "docker"
-        config_dir.mkdir()
-        with patch(f"{TASK}.subprocess_cmd.run_cmd") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-            push_snapshot.cosign_copy("src:tag", "dst:tag", config_dir, only="att,sbom")
-
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert cmd == ["cosign", "copy", "-f", "--only", "att,sbom", "src:tag", "dst:tag"]
-
-    def test_calls_cosign_without_only_argument(self, tmp_path: Path) -> None:
-        """Invoke cosign copy with correct command args without only argument."""
-        config_dir = tmp_path / "docker"
-        config_dir.mkdir()
-        with patch(f"{TASK}.subprocess_cmd.run_cmd") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-            push_snapshot.cosign_copy("src:tag", "dst:tag", config_dir)
-
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert cmd == ["cosign", "copy", "-f", "src:tag", "dst:tag"]
-
 
 class TestDiscoverArtifactsWithRetry:
     """Test _discover_artifacts_with_retry."""
 
-    def test_returns_artifacts_on_success(self, tmp_path: Path) -> None:
-        """Return the list of discovered referrers on the first try."""
+    def test_returns_count_on_success(self, tmp_path: Path) -> None:
+        """Return the number of discovered referrers on the first try."""
         auth_file = tmp_path / "auth.json"
         auth_file.write_text("{}", encoding="utf-8")
         with patch(
             f"{TASK}.oras_discover_referrers",
             return_value=[{"digest": "sha256:a"}, {"digest": "sha256:b"}],
         ):
-            referrers = push_snapshot._discover_artifacts_with_retry(
+            count = push_snapshot._discover_artifacts_with_retry(
                 "reg.io/img@sha256:abc", auth_file, retries=2
             )
-        assert referrers == [{"digest": "sha256:a"}, {"digest": "sha256:b"}]
+        assert count == 2
 
-    def test_returns_empty_list_on_persistent_failure(self, tmp_path: Path) -> None:
-        """Fall back to empty list of discovered artifacts after repeated failures."""
+    def test_returns_zero_on_persistent_failure(self, tmp_path: Path) -> None:
+        """Fall back to zero discovered artifacts after repeated failures."""
         auth_file = tmp_path / "auth.json"
         auth_file.write_text("{}", encoding="utf-8")
         with patch(
             f"{TASK}.oras_discover_referrers",
             side_effect=RuntimeError("fail"),
         ):
-            artifacts = push_snapshot._discover_artifacts_with_retry(
+            count = push_snapshot._discover_artifacts_with_retry(
                 "reg.io/img@sha256:abc", auth_file, retries=1
             )
-        assert artifacts == []
+        assert count == 0
 
 
 class TestPushImage:
@@ -339,37 +315,28 @@ class TestPushImage:
                     (config_dir / "config.json").write_text("{}")
                     mock_config.return_value = config_dir
 
-                    with patch(f"{TASK}.skopeo.copy") as mock_skopeo:
-                        with patch(f"{TASK}.cosign_copy") as mock_cosign:
-                            result = push_snapshot.push_image(
-                                push_snapshot.PushJob(
-                                    origin_digest="sha256:abc123",
-                                    name="comp1",
-                                    container_image="reg.io/img@sha256:abc123",
-                                    repository_url="prod.io/repo",
-                                    tag="v1.0",
-                                    platform="",
-                                    source_auth_file=source_auth,
-                                    retries=0,
-                                    copy_bundle_migrations=False,
-                                )
+                    with patch(f"{TASK}.cosign_copy") as mock_cosign:
+                        result = push_snapshot.push_image(
+                            push_snapshot.PushJob(
+                                origin_digest="sha256:abc123",
+                                name="comp1",
+                                container_image="reg.io/img@sha256:abc123",
+                                repository_url="prod.io/repo",
+                                tag="v1.0",
+                                platform="",
+                                source_auth_file=source_auth,
+                                retries=0,
+                                copy_bundle_migrations=False,
                             )
+                        )
 
-        mock_skopeo.assert_called_once_with(
-            "docker://reg.io/img@sha256:abc123",
-            "docker://prod.io/repo:v1.0",
-            source_auth_file=source_auth,
-            dest_auth_file=dest_file,
-            all=True,
-            check=True,
-        )
         mock_cosign.assert_called_once_with(
-            "reg.io/img@sha256:abc123", "prod.io/repo:v1.0", config_dir, only="att,sbom"
+            "reg.io/img@sha256:abc123", "prod.io/repo:v1.0", config_dir
         )
         assert result == {"name": "comp1", "url": "prod.io/repo:v1.0"}
 
     def test_uses_oras_cp_with_artifacts(self, tmp_path: Path) -> None:
-        """Use oras cp when attached artifacts are discovered."""
+        """Use oras cp -r when attached artifacts are discovered."""
         source_auth = tmp_path / "src_auth.json"
         source_auth.write_text('{"auths":{}}', encoding="utf-8")
 
@@ -387,12 +354,7 @@ class TestPushImage:
 
                     with patch(
                         f"{TASK}._discover_artifacts_with_retry",
-                        return_value=[
-                            {
-                                "digest": "sha256:art1",
-                                "artifactType": "application/vnd.example.sbom",
-                            }
-                        ],
+                        return_value=2,
                     ):
                         with patch(f"{TASK}.oras_utils.oras_cp") as mock_oras:
                             result = push_snapshot.push_image(
@@ -409,100 +371,14 @@ class TestPushImage:
                                 )
                             )
 
-        mock_oras.assert_has_calls(
-            [
-                call(
-                    "reg.io/img@sha256:abc",
-                    "prod.io/repo:v1.0",
-                    from_auth=source_auth,
-                    to_auth=dest_file,
-                    recursive=False,
-                    platform="linux/amd64",
-                ),
-                call(
-                    "reg.io/img@sha256:art1",
-                    "prod.io/repo:v1.0",
-                    from_auth=source_auth,
-                    to_auth=dest_file,
-                    recursive=False,
-                ),
-            ]
+        mock_oras.assert_called_once_with(
+            "reg.io/img@sha256:abc",
+            "prod.io/repo:v1.0",
+            from_auth=source_auth,
+            to_auth=dest_file,
+            recursive=True,
+            platform="linux/amd64",
         )
-        assert mock_oras.call_count == 2
-        assert result["url"] == "prod.io/repo:v1.0"
-
-    def test_skips_cosign_signatures_when_copying_artifacts(self, tmp_path: Path) -> None:
-        """Skip cosign signatures when copying attached artifacts.
-
-        Also skip artifacts with no digest attribute.
-        """
-        source_auth = tmp_path / "src_auth.json"
-        source_auth.write_text('{"auths":{}}', encoding="utf-8")
-
-        with patch(f"{TASK}.create_dest_auth_file") as mock_dest_auth:
-            dest_file = tmp_path / "dest_auth.json"
-            dest_file.write_text('{"auths":{}}', encoding="utf-8")
-            mock_dest_auth.return_value = dest_file
-
-            with patch(f"{TASK}.oras_utils.oras_resolve", return_value=None):
-                with patch(f"{TASK}.create_combined_docker_config") as mock_config:
-                    config_dir = tmp_path / "docker"
-                    config_dir.mkdir()
-                    (config_dir / "config.json").write_text("{}")
-                    mock_config.return_value = config_dir
-
-                    with patch(
-                        f"{TASK}._discover_artifacts_with_retry",
-                        return_value=[
-                            {
-                                "digest": "sha256:sig1",
-                                "artifactType": "application/vnd.dev.cosign.signature.v1+json",
-                            },
-                            {
-                                "digest": "sha256:art1",
-                                "artifactType": "application/vnd.example.sbom",
-                            },
-                            {
-                                "digest": None,
-                                "artifactType": "application/vnd.example.sbom",
-                            },
-                        ],
-                    ):
-                        with patch(f"{TASK}.oras_utils.oras_cp") as mock_oras:
-                            result = push_snapshot.push_image(
-                                push_snapshot.PushJob(
-                                    origin_digest="sha256:abc",
-                                    name="comp1",
-                                    container_image="reg.io/img@sha256:abc",
-                                    repository_url="prod.io/repo",
-                                    tag="v1.0",
-                                    platform="linux/amd64",
-                                    source_auth_file=source_auth,
-                                    retries=0,
-                                    copy_bundle_migrations=True,
-                                )
-                            )
-
-        mock_oras.assert_has_calls(
-            [
-                call(
-                    "reg.io/img@sha256:abc",
-                    "prod.io/repo:v1.0",
-                    from_auth=source_auth,
-                    to_auth=dest_file,
-                    recursive=False,
-                    platform="linux/amd64",
-                ),
-                call(
-                    "reg.io/img@sha256:art1",
-                    "prod.io/repo:v1.0",
-                    from_auth=source_auth,
-                    to_auth=dest_file,
-                    recursive=False,
-                ),
-            ]
-        )
-        assert mock_oras.call_count == 2
         assert result["url"] == "prod.io/repo:v1.0"
 
     def test_retries_on_failure(self, tmp_path: Path) -> None:
@@ -510,35 +386,38 @@ class TestPushImage:
         source_auth = tmp_path / "src_auth.json"
         source_auth.write_text('{"auths":{}}', encoding="utf-8")
 
-        with (
-            patch(f"{TASK}.create_dest_auth_file") as mock_dest_auth,
-            patch(f"{TASK}.oras_utils.oras_resolve", return_value=None),
-            patch(f"{TASK}.skopeo.copy", return_value=None),
-            patch(f"{TASK}.create_combined_docker_config") as mock_config,
-            patch(f"{TASK}.cosign_copy", side_effect=[RuntimeError("timeout"), None]),
-        ):
+        with patch(f"{TASK}.create_dest_auth_file") as mock_dest_auth:
             dest_file = tmp_path / "dest_auth.json"
             dest_file.write_text('{"auths":{}}', encoding="utf-8")
             mock_dest_auth.return_value = dest_file
 
-            config_dir = tmp_path / "docker"
-            config_dir.mkdir()
-            (config_dir / "config.json").write_text("{}")
-            mock_config.return_value = config_dir
+            with patch(f"{TASK}.oras_utils.oras_resolve", return_value=None):
+                with patch(f"{TASK}.create_combined_docker_config") as mock_config:
+                    config_dir = tmp_path / "docker"
+                    config_dir.mkdir()
+                    (config_dir / "config.json").write_text("{}")
+                    mock_config.return_value = config_dir
 
-            result = push_snapshot.push_image(
-                push_snapshot.PushJob(
-                    origin_digest="sha256:abc",
-                    name="comp1",
-                    container_image="reg.io/img@sha256:abc",
-                    repository_url="prod.io/repo",
-                    tag="v1.0",
-                    platform="",
-                    source_auth_file=source_auth,
-                    retries=1,
-                    copy_bundle_migrations=False,
-                )
-            )
+                    with patch(
+                        f"{TASK}.cosign_copy",
+                        side_effect=[
+                            RuntimeError("timeout"),
+                            None,
+                        ],
+                    ):
+                        result = push_snapshot.push_image(
+                            push_snapshot.PushJob(
+                                origin_digest="sha256:abc",
+                                name="comp1",
+                                container_image="reg.io/img@sha256:abc",
+                                repository_url="prod.io/repo",
+                                tag="v1.0",
+                                platform="",
+                                source_auth_file=source_auth,
+                                retries=1,
+                                copy_bundle_migrations=False,
+                            )
+                        )
 
         assert result["url"] == "prod.io/repo:v1.0"
 
@@ -547,40 +426,36 @@ class TestPushImage:
         source_auth = tmp_path / "src_auth.json"
         source_auth.write_text('{"auths":{}}', encoding="utf-8")
 
-        with (
-            patch(f"{TASK}.create_dest_auth_file") as mock_dest_auth,
-            patch(f"{TASK}.oras_utils.oras_resolve", return_value=None),
-            patch(f"{TASK}.skopeo.copy", return_value=None),
-            patch(f"{TASK}.create_combined_docker_config") as mock_config,
-            patch(
-                f"{TASK}.cosign_copy",
-                side_effect=RuntimeError("persistent failure"),
-            ),
-        ):
-
+        with patch(f"{TASK}.create_dest_auth_file") as mock_dest_auth:
             dest_file = tmp_path / "dest_auth.json"
             dest_file.write_text('{"auths":{}}', encoding="utf-8")
             mock_dest_auth.return_value = dest_file
 
-            config_dir = tmp_path / "docker"
-            config_dir.mkdir()
-            (config_dir / "config.json").write_text("{}")
-            mock_config.return_value = config_dir
+            with patch(f"{TASK}.oras_utils.oras_resolve", return_value=None):
+                with patch(f"{TASK}.create_combined_docker_config") as mock_config:
+                    config_dir = tmp_path / "docker"
+                    config_dir.mkdir()
+                    (config_dir / "config.json").write_text("{}")
+                    mock_config.return_value = config_dir
 
-            with pytest.raises(RuntimeError, match="persistent"):
-                push_snapshot.push_image(
-                    push_snapshot.PushJob(
-                        origin_digest="sha256:abc",
-                        name="comp1",
-                        container_image="reg.io/img@sha256:abc",
-                        repository_url="prod.io/repo",
-                        tag="v1.0",
-                        platform="",
-                        source_auth_file=source_auth,
-                        retries=1,
-                        copy_bundle_migrations=False,
-                    )
-                )
+                    with patch(
+                        f"{TASK}.cosign_copy",
+                        side_effect=RuntimeError("persistent failure"),
+                    ):
+                        with pytest.raises(RuntimeError, match="persistent"):
+                            push_snapshot.push_image(
+                                push_snapshot.PushJob(
+                                    origin_digest="sha256:abc",
+                                    name="comp1",
+                                    container_image="reg.io/img@sha256:abc",
+                                    repository_url="prod.io/repo",
+                                    tag="v1.0",
+                                    platform="",
+                                    source_auth_file=source_auth,
+                                    retries=1,
+                                    copy_bundle_migrations=False,
+                                )
+                            )
 
 
 class TestPushMigrationArtifact:
