@@ -10,6 +10,7 @@ from typing import Any
 
 from release_service_utils.helpers import file
 from release_service_utils.helpers import pyxis_api
+from release_service_utils.helpers import retry_safety
 from release_service_utils.helpers import tekton
 from release_service_utils.helpers.logger import logger
 from release_service_utils.helpers.snapshot import (
@@ -96,6 +97,7 @@ def publish_repositories(
 ) -> dict[str, Any]:
     """Process snapshot components and return the results JSON payload."""
     results: dict[str, list[dict[str, str]]] = {"catalog_urls": []}
+    retry_safety_recorder = retry_safety.RetrySafetyRecorder.from_env()
     components = snapshot.get("components")
     if not isinstance(components, list):
         msg = "snapshot components must be a JSON array"
@@ -175,11 +177,19 @@ def publish_repositories(
             )
 
             if should_patch:
+                retry_safety_recorder.mark_unsafe_operation_started(
+                    "Started publishing Pyxis repository",
+                    details={"repository": repository_url},
+                )
                 pyxis_api.patch_repository_json(
                     pyxis_api_url,
                     str(repository_id),
                     payload,
                     cert=cert,
+                )
+                retry_safety_recorder.mark_unsafe_operation_completed(
+                    "Published Pyxis repository",
+                    details={"repository": repository_url},
                 )
                 logger.info(
                     "Published %s/%s (id %s)",

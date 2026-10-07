@@ -13,6 +13,7 @@ import requests
 
 from release_service_utils.helpers import file
 from release_service_utils.helpers import http_client
+from release_service_utils.helpers import retry_safety
 from release_service_utils.helpers.logger import logger
 
 PROG = "make_repo_public.py"
@@ -141,6 +142,7 @@ def run(
         raise RuntimeError(f"Invalid JSON in snapshot file {snapshot_file}: {exc}") from exc
 
     default_public = data.get("mapping", {}).get("defaults", {}).get("public", False)
+    retry_safety_recorder = retry_safety.RetrySafetyRecorder.from_env()
 
     session = http_client.get_retry_session(
         total=3,
@@ -188,7 +190,15 @@ def run(
                     " registry."
                 )
 
+            retry_safety_recorder.mark_unsafe_operation_started(
+                "Started making repository public",
+                details={"repository": repo_url},
+            )
             make_repo_public(registry, repo_path, token, session)
+            retry_safety_recorder.mark_unsafe_operation_completed(
+                "Made repository public",
+                details={"repository": repo_url},
+            )
 
 
 def main() -> int:
