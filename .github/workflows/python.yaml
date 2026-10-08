@@ -32,7 +32,7 @@ jobs:
       - name: Test get-image-architectures
         run: bash utils/tests/test_get_image_architectures
       - name: Black Lint
-        uses: psf/black@87928e6d6761a4a6d22250e1fee5601b3998086e  # stable
+        uses: psf/black@4f1883b1f15305a0e83a7c87991f46292bf09f85  # stable
       - name: Setup python environment for flake8 check
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
         with:
