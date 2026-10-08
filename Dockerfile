@@ -103,7 +103,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
 RUN dnf install -y 'dnf-command(config-manager)' && \
     dnf config-manager --set-enabled codeready-builder-for-ubi-10-$(arch)-rpms
 
-RUN dnf -y --setopt=tsflags=nodocs install \
+RUN dnf -y --nobest --setopt=tsflags=nodocs install \
     git \
     git-lfs \
     jq \
