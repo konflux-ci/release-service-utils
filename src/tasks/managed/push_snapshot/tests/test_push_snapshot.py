@@ -292,6 +292,66 @@ class TestDiscoverArtifactsWithRetry:
         assert artifacts == []
 
 
+class TestRunJob:
+    """Test _run_job error reporting."""
+
+    @staticmethod
+    def _lock_for_digest(_digest: str) -> threading.Lock:
+        return threading.Lock()
+
+    @staticmethod
+    def _make_job() -> push_snapshot.PushJob:
+        return push_snapshot.PushJob(
+            origin_digest="sha256:abc",
+            name="comp1",
+            container_image="reg.io/img@sha256:abc",
+            repository_url="prod.io/loc",
+            tag="v1",
+            platform="",
+            source_auth_file=Path("/tmp/auth.json"),
+            retries=0,
+            copy_bundle_migrations=False,
+        )
+
+    def test_reports_called_process_error_stderr_and_stdout(self) -> None:
+        """Include subprocess stdout and stderr, not just the exit-status message.
+
+        Stdout can carry progress output printed before a mid-upload failure,
+        so it must not be dropped in favor of just the final stderr error.
+        """
+        exc = subprocess.CalledProcessError(
+            1,
+            ["cosign", "copy"],
+            output="uploading layer 3/8\n",
+            stderr="denied: permission denied\n",
+        )
+
+        def fake_push(_job: push_snapshot.PushJob) -> dict[str, str]:
+            raise exc
+
+        result, error = push_snapshot._run_job(
+            fake_push, self._make_job(), self._lock_for_digest
+        )
+
+        assert result is None
+        assert error is not None
+        assert "uploading layer 3/8" in error
+        assert "denied: permission denied" in error
+
+    def test_reports_plain_exception_message(self) -> None:
+        """Fall back to str(exc) for exceptions without captured stdout/stderr."""
+
+        def fake_push(_job: push_snapshot.PushJob) -> dict[str, str]:
+            raise RuntimeError("boom")
+
+        result, error = push_snapshot._run_job(
+            fake_push, self._make_job(), self._lock_for_digest
+        )
+
+        assert result is None
+        assert error == "boom"
+
+
 class TestPushImage:
     """Test push_image function."""
 

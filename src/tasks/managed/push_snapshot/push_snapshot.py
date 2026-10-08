@@ -597,8 +597,15 @@ def _run_job(
             result = fn(job)
         return (result if isinstance(result, dict) else None), None
     except Exception as exc:
-        logger.error("Push failed: %s", exc)
-        return None, str(exc)
+        message = str(exc)
+        stdout = getattr(exc, "stdout", None)
+        if stdout:
+            message += f"\n{stdout.strip()}"
+        stderr = getattr(exc, "stderr", None)
+        if stderr:
+            message += f"\n{stderr.strip()}"
+        logger.error("Push failed: %s", message)
+        return None, message
 
 
 def run(
