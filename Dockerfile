@@ -19,6 +19,15 @@ ARG GLAB_VERSION=1.51.0
 ARG GH_VERSION=2.82.1
 ARG SYFT_VERSION=1.19.0
 ARG KUBEARCHIVE_VERSION=1.17.3
+ARG UV_VERSION=0.12.20
+ARG EXODUS_RSYNC_VERSION=v1.12.4
+
+# Every binary below is downloaded over plain curl from its upstream release and
+# verified against a SHA-256 pinned in this file (not fetched at build time), so a
+# compromised or substituted release asset is caught instead of silently executed.
+# When bumping one of the *_VERSION args above, update its matching SHA-256s too --
+# take them from the project's own release checksums file when it publishes one, or
+# by downloading the new artifact yourself and running `sha256sum` on it.
 
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
@@ -31,10 +40,40 @@ RUN ARCH=$(uname -m) && \
     curl -fsSL https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${GO_ARCH} -o /usr/bin/yq &&\
     curl -fsSL https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${GO_ARCH}/kubectl -o /usr/bin/kubectl &&\
     curl -fsSL https://github.com/operator-framework/operator-registry/releases/download/${OPM_VERSION}/linux-${GO_ARCH}-opm -o /usr/bin/opm &&\
-    curl -fsSL https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr -xzf - bin/glab &&\
-    curl -fsSL https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GO_ARCH}.tar.gz  | tar -C /usr -xzf - --strip=1 gh_${GH_VERSION}_linux_${GO_ARCH}/bin/gh &&\
-    curl -fsSL https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${GO_ARCH}.tar.gz | tar -C /usr/bin/ -xzf - syft &&\
+    curl -fsSL https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${GO_ARCH}.tar.gz -o /tmp/glab.tar.gz &&\
+    curl -fsSL https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GO_ARCH}.tar.gz -o /tmp/gh.tar.gz &&\
+    curl -fsSL https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${GO_ARCH}.tar.gz -o /tmp/syft.tar.gz &&\
     curl -fsSL https://github.com/kubearchive/kubearchive/releases/download/v${KUBEARCHIVE_VERSION}/kubectl-ka-linux-${GO_ARCH} -o /usr/bin/kubectl-ka &&\
+    if [ "$GO_ARCH" = "amd64" ]; then \
+        YQ_SHA256=c5a92a572b3bd0024c7b1fe8072be3251156874c05f017c23f9db7b3254ae71a; \
+        KUBECTL_SHA256=4f38ee903f35b300d3b005a9c6bfb9a46a57f92e89ae602ef9c129b91dc6c5a5; \
+        OPM_SHA256=d9bfdc08dd9640c1d9085d191f10f884f2ef29370db1ac097a73a0e23e803f95; \
+        GLAB_SHA256=5579e39cec0318939267fa7ec89dbc0b55212f24643fd1b524119154121bc236; \
+        GH_SHA256=afada88676dfccea384e6cc28ae990b3e31bbc55f9d75c4697f902c757fa462b; \
+        SYFT_SHA256=1dec148ea36aef68a866e35528974b5dbc106ba0b545f1a262ad977d48294637; \
+        KUBEARCHIVE_SHA256=92ea9e0a69a93674c8dde7eb30b42056ee502bbae5994ea2fa649e9b583ff930; \
+    elif [ "$GO_ARCH" = "arm64" ]; then \
+        YQ_SHA256=c1410df7b1266d34a89a91dcfeaf8eb27cb1c3f69822d72040d167ec61917ba0; \
+        KUBECTL_SHA256=1b0966692e398efe71fe59f913eaec44ffd4468cc1acd00bf91c29fa8ff8f578; \
+        OPM_SHA256=888b5ef195d0de6b5defa9f64784415d9ca17f55802b5e8c33e08b0cb7b92a87; \
+        GLAB_SHA256=5d16a9e398dc9101126d1e61a5e601cd2dcabad066484ff59a88748761b99440; \
+        GH_SHA256=80b467daabeabf4379b5b7138f4b8b47f56670cc615ab288361a602ce413d8bf; \
+        SYFT_SHA256=3ec1412f1497a7aad795a36d09dc1df2bad349f07e274bbaf50c8c3746549048; \
+        KUBEARCHIVE_SHA256=fbaac0ceb8b9ee9520e199c89da68b3ce56ddac9cbca35d7d7e8d02cdcccab69; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    echo "${YQ_SHA256}  /usr/bin/yq" | sha256sum -c - && \
+    echo "${KUBECTL_SHA256}  /usr/bin/kubectl" | sha256sum -c - && \
+    echo "${OPM_SHA256}  /usr/bin/opm" | sha256sum -c - && \
+    echo "${GLAB_SHA256}  /tmp/glab.tar.gz" | sha256sum -c - && \
+    echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum -c - && \
+    echo "${SYFT_SHA256}  /tmp/syft.tar.gz" | sha256sum -c - && \
+    echo "${KUBEARCHIVE_SHA256}  /usr/bin/kubectl-ka" | sha256sum -c - && \
+    tar -C /usr -xzf /tmp/glab.tar.gz bin/glab &&\
+    tar -C /usr -xzf /tmp/gh.tar.gz --strip=1 gh_${GH_VERSION}_linux_${GO_ARCH}/bin/gh &&\
+    tar -C /usr/bin/ -xzf /tmp/syft.tar.gz syft &&\
+    rm -f /tmp/glab.tar.gz /tmp/gh.tar.gz /tmp/syft.tar.gz &&\
     chmod +x /usr/bin/{yq,kubectl,opm,glab,gh,syft,kubectl-ka} && \
     # Verify each binary is actually a working executable, not a truncated/error-page
     # download that a bare curl exit code wouldn't catch.
@@ -85,19 +124,46 @@ RUN ARCH=$(uname -m) && \
     ec version
 
 RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" = "x86_64" ]; then ARCH=amd64; fi && \
-    if [ "$ARCH" = "aarch64" ]; then ARCH=arm64; fi && \
+    if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then \
+        ARCH="amd64"; \
+        COSIGN3_SHA256="10dab2fd2170b5aa0d5c0673a9a2793304960220b314f6a873bf39c2f08287aa"; \
+    elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
+        ARCH="arm64"; \
+        COSIGN3_SHA256="c12fc6150195758ec0b1aeb1aade3381a1d3a299584982b66543f22bab04535b"; \
+    elif [ "$ARCH" = "ppc64le" ]; then \
+        COSIGN3_SHA256="784dc5461a588dd8611e7969a4c988620f08bcb7f173beb77321b7acfc9a2b5f"; \
+    elif [ "$ARCH" = "s390x" ]; then \
+        COSIGN3_SHA256="0516fe2ea7d3c039cb6ed99aefbd86b69d661ff35956484c16fb480c29f3897d"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
     curl -LsSf https://github.com/sigstore/cosign/releases/download/v${COSIGN3_VERSION}/cosign-linux-${ARCH} -o /usr/local/bin/cosign3 && \
+    echo "${COSIGN3_SHA256}  /usr/local/bin/cosign3" | sha256sum -c - && \
     chmod +x /usr/local/bin/cosign3 && \
     /usr/local/bin/cosign3 version
-
 
 COPY --from=roxctl /usr/bin/roxctl /usr/bin/roxctl
 RUN roxctl version
 
-# Install uv via curl
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
-    mv /root/.local/bin/uv /usr/local/bin/uv && \
+# Install uv: download the pinned release archive directly instead of piping the
+# upstream install.sh through a shell, and verify it before extracting/running anything
+# from it.
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        UV_TARGET="x86_64-unknown-linux-gnu"; \
+        UV_SHA256=6590717592ace991ff83a63fef799e3ad9d33ecc8f96c5d6bdd732496e79337f; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        UV_TARGET="aarch64-unknown-linux-gnu"; \
+        UV_SHA256=8a7aad7bc76a2fae5151566ff3e43eacce0b2a113d5e4de3e4afe3e58fa2441e; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    curl -fsSL https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz -o /tmp/uv.tar.gz && \
+    echo "${UV_SHA256}  /tmp/uv.tar.gz" | sha256sum -c - && \
+    tar -C /tmp -xzf /tmp/uv.tar.gz uv-${UV_TARGET}/uv && \
+    mv /tmp/uv-${UV_TARGET}/uv /usr/local/bin/uv && \
+    rm -rf /tmp/uv.tar.gz /tmp/uv-${UV_TARGET} && \
+    chmod +x /usr/local/bin/uv && \
     uv --version
 
 RUN dnf install -y 'dnf-command(config-manager)' && \
@@ -131,8 +197,9 @@ RUN dnf -y --setopt=tsflags=nodocs install \
 # and generic rsync usage keeps working normally.
 RUN ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
-        curl -fLO https://github.com/release-engineering/exodus-rsync/releases/latest/download/exodus-rsync && \
-        chmod +x exodus-rsync && mv exodus-rsync /usr/local/bin/rsync && \
+        curl -fsSL https://github.com/release-engineering/exodus-rsync/releases/download/${EXODUS_RSYNC_VERSION}/exodus-rsync -o /usr/local/bin/rsync && \
+        echo "654aca0247bd2c602d8df97a12ffaaa9e4959cf75d5b742348bcd1ffcffa64f8  /usr/local/bin/rsync" | sha256sum -c - && \
+        chmod +x /usr/local/bin/rsync && \
         rsync --help > /dev/null; \
     fi
 
