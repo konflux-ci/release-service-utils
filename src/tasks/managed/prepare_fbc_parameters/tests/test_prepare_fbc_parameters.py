@@ -595,6 +595,43 @@ def test_run_prepare_staged_mode(
     assert results["iibServiceAccountSecret"] == "iib-service-account-stage"
 
 
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.fetch_results")
+@mock.patch(f"{TASK}.prepare_fbc_parameters.internal_request.create")
+@mock.patch(f"{TASK}.prepare_fbc_parameters.render_fbc_fragment")
+def test_run_prepare_stage_pyxis_uses_stage_sa(
+    mock_render: mock.MagicMock,
+    mock_ir_create: mock.MagicMock,
+    mock_fetch: mock.MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Select stage SA when pyxis_server=stage even without stagedIndex."""
+    snap_path, data_path = _setup_run_prepare(tmp_path)
+
+    mock_render.return_value = _catalog_entries(["pkg-a"], ["quay.io/bundle-a"])
+    mock_ir_create.return_value = "test-ir-name"
+    mock_fetch.return_value = {
+        "optInResults": json.dumps(
+            [
+                {"containerImage": "quay.io/bundle-a", "fbcOptIn": True},
+            ]
+        ),
+    }
+
+    results = prepare_fbc_parameters.run_prepare(
+        snap_path,
+        data_path,
+        pyxis_server="stage",
+        task_git_url="http://localhost",
+        task_git_revision="main",
+        pipeline_run_uid="uid-123",
+    )
+    assert results["fbcOptIn"] == "true"
+    assert results["mustPublishIndexImage"] == "true"
+    assert results["mustSignIndexImage"] == "true"
+    assert results["mustOverwriteFromIndexImage"] == "true"
+    assert results["iibServiceAccountSecret"] == "iib-service-account-stage"
+
+
 @mock.patch(f"{TASK}.prepare_fbc_parameters.render_fbc_fragment")
 def test_run_prepare_duplicate_packages(
     mock_render: mock.MagicMock,
