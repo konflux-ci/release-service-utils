@@ -336,22 +336,39 @@ def oras_manifest_fetch(
 def oras_blob_fetch(
     pullspec: str,
     output_path: Path,
-    auth_file: Path,
+    auth_file: Path | None = None,
 ) -> None:
-    """Download a single OCI blob to *output_path* using ``oras blob fetch``."""
-    run_cmd(
-        [
-            "oras",
-            "blob",
-            "fetch",
-            "--registry-config",
-            str(auth_file),
-            "--output",
-            str(output_path),
-            pullspec,
-        ],
-        check=True,
-    )
+    """Download a single OCI blob to *output_path* using ``oras blob fetch``.
+
+    When *auth_file* is omitted, credentials are obtained via ``select-oci-auth``
+    and the temporary auth file is deleted afterwards.
+    """
+    cleanup_auth = auth_file is None
+    if auth_file is None:
+        auth_file = file.make_tempfile_path("oras-auth-")
+    try:
+        if cleanup_auth:
+            auth_out = run_cmd(
+                ["select-oci-auth", str(pullspec)],
+                check=True,
+            ).stdout
+            auth_file.write_text(auth_out, encoding="utf-8")
+        run_cmd(
+            [
+                "oras",
+                "blob",
+                "fetch",
+                "--registry-config",
+                str(auth_file),
+                "--output",
+                str(output_path),
+                pullspec,
+            ],
+            check=True,
+        )
+    finally:
+        if cleanup_auth:
+            auth_file.unlink(missing_ok=True)
 
 
 def oras_push(tag: str, directory: Path, subdirectory: str, component_name: str) -> str:
