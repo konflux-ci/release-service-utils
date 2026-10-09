@@ -428,6 +428,7 @@ def _populate_rpm(
 
     for rpm in rpms:
         rpm_name = rpm["rpmname"]
+        epoch = rpm.get("epoch")
         arch = rpm["arch"]
         version = rpm["version"]
         release = rpm["release"]
@@ -451,7 +452,7 @@ def _populate_rpm(
         if not target_repos:
             # If no targetRepos, fall back to best-effort purl without repository_id.
             purl = advisory_data.generate_purl_rpm(
-                rpm_name, version, release, arch, distro, ""
+                rpm_name, version, release, arch, distro, "", epoch=epoch
             )
             logger.info("purl: %s", purl)
             entry: dict[str, Any] = {
@@ -479,6 +480,7 @@ def _populate_rpm(
                 arch_for_entry,
                 repo_distro,
                 repo_id,
+                epoch=epoch,
             )
             logger.info("purl: %s", purl)
             entry = {

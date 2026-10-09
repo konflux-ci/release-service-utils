@@ -936,6 +936,99 @@ def test_rpms() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "epoch_fields",
+    [
+        pytest.param({"epoch": "32"}, id="nonzero-string"),
+        pytest.param({"epoch": 32}, id="nonzero-integer"),
+        pytest.param({"epoch": "0"}, id="zero-string"),
+        pytest.param({"epoch": 0}, id="zero-integer"),
+        pytest.param({"epoch": None}, id="null"),
+        pytest.param({}, id="missing"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("arch", "repo_names"),
+    [
+        pytest.param("x86_64", ["x86_64"], id="binary-x86_64"),
+        pytest.param("aarch64", ["aarch64"], id="binary-aarch64"),
+        pytest.param("noarch", ["x86_64", "aarch64"], id="noarch"),
+        pytest.param("x86_64", ["source"], id="source"),
+        pytest.param("x86_64", [], id="empty-target-repos"),
+        pytest.param("x86_64", None, id="missing-target-repos"),
+    ],
+)
+def test_rpm_epoch_and_artifact_metadata(
+    epoch_fields: dict[str, str | int | None], arch: str, repo_names: list[str] | None
+) -> None:
+    """Preserve RPM epoch, legacy PURLs, and artifact metadata in every generation path."""
+    data = _default_data(
+        releaseNotes=_default_release_notes(
+            cves=[
+                {"key": "CVE-2026-1234", "component": "bind--main", "packages": ["bind"]},
+                {"key": "CVE-2026-5678", "component": "other"},
+            ]
+        ),
+        mapping={"components": [{"name": "bind--main", "contentType": "rpm"}]},
+        pulp={"domain": "public-hummingbird"},
+        signOptions={
+            "signedRpmsDomain": "signed-hummingbird",
+            "signKeyAlias": {"key": "hummingbird-signing-key"},
+        },
+    )
+    rpm: dict[str, Any] = {
+        "rpmname": "bind",
+        "arch": arch,
+        "version": "9.20.27",
+        "release": "0.1.hum1",
+        "distro": "fallback-distro",
+        "sbomPath": "sboms/bind.sbom",
+        "attestationPath": "attestations/bind.att",
+        **epoch_fields,
+    }
+    if repo_names is not None:
+        rpm["targetRepos"] = [
+            {
+                "repository_id": f"hbird-{repo_name}-id",
+                "repository_name": repo_name,
+                "distro": "hummingbird",
+            }
+            for repo_name in repo_names
+        ]
+    snapshot = _default_snapshot([{"name": "bind--main", "rpmsToPublish": [rpm]}])
+
+    populate_release_notes.populate_artifacts(data, snapshot)
+
+    epoch_qualifier = "&epoch=32" if epoch_fields.get("epoch") in ("32", 32) else ""
+    expected_artifacts = []
+    for repo_name in repo_names or [""]:
+        expected_arch = "src" if repo_name == "source" else arch
+        distro = "hummingbird" if repo_name else "fallback-distro"
+        repo_qualifier = f"&repository_id=hbird-{repo_name}-id" if repo_name else ""
+        artifact = {
+            "architecture": expected_arch,
+            "os": "linux",
+            "purl": (
+                f"pkg:rpm/redhat/bind@9.20.27-0.1.hum1?arch={expected_arch}"
+                f"{epoch_qualifier}&distro={distro}{repo_qualifier}"
+            ),
+            "component": "bind--main",
+            "signingKey": "hummingbird-signing-key",
+            "cves": {"fixed": {"CVE-2026-1234": {"packages": ["bind"]}}},
+        }
+        if repo_name == "source":
+            artifact["sbom"] = (
+                "https://packages.redhat.com/api/pulp-content/"
+                "signed-hummingbird/sboms/bind.sbom"
+            )
+            artifact["attestation"] = (
+                "https://packages.redhat.com/api/pulp-content/"
+                "signed-hummingbird/attestations/bind.att"
+            )
+        expected_artifacts.append(artifact)
+    assert data["releaseNotes"]["content"]["artifacts"] == expected_artifacts
+
+
 def test_rpm_without_distro_field() -> None:
     """RPM entry without distro at root level does not error."""
     data = _default_data(
