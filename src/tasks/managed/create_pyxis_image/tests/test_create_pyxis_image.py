@@ -330,6 +330,7 @@ class TestProcessComponent:
         process_helm_charts: bool = False,
         include_layers: bool = False,
         append_tags: str = "false",
+        retry_safety_recorder: MagicMock | None = None,
     ) -> dict[str, Any] | None:
         data_dir = tmp_path / "release"
         data_dir.mkdir(exist_ok=True)
@@ -346,6 +347,8 @@ class TestProcessComponent:
             process_helm_charts=process_helm_charts,
             data_dir=data_dir,
             snapshot_dir=Path("results"),
+            retry_safety_recorder=retry_safety_recorder
+            or create_pyxis_image.retry_safety.RetrySafetyRecorder.disabled(),
         )
         return create_pyxis_image.process_component(
             component_index,
@@ -404,6 +407,99 @@ class TestProcessComponent:
         assert len(result["pyxisImages"]) == 1
         assert result["pyxisImages"][0]["imageId"] == "img123"
         mock_cleanup.assert_not_called()
+
+    @patch(f"{TASK}.cleanup_tags_with_retry")
+    @patch(f"{TASK}.create_or_update", return_value="img123")
+    @patch(
+        f"{TASK}.oras_utils.oras_manifest_fetch",
+        return_value='{"layers": []}',
+    )
+    @patch(
+        f"{TASK}._get_image_architectures",
+        return_value=[
+            {
+                "platform": {"architecture": "amd64", "os": "linux"},
+                "digest": "sha256:archdig",
+                "multiarch": False,
+            }
+        ],
+    )
+    @patch(
+        f"{TASK}.skopeo.inspect",
+        return_value=_skopeo_result(_raw_manifest()),
+    )
+    @patch(
+        f"{TASK}._try_pull_dockerfile",
+        return_value=None,
+    )
+    @patch(f"{TASK}._write_auth_file")
+    def test_noop_create_or_update_keeps_retry_safety_safe(
+        self,
+        mock_auth,
+        mock_docker,
+        mock_skopeo,
+        mock_arch,
+        mock_oras,
+        mock_create,
+        mock_cleanup,
+        tmp_path: Path,
+    ) -> None:
+        """Skip retry-safety image markers when Pyxis creation is a no-op."""
+        retry_safety_recorder = MagicMock()
+
+        result = self._call(tmp_path, retry_safety_recorder=retry_safety_recorder)
+
+        assert result is not None
+        retry_safety_recorder.mark_unsafe_operation_started.assert_not_called()
+        retry_safety_recorder.mark_unsafe_operation_completed.assert_not_called()
+
+    @patch(f"{TASK}.cleanup_tags_with_retry")
+    @patch(
+        f"{TASK}.oras_utils.oras_manifest_fetch",
+        return_value='{"layers": []}',
+    )
+    @patch(
+        f"{TASK}._get_image_architectures",
+        return_value=[
+            {
+                "platform": {"architecture": "amd64", "os": "linux"},
+                "digest": "sha256:archdig",
+                "multiarch": False,
+            }
+        ],
+    )
+    @patch(
+        f"{TASK}.skopeo.inspect",
+        return_value=_skopeo_result(_raw_manifest()),
+    )
+    @patch(
+        f"{TASK}._try_pull_dockerfile",
+        return_value=None,
+    )
+    @patch(f"{TASK}._write_auth_file")
+    def test_create_or_update_write_marks_retry_safety(
+        self,
+        mock_auth,
+        mock_docker,
+        mock_skopeo,
+        mock_arch,
+        mock_oras,
+        mock_cleanup,
+        tmp_path: Path,
+    ) -> None:
+        """Record retry-safety markers only when a Pyxis write happens."""
+        retry_safety_recorder = MagicMock()
+
+        def fake_create_or_update(*args, **kwargs):
+            kwargs["before_remote_write"]()
+            return "img123"
+
+        with patch(f"{TASK}.create_or_update", side_effect=fake_create_or_update):
+            result = self._call(tmp_path, retry_safety_recorder=retry_safety_recorder)
+
+        assert result is not None
+        retry_safety_recorder.mark_unsafe_operation_started.assert_called_once()
+        retry_safety_recorder.mark_unsafe_operation_completed.assert_called_once()
 
     @patch(f"{TASK}.cleanup_tags_with_retry")
     @patch(

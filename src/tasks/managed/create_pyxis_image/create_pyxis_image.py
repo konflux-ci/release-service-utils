@@ -24,7 +24,7 @@ import tempfile
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,7 @@ from release_service_utils.helpers import file as file_helpers
 from release_service_utils.helpers import memory_throttle
 from release_service_utils.helpers import oras_utils
 from release_service_utils.helpers import pyxis_api
+from release_service_utils.helpers import retry_safety
 from release_service_utils.helpers import skopeo
 from release_service_utils.helpers.image_ref import split_image_ref
 from release_service_utils.helpers.logger import logger
@@ -72,6 +73,9 @@ class RunConfig:
     process_helm_charts: bool
     data_dir: Path
     snapshot_dir: Path
+    retry_safety_recorder: retry_safety.RetrySafetyRecorder = field(
+        default_factory=retry_safety.RetrySafetyRecorder.disabled
+    )
 
 
 @dataclass(frozen=True)
@@ -311,11 +315,39 @@ def _process_architecture(
         architecture=arch,
     )
 
-    image_id = create_or_update(cci_args)
+    retry_safety_details = {
+        "component_index": component.index,
+        "repository": repo_url,
+        "architecture": arch,
+    }
+    did_write_pyxis_image = False
+
+    def mark_write_started() -> None:
+        nonlocal did_write_pyxis_image
+        did_write_pyxis_image = True
+        config.retry_safety_recorder.mark_unsafe_operation_started(
+            "Started creating Pyxis image",
+            details=retry_safety_details,
+        )
+
+    image_id = create_or_update(cci_args, before_remote_write=mark_write_started)
+    if did_write_pyxis_image:
+        config.retry_safety_recorder.mark_unsafe_operation_completed(
+            "Created Pyxis image",
+            details=retry_safety_details,
+        )
     logger.info("The image id is: %s", image_id)
 
     if config.rh_push == "true":
+        config.retry_safety_recorder.mark_unsafe_operation_started(
+            "Started cleaning up Pyxis tags",
+            details=retry_safety_details,
+        )
         cleanup_tags_with_retry(config.pyxis_graphql_url, image_id, proxymap(repo_url))
+        config.retry_safety_recorder.mark_unsafe_operation_completed(
+            "Cleaned up Pyxis tags",
+            details=retry_safety_details,
+        )
 
     return {
         "arch": arch,
@@ -429,6 +461,7 @@ def run(
         process_helm_charts=process_helm_charts,
         data_dir=data_dir,
         snapshot_dir=snapshot_dir,
+        retry_safety_recorder=retry_safety.RetrySafetyRecorder.from_env(),
     )
 
     components = snapshot.get("components", [])

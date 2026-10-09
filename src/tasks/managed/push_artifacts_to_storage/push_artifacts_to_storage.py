@@ -8,6 +8,7 @@ from typing import Any
 
 from release_service_utils.helpers import file
 from release_service_utils.helpers import oras_utils
+from release_service_utils.helpers import retry_safety
 from release_service_utils.helpers import tekton
 from release_service_utils.helpers.logger import logger
 from release_service_utils.helpers.subprocess_cmd import run_cmd
@@ -40,6 +41,7 @@ def push_to_storage(
     results_dir: Path,
     snapshot_build_id: str,
     snapshot_namespace: str,
+    retry_safety_recorder: retry_safety.RetrySafetyRecorder,
 ) -> None:
     """Push pulled RPM artifacts to artifact storage via pulp-tool.
 
@@ -63,6 +65,10 @@ def push_to_storage(
         snapshot_namespace,
     )
 
+    retry_safety_recorder.mark_unsafe_operation_started(
+        "Started uploading artifacts to storage",
+        details={"snapshot_build_id": snapshot_build_id},
+    )
     run_cmd(
         [
             "pulp-tool",
@@ -76,6 +82,10 @@ def push_to_storage(
             "--rpm-path",
             str(results_dir),
         ]
+    )
+    retry_safety_recorder.mark_unsafe_operation_completed(
+        "Uploaded artifacts to storage",
+        details={"snapshot_build_id": snapshot_build_id},
     )
 
     logger.info('Completed push-artifacts-to-storage for "%s"', component_group)
@@ -99,6 +109,7 @@ def run(
     data = file.load_json_dict(data_file)
 
     pull_component_artifacts(snapshot, results_dir)
+    retry_safety_recorder = retry_safety.RetrySafetyRecorder.from_env()
 
     push_to_storage(
         snapshot,
@@ -107,6 +118,7 @@ def run(
         results_dir,
         snapshot_build_id,
         snapshot_namespace,
+        retry_safety_recorder,
     )
 
 

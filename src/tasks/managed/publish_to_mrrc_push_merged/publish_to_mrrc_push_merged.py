@@ -17,6 +17,7 @@ from pathlib import Path
 from release_service_utils.helpers import charon_env
 from release_service_utils.helpers import file
 from release_service_utils.helpers import oras_utils
+from release_service_utils.helpers import retry_safety
 from release_service_utils.helpers import tekton
 from release_service_utils.helpers.logger import logger
 
@@ -45,6 +46,7 @@ def push_merged_maven_repo(
 
     tag = generate_tag()
     tagged_ref = f"{image}:{tag}"
+    retry_safety_recorder = retry_safety.RetrySafetyRecorder.from_env()
 
     auth_out = subprocess.check_output(
         ["select-oci-auth", image],
@@ -67,11 +69,19 @@ def push_merged_maven_repo(
     cmd.extend([tagged_ref, "merged.zip"])
 
     logger.info("Pushing image %s to registry", tagged_ref)
+    retry_safety_recorder.mark_unsafe_operation_started(
+        "Started pushing merged maven repository",
+        details={"reference": tagged_ref},
+    )
     subprocess.check_output(cmd, cwd=str(merge_dir), stderr=subprocess.STDOUT, text=True)
 
     digest = oras_utils.oras_resolve(tagged_ref)
     result_image_digest.write_text(digest, encoding="utf-8")
     result_image_tag.write_text(tag, encoding="utf-8")
+    retry_safety_recorder.mark_unsafe_operation_completed(
+        "Pushed merged maven repository",
+        details={"reference": tagged_ref},
+    )
     logger.info("Push merged zip %s@%s successfully", tagged_ref, digest)
 
 

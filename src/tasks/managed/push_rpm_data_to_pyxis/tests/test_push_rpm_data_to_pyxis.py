@@ -6,7 +6,7 @@ import json
 import runpy
 import subprocess
 from pathlib import Path
-from unittest.mock import call, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -15,6 +15,10 @@ from release_service_utils.tasks.managed.push_rpm_data_to_pyxis import (
 )
 
 TASK = "release_service_utils.tasks.managed.push_rpm_data_to_pyxis.push_rpm_data_to_pyxis"
+
+
+def _retry_safety_recorder() -> MagicMock:
+    return MagicMock(spec=task.retry_safety.RetrySafetyRecorder)
 
 
 def _job(
@@ -326,7 +330,7 @@ class TestUploadRpmData:
         """Fail when an image's downloaded SBOM cannot be found."""
         with patch.object(task, "SBOM_DIR", tmp_path):
             with pytest.raises(RuntimeError, match="not found"):
-                task.upload_rpm_data(_job())
+                task.upload_rpm_data(_job(), _retry_safety_recorder())
 
     @pytest.mark.parametrize("data", [{}, {"spdxVersion": ""}])
     def test_rejects_non_spdx_sbom(self, tmp_path: Path, data: dict) -> None:
@@ -334,7 +338,7 @@ class TestUploadRpmData:
         (tmp_path / "abcdef.json").write_text(json.dumps(data), encoding="utf-8")
         with patch.object(task, "SBOM_DIR", tmp_path):
             with pytest.raises(ValueError, match="not a valid SPDX SBOM"):
-                task.upload_rpm_data(_job())
+                task.upload_rpm_data(_job(), _retry_safety_recorder())
 
     @pytest.mark.parametrize(
         ("content", "error"),
@@ -347,7 +351,7 @@ class TestUploadRpmData:
         (tmp_path / "abcdef.json").write_text(content, encoding="utf-8")
         with patch.object(task, "SBOM_DIR", tmp_path):
             with pytest.raises(error):
-                task.upload_rpm_data(_job())
+                task.upload_rpm_data(_job(), _retry_safety_recorder())
 
     def test_invokes_existing_upload_command(self, tmp_path: Path) -> None:
         """Run the existing upload command with retry, image ID, and SBOM path."""
@@ -358,7 +362,7 @@ class TestUploadRpmData:
                 f"{TASK}.subprocess_cmd.run_cmd",
                 return_value=_completed(stdout="uploaded", stderr="upload status"),
             ) as run_cmd:
-                task.upload_rpm_data(_job())
+                task.upload_rpm_data(_job(), _retry_safety_recorder())
 
         run_cmd.assert_called_once_with(
             [
@@ -386,7 +390,7 @@ class TestUploadRpmData:
             with patch(f"{TASK}.subprocess_cmd.run_cmd", side_effect=error):
                 with patch(f"{TASK}.logger.info") as log:
                     with pytest.raises(subprocess.CalledProcessError):
-                        task.upload_rpm_data(_job())
+                        task.upload_rpm_data(_job(), _retry_safety_recorder())
 
         assert call("upload output") in log.call_args_list
         assert call("upload error") in log.call_args_list
