@@ -118,6 +118,7 @@ RUN dnf -y --setopt=tsflags=nodocs install \
     krb5-devel \
     krb5-workstation \
     openssl \
+    gnupg2 \
     rsync \
     gcc \
     python3-qpid-proton \
