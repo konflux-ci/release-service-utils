@@ -109,10 +109,6 @@
           "type": "integer",
           "description": "The requested timeout in seconds e.g. 1500"
         },
-        "timestampFormat": {
-          "type": "string",
-          "description": "The timestamp format which defaults to %s e.g. %Y-%m-%d"
-        },
         "issueId": {
           "type": "string",
           "description": "The issue ID e.g. bz123456"
