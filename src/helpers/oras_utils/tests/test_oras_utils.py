@@ -769,3 +769,134 @@ class TestOrasCp:
 def test_archive_stem(name: str, expected: str) -> None:
     """Strip a trailing .tar.gz (or other) extension to form a directory-friendly stem."""
     assert oras_utils.archive_stem(name) == expected
+
+
+def test_copy_all_flat_artifact_files_extracts_blobs(tmp_path: Path) -> None:
+    """Copy all blobs from a flat ORAS artifact by title annotation."""
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    (image_dir / "aabbcc").write_bytes(b"binary-data")
+    manifest = {
+        "config": {"mediaType": oras_utils.FLAT_ARTIFACT_CONFIG_MEDIA_TYPE},
+        "layers": [
+            {
+                "digest": "sha256:aabbcc",
+                "annotations": {
+                    "org.opencontainers.image.title": "tool.bin",
+                },
+            }
+        ],
+    }
+    dest = tmp_path / "out"
+    dest.mkdir()
+    oras_utils.copy_all_flat_artifact_files(manifest, image_dir, dest)
+    assert (dest / "tool.bin").read_bytes() == b"binary-data"
+
+
+def test_copy_all_flat_artifact_files_rejects_traversal(tmp_path: Path) -> None:
+    """Reject titles with '..' path segments."""
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    (image_dir / "abc").write_bytes(b"evil")
+    manifest = {
+        "config": {"mediaType": oras_utils.FLAT_ARTIFACT_CONFIG_MEDIA_TYPE},
+        "layers": [
+            {
+                "digest": "sha256:abc",
+                "annotations": {
+                    "org.opencontainers.image.title": "../../../etc/passwd",
+                },
+            }
+        ],
+    }
+    dest = tmp_path / "out"
+    dest.mkdir()
+    with pytest.raises(RuntimeError, match="unsafe title"):
+        oras_utils.copy_all_flat_artifact_files(manifest, image_dir, dest)
+
+
+def test_copy_all_flat_artifact_files_skips_missing_title(
+    tmp_path: Path,
+) -> None:
+    """Skip layers without a title annotation."""
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    (image_dir / "abc").write_bytes(b"data")
+    manifest = {
+        "config": {"mediaType": oras_utils.FLAT_ARTIFACT_CONFIG_MEDIA_TYPE},
+        "layers": [{"digest": "sha256:abc", "annotations": {}}],
+    }
+    dest = tmp_path / "out"
+    dest.mkdir()
+    oras_utils.copy_all_flat_artifact_files(manifest, image_dir, dest)
+    assert list(dest.iterdir()) == []
+
+
+def test_copy_all_flat_artifact_files_normalizes_prefix(
+    tmp_path: Path,
+) -> None:
+    """Strip leading slashes and './' from titles."""
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    (image_dir / "aaa").write_bytes(b"one")
+    (image_dir / "bbb").write_bytes(b"two")
+    manifest = {
+        "config": {"mediaType": oras_utils.FLAT_ARTIFACT_CONFIG_MEDIA_TYPE},
+        "layers": [
+            {
+                "digest": "sha256:aaa",
+                "annotations": {
+                    "org.opencontainers.image.title": "/file1.bin",
+                },
+            },
+            {
+                "digest": "sha256:bbb",
+                "annotations": {
+                    "org.opencontainers.image.title": "././file2.bin",
+                },
+            },
+        ],
+    }
+    dest = tmp_path / "out"
+    dest.mkdir()
+    oras_utils.copy_all_flat_artifact_files(manifest, image_dir, dest)
+    assert (dest / "file1.bin").read_bytes() == b"one"
+    assert (dest / "file2.bin").read_bytes() == b"two"
+
+
+def test_copy_all_layered_image_files_extracts_layers(
+    tmp_path: Path,
+) -> None:
+    """Extract all files from tar layers."""
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    tar_path = image_dir / "layerdata"
+    _make_tar(tar_path, {"hello.txt": b"world"})
+    manifest = {
+        "config": {
+            "mediaType": "application/vnd.oci.image.config.v1+json",
+        },
+        "layers": [{"digest": "sha256:layerdata"}],
+    }
+    dest = tmp_path / "out"
+    dest.mkdir()
+    oras_utils.copy_all_layered_image_files(manifest, image_dir, dest)
+    assert (dest / "hello.txt").read_bytes() == b"world"
+
+
+def test_copy_all_layered_image_files_skips_missing_layer(
+    tmp_path: Path,
+) -> None:
+    """Skip layers whose blob file does not exist."""
+    image_dir = tmp_path / "image"
+    image_dir.mkdir()
+    manifest = {
+        "config": {
+            "mediaType": "application/vnd.oci.image.config.v1+json",
+        },
+        "layers": [{"digest": "sha256:nonexistent"}],
+    }
+    dest = tmp_path / "out"
+    dest.mkdir()
+    oras_utils.copy_all_layered_image_files(manifest, image_dir, dest)
+    assert list(dest.iterdir()) == []
