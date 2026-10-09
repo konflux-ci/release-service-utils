@@ -16,24 +16,51 @@ import jq
 _UNIQUE_PROGRAM = jq.compile(". | unique")
 _MULTIPLY_PROGRAM = jq.compile(".[0] * .[1]")
 
-# Mirrors the former ``merge-json`` shell utility: objects are
-# merged recursively, arrays are concatenated and deduplicated/sorted (``jq``'s
-# ``unique``), and any other type has ``b``'s value win unless ``b``'s value
-# is ``null``, in which case ``a``'s value is kept. The explicit ``!= null``
-# check (rather than ``//``) is required to preserve literal ``false`` values
-# from ``b``, since ``//`` treats ``false`` the same as ``null``.
+# Objects are merged recursively. Arrays of objects with a "name" field are
+# merged by matching on that field; other arrays are joined and deduplicated.
+# Scalars: b wins, unless b is null in which case a is kept. The != null check
+# (not //) is intentional: jq's // also triggers on false, which would drop an
+# explicit false from b.
+#
+# merge_named_arrays is defined inside merge_objects so it can call back into
+# merge_objects; jq does not allow a top-level function to reference one defined later.
 _MERGE_DEEP_UNION_ARRAYS_PROGRAM = jq.compile("""
-    def merge_objects(a; b):
-      a as $a | b as $b |
-      ($a | keys) + ($b | keys) | unique | map({
+    def is_named:   type == "object" and has("name");
+    def is_unnamed: is_named | not;
+    def has_named_objects: any(.[]; is_named);
+
+    def merge_objects(base; overlay):
+      def merge_named_arrays(base_arr; overlay_arr):
+        # build index by merging same-named base entries, not last-wins
+        (base_arr | map(select(is_named))
+                  | reduce .[] as $item (
+                      {};
+                      .[$item.name] = merge_objects((.[$item.name] // {}); $item)
+                    )) as $base_index |
+        # unnamed items are kept as-is from both sides
+        (base_arr    | map(select(is_unnamed))) as $base_unnamed |
+        (overlay_arr | map(select(is_unnamed))) as $overlay_unnamed |
+        # merge each overlay entry with its base counterpart; new names start from {}
+        (overlay_arr | map(select(is_named))
+                     | reduce .[] as $item (
+                         $base_index;
+                         .[$item.name] = merge_objects((.[$item.name] // {}); $item)
+                       )) as $result |
+        [$result[]] + $base_unnamed + $overlay_unnamed;
+      base as $base | overlay as $overlay |
+      ($base | keys) + ($overlay | keys) | unique | map({
         key: .,
         value: (
-          if ($a[.] | type) == "object" and ($b[.] | type) == "object" then
-            merge_objects($a[.]; $b[.])
-          elif ($a[.] | type) == "array" and ($b[.] | type) == "array" then
-            ($a[.] + $b[.]) | unique
+          if ($base[.] | type) == "object" and ($overlay[.] | type) == "object" then
+            merge_objects($base[.]; $overlay[.])
+          elif ($base[.] | type) == "array" and ($overlay[.] | type) == "array" then
+            if ($base[.] | has_named_objects) or ($overlay[.] | has_named_objects) then
+              merge_named_arrays($base[.]; $overlay[.])
+            else
+              ($base[.] + $overlay[.]) | unique
+            end
           else
-            if ($b[.] != null) then $b[.] else $a[.] end
+            if ($overlay[.] != null) then $overlay[.] else $base[.] end
           end
         )
       }) | from_entries;
@@ -60,11 +87,12 @@ def jq_multiply(a: Any, b: Any) -> Any:
 
 
 def merge_deep_union_arrays(a: dict, b: dict) -> dict:
-    """Recursively merge two JSON objects, unioning arrays instead of replacing them.
+    """Recursively merge two JSON objects.
 
-    Mirrors the  former ``merge-json`` shell utility: object values are merged
-    recursively, array values are concatenated and deduplicated (via
-    :func:`unique_sorted`), and any other type has ``b``'s value win unless
-    ``b``'s value is ``None``, in which case ``a``'s value is kept.
+    Objects are merged recursively.  Arrays whose elements carry a ``"name"``
+    key are merged by that key; same-named entries are combined rather than
+    duplicated.  All other arrays are concatenated and deduplicated via
+    ``jq unique``.  For any other type ``b``'s value wins; if ``b``'s value is
+    ``None``, ``a``'s value is kept.
     """
     return _MERGE_DEEP_UNION_ARRAYS_PROGRAM.input_value([a, b]).first()

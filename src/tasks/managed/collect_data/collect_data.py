@@ -268,6 +268,8 @@ def collect(
     merged = json_merge.merge_deep_union_arrays(merged, release_plan_data)
     merged = json_merge.merge_deep_union_arrays(merged, rpa_data)
 
+    _log_json("Merged data", merged)
+
     pipeline_metadata = resolve_pipeline_ref(rpa_json)
     logger.info("Release Pipeline Ref Info:")
     logger.info("--------------------------")

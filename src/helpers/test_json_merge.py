@@ -187,3 +187,229 @@ def test_merge_deep_union_arrays_does_not_mutate_inputs() -> None:
     json_merge.merge_deep_union_arrays(a, b)
     assert a == {"tags": ["v1"]}
     assert b == {"tags": ["v2"]}
+
+
+def test_merge_deep_union_arrays_named_objects_merged_by_name() -> None:
+    """Array elements with the same ``name`` are merged rather than duplicated."""
+    a = {"components": [{"name": "foo", "x": 1}]}
+    b = {"components": [{"name": "foo", "y": 2}]}
+    assert json_merge.merge_deep_union_arrays(a, b) == {
+        "components": [{"name": "foo", "x": 1, "y": 2}]
+    }
+
+
+def test_merge_deep_union_arrays_duplicate_named_entries_in_a_combined() -> None:
+    """Duplicate named entries in ``a`` are combined before merging with ``b``."""
+    a = {"components": [{"name": "foo", "x": 1}, {"name": "foo", "y": 2}]}
+    b = {"components": [{"name": "foo", "z": 3}]}
+    result = json_merge.merge_deep_union_arrays(a, b)
+    assert result == {"components": [{"name": "foo", "x": 1, "y": 2, "z": 3}]}
+
+
+def test_merge_deep_union_arrays_named_object_scalar_b_wins() -> None:
+    """When same-named objects define the same scalar key, ``b``'s value wins."""
+    a = {"components": [{"name": "foo", "version": "1.0"}]}
+    b = {"components": [{"name": "foo", "version": "2.0"}]}
+    assert json_merge.merge_deep_union_arrays(a, b) == {
+        "components": [{"name": "foo", "version": "2.0"}]
+    }
+
+
+def test_merge_deep_union_arrays_named_object_null_b_falls_back_to_a() -> None:
+    """A ``None`` value in ``b`` does not clobber ``a``'s value for a named object."""
+    a = {"components": [{"name": "foo", "version": "1.0"}]}
+    b = {"components": [{"name": "foo", "version": None}]}
+    assert json_merge.merge_deep_union_arrays(a, b) == {
+        "components": [{"name": "foo", "version": "1.0"}]
+    }
+
+
+def test_merge_deep_union_arrays_named_objects_empty_a() -> None:
+    """Named entries from ``b`` are kept when ``a``'s array is empty."""
+    a = {"components": []}
+    b = {"components": [{"name": "foo", "x": 1}]}
+    assert json_merge.merge_deep_union_arrays(a, b) == {
+        "components": [{"name": "foo", "x": 1}]
+    }
+
+
+def test_merge_deep_union_arrays_named_objects_empty_b() -> None:
+    """Named entries from ``a`` are kept when ``b``'s array is empty."""
+    a = {"components": [{"name": "foo", "x": 1}]}
+    b = {"components": []}
+    assert json_merge.merge_deep_union_arrays(a, b) == {
+        "components": [{"name": "foo", "x": 1}]
+    }
+
+
+def test_merge_deep_union_arrays_named_objects_different_names_kept() -> None:
+    """Named objects with different names are both kept."""
+    a = {"components": [{"name": "foo", "x": 1}]}
+    b = {"components": [{"name": "bar", "y": 2}]}
+    result = json_merge.merge_deep_union_arrays(a, b)
+    assert len(result["components"]) == 2
+    assert {"name": "foo", "x": 1} in result["components"]
+    assert {"name": "bar", "y": 2} in result["components"]
+
+
+def test_merge_deep_union_arrays_unnamed_items_pass_through() -> None:
+    """Items without a ``name`` key are appended unchanged."""
+    a = {"components": [{"name": "foo", "x": 1}, {"role": "sidecar"}]}
+    b = {"components": [{"name": "foo", "y": 2}]}
+    result = json_merge.merge_deep_union_arrays(a, b)
+    assert {"name": "foo", "x": 1, "y": 2} in result["components"]
+    assert {"role": "sidecar"} in result["components"]
+
+
+def test_merge_deep_union_arrays_named_object_nested_merge_recursively() -> None:
+    """Nested objects inside same-named entries are merged recursively."""
+    a = {"components": [{"name": "foo", "staged": {"destination": "dest", "files": ["f1"]}}]}
+    b = {"components": [{"name": "foo", "staged": {"version": "1.0"}}]}
+    result = json_merge.merge_deep_union_arrays(a, b)
+    assert result == {
+        "components": [
+            {
+                "name": "foo",
+                "staged": {"destination": "dest", "files": ["f1"], "version": "1.0"},
+            }
+        ]
+    }
+
+
+def test_merge_deep_union_arrays_named_object_disjoint_nested_keys_combined() -> None:
+    """Disjoint nested keys from same named entries are combined."""
+    a = {"mapping": {"components": [{"name": "main", "staged": {"version": "4.11.5"}}]}}
+    b = {
+        "mapping": {
+            "components": [
+                {
+                    "contentType": "binary",
+                    "name": "main",
+                    "staged": {"destination": "rhacs-files", "files": [{"arch": "amd64"}]},
+                }
+            ]
+        }
+    }
+    result = json_merge.merge_deep_union_arrays(a, b)
+    components = result["mapping"]["components"]
+    assert len(components) == 1
+    assert components[0]["contentType"] == "binary"
+    assert components[0]["staged"]["version"] == "4.11.5"
+    assert components[0]["staged"]["destination"] == "rhacs-files"
+
+
+def test_merge_deep_union_arrays_named_component_scalar_b_wins() -> None:
+    """A scalar conflict inside a same named component is won by ``b``."""
+    a = {
+        "mapping": {
+            "components": [
+                {"name": "main-4-11", "contentType": "source", "staged": {"version": "4.11.5"}}
+            ]
+        }
+    }
+    b = {"mapping": {"components": [{"name": "main-4-11", "contentType": "binary"}]}}
+    result = json_merge.merge_deep_union_arrays(a, b)
+    components = result["mapping"]["components"]
+    assert len(components) == 1
+    assert components[0]["contentType"] == "binary"
+    assert components[0]["staged"]["version"] == "4.11.5"
+
+
+def test_merge_deep_union_arrays_references_from_both_sides_combined() -> None:
+    """References from both sides are combined into one list."""
+    a = {"releaseNotes": {"references": ["https://access.redhat.com/downloads/content/837"]}}
+    b = {
+        "releaseNotes": {
+            "references": ["https://docs.redhat.com/en/documentation/rhacs/4.11/"]
+        }
+    }
+    result = json_merge.merge_deep_union_arrays(a, b)
+    refs = result["releaseNotes"]["references"]
+    assert "https://access.redhat.com/downloads/content/837" in refs
+    assert "https://docs.redhat.com/en/documentation/rhacs/4.11/" in refs
+    assert len(refs) == 2
+
+
+def test_merge_deep_union_arrays_named_component_only_in_b_is_added() -> None:
+    """A component present only in ``b`` is added alongside shared entries."""
+    a = {"mapping": {"components": [{"name": "main-4-11", "staged": {"version": "4.11.5"}}]}}
+    b = {
+        "mapping": {
+            "components": [
+                {
+                    "contentType": "binary",
+                    "name": "main-4-11",
+                    "staged": {"destination": "rhacs-4-for-rhel-9-x86_64-files"},
+                },
+                {
+                    "contentType": "binary",
+                    "name": "sidecar-4-11",
+                    "staged": {"destination": "rhacs-4-sidecar-files"},
+                },
+            ]
+        }
+    }
+    result = json_merge.merge_deep_union_arrays(a, b)
+    by_name = {c["name"]: c for c in result["mapping"]["components"]}
+    assert len(by_name) == 2
+    assert by_name["main-4-11"]["staged"]["version"] == "4.11.5"
+    assert by_name["main-4-11"]["staged"]["destination"] == "rhacs-4-for-rhel-9-x86_64-files"
+    assert by_name["sidecar-4-11"]["staged"]["destination"] == "rhacs-4-sidecar-files"
+
+
+def test_merge_deep_union_arrays_rpm_repositories_merged_by_name() -> None:
+    """rpm-repositories entries with the same name are merged, not duplicated."""
+    a = {
+        "mapping": {
+            "rpm-repositories": [{"name": "rhel-9-baseos", "baseurl": "https://a.example.com"}]
+        }
+    }
+    b = {"mapping": {"rpm-repositories": [{"name": "rhel-9-baseos", "gpgcheck": True}]}}
+    result = json_merge.merge_deep_union_arrays(a, b)
+    repos = result["mapping"]["rpm-repositories"]
+    assert len(repos) == 1
+    assert repos[0]["name"] == "rhel-9-baseos"
+    assert repos[0]["baseurl"] == "https://a.example.com"
+    assert repos[0]["gpgcheck"] is True
+
+
+def test_merge_deep_union_arrays_named_objects_successive_calls() -> None:
+    """Named entries accumulate correctly across successive merge calls."""
+    release = {
+        "mapping": {"components": [{"name": "main-4-11", "staged": {"version": "4.11.5"}}]},
+        "releaseNotes": {"type": "RHBA", "synopsis": "RHACS 4.11.5 CLI update"},
+    }
+    rp = {
+        "releaseNotes": {
+            "description": "Binary release of the roxctl CLI.",
+            "solution": "Download the roxctl binary for your platform.",
+        }
+    }
+    rpa = {
+        "cdn": {"env": "stage"},
+        "mapping": {
+            "components": [
+                {
+                    "contentType": "binary",
+                    "name": "main-4-11",
+                    "staged": {
+                        "destination": "rhacs-4-for-rhel-9-x86_64-files",
+                        "files": [
+                            {"arch": "amd64", "filename": "roxctl-linux", "os": "linux"}
+                        ],
+                    },
+                }
+            ]
+        },
+    }
+    merged = json_merge.merge_deep_union_arrays({}, release)
+    merged = json_merge.merge_deep_union_arrays(merged, rp)
+    merged = json_merge.merge_deep_union_arrays(merged, rpa)
+    components = merged["mapping"]["components"]
+    assert len(components) == 1
+    assert components[0]["contentType"] == "binary"
+    assert components[0]["staged"]["version"] == "4.11.5"
+    assert components[0]["staged"]["destination"] == "rhacs-4-for-rhel-9-x86_64-files"
+    assert merged["cdn"]["env"] == "stage"
+    assert merged["releaseNotes"]["type"] == "RHBA"
+    assert merged["releaseNotes"]["description"] == "Binary release of the roxctl CLI."
