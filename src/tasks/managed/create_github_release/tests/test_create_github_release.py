@@ -74,6 +74,11 @@ def _make_completed_process(
     )
 
 
+def _uploaded_names(cmd: list[str], tmp_path: Path) -> set[str]:
+    """Return basenames of file-path arguments under *tmp_path*."""
+    return {Path(arg).name for arg in cmd if arg.startswith(str(tmp_path))}
+
+
 class TestCheckReleaseExists:
     """Tests for check_release_exists."""
 
@@ -174,12 +179,13 @@ class TestCreateRelease:
     def test_calls_gh_release_create(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Calls gh release create with correct arguments."""
+        """Calls gh release create with zip, tar.gz, json, checksum, and sig."""
         binaries_dir = tmp_path / "binaries"
         content_dir = tmp_path / "content"
         binaries_dir.mkdir()
         content_dir.mkdir()
         (binaries_dir / "app.zip").write_bytes(b"zip")
+        (binaries_dir / "app.tar.gz").write_bytes(b"tarball")
         (binaries_dir / "meta.json").write_text("{}", encoding="utf-8")
         (content_dir / "foo_SHA256SUMS").write_text("hash", encoding="utf-8")
         (content_dir / "foo.sig").write_text("sig", encoding="utf-8")
@@ -208,6 +214,73 @@ class TestCreateRelease:
         assert "v1.0" in captured_cmd
         assert "--repo" in captured_cmd
         assert "https://github.com/foo/bar" in captured_cmd
+        assert _uploaded_names(captured_cmd, tmp_path) == {
+            "app.zip",
+            "app.tar.gz",
+            "meta.json",
+            "foo_SHA256SUMS",
+            "foo.sig",
+        }
+
+    def test_uploads_tar_gz_without_zip_or_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Upload tar.gz when zip and json are absent (e.g. ROSA CLI)."""
+        binaries_dir = tmp_path / "binaries"
+        content_dir = tmp_path / "content"
+        binaries_dir.mkdir()
+        content_dir.mkdir()
+        (binaries_dir / "rosa.tar.gz").write_bytes(b"tarball")
+        (content_dir / "foo_SHA256SUMS").write_text("hash", encoding="utf-8")
+        (content_dir / "foo.sig").write_text("sig", encoding="utf-8")
+
+        captured_cmd: list[str] = []
+
+        def mock_gh(cmd, *, gh_token, check=True, cwd=None):
+            captured_cmd.extend(cmd)
+            return _make_completed_process(stdout="https://github.com/foo/bar/v1")
+
+        monkeypatch.setattr(github, "run_gh_command", mock_gh)
+        cgr.create_release(
+            "https://github.com/foo/bar",
+            "1.0",
+            binaries_dir,
+            content_dir,
+            "token",
+        )
+
+        names = _uploaded_names(captured_cmd, tmp_path)
+        assert names == {"rosa.tar.gz", "foo_SHA256SUMS", "foo.sig"}
+
+    def test_uploads_zip_without_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Upload zip when json is absent; missing optional globs are skipped."""
+        binaries_dir = tmp_path / "binaries"
+        content_dir = tmp_path / "content"
+        binaries_dir.mkdir()
+        content_dir.mkdir()
+        (binaries_dir / "app.zip").write_bytes(b"zip")
+        (content_dir / "foo_SHA256SUMS").write_text("hash", encoding="utf-8")
+        (content_dir / "foo.sig").write_text("sig", encoding="utf-8")
+
+        captured_cmd: list[str] = []
+
+        def mock_gh(cmd, *, gh_token, check=True, cwd=None):
+            captured_cmd.extend(cmd)
+            return _make_completed_process(stdout="https://github.com/foo/bar/v1")
+
+        monkeypatch.setattr(github, "run_gh_command", mock_gh)
+        cgr.create_release(
+            "https://github.com/foo/bar",
+            "1.0",
+            binaries_dir,
+            content_dir,
+            "token",
+        )
+
+        names = _uploaded_names(captured_cmd, tmp_path)
+        assert names == {"app.zip", "foo_SHA256SUMS", "foo.sig"}
 
 
 class TestWriteResultsJson:
