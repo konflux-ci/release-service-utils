@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import time
 import types
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 from unittest.mock import call, patch
 
 import pytest
@@ -287,6 +290,66 @@ class TestDiscoverArtifactsWithRetry:
                 "reg.io/img@sha256:abc", auth_file, retries=1
             )
         assert artifacts == []
+
+
+class TestRunJob:
+    """Test _run_job error reporting."""
+
+    @staticmethod
+    def _lock_for_digest(_digest: str) -> threading.Lock:
+        return threading.Lock()
+
+    @staticmethod
+    def _make_job() -> push_snapshot.PushJob:
+        return push_snapshot.PushJob(
+            origin_digest="sha256:abc",
+            name="comp1",
+            container_image="reg.io/img@sha256:abc",
+            repository_url="prod.io/loc",
+            tag="v1",
+            platform="",
+            source_auth_file=Path("/tmp/auth.json"),
+            retries=0,
+            copy_bundle_migrations=False,
+        )
+
+    def test_reports_called_process_error_stderr_and_stdout(self) -> None:
+        """Include subprocess stdout and stderr, not just the exit-status message.
+
+        Stdout can carry progress output printed before a mid-upload failure,
+        so it must not be dropped in favor of just the final stderr error.
+        """
+        exc = subprocess.CalledProcessError(
+            1,
+            ["cosign", "copy"],
+            output="uploading layer 3/8\n",
+            stderr="denied: permission denied\n",
+        )
+
+        def fake_push(_job: push_snapshot.PushJob) -> dict[str, str]:
+            raise exc
+
+        result, error = push_snapshot._run_job(
+            fake_push, self._make_job(), self._lock_for_digest
+        )
+
+        assert result is None
+        assert error is not None
+        assert "uploading layer 3/8" in error
+        assert "denied: permission denied" in error
+
+    def test_reports_plain_exception_message(self) -> None:
+        """Fall back to str(exc) for exceptions without captured stdout/stderr."""
+
+        def fake_push(_job: push_snapshot.PushJob) -> dict[str, str]:
+            raise RuntimeError("boom")
+
+        result, error = push_snapshot._run_job(
+            fake_push, self._make_job(), self._lock_for_digest
+        )
+
+        assert result is None
+        assert error == "boom"
 
 
 class TestPushImage:
@@ -1062,6 +1125,158 @@ class TestRun:
 
         with pytest.raises(RuntimeError, match="One or more jobs failed"):
             push_snapshot.run(snapshot_file, data_file, tmp_path / "results", 5, 0, False)
+
+    def test_tags_within_component_run_sequentially(
+        self, tmp_path: Path, run_mocks: types.SimpleNamespace
+    ) -> None:
+        """Tags of the same component must never push concurrently.
+
+        Concurrent pushes of different tags for the same (not-yet-present)
+        image would race to upload the same layers to the destination.
+        """
+        snapshot_file = tmp_path / "snapshot.json"
+        _write_json(
+            snapshot_file,
+            _default_snapshot(
+                [
+                    {
+                        "name": "comp1",
+                        "containerImage": "registry.io/image1@sha256:abc123",
+                        "repositories": [{"url": "prod.io/loc1", "tags": ["v1", "v2", "v3"]}],
+                        "pushSourceContainer": False,
+                    }
+                ]
+            ),
+        )
+        data_file = tmp_path / "data.json"
+        _write_json(data_file, _default_data())
+        results_dir = tmp_path / "results"
+
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def fake_push_image(job: push_snapshot.PushJob) -> dict[str, str]:
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return {"name": job.name, "url": f"{job.repository_url}:{job.tag}"}
+
+        run_mocks.push_image.side_effect = fake_push_image
+
+        push_snapshot.run(snapshot_file, data_file, results_dir, 5, 0, False)
+
+        assert max_active == 1
+        assert run_mocks.push_image.call_count == 3
+
+    def test_same_digest_across_components_runs_sequentially(
+        self, tmp_path: Path, run_mocks: types.SimpleNamespace
+    ) -> None:
+        """Different components sharing an image digest must not race either.
+
+        Two components can reference the exact same image; pushes for that
+        digest must still serialize even though they belong to different
+        components.
+        """
+        snapshot_file = tmp_path / "snapshot.json"
+        _write_json(
+            snapshot_file,
+            _default_snapshot(
+                [
+                    {
+                        "name": f"comp{i}",
+                        "containerImage": "registry.io/shared@sha256:shared123",
+                        "repositories": [{"url": f"prod.io/loc{i}", "tags": ["v1"]}],
+                        "pushSourceContainer": False,
+                    }
+                    for i in range(3)
+                ]
+            ),
+        )
+        data_file = tmp_path / "data.json"
+        _write_json(data_file, _default_data())
+        results_dir = tmp_path / "results"
+
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def fake_push_image(job: push_snapshot.PushJob) -> dict[str, str]:
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return {"name": job.name, "url": f"{job.repository_url}:{job.tag}"}
+
+        run_mocks.push_image.side_effect = fake_push_image
+
+        push_snapshot.run(snapshot_file, data_file, results_dir, 5, 0, False)
+
+        assert max_active == 1
+        assert run_mocks.push_image.call_count == 3
+
+    def test_main_and_source_container_run_concurrently(
+        self, tmp_path: Path, run_mocks: types.SimpleNamespace
+    ) -> None:
+        """Main image and source container pushes may run in parallel.
+
+        They copy distinct content, so unlike same-content tag pushes they
+        don't need to be serialized against each other.
+        """
+        snapshot_file = tmp_path / "snapshot.json"
+        _write_json(
+            snapshot_file,
+            _default_snapshot(
+                [
+                    {
+                        "name": "comp1",
+                        "containerImage": "registry.io/image1@sha256:abc123",
+                        "repositories": [{"url": "prod.io/loc1", "tags": ["v1"]}],
+                        "pushSourceContainer": True,
+                    }
+                ]
+            ),
+        )
+        data_file = tmp_path / "data.json"
+        _write_json(data_file, {"mapping": {"defaults": {}}})
+        results_dir = tmp_path / "results"
+
+        resolve_calls = [0]
+
+        def _resolve(ref: str, **kwargs: Any) -> str:
+            resolve_calls[0] += 1
+            return "sha256:origin123" if resolve_calls[0] == 1 else "sha256:srccontainer456"
+
+        run_mocks.resolve.side_effect = _resolve
+
+        main_started = threading.Event()
+        source_started = threading.Event()
+
+        def fake_push_image(job: push_snapshot.PushJob) -> dict[str, str]:
+            if job.origin_digest == "sha256:origin123":
+                main_started.set()
+                assert source_started.wait(
+                    timeout=2
+                ), "source container job never overlapped with main image job"
+            else:
+                source_started.set()
+                assert main_started.wait(
+                    timeout=2
+                ), "main image job never overlapped with source container job"
+            return {"name": job.name, "url": f"{job.repository_url}:{job.tag}"}
+
+        run_mocks.push_image.side_effect = fake_push_image
+
+        push_snapshot.run(snapshot_file, data_file, results_dir, 5, 0, False)
+
+        assert run_mocks.push_image.call_count == 3
 
     def test_burst_triggers_stabilization_delay(self, tmp_path: Path, run_mocks) -> None:
         """Every BURST_SIZE-th submitted job should sleep for stabilization."""
