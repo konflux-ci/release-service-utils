@@ -21,6 +21,7 @@ from release_service_utils.helpers import skopeo
 from release_service_utils.helpers import snapshot as snapshot_helper
 from release_service_utils.helpers import tekton
 from release_service_utils.helpers.logger import logger
+from release_service_utils.helpers.oot_kmods import resolve_arch_name
 from release_service_utils.helpers.subprocess_cmd import run_cmd_text
 
 
@@ -150,39 +151,6 @@ def _extract_layer(
             logger.info("Extracted envfile for destination %s", dest_dir)
 
     return True
-
-
-def resolve_arch_name(dest_dir: Path, platform_arch: str) -> str:
-    """Determine the final architecture name from the envfile.
-
-    If the ``envfile`` in *dest_dir* defines an ``ARCH`` variable that
-    is non-empty and not ``MULTI_PLATFORM``, that value is used.
-    Otherwise *platform_arch* is returned.
-    """
-    envfile = dest_dir / "envfile"
-    if envfile.is_file():
-        for line in envfile.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("ARCH="):
-                arch_value = line[len("ARCH=") :].strip("'\"")
-                if arch_value and arch_value != "MULTI_PLATFORM":
-                    logger.info(
-                        "Using ARCH=%s from envfile (platform: %s)",
-                        arch_value,
-                        platform_arch,
-                    )
-                    return arch_value
-                if arch_value == "MULTI_PLATFORM":
-                    logger.info(
-                        "ARCH=MULTI_PLATFORM in envfile, " "using platform architecture: %s",
-                        platform_arch,
-                    )
-                    return platform_arch
-    logger.info(
-        "No ARCH variable in envfile, using platform architecture: %s",
-        platform_arch,
-    )
-    return platform_arch
 
 
 def _write_summary(output_base: Path, arch_count: int) -> None:
