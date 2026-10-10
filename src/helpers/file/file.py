@@ -19,7 +19,10 @@ from typing import Any
 def load_json_dict(path: Path) -> dict[str, Any]:
     """Load a JSON file whose root value must be an object."""
     with open(path, encoding="utf-8") as handle:
-        data = json.load(handle)
+        try:
+            data = json.load(handle)
+        except json.JSONDecodeError as e:
+            raise json.JSONDecodeError(f"File is not valid JSON: {path}", e.doc, e.pos) from e
     if not isinstance(data, dict):
         msg = f"JSON root must be an object: {path}"
         raise TypeError(msg)
