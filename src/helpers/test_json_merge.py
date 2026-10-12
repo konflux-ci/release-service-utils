@@ -187,3 +187,80 @@ def test_merge_deep_union_arrays_does_not_mutate_inputs() -> None:
     json_merge.merge_deep_union_arrays(a, b)
     assert a == {"tags": ["v1"]}
     assert b == {"tags": ["v2"]}
+
+
+# ---------------------------------------------------------------------------
+# merge_concat_arrays
+# ---------------------------------------------------------------------------
+
+
+def test_merge_concat_arrays_disjoint_keys() -> None:
+    """Keys unique to either side are kept."""
+    assert json_merge.merge_concat_arrays({"a": 1}, {"b": 2}) == {"a": 1, "b": 2}
+
+
+def test_merge_concat_arrays_concatenates_in_order_with_duplicates() -> None:
+    """Arrays keep their order and duplicates."""
+    a = {"tags": ["v2", "v1"]}
+    b = {"tags": ["v3", "v1"]}
+    assert json_merge.merge_concat_arrays(a, b) == {"tags": ["v2", "v1", "v3", "v1"]}
+
+
+def test_merge_concat_arrays_nested_objects_merge_recursively() -> None:
+    """Nested objects are merged recursively rather than replaced."""
+    a = {"settings": {"publish": True}}
+    b = {"settings": {"env": "prod"}}
+    result = json_merge.merge_concat_arrays(a, b)
+    assert result == {"settings": {"publish": True, "env": "prod"}}
+
+
+def test_merge_concat_arrays_only_concatenates_top_level_arrays() -> None:
+    """An array nested inside a merged object is overwritten, not concatenated."""
+    a = {"settings": {"accountId": ["1"], "publish": True}}
+    b = {"settings": {"accountId": ["2"]}}
+    result = json_merge.merge_concat_arrays(a, b)
+    assert result == {"settings": {"accountId": ["2"], "publish": True}}
+
+
+def test_merge_concat_arrays_scalar_conflict_b_wins() -> None:
+    """When both sides define an incompatible scalar, ``b``'s value wins."""
+    assert json_merge.merge_concat_arrays({"a": 1}, {"a": 2}) == {"a": 2}
+
+
+def test_merge_concat_arrays_null_b_falls_back_to_a() -> None:
+    """A ``None`` value in ``b`` does not clobber ``a``'s value."""
+    assert json_merge.merge_concat_arrays({"a": 1}, {"a": None}) == {"a": 1}
+
+
+def test_merge_concat_arrays_false_b_falls_back_to_a() -> None:
+    """A literal ``False`` in ``b`` falls back to ``a`` (unlike merge_deep_union_arrays)."""
+    assert json_merge.merge_concat_arrays({"a": True}, {"a": False}) == {"a": True}
+
+
+def test_merge_concat_arrays_key_only_in_a() -> None:
+    """A key present only in ``a`` is preserved."""
+    assert json_merge.merge_concat_arrays({"a": 1}, {}) == {"a": 1}
+
+
+def test_merge_concat_arrays_key_only_in_b() -> None:
+    """A key present only in ``b`` is added."""
+    assert json_merge.merge_concat_arrays({}, {"a": 1}) == {"a": 1}
+
+
+def test_merge_concat_arrays_empty_both() -> None:
+    """Merging two empty objects returns an empty object."""
+    assert json_merge.merge_concat_arrays({}, {}) == {}
+
+
+def test_merge_concat_arrays_type_mismatch_array_vs_scalar() -> None:
+    """A type mismatch (array vs scalar) falls through to ``b`` wins."""
+    assert json_merge.merge_concat_arrays({"a": [1, 2]}, {"a": "x"}) == {"a": "x"}
+
+
+def test_merge_concat_arrays_does_not_mutate_inputs() -> None:
+    """Neither input dict is mutated."""
+    a = {"tags": ["v1"]}
+    b = {"tags": ["v2"]}
+    json_merge.merge_concat_arrays(a, b)
+    assert a == {"tags": ["v1"]}
+    assert b == {"tags": ["v2"]}

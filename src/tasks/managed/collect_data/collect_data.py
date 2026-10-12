@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from release_service_utils.helpers import http_client, json_merge
+from release_service_utils.helpers import http_client, json_merge, kubectl
 from release_service_utils.helpers.authentication import setup_ca_cert
 from release_service_utils.helpers.file import resolve_path_under_base
 from get_resource import get_resource_dict
@@ -222,24 +222,24 @@ def collect(
     subdirectory: str,
 ) -> CollectDataResult:
     """Fetch K8s resources, merge data, and return computed results."""
-    ns, name = release.split("/", 1)
+    ns, name = kubectl.split_namespace(release)
     release_json = get_resource_dict("release", ns, name)
     _log_json("Release", release_json)
 
-    ns, name = release_plan.split("/", 1)
+    ns, name = kubectl.split_namespace(release_plan)
     release_plan_json = get_resource_dict("releaseplan", ns, name)
     _log_json("ReleasePlan", release_plan_json)
 
-    ns, name = release_plan_admission.split("/", 1)
+    ns, name = kubectl.split_namespace(release_plan_admission)
     rpa_json = get_resource_dict("releaseplanadmission", ns, name)
     _log_json("ReleasePlanAdmission", rpa_json)
 
-    ns, name = release_service_config.split("/", 1)
+    ns, name = kubectl.split_namespace(release_service_config)
     rsc_json = get_resource_dict("releaseserviceconfig", ns, name)
     _log_json("ReleaseServiceConfig", rsc_json)
 
     logger.info("Fetching Snapshot Spec")
-    snapshot_namespace, snapshot_name = snapshot.split("/", 1)
+    snapshot_namespace, snapshot_name = kubectl.split_namespace(snapshot)
     snapshot_json = get_resource_dict("snapshot", snapshot_namespace, snapshot_name)
     snapshot_spec = transform_snapshot_spec(snapshot_json.get("spec", {}))
     _log_json("Snapshot spec", snapshot_spec)
