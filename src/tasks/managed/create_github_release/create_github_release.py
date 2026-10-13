@@ -84,16 +84,22 @@ def create_release(
     content_dir: Path,
     gh_token: str,
 ) -> str:
-    """Create a GitHub release and return the release URL."""
+    """Create a GitHub release and return the release URL.
+
+    Upload ``*.zip``, ``*.tar.gz``, and ``*.json`` from *binaries_dir* plus
+    SHA256SUMS and ``*.sig`` from *content_dir*. Missing optional globs are
+    skipped.
+    """
     tag = f"v{release_version}"
     title = f"Release {release_version}"
 
     zip_files = list(binaries_dir.glob("*.zip"))
+    tar_gz_files = list(binaries_dir.glob("*.tar.gz"))
     json_files = list(binaries_dir.glob("*.json"))
     sha256sums_files = list(content_dir.glob("*SHA256SUMS"))
     sig_files = list(content_dir.glob("*.sig"))
 
-    files_to_upload = zip_files + json_files + sha256sums_files + sig_files
+    files_to_upload = zip_files + tar_gz_files + json_files + sha256sums_files + sig_files
     file_args = [str(f) for f in files_to_upload]
 
     cmd = [
