@@ -11,7 +11,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from release_service_utils.helpers import file
+from release_service_utils.helpers import oci_auth
 from release_service_utils.helpers import subprocess_cmd
 from release_service_utils.helpers.subprocess_cmd import run_cmd
 
@@ -77,14 +77,9 @@ def oras_resolve(
             check=False,
         )
     else:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as tmp_auth:
-            select_auth = run_cmd(["select-oci-auth", auth_ref or reference], check=False)
-            auth_content = select_auth.stdout.strip()
-            tmp_auth.write(auth_content if auth_content else "{}")
-            tmp_auth.flush()
-
+        with oci_auth.auth_file(auth_ref or reference, check=False) as tmp_auth:
             result = run_cmd(
-                ["oras", "resolve", "--registry-config", tmp_auth.name, reference],
+                ["oras", "resolve", "--registry-config", str(tmp_auth), reference],
                 check=False,
             )
 
@@ -137,20 +132,13 @@ def oras_pull(
     stderr_path: Path | None = None,
 ) -> None:
     """Pull an OCI artifact into *download_dir* using select-oci-auth and oras."""
-    auth_file = file.make_tempfile_path("oras-auth-")
-    try:
-        auth_out = subprocess_cmd.run_cmd(
-            ["select-oci-auth", str(pull_spec)],
-            stderr_path=stderr_path,
-            check=True,
-        ).stdout
-        auth_file.write_text(auth_out, encoding="utf-8")
+    with oci_auth.auth_file(str(pull_spec), stderr_path=stderr_path) as auth_path:
         subprocess_cmd.run_cmd(
             [
                 "oras",
                 "pull",
                 "--registry-config",
-                str(auth_file),
+                str(auth_path),
                 str(pull_spec),
             ],
             cwd=download_dir,
@@ -158,9 +146,6 @@ def oras_pull(
             check=True,
             stream_stdout=True,
         )
-    finally:
-        # Always remove the auth file; subprocess failures still propagate to callers.
-        auth_file.unlink(missing_ok=True)
 
 
 def extract_disk_image_files(
@@ -196,14 +181,7 @@ def extract_disk_image_files(
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
-        auth_file = file.make_tempfile_path("oci-auth-")
-        try:
-            auth_out = subprocess_cmd.run_cmd(
-                ["select-oci-auth", str(pull_spec)],
-                stderr_path=stderr_path,
-                check=True,
-            ).stdout
-            auth_file.write_text(auth_out, encoding="utf-8")
+        with oci_auth.auth_file(str(pull_spec), stderr_path=stderr_path) as auth_path:
             subprocess_cmd.run_cmd(
                 [
                     "skopeo",
@@ -211,7 +189,7 @@ def extract_disk_image_files(
                     "--retry-times",
                     "3",
                     "--authfile",
-                    str(auth_file),
+                    str(auth_path),
                     f"docker://{pull_spec}",
                     f"dir:{tmp_dir}",
                 ],
@@ -219,8 +197,6 @@ def extract_disk_image_files(
                 check=True,
                 stream_stdout=True,
             )
-        finally:
-            auth_file.unlink(missing_ok=True)
 
         manifest = json.loads((tmp_dir / "manifest.json").read_text())
         config_media_type = manifest.get("config", {}).get("mediaType", "")

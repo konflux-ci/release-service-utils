@@ -485,15 +485,14 @@ def test_check_existing_signature_invalid_json_raises(
 
 @patch(f"{TASK}.run_cosign_with_retry")
 @patch(f"{TASK}.check_existing_cosign_signature", return_value=True)
-@patch(f"{TASK}.run_cmd")
+@patch("release_service_utils.helpers.oci_auth.oci_auth.auth_json", return_value="{}")
 def test_sign_item_skips_when_already_signed(
-    mock_run_cmd: MagicMock,
+    mock_auth: MagicMock,
     mock_check: MagicMock,
     mock_cosign: MagicMock,
     tmp_path: Path,
 ) -> None:
     """Cosign sign is not called when a signature is already present."""
-    mock_run_cmd.return_value = MagicMock(stdout='{"auths":{}}')
     pub_key = tmp_path / "pub.key"
     pub_key.write_text("key")
 
@@ -507,19 +506,19 @@ def test_sign_item_skips_when_already_signed(
     )
 
     mock_cosign.assert_not_called()
+    assert mock_auth.called
 
 
 @patch(f"{TASK}.run_cosign_with_retry")
 @patch(f"{TASK}.check_existing_cosign_signature", return_value=False)
-@patch(f"{TASK}.run_cmd")
+@patch("release_service_utils.helpers.oci_auth.oci_auth.auth_json", return_value="{}")
 def test_sign_item_calls_cosign_when_not_signed(
-    mock_run_cmd: MagicMock,
+    mock_auth: MagicMock,
     mock_check: MagicMock,
     mock_cosign: MagicMock,
     tmp_path: Path,
 ) -> None:
     """Cosign sign is called with the correct identity and reference when unsigned."""
-    mock_run_cmd.return_value = MagicMock(stdout='{"auths":{}}')
     mock_cosign.return_value = MagicMock(returncode=0, stdout="", stderr="")
     pub_key = tmp_path / "pub.key"
     pub_key.write_text("key")
@@ -543,9 +542,9 @@ def test_sign_item_calls_cosign_when_not_signed(
 
 @patch(f"{TASK}.run_cosign_with_retry")
 @patch(f"{TASK}.check_existing_cosign_signature", return_value=False)
-@patch(f"{TASK}.run_cmd")
+@patch("release_service_utils.helpers.oci_auth.oci_auth.auth_json", return_value="{}")
 def test_sign_item_passes_docker_config_to_verify(
-    mock_run_cmd: MagicMock,
+    mock_auth: MagicMock,
     mock_check: MagicMock,
     mock_cosign: MagicMock,
     tmp_path: Path,
@@ -556,7 +555,6 @@ def test_sign_item_passes_docker_config_to_verify(
     so both the verify and sign calls need the single-entry auth file created
     from select-oci-auth for that source.
     """
-    mock_run_cmd.return_value = MagicMock(stdout='{"auths":{}}')
     mock_cosign.return_value = MagicMock(returncode=0, stdout="", stderr="")
     pub_key = tmp_path / "pub.key"
     pub_key.write_text("key")
@@ -578,15 +576,14 @@ def test_sign_item_passes_docker_config_to_verify(
 
 @patch(f"{TASK}.run_cosign_with_retry")
 @patch(f"{TASK}.check_existing_cosign_signature", return_value=False)
-@patch(f"{TASK}.run_cmd")
+@patch("release_service_utils.helpers.oci_auth.oci_auth.auth_json", return_value="{}")
 def test_sign_item_with_rekor(
-    mock_run_cmd: MagicMock,
+    mock_auth: MagicMock,
     mock_check: MagicMock,
     mock_cosign: MagicMock,
     tmp_path: Path,
 ) -> None:
     """Cosign sign includes --rekor-url and sets SIGSTORE_REKOR_PUBLIC_KEY when available."""
-    mock_run_cmd.return_value = MagicMock(stdout='{"auths":{}}')
     mock_cosign.return_value = MagicMock(returncode=0, stdout="", stderr="")
     pub_key = tmp_path / "pub.key"
     pub_key.write_text("key")

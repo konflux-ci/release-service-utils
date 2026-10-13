@@ -37,6 +37,7 @@ from create_container_image import (
 )
 from release_service_utils.helpers import file as file_helpers
 from release_service_utils.helpers import memory_throttle
+from release_service_utils.helpers import oci_auth
 from release_service_utils.helpers import oras_utils
 from release_service_utils.helpers import pyxis_api
 from release_service_utils.helpers import skopeo
@@ -91,18 +92,13 @@ _FBC_INDEX_RE = re.compile(r"/(preview-operator-index|redhat-operator-index)$")
 
 def _write_auth_file(reference: str, auth_path: Path) -> None:
     """Run ``select-oci-auth`` and write the result to *auth_path*."""
-    result = subprocess.run(
-        ["select-oci-auth", reference],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
+    try:
+        auth_path.write_text(oci_auth.auth_json(reference), encoding="utf-8")
+    except subprocess.CalledProcessError as exc:
         raise RuntimeError(
             f"select-oci-auth failed for {reference} "
-            f"(exit {result.returncode}): {result.stderr.strip()}"
-        )
-    auth_path.write_text(result.stdout, encoding="utf-8")
+            f"(exit {exc.returncode}): {(exc.stderr or '').strip()}"
+        ) from exc
 
 
 def _try_pull_dockerfile(source_repo: str, digest: str) -> Path | None:

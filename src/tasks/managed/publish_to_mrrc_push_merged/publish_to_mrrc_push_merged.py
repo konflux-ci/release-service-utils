@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from release_service_utils.helpers import charon_env
-from release_service_utils.helpers import file
+from release_service_utils.helpers import oci_auth
 from release_service_utils.helpers import oras_utils
 from release_service_utils.helpers import tekton
 from release_service_utils.helpers.logger import logger
@@ -46,28 +46,22 @@ def push_merged_maven_repo(
     tag = generate_tag()
     tagged_ref = f"{image}:{tag}"
 
-    auth_out = subprocess.check_output(
-        ["select-oci-auth", image],
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    auth_file = file.make_tempfile_path("oras-auth-", auth_out.encode("utf-8"))
+    with oci_auth.auth_file(image) as auth_path:
+        cmd: list[str] = [
+            "oras",
+            "push",
+            "--registry-config",
+            str(auth_path),
+            "--artifact-type",
+            "application/vnd.maven+zip",
+        ]
+        if image_expires_after:
+            logger.info("Setting image expiration to %s", image_expires_after)
+            cmd.extend(["--annotation", f"quay.expires-after={image_expires_after}"])
+        cmd.extend([tagged_ref, "merged.zip"])
 
-    cmd: list[str] = [
-        "oras",
-        "push",
-        "--registry-config",
-        str(auth_file),
-        "--artifact-type",
-        "application/vnd.maven+zip",
-    ]
-    if image_expires_after:
-        logger.info("Setting image expiration to %s", image_expires_after)
-        cmd.extend(["--annotation", f"quay.expires-after={image_expires_after}"])
-    cmd.extend([tagged_ref, "merged.zip"])
-
-    logger.info("Pushing image %s to registry", tagged_ref)
-    subprocess.check_output(cmd, cwd=str(merge_dir), stderr=subprocess.STDOUT, text=True)
+        logger.info("Pushing image %s to registry", tagged_ref)
+        subprocess.check_output(cmd, cwd=str(merge_dir), stderr=subprocess.STDOUT, text=True)
 
     digest = oras_utils.oras_resolve(tagged_ref)
     result_image_digest.write_text(digest, encoding="utf-8")

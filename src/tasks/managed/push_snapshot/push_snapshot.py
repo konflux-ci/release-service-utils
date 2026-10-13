@@ -31,6 +31,7 @@ from release_service_utils.helpers import (
     file,
     image_ref,
     memory_throttle,
+    oci_auth,
     oras_utils,
     retry,
     skopeo,
@@ -79,12 +80,6 @@ class MigrationJob:
     retries: int
 
 
-def select_oci_auth(reference: str) -> str:
-    """Run ``select-oci-auth`` and return the raw JSON output."""
-    result = subprocess_cmd.run_cmd(["select-oci-auth", reference], check=False)
-    return result.stdout.strip() or "{}"
-
-
 def create_source_auth_file(container_image: str) -> Path:
     """Create an auth file for the source registry with a repo-level key.
 
@@ -96,7 +91,7 @@ def create_source_auth_file(container_image: str) -> Path:
     """
     reg = image_ref.registry(container_image)
     source_repo = image_ref.repository(container_image)
-    auth_json_str = select_oci_auth(container_image)
+    auth_json_str = oci_auth.auth_json(container_image, check=False)
     auth_data = json.loads(auth_json_str)
 
     auths = auth_data.get("auths", {})
@@ -118,7 +113,7 @@ def create_dest_auth_file(repository_url: str) -> Path:
     entries can coexist in the combined auth file used by ``cosign copy``.
     """
     reg = image_ref.registry(repository_url)
-    auth_json_str = select_oci_auth(repository_url)
+    auth_json_str = oci_auth.auth_json(repository_url, check=False)
     auth_data = json.loads(auth_json_str)
 
     if reg != "docker.io":

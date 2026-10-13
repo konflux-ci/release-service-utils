@@ -15,6 +15,5 @@ from .push_snapshot import (  # noqa: F401
     push_image,
     push_migration_artifact,
     run,
-    select_oci_auth,
     validate_snapshot,
 )

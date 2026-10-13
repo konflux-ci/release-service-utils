@@ -10,6 +10,8 @@ import pytest
 
 from release_service_utils.tasks.managed import publish_to_mrrc_push_merged
 
+_AUTH_JSON = "release_service_utils.helpers.oci_auth.oci_auth.auth_json"
+
 
 def _make_result_paths(tmp_path: Path) -> tuple[Path, Path]:
     results = tmp_path / "results"
@@ -50,10 +52,9 @@ def test_push_merged_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
     def fake_check_output(cmd, **kwargs):  # type: ignore[no-untyped-def]
         calls.append([str(x) for x in cmd])
-        if cmd[0] == "select-oci-auth":
-            return '{"auths":{}}'
         return ""
 
+    monkeypatch.setattr(_AUTH_JSON, lambda *args, **kwargs: '{"auths":{}}')
     monkeypatch.setattr(
         publish_to_mrrc_push_merged.publish_to_mrrc_push_merged.subprocess,
         "check_output",
@@ -81,8 +82,7 @@ def test_push_merged_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert result_digest.read_text(encoding="utf-8") == "sha256:abcdef1234567890"
     assert result_tag.read_text(encoding="utf-8") == "20260716-120000-test-uuid"
 
-    assert calls[0] == ["select-oci-auth", "quay.io/konflux-mrrc/mrrc-merge"]
-    push_cmd = calls[1]
+    push_cmd = calls[0]
     assert push_cmd[0] == "oras"
     assert push_cmd[1] == "push"
     assert "--artifact-type" in push_cmd
@@ -126,10 +126,9 @@ def test_push_merged_no_expire_annotation(
 
     def fake_check_output(cmd, **kwargs):  # type: ignore[no-untyped-def]
         calls.append([str(x) for x in cmd])
-        if cmd[0] == "select-oci-auth":
-            return '{"auths":{}}'
         return ""
 
+    monkeypatch.setattr(_AUTH_JSON, lambda *args, **kwargs: '{"auths":{}}')
     monkeypatch.setattr(
         publish_to_mrrc_push_merged.publish_to_mrrc_push_merged.subprocess,
         "check_output",
@@ -154,7 +153,7 @@ def test_push_merged_no_expire_annotation(
         result_image_tag=result_tag,
     )
 
-    push_cmd = calls[1]
+    push_cmd = calls[0]
     assert "--annotation" not in push_cmd
 
 
@@ -170,10 +169,9 @@ def test_push_merged_oras_push_failure(
     result_digest, result_tag = _make_result_paths(tmp_path)
 
     def fake_check_output(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        if cmd[0] == "select-oci-auth":
-            return '{"auths":{}}'
         raise subprocess.CalledProcessError(1, cmd)
 
+    monkeypatch.setattr(_AUTH_JSON, lambda *args, **kwargs: '{"auths":{}}')
     monkeypatch.setattr(
         publish_to_mrrc_push_merged.publish_to_mrrc_push_merged.subprocess,
         "check_output",
@@ -207,10 +205,9 @@ def test_push_merged_oras_resolve_failure(
     result_digest, result_tag = _make_result_paths(tmp_path)
 
     def fake_check_output(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        if cmd[0] == "select-oci-auth":
-            return '{"auths":{}}'
         return ""
 
+    monkeypatch.setattr(_AUTH_JSON, lambda *args, **kwargs: '{"auths":{}}')
     monkeypatch.setattr(
         publish_to_mrrc_push_merged.publish_to_mrrc_push_merged.subprocess,
         "check_output",
