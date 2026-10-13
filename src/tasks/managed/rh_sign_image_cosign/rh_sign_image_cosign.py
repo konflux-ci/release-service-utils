@@ -15,9 +15,8 @@ from itertools import zip_longest
 from pathlib import Path
 from typing import Any
 
-from release_service_utils.helpers import file, memory_throttle, skopeo
+from release_service_utils.helpers import file, memory_throttle, oci_auth, skopeo
 from release_service_utils.helpers.logger import logger
-from release_service_utils.helpers.subprocess_cmd import run_cmd
 
 PROG = "rh_sign_image_cosign.py"
 
@@ -424,16 +423,11 @@ def sign_item(
         aws_env: AWS credential environment variables for cosign.
 
     """
-    with tempfile.TemporaryDirectory() as docker_config_dir:
-        auth_result = run_cmd(["select-oci-auth", item.source])
-        (Path(docker_config_dir) / "config.json").write_text(
-            auth_result.stdout, encoding="utf-8"
-        )
-
+    with oci_auth.docker_config(item.source) as docker_config_dir:
         # DOCKER_CONFIG must be set for both verify and sign: cosign has no way
         # to select the right auth entry for `item.source`, so a single-entry
         # auth file scoped to it is required for every cosign call against it.
-        cosign_env = {**aws_env, "DOCKER_CONFIG": docker_config_dir}
+        cosign_env = {**aws_env, "DOCKER_CONFIG": str(docker_config_dir)}
 
         already_signed = check_existing_cosign_signature(
             item.identity,

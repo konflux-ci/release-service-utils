@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import re
 import subprocess
-import tempfile
+from contextlib import ExitStack
 from pathlib import Path
+
+from release_service_utils.helpers import oci_auth
 
 _REPO_NOT_FOUND_RE = re.compile(r"name unknown|repository not found", re.IGNORECASE)
 
@@ -85,18 +87,12 @@ def copy(
     and remove the temporary auth file after the copy completes.
     (Deprecated: use source_auth_file and explicit transport prefixes instead.)
     """
-    auth_file: Path | None = None
-    try:
+    with ExitStack() as stack:
         if authenticated:
-            with tempfile.NamedTemporaryFile(mode="wb", delete=False) as auth_fp:
-                auth_file = Path(auth_fp.name)
-                auth_data = subprocess.check_output(
-                    ["select-oci-auth", source], stderr=subprocess.PIPE
-                )
-                auth_fp.write(auth_data)
+            auth_path = stack.enter_context(oci_auth.auth_file(source))
             source = f"docker://{source}"
             dest = f"dir:{dest}"
-            extra_args = ["--authfile", str(auth_file), *(extra_args or [])]
+            extra_args = ["--authfile", str(auth_path), *(extra_args or [])]
 
         cmd = ["skopeo", "copy", "--retry-times", str(retry_times)]
         if all:
@@ -117,6 +113,3 @@ def copy(
             cmd.extend(extra_args)
         cmd.extend([source, str(dest)])
         return subprocess.run(cmd, capture_output=True, text=True, check=check)
-    finally:
-        if auth_file is not None:
-            auth_file.unlink(missing_ok=True)

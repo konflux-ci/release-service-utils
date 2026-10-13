@@ -6,7 +6,6 @@ from __future__ import annotations
 import os
 import string
 import subprocess
-import tempfile
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -17,10 +16,10 @@ from typing import Any
 
 from release_service_utils.helpers import (
     authentication,
+    cosign,
     file,
     memory_throttle,
     pyxis_api,
-    retry,
     subprocess_cmd,
     tekton,
 )
@@ -117,46 +116,13 @@ def _log_process_output(
 
 def download_sbom(job: ImageJob, retries: int) -> None:
     """Download one image SBOM with registry authentication and retries."""
-    output_path = SBOM_DIR / f"{job.image_id}.json"
-    with tempfile.TemporaryDirectory(prefix="docker-config-") as config_dir_name:
-        config_dir = Path(config_dir_name)
-        try:
-            auth_result = subprocess_cmd.run_cmd(
-                ["select-oci-auth", job.container_image], check=True
-            )
-        except subprocess.CalledProcessError as exc:
-            _log_process_output(exc, include_stdout=False)
-            raise
-        (config_dir / "config.json").write_text(
-            auth_result.stdout.strip() or "{}", encoding="utf-8"
-        )
-
-        command = ["cosign", "download", "sbom", "--output-file", str(output_path)]
-        if job.platform is not None:
-            command.extend(["--platform", job.platform])
-        command.append(job.container_image)
-
-        def run_cosign() -> subprocess.CompletedProcess[str]:
-            try:
-                return subprocess_cmd.run_cmd(
-                    command,
-                    env={"DOCKER_CONFIG": str(config_dir)},
-                    check=True,
-                )
-            except subprocess.CalledProcessError as exc:
-                _log_process_output(exc)
-                raise
-
-        result = retry.retry_with_exponential_backoff(
-            run_cosign,
-            max_attempts=retries + 1,
-            retry_on=subprocess.CalledProcessError,
-            base_sleep_seconds=2,
-        )
-        _log_process_output(result)
-
-    if not output_path.is_file():
-        raise RuntimeError(f"SBOM file {output_path} was not created for image {job.image_id}")
+    cosign.download(
+        "sbom",
+        job.container_image,
+        SBOM_DIR / f"{job.image_id}.json",
+        max_attempts=retries + 1,
+        platform=job.platform,
+    )
 
 
 def upload_rpm_data(job: ImageJob) -> None:

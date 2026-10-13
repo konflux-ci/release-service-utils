@@ -583,12 +583,16 @@ _INDEX_MANIFEST = json.dumps(
 _HELM_MANIFEST = json.dumps({"schemaVersion": 2})  # no mediaType, no manifests
 
 
+_AUTH_JSON = "release_service_utils.helpers.oci_auth.oci_auth.auth_json"
+
+
 def test_get_all_image_digests_single_arch_returns_only_top_level() -> None:
     """A single-arch image returns only its own digest."""
     ref = "registry.io/repo/image@sha256:toplevel"
-    with patch(f"{TASK}.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(stdout=_SINGLE_MANIFEST)
-        digests = get_all_image_digests(ref)
+    with patch(_AUTH_JSON, return_value="{}"):
+        with patch(f"{TASK}.run_cmd") as mock_run:
+            mock_run.return_value = MagicMock(stdout=_SINGLE_MANIFEST)
+            digests = get_all_image_digests(ref)
 
     assert digests == ["sha256:toplevel"]
 
@@ -596,9 +600,10 @@ def test_get_all_image_digests_single_arch_returns_only_top_level() -> None:
 def test_get_all_image_digests_multi_arch_includes_nested_digests() -> None:
     """A multi-arch index image includes the top-level and all nested digests."""
     ref = "registry.io/repo/image@sha256:index"
-    with patch(f"{TASK}.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(stdout=_INDEX_MANIFEST)
-        digests = get_all_image_digests(ref)
+    with patch(_AUTH_JSON, return_value="{}"):
+        with patch(f"{TASK}.run_cmd") as mock_run:
+            mock_run.return_value = MagicMock(stdout=_INDEX_MANIFEST)
+            digests = get_all_image_digests(ref)
 
     assert digests == ["sha256:index", "sha256:amd64", "sha256:arm64"]
 
@@ -606,9 +611,10 @@ def test_get_all_image_digests_multi_arch_includes_nested_digests() -> None:
 def test_get_all_image_digests_helm_chart_returns_only_top_level() -> None:
     """Single-manifest artifact with no nested manifests returns only the top-level digest."""
     ref = "registry.io/repo/chart@sha256:chart"
-    with patch(f"{TASK}.run_cmd") as mock_run:
-        mock_run.return_value = MagicMock(stdout=_HELM_MANIFEST)
-        digests = get_all_image_digests(ref)
+    with patch(_AUTH_JSON, return_value="{}"):
+        with patch(f"{TASK}.run_cmd") as mock_run:
+            mock_run.return_value = MagicMock(stdout=_HELM_MANIFEST)
+            digests = get_all_image_digests(ref)
 
     assert digests == ["sha256:chart"]
 
@@ -616,28 +622,23 @@ def test_get_all_image_digests_helm_chart_returns_only_top_level() -> None:
 def test_get_all_image_digests_calls_select_oci_auth_with_reference() -> None:
     """select-oci-auth is called with the image reference before skopeo inspect."""
     ref = "registry.io/repo/image@sha256:abc"
-    with patch(f"{TASK}.run_cmd") as mock_run:
-        mock_run.side_effect = [
-            MagicMock(stdout="{}"),
-            MagicMock(stdout=_SINGLE_MANIFEST),
-        ]
-        get_all_image_digests(ref)
+    with patch(_AUTH_JSON, return_value="{}") as mock_auth:
+        with patch(f"{TASK}.run_cmd") as mock_run:
+            mock_run.return_value = MagicMock(stdout=_SINGLE_MANIFEST)
+            get_all_image_digests(ref)
 
-    first_call = mock_run.call_args_list[0].args[0]
-    assert first_call == ["select-oci-auth", ref]
+    mock_auth.assert_called_once_with(ref, check=True, stderr_path=None)
 
 
 def test_get_all_image_digests_passes_authfile_to_skopeo() -> None:
     """Skopeo inspect is called with --authfile pointing to the auth credentials."""
     ref = "registry.io/repo/image@sha256:abc"
-    with patch(f"{TASK}.run_cmd") as mock_run:
-        mock_run.side_effect = [
-            MagicMock(stdout="{}"),
-            MagicMock(stdout=_SINGLE_MANIFEST),
-        ]
-        get_all_image_digests(ref)
+    with patch(_AUTH_JSON, return_value="{}"):
+        with patch(f"{TASK}.run_cmd") as mock_run:
+            mock_run.return_value = MagicMock(stdout=_SINGLE_MANIFEST)
+            get_all_image_digests(ref)
 
-    skopeo_call = mock_run.call_args_list[1].args[0]
+    skopeo_call = mock_run.call_args.args[0]
     assert skopeo_call[0] == "skopeo"
     assert "--authfile" in skopeo_call
     assert f"docker://{ref}" in skopeo_call

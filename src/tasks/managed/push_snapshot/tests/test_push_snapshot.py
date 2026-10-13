@@ -42,33 +42,13 @@ def _default_data() -> dict:
     return {"mapping": {"defaults": {"pushSourceContainer": True}}}
 
 
-class TestSelectOciAuth:
-    """Test select-oci-auth wrapper."""
-
-    def test_returns_stdout(self) -> None:
-        """Return the raw auth JSON printed by select-oci-auth."""
-        with patch(f"{TASK}.subprocess_cmd.run_cmd") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                [], 0, stdout='{"auths":{"reg.io":{"auth":"x"}}}', stderr=""
-            )
-            result = push_snapshot.select_oci_auth("reg.io/repo")
-        assert result == '{"auths":{"reg.io":{"auth":"x"}}}'
-
-    def test_returns_empty_braces_on_empty_output(self) -> None:
-        """Fall back to an empty JSON object when there is no output."""
-        with patch(f"{TASK}.subprocess_cmd.run_cmd") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-            result = push_snapshot.select_oci_auth("reg.io/repo")
-        assert result == "{}"
-
-
 class TestCreateSourceAuthFile:
     """Test source auth file creation with key remapping."""
 
     def test_remaps_registry_to_repo(self, tmp_path: Path) -> None:
         """Remap the bare-registry auth key to the full repository path."""
         auth_json = '{"auths":{"registry.io":{"auth":"token123"}}}'
-        with patch(f"{TASK}.select_oci_auth", return_value=auth_json):
+        with patch(f"{TASK}.oci_auth.auth_json", return_value=auth_json):
             with patch(f"{TASK}.file.make_tempfile_path") as mock_tmp:
                 tmp_file = tmp_path / "auth.json"
                 mock_tmp.return_value = tmp_file
@@ -82,7 +62,7 @@ class TestCreateSourceAuthFile:
 
     def test_handles_empty_auth(self, tmp_path: Path) -> None:
         """Write an empty auths object when select-oci-auth returns none."""
-        with patch(f"{TASK}.select_oci_auth", return_value="{}"):
+        with patch(f"{TASK}.oci_auth.auth_json", return_value="{}"):
             with patch(f"{TASK}.file.make_tempfile_path") as mock_tmp:
                 tmp_file = tmp_path / "auth.json"
                 mock_tmp.return_value = tmp_file
@@ -98,7 +78,7 @@ class TestCreateDestAuthFile:
     def test_remaps_non_docker_registry(self, tmp_path: Path) -> None:
         """Remap a non-docker.io registry auth key to the full repo path."""
         auth_json = '{"auths":{"quay.io":{"auth":"tok"}}}'
-        with patch(f"{TASK}.select_oci_auth", return_value=auth_json):
+        with patch(f"{TASK}.oci_auth.auth_json", return_value=auth_json):
             with patch(f"{TASK}.file.make_tempfile_path") as mock_tmp:
                 tmp_file = tmp_path / "auth.json"
                 mock_tmp.return_value = tmp_file
@@ -111,7 +91,7 @@ class TestCreateDestAuthFile:
     def test_keeps_docker_io_as_is(self, tmp_path: Path) -> None:
         """Keep the docker.io auth key unchanged for docker.io destinations."""
         auth_json = '{"auths":{"https://index.docker.io/v1/":{"auth":"tok"}}}'
-        with patch(f"{TASK}.select_oci_auth", return_value=auth_json):
+        with patch(f"{TASK}.oci_auth.auth_json", return_value=auth_json):
             with patch(f"{TASK}.file.make_tempfile_path") as mock_tmp:
                 tmp_file = tmp_path / "auth.json"
                 mock_tmp.return_value = tmp_file
@@ -123,7 +103,7 @@ class TestCreateDestAuthFile:
     def test_leaves_auths_when_registry_key_missing(self, tmp_path: Path) -> None:
         """Keep auths unchanged when the registry hostname is not a key."""
         auth_json = '{"auths":{"other.io":{"auth":"tok"}}}'
-        with patch(f"{TASK}.select_oci_auth", return_value=auth_json):
+        with patch(f"{TASK}.oci_auth.auth_json", return_value=auth_json):
             with patch(f"{TASK}.file.make_tempfile_path") as mock_tmp:
                 tmp_file = tmp_path / "auth.json"
                 mock_tmp.return_value = tmp_file
