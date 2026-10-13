@@ -12,8 +12,21 @@ Create Python task scripts under `scripts/python/tasks/` that Tekton tasks in
 **release-service-catalog** invoke via `command` + `args` + `env` from the utils
 container image (`quay.io/konflux-ci/release-service-utils`).
 
-**Before writing anything:** read `using-helpers` — reuse helpers instead of
-duplicating auth, HTTP, file I/O, or Tekton plumbing.
+**Before writing anything:**
+
+1. Read `using-helpers` — reuse helpers instead of duplicating auth, HTTP, file
+   I/O, or Tekton plumbing.
+2. **Check the catalog task YAML** at `tasks/managed/<name>/` or
+   `tasks/internal/<name>/`. If the existing step uses `jq` or shell to produce
+   result strings, your Python must emit **identical output**:
+   - `jq -r` prints booleans as `true`/`false`. Python `str(True)` prints `True`.
+     Use `json.dumps(value)` for booleans (check `bool` before `int` — `bool` is
+     a subclass of `int`).
+   - `jq -r` prints `null` for JSON null. Python `str(None)` prints `None`.
+   - Diff the old command and your script on one real pipeline input before
+     opening the PR.
+   - Tekton `when` expressions compare these strings literally — a mismatch
+     silently skips tasks and the pipeline still succeeds.
 
 ---
 
