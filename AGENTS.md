@@ -43,6 +43,7 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - Mocking with `unittest.mock`: use `patch`, `MagicMock`, `monkeypatch` for env vars.
 - Tekton result tests: use `tmp_path` for result files and `monkeypatch.setenv("RESULT_*", str(path))`.
 - Integration tests live in `integration-tests/` and are not run by pytest.
+- When a task replaces `jq` or shell output, diff the old command and the new script on one real pipeline input. JSON booleans must be `true`/`false`. `str(True)` is `True`, so Tekton `when` expressions skip the task and the pipeline still succeeds. If they differ, serialize booleans with `json.dumps` before the `str()` fallback (`bool` is a subclass of `int`). Assert `true` and `false` from a JSON boolean in the data file. A string default `"false"` stays `"false"` under `str()` and hides the bug.
 
 ## Commits
 
