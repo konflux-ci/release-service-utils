@@ -370,6 +370,28 @@ def test_run_cosign_with_retry_raises_after_all_attempts(
     assert mock_run.call_count == 3  # 1 initial + 2 retries
 
 
+@patch("time.sleep")
+@patch("subprocess.run")
+def test_run_cosign_with_retry_does_not_retry_non_retryable_error(
+    mock_run: MagicMock, mock_sleep: MagicMock
+) -> None:
+    """Deterministic errors requested by the caller are raised immediately."""
+    error = subprocess.CalledProcessError(
+        12, "cosign", stderr="Error: no matching signatures: crypto/rsa: verification error"
+    )
+    mock_run.side_effect = error
+
+    with pytest.raises(subprocess.CalledProcessError):
+        run_cosign_with_retry(
+            ["cosign", "verify"],
+            retries=3,
+            non_retryable_errors=("no matching signatures",),
+        )
+
+    mock_run.assert_called_once()
+    mock_sleep.assert_not_called()
+
+
 # --- check_existing_cosign_signature ---
 
 
@@ -423,6 +445,91 @@ def test_check_existing_signature_not_found(mock_cosign: MagicMock, tmp_path: Pa
         aws_env={},
     )
     assert found is False
+
+
+@patch(f"{TASK}.run_cosign_with_retry")
+def test_check_existing_signature_key_mismatch_is_not_found(
+    mock_cosign: MagicMock, tmp_path: Path
+) -> None:
+    """A signature made by another key does not prevent adding the configured signature."""
+    mock_cosign.side_effect = subprocess.CalledProcessError(
+        12,
+        "cosign",
+        stderr="Error: no matching signatures: crypto/rsa: verification error",
+    )
+
+    pub_key = tmp_path / "pub.key"
+    pub_key.write_text("key")
+
+    found = check_existing_cosign_signature(
+        "registry.redhat.io/myrepo:v1.0",
+        "quay.io/internal/myrepo",
+        "sha256:abc",
+        SECRETS_NO_REKOR,
+        public_key_path=pub_key,
+        rekor_key_path=None,
+        retries=3,
+        aws_env={},
+    )
+
+    assert found is False
+    assert mock_cosign.call_args.kwargs["non_retryable_errors"] == (
+        "no signatures found",
+        "crypto/rsa: verification error",
+    )
+
+
+@patch(f"{TASK}.run_cosign_with_retry")
+def test_check_existing_signature_unsigned_image_is_not_found(
+    mock_cosign: MagicMock, tmp_path: Path
+) -> None:
+    """An image with no attached signatures is eligible for signing."""
+    mock_cosign.side_effect = subprocess.CalledProcessError(
+        1, "cosign", stderr="Error: no signatures found"
+    )
+
+    pub_key = tmp_path / "pub.key"
+    pub_key.write_text("key")
+
+    found = check_existing_cosign_signature(
+        "registry.redhat.io/myrepo:v1.0",
+        "quay.io/internal/myrepo",
+        "sha256:abc",
+        SECRETS_NO_REKOR,
+        public_key_path=pub_key,
+        rekor_key_path=None,
+        retries=3,
+        aws_env={},
+    )
+
+    assert found is False
+
+
+@patch(f"{TASK}.run_cosign_with_retry")
+def test_check_existing_signature_rekor_failure_raises(
+    mock_cosign: MagicMock, tmp_path: Path
+) -> None:
+    """A matching-signature error caused by Rekor is not treated as unsigned."""
+    mock_cosign.side_effect = subprocess.CalledProcessError(
+        1,
+        "cosign",
+        stderr="Error: no matching signatures: signature not found in transparency log",
+    )
+
+    pub_key = tmp_path / "pub.key"
+    pub_key.write_text("key")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        check_existing_cosign_signature(
+            "registry.redhat.io/myrepo:v1.0",
+            "quay.io/internal/myrepo",
+            "sha256:abc",
+            SECRETS_NO_REKOR,
+            public_key_path=pub_key,
+            rekor_key_path=None,
+            retries=3,
+            aws_env={},
+        )
 
 
 @patch(f"{TASK}.run_cosign_with_retry")

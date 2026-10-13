@@ -254,6 +254,7 @@ def run_cosign_with_retry(
     *,
     retries: int,
     env: dict[str, str] | None = None,
+    non_retryable_errors: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     """Run a cosign command with Fibonacci backoff retries on failure.
 
@@ -266,6 +267,8 @@ def run_cosign_with_retry(
         retries: Maximum number of retries (not counting the initial attempt).
         env: Optional environment variable overrides merged on top of the
             current process environment.
+        non_retryable_errors: Stderr fragments that identify deterministic
+            failures which should be returned to the caller without retrying.
 
     Returns:
         The CompletedProcess result from the final successful attempt.
@@ -287,6 +290,8 @@ def run_cosign_with_retry(
                 check=True,
             )
         except subprocess.CalledProcessError as exc:
+            if any(error in (exc.stderr or "") for error in non_retryable_errors):
+                raise
             if attempt >= retries:
                 logger.error("Max retries exceeded for cosign command")
                 raise
@@ -301,6 +306,13 @@ def run_cosign_with_retry(
             backoff1, backoff2 = backoff2, backoff1 + backoff2
 
     raise AssertionError("unreachable: loop above always returns or re-raises")
+
+
+def _is_missing_signature_error(stderr: str) -> bool:
+    """Return whether cosign found no signature made by the configured key."""
+    return "no signatures found" in stderr or (
+        "no matching signatures" in stderr and "crypto/rsa: verification error" in stderr
+    )
 
 
 def check_existing_cosign_signature(
@@ -335,10 +347,9 @@ def check_existing_cosign_signature(
         True when a matching signature is found, False otherwise.
 
     Raises:
-        subprocess.CalledProcessError: When ``cosign verify`` fails on every
-            retry attempt. A verification failure must not be treated as "no
-            signature found", since that would cause the task to add a
-            duplicate signature instead of failing loudly.
+        subprocess.CalledProcessError: When ``cosign verify`` fails for a
+            reason other than finding no signature matching the configured
+            public key.
         ValueError: When ``cosign verify`` exits successfully but prints
             output that is not valid JSON.
 
@@ -353,7 +364,20 @@ def check_existing_cosign_signature(
         + ["--key", str(public_key_path), f"{source}@{digest}"]
     )
 
-    result = run_cosign_with_retry(verify_args, retries=retries, env=verify_env)
+    try:
+        result = run_cosign_with_retry(
+            verify_args,
+            retries=retries,
+            env=verify_env,
+            non_retryable_errors=("no signatures found", "crypto/rsa: verification error"),
+        )
+    except subprocess.CalledProcessError as exc:
+        if _is_missing_signature_error(exc.stderr or ""):
+            logger.info(
+                "No signature matching the configured key for %s (%s)", identity, digest
+            )
+            return False
+        raise
     verify_output = result.stdout.strip() or "[]"
 
     try:
