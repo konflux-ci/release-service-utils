@@ -33,7 +33,9 @@ def load_credential(file_path: str, logger: logging.Logger) -> str:
 
     """
     try:
-        return Path(file_path).read_text().strip()
+        cred = Path(file_path).read_text().strip()
+        logger.info(f"Successfully loaded credential from {file_path}")
+        return cred
     except Exception as e:
         logger.error(f"Error reading credential from {file_path}: {e}")
         raise
@@ -57,8 +59,11 @@ def extract_source_digest(source_index: str, logger: logging.Logger) -> str:
             f"No digest found in source index '{source_index}'. "
             "This is unexpected; proceeding with the whole string."
         )
+        logger.info(f"Using source_index as digest: {source_index}")
         return source_index
-    return source_index.split("@", 1)[1]
+    digest = source_index.split("@", 1)[1]
+    logger.info(f"Extracted digest: {digest}")
+    return digest
 
 
 def needs_source_auth(source_index: str) -> bool:
@@ -109,12 +114,23 @@ def inspect_image(
     ret = inspect(index, **kwargs)
     if ret.returncode != 0:
         logger.info("Image does not exist or inspect failed.")
+        logger.info(f"Inspect return code: {ret.returncode}")
         if ret.stderr:
             logger.error(f"Error details: {ret.stderr}")
+        if ret.stdout:
+            logger.debug(f"Stdout: {ret.stdout}")
         return None
 
     logger.info("Image exists.")
-    return json.loads(ret.stdout)
+    result = json.loads(ret.stdout)
+    if config:
+        version_label = (
+            result.get("config", {}).get("Labels", {}).get("com.redhat.index.delivery.version")
+        )
+        logger.debug(f"Image version label: {version_label}")
+    else:
+        logger.debug(f"Image digest: {result.get('Digest', 'N/A')}")
+    return result
 
 
 def copy_image(
@@ -156,10 +172,17 @@ def copy_image(
         f"docker://{target_index}",
         **kwargs,
     )
+    logger.info(f"Copy operation return code: {ret.returncode}")
+    if ret.stdout:
+        logger.info(f"Copy stdout: {ret.stdout}")
+
     if ret.returncode == 0:
+        logger.info("Image copy completed successfully")
         return True, "Index Image Published successfully"
     else:
-        logger.error(f"Error details: {ret.stderr}")
+        logger.error(f"Copy operation failed with return code {ret.returncode}")
+        if ret.stderr:
+            logger.error(f"Error details: {ret.stderr}")
         return False, "Error: Failed publishing Index Image"
 
 
@@ -223,7 +246,14 @@ def main() -> int:
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logger = setup_logger(level=log_level, name="publish_index_image")
 
+    logger.info("Starting publish_index_image task")
+    logger.info(f"Source index: {args.source_index}")
+    logger.info(f"Target index: {args.target_index}")
+    logger.info(f"Target OCP version: {args.target_ocp_version}")
+    logger.info(f"Retries: {args.retries}")
+
     (result_path,) = tekton.result_paths_from_env("RESULT_RESULT")
+    logger.info(f"Result path: {result_path}")
 
     try:
         # Step 1: Load credentials
@@ -238,6 +268,7 @@ def main() -> int:
 
         # Step 3: Determine if source needs authentication
         source_creds = source_credential if needs_source_auth(args.source_index) else None
+        logger.info(f"Source authentication needed: {source_creds is not None}")
 
         # Step 4: Inspect source image config to get ocp version
         source_config = inspect_image(
@@ -252,6 +283,8 @@ def main() -> int:
             if source_config
             else None
         )
+        logger.info(f"Source OCP version: {source_ocp_version}")
+        logger.info(f"Target OCP version (expected): {args.target_ocp_version}")
         if source_ocp_version != args.target_ocp_version:
             message = (
                 f"Error: The source index does not match its targetOcpVersion "
@@ -269,12 +302,20 @@ def main() -> int:
             retry_times=args.retries,
         )
         target_digest = target_image_info["Digest"] if target_image_info else None
+        logger.info(f"Target image exists: {target_image_info is not None}")
+        if target_digest:
+            logger.info(f"Target digest: {target_digest}")
 
         # Hotfix and pre-ga targetIndex should skip the next check
-        if target_image_info and re.match(r".*:v[0-9]{1}\.[0-9]{2}$", args.target_index):
+        matches_version_pattern = re.match(r".*:v[0-9]{1}\.[0-9]{2}$", args.target_index)
+        logger.info(
+            f"Target index matches version pattern: {matches_version_pattern is not None}"
+        )
+        if target_image_info and matches_version_pattern:
             real_target_ocp_version = target_image_info["Labels"].get(
                 "com.redhat.index.delivery.version"
             )
+            logger.info(f"Real target OCP version: {real_target_ocp_version}")
             if source_ocp_version != real_target_ocp_version:
                 message = (
                     f"Error: The indexes versions do not match "
@@ -286,18 +327,23 @@ def main() -> int:
 
         # Step 6: Compare digests if target exists
         if target_digest is not None:
-            logger.debug(f"Source Digest - {source_digest}")
-            logger.debug(f"Target Digest - {target_digest}")
+            logger.info(f"Source Digest - {source_digest}")
+            logger.info(f"Target Digest - {target_digest}")
+            logger.info(f"Digests match: {source_digest == target_digest}")
 
             if source_digest == target_digest:
                 message = "Image already exists with the same digest, skipping copy."
+                logger.info(message)
                 write_result(message, result_path)
+                logger.info(f"Result written to {result_path}: {message}")
                 return 0
             else:
                 logger.info(
                     "Image exists in target registry but digests do not match. "
                     "Proceeding to copy the image."
                 )
+        else:
+            logger.info("Target image does not exist, proceeding to copy")
 
         # Step 7: Execute copy operation
         success, message = copy_image(
@@ -310,13 +356,20 @@ def main() -> int:
         )
 
         # Step 8: Write result
+        logger.info(f"Writing result to {result_path}: {message}")
         write_result(message, result_path)
+        if success:
+            logger.info("Task completed successfully")
+        else:
+            logger.error("Task completed with errors")
 
         return 0
 
     except Exception as e:
+        error_msg = f"Error: {e}"
         logger.exception(f"Failed to publish index image: {e}")
-        write_result(f"Error: {e}", result_path)
+        logger.info(f"Writing error result to {result_path}: {error_msg}")
+        write_result(error_msg, result_path)
         return 0
 
 

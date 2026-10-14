@@ -87,7 +87,10 @@ class TestExtractSourceDigest:
     def test_extract_digest_but_tag(self) -> None:
         """Test that if source has a tag instead of digest, return the whole string."""
         source = "quay.io/repo/image:tag"
-        assert extract_source_digest(source, logger=mock.Mock()) == source
+        mock_logger = mock.Mock()
+        result = extract_source_digest(source, logger=mock_logger)
+        assert result == source
+        mock_logger.info.assert_called_with(f"Using source_index as digest: {source}")
 
 
 class TestNeedsSourceAuth:
@@ -146,6 +149,23 @@ class TestInspectImage:
         )
 
     @mock.patch(f"{TASK}.inspect")
+    def test_inspect_logs_version_label(self, mock_inspect) -> None:
+        """Test inspecting image with config logs version label."""
+        config_data = {"config": {"Labels": {"com.redhat.index.delivery.version": "4.14"}}}
+        mock_inspect.return_value = _inspect_ok(config_data)
+        mock_logger = mock.Mock()
+
+        result = inspect_image(
+            "quay.io/image:tag",
+            "user:pass",
+            logger=mock_logger,
+            config=True,
+        )
+
+        assert result == config_data
+        mock_logger.debug.assert_called_once_with("Image version label: 4.14")
+
+    @mock.patch(f"{TASK}.inspect")
     def test_inspect_nonexistent_image(self, mock_inspect) -> None:
         """Test inspecting an image that doesn't exist."""
         mock_inspect.return_value = _inspect_missing()
@@ -153,6 +173,19 @@ class TestInspectImage:
         result = inspect_image("quay.io/image:tag", "user:pass", logger=mock.Mock())
 
         assert result is None
+
+    @mock.patch(f"{TASK}.inspect")
+    def test_inspect_failure_with_stdout(self, mock_inspect) -> None:
+        """Test inspecting an image that fails but has stdout."""
+        mock_inspect.return_value = _completed(
+            returncode=1, stderr="error", stdout="some output"
+        )
+        mock_logger = mock.Mock()
+
+        result = inspect_image("quay.io/image:tag", "user:pass", logger=mock_logger)
+
+        assert result is None
+        mock_logger.debug.assert_called_once_with("Stdout: some output")
 
     @mock.patch(f"{TASK}.inspect")
     def test_inspect_without_credentials(self, mock_inspect) -> None:
@@ -365,11 +398,12 @@ class TestMain:
     def _patch_main_deps(self, tmp_path) -> None:
         TASK = "release_service_utils.tasks.internal.publish_index_image.publish_index_image"
         self.result_path = tmp_path / "result.txt"
+        self.mock_logger = mock.Mock()
         with (
             mock.patch(f"{TASK}.parse_arguments") as self.parse_args,
             mock.patch(
                 f"{TASK}.setup_logger",
-                return_value=mock.Mock(),
+                return_value=self.mock_logger,
             ) as self.setup_logger,
             mock.patch(f"{TASK}.load_credential") as self.load_cred,
             mock.patch(f"{TASK}.inspect") as self.inspect,
@@ -395,6 +429,7 @@ class TestMain:
         assert result == 0
         assert "Index Image Published successfully" in self.result_path.read_text()
         self.copy.assert_called_once()
+        self.mock_logger.info.assert_any_call("Task completed successfully")
 
     def test_main_digest_match_skip_copy(self) -> None:
         """Test main workflow when target exists with same digest."""
@@ -423,6 +458,7 @@ class TestMain:
 
         assert result == 0
         assert "Error: Failed publishing Index Image" in self.result_path.read_text()
+        self.mock_logger.error.assert_any_call("Task completed with errors")
 
     def test_main_credential_load_failure(self) -> None:
         """Test main workflow when credential loading fails."""
