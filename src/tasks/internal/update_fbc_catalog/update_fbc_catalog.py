@@ -56,6 +56,16 @@ class RunResult:
     index_image_digests: str
     iib_log_url: str
     exit_code: int
+    stale_reuse: bool = False
+
+
+class IndexImageMismatchError(ValueError):
+    """Raised when a reused build's index image doesn't match from_index.
+
+    Distinct from other ``validate_index_image`` failures so callers can
+    tell "this build was stale and should be replaced" apart from a
+    genuine configuration error (see ``validate_index_image``).
+    """
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -445,14 +455,17 @@ def validate_index_image(
 ) -> None:
     """Validate the index image based on the release strategy.
 
-    Raise ``ValueError`` on invalid strategy combinations or when the
-    expected image field is missing.
+    Raise ``IndexImageMismatchError`` (a ``ValueError``) when the index
+    image doesn't match ``from_index`` -- this happens when a reused
+    build is stale, and the caller may retry with a fresh IIB submit.
+    Raise a plain ``ValueError`` for invalid strategy combinations,
+    which a retry cannot fix.
     """
     if must_overwrite and must_publish:
         index_image = build_info.get("index_image", "")
         expected = build_info.get("from_index", "")
         if index_image != expected:
-            raise ValueError(
+            raise IndexImageMismatchError(
                 f"Index image mismatch: expected {expected}, got "
                 f"{index_image}. The from index was not properly "
                 "overwritten."
@@ -573,40 +586,29 @@ def _authenticated_run(
 
     if previous:
         logger.info("=== A previous build for this fragment was found ===")
-        build_info = previous
-    else:
-        payload: iib.FBCOperationPayload = {
-            "fbc_fragments": input.fbc_fragments,
-            "from_index": input.from_index,
-        }
-        if input.must_overwrite:
-            payload["overwrite_from_index"] = True
-            payload["overwrite_from_index_token"] = f"{overwrite_username}:{overwrite_token}"
-        if input.build_tags:
-            payload["build_tags"] = input.build_tags
-        if input.add_arches:
-            payload["add_arches"] = input.add_arches
+        result = _poll_and_collect(
+            iib_url,
+            previous,
+            input.build_timeout_seconds,
+            input.must_overwrite,
+            input.must_publish,
+            iib_log_path=iib_log_path,
+        )
+        if result.exit_code == 0 or not result.stale_reuse:
+            return result
+        logger.warning(
+            "Reused build %s failed index image validation; "
+            "submitting a fresh IIB build instead of reusing it.",
+            previous.get("id"),
+        )
 
-        if build_state_path:
-            build_state_path.write_text(
-                json.dumps(
-                    {
-                        "state": "in_progress",
-                        "state_reason": "Calling IIB endpoint",
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-        auth = HTTPKerberosAuth(mutual_authentication=OPTIONAL)
-        try:
-            build_info = iib.submit_fbc_operation(
-                iib_url,
-                payload,
-                auth=auth,
-            )
-        except (requests.RequestException, ValueError) as e:
-            raise tekton.CheckStepError("submitting IIB build", e) from e
+    build_info = _submit_fresh_build(
+        iib_url,
+        input,
+        overwrite_username,
+        overwrite_token,
+        build_state_path=build_state_path,
+    )
 
     return _poll_and_collect(
         iib_url,
@@ -616,6 +618,48 @@ def _authenticated_run(
         input.must_publish,
         iib_log_path=iib_log_path,
     )
+
+
+def _submit_fresh_build(
+    iib_url: str,
+    input: FBCCatalogInput,
+    overwrite_username: str,
+    overwrite_token: str,
+    build_state_path: Path | None = None,
+) -> iib.IIBBuild:
+    """Build the FBC operation payload and submit a fresh IIB build."""
+    payload: iib.FBCOperationPayload = {
+        "fbc_fragments": input.fbc_fragments,
+        "from_index": input.from_index,
+    }
+    if input.must_overwrite:
+        payload["overwrite_from_index"] = True
+        payload["overwrite_from_index_token"] = f"{overwrite_username}:{overwrite_token}"
+    if input.build_tags:
+        payload["build_tags"] = input.build_tags
+    if input.add_arches:
+        payload["add_arches"] = input.add_arches
+
+    if build_state_path:
+        build_state_path.write_text(
+            json.dumps(
+                {
+                    "state": "in_progress",
+                    "state_reason": "Calling IIB endpoint",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    auth = HTTPKerberosAuth(mutual_authentication=OPTIONAL)
+    try:
+        return iib.submit_fbc_operation(
+            iib_url,
+            payload,
+            auth=auth,
+        )
+    except (requests.RequestException, ValueError) as e:
+        raise tekton.CheckStepError("submitting IIB build", e) from e
 
 
 def _poll_and_collect(
@@ -674,6 +718,16 @@ def _poll_and_collect(
 
     try:
         validate_index_image(build_info, must_overwrite, must_publish)
+    except IndexImageMismatchError as e:
+        return RunResult(
+            build_info=build_info,
+            state="failed",
+            state_reason=str(e),
+            index_image_digests="",
+            iib_log_url=log_url,
+            exit_code=1,
+            stale_reuse=True,
+        )
     except ValueError as e:
         return RunResult(
             build_info=build_info,
