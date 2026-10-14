@@ -150,7 +150,18 @@ def process_fixed_issue(
 
     issue_data = jira_get_json(session, issue_url, auth)
     if issue_status_name(issue_data) == "Closed":
-        logger.info("Issue %s is already in Closed state. Skipping it.", issue)
+        try:
+            logger.info("Issue %s is already in a Closed state. Commenting instead.", issue)
+            add_issue_comment(session, issue_url, auth, comment)
+        except requests.RequestException as exc:
+            # KONFLUX-7489: some projects deny close/comment permission. The
+            # advisory is already published, so warn and continue rather than
+            # failing the release.
+            logger.warning(
+                "Warning: failed to add comment to already closed issue %s. %s",
+                issue,
+                exc,
+            )
         return
 
     logger.info("Closing issue %s", issue)
