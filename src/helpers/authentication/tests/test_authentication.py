@@ -115,13 +115,16 @@ def test_kinit_with_retry_success(tmp_path: Path) -> None:
     keytab.write_bytes(b"fake")
 
     with mock.patch("subprocess.run") as mock_run:
-        mock_run.return_value = mock.Mock(returncode=0)
+        mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
         authentication.kinit_with_retry("user@REALM", keytab, {})
 
     mock_run.assert_called_once()
     args = mock_run.call_args[0][0]
     assert args[0] == "kinit"
     assert "user@REALM" in args
+    # Verify capture_output and text are set
+    assert mock_run.call_args[1]["capture_output"] is True
+    assert mock_run.call_args[1]["text"] is True
 
 
 def test_kinit_with_retry_fails_after_max_attempts(tmp_path: Path) -> None:
@@ -130,11 +133,15 @@ def test_kinit_with_retry_fails_after_max_attempts(tmp_path: Path) -> None:
     keytab.write_bytes(b"fake")
 
     with mock.patch("subprocess.run") as mock_run, mock.patch("time.sleep"):
-        mock_run.return_value = mock.Mock(returncode=1)
-        with pytest.raises(subprocess.CalledProcessError):
+        mock_run.return_value = mock.Mock(
+            returncode=1, stdout="kinit: error", stderr="kinit failure"
+        )
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
             authentication.kinit_with_retry("user@REALM", keytab, {}, max_attempts=2)
 
     assert mock_run.call_count == 2
+    assert exc_info.value.stdout == "kinit: error"
+    assert exc_info.value.stderr == "kinit failure"
 
 
 def test_kinit_with_retry_caps_sleep(tmp_path: Path) -> None:

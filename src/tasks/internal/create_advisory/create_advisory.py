@@ -157,7 +157,16 @@ def _reserve_errata_live_id(
         "KRB5_TRACE": "/dev/stderr",
     }
     try:
-        kinit_fn(principal, keytab_path, kenv, max_attempts=5)
+        try:
+            kinit_fn(principal, keytab_path, kenv, max_attempts=5)
+        except subprocess.CalledProcessError as exc:
+            logger.error(
+                "kinit failed with exit code %d. stdout: %r stderr: %r",
+                exc.returncode,
+                exc.stdout,
+                exc.stderr,
+            )
+            raise tekton.CheckStepError("logging in with Kerberos (kinit)", exc) from exc
         # Propagate ccache + krb5 into the process; omit KRB5_TRACE (very noisy).
         krb5_env_for_process = {
             env_key: env_val for env_key, env_val in kenv.items() if env_key != "KRB5_TRACE"

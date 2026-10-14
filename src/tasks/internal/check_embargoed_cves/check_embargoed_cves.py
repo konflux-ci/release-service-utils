@@ -199,6 +199,12 @@ def run_check(
         try:
             kinit(princ, kpath, kenv, max_attempts=5)
         except subprocess.CalledProcessError as e:
+            logger.error(
+                "kinit failed with exit code %d. stdout: %r stderr: %r",
+                e.returncode,
+                e.stdout,
+                e.stderr,
+            )
             raise tekton.CheckStepError("logging in with Kerberos (kinit)", e) from e
         # kinit’s env is only for the child; GSS/HTTP in this process needs
         # the same ccache in ``os.environ``.
