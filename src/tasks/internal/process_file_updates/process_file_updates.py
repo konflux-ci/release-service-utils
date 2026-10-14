@@ -342,21 +342,6 @@ class PathProcessingState:
     key_not_found: bool = False
 
 
-def normalize_gitlab_url(gitlab_host: str) -> str:
-    """Return a python-gitlab URL, adding ``https://`` when *gitlab_host* has no scheme.
-
-    Production secrets store a hostname (e.g. ``gitlab.cee.redhat.com``). python-gitlab
-    expects a full URL, so hostname-only values fail before an MR can be found or
-    created. Already-complete URLs are returned unchanged.
-    """
-    host = gitlab_host.strip()
-    if not host:
-        raise ValueError("gitlab_host is required")
-    if "://" in host:
-        return host
-    return f"https://{host}"
-
-
 def configure_git_environment(secrets: dict[str, str]) -> str:
     """Export git/GitLab env vars, configure OAuth2 auth; return the access token."""
     token = secrets["gitlab_access_token"]
@@ -714,7 +699,7 @@ def run_file_updates(
 
     token = configure_git_environment(secrets)
     if gitlab_client is None:
-        gitlab_client = vcs_gitlab.client(normalize_gitlab_url(secrets["gitlab_host"]), token)
+        gitlab_client = vcs_gitlab.client(secrets["gitlab_host"], token)
     git_functions_init(secrets["git_author_name"], secrets["git_author_email"], token)
 
     update_paths_file, paths_data = write_paths_manifest(paths_json, temp_dir)
