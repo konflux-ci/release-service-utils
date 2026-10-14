@@ -1228,7 +1228,7 @@ def test_poll_build_status_writes_log_url(tmp_path: Path) -> None:
 
 
 def test_poll_and_collect_validation_error() -> None:
-    """Index image validation failure returns exit_code=1."""
+    """Index image validation failure returns exit_code=1 and stale_reuse."""
     build: iib.IIBBuild = {
         "id": 1,
         "state": "complete",
@@ -1246,6 +1246,27 @@ def test_poll_and_collect_validation_error() -> None:
     assert result.exit_code == 1
     assert result.state == "failed"
     assert "Index image mismatch" in result.state_reason
+    assert result.stale_reuse is True
+
+
+def test_poll_and_collect_invalid_combination_not_stale_reuse() -> None:
+    """Invalid overwrite/publish combination is not flagged as stale_reuse.
+
+    Unlike an index image mismatch, retrying with a fresh build would hit
+    the exact same invalid combination, so this must not trigger a retry.
+    """
+    build: iib.IIBBuild = {"id": 1, "state": "complete"}
+    with mock.patch("release_service_utils.helpers.iib.get_build", return_value=build):
+        result = update_fbc_catalog.update_fbc_catalog._poll_and_collect(
+            "https://iib",
+            build,
+            3600,
+            True,
+            False,
+        )
+    assert result.exit_code == 1
+    assert "Invalid combination" in result.state_reason
+    assert result.stale_reuse is False
 
 
 def test_poll_and_collect_missing_internal_copy() -> None:
@@ -1849,3 +1870,268 @@ def test_poll_and_collect_detail_fetch_failure_is_non_fatal() -> None:
         )
     assert result.exit_code == 0
     assert result.iib_log_url == ""
+
+
+# ---------------------------------------------------------------------------
+# _submit_fresh_build
+# ---------------------------------------------------------------------------
+
+
+def _fbc_input(**overrides: object) -> update_fbc_catalog.update_fbc_catalog.FBCCatalogInput:
+    defaults: dict[str, object] = {
+        "fbc_fragments": ["frag-a"],
+        "from_index": "registry/idx:v4.14",
+        "build_tags": [],
+        "add_arches": [],
+        "must_overwrite": True,
+        "must_publish": True,
+        "build_timeout_seconds": 3600,
+    }
+    defaults.update(overrides)
+    fbc_input = update_fbc_catalog.update_fbc_catalog.FBCCatalogInput
+    return fbc_input(**defaults)  # type: ignore[arg-type]
+
+
+def test_submit_fresh_build_includes_overwrite_token(tmp_path: Path) -> None:
+    """overwrite_from_index and its token are set when must_overwrite."""
+    build_state_path = tmp_path / "build_state"
+    with mock.patch(
+        "release_service_utils.helpers.iib.submit_fbc_operation",
+        return_value={"id": 99, "state": "in_progress"},
+    ) as submit_mock:
+        result = update_fbc_catalog.update_fbc_catalog._submit_fresh_build(
+            "https://iib",
+            _fbc_input(),
+            "owner",
+            "token123",
+            build_state_path=build_state_path,
+        )
+    assert result == {"id": 99, "state": "in_progress"}
+    payload = submit_mock.call_args.args[1]
+    assert payload["overwrite_from_index"] is True
+    assert payload["overwrite_from_index_token"] == "owner:token123"
+    state = json.loads(build_state_path.read_text(encoding="utf-8"))
+    assert state["state"] == "in_progress"
+
+
+def test_submit_fresh_build_without_overwrite_omits_token() -> None:
+    """No overwrite token is included when must_overwrite is False."""
+    with mock.patch(
+        "release_service_utils.helpers.iib.submit_fbc_operation",
+        return_value={"id": 1, "state": "in_progress"},
+    ) as submit_mock:
+        update_fbc_catalog.update_fbc_catalog._submit_fresh_build(
+            "https://iib",
+            _fbc_input(must_overwrite=False),
+            "owner",
+            "token123",
+        )
+    payload = submit_mock.call_args.args[1]
+    assert "overwrite_from_index" not in payload
+    assert "overwrite_from_index_token" not in payload
+
+
+def test_submit_fresh_build_request_error_raises_check_step_error() -> None:
+    """A request failure is wrapped in ``CheckStepError``."""
+    with mock.patch(
+        "release_service_utils.helpers.iib.submit_fbc_operation",
+        side_effect=requests.ConnectionError("boom"),
+    ):
+        with pytest.raises(tekton.CheckStepError):
+            update_fbc_catalog.update_fbc_catalog._submit_fresh_build(
+                "https://iib",
+                _fbc_input(),
+                "owner",
+                "token123",
+            )
+
+
+# ---------------------------------------------------------------------------
+# _authenticated_run — stale reuse fallback (RELEASE-2782)
+# ---------------------------------------------------------------------------
+
+
+def test_authenticated_run_no_previous_build_submits_fresh(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """No reusable build found: submit fresh and return its result."""
+    fresh_build = {"id": 1, "state": "in_progress"}
+    final_result = update_fbc_catalog.update_fbc_catalog.RunResult(
+        build_info={"id": 1, "state": "complete"},
+        state="complete",
+        state_reason="",
+        index_image_digests="sha256:abc",
+        iib_log_url="",
+        exit_code=0,
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    with (
+        mock.patch(f"{TASK}.update_fbc_catalog.check_previous_build", return_value=None),
+        mock.patch(
+            f"{TASK}.update_fbc_catalog._submit_fresh_build",
+            return_value=fresh_build,
+        ) as submit_mock,
+        mock.patch(
+            f"{TASK}.update_fbc_catalog._poll_and_collect",
+            return_value=final_result,
+        ) as poll_mock,
+    ):
+        result = update_fbc_catalog.update_fbc_catalog._authenticated_run(
+            _fbc_input(),
+            "https://iib",
+            "principal",
+            "",
+            "owner",
+            "token123",
+        )
+    assert result == final_result
+    submit_mock.assert_called_once()
+    poll_mock.assert_called_once_with(
+        "https://iib",
+        fresh_build,
+        3600,
+        True,
+        True,
+        iib_log_path=None,
+    )
+
+
+def test_authenticated_run_reused_build_success_skips_fresh_submit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A healthy reused build is returned without submitting a fresh one."""
+    previous_build = {"id": 10, "state": "complete"}
+    success_result = update_fbc_catalog.update_fbc_catalog.RunResult(
+        build_info=previous_build,
+        state="complete",
+        state_reason="",
+        index_image_digests="sha256:abc",
+        iib_log_url="",
+        exit_code=0,
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    with (
+        mock.patch(
+            f"{TASK}.update_fbc_catalog.check_previous_build",
+            return_value=previous_build,
+        ),
+        mock.patch(
+            f"{TASK}.update_fbc_catalog._poll_and_collect",
+            return_value=success_result,
+        ) as poll_mock,
+        mock.patch(f"{TASK}.update_fbc_catalog._submit_fresh_build") as submit_mock,
+    ):
+        result = update_fbc_catalog.update_fbc_catalog._authenticated_run(
+            _fbc_input(),
+            "https://iib",
+            "principal",
+            "",
+            "owner",
+            "token123",
+        )
+    assert result == success_result
+    poll_mock.assert_called_once()
+    submit_mock.assert_not_called()
+
+
+def test_authenticated_run_stale_reuse_falls_back_to_fresh_build(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A stale reused build triggers a fresh IIB submit (RELEASE-2782).
+
+    Regression test for the bug where a reused build that fails
+    ``validate_index_image`` (index image mismatch) caused the task to
+    exit 1 instead of submitting a fresh build with
+    ``overwrite_from_index=True``.
+    """
+    previous_build = {"id": 10, "state": "complete"}
+    fresh_build = {"id": 20, "state": "in_progress"}
+    stale_result = update_fbc_catalog.update_fbc_catalog.RunResult(
+        build_info=previous_build,
+        state="failed",
+        state_reason="Index image mismatch: expected x, got y",
+        index_image_digests="",
+        iib_log_url="",
+        exit_code=1,
+        stale_reuse=True,
+    )
+    fresh_result = update_fbc_catalog.update_fbc_catalog.RunResult(
+        build_info={"id": 20, "state": "complete"},
+        state="complete",
+        state_reason="",
+        index_image_digests="sha256:fresh",
+        iib_log_url="",
+        exit_code=0,
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    with (
+        mock.patch(
+            f"{TASK}.update_fbc_catalog.check_previous_build",
+            return_value=previous_build,
+        ),
+        mock.patch(
+            f"{TASK}.update_fbc_catalog._poll_and_collect",
+            side_effect=[stale_result, fresh_result],
+        ) as poll_mock,
+        mock.patch(
+            f"{TASK}.update_fbc_catalog._submit_fresh_build",
+            return_value=fresh_build,
+        ) as submit_mock,
+    ):
+        result = update_fbc_catalog.update_fbc_catalog._authenticated_run(
+            _fbc_input(),
+            "https://iib",
+            "principal",
+            "",
+            "owner",
+            "token123",
+        )
+    assert result == fresh_result
+    assert poll_mock.call_count == 2
+    submit_mock.assert_called_once()
+    # Second poll call used the freshly submitted build, not the stale one.
+    second_call_build = poll_mock.call_args_list[1].args[1]
+    assert second_call_build == fresh_build
+
+
+def test_authenticated_run_non_stale_failure_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A genuine (non-stale) build failure is returned without retrying."""
+    previous_build = {"id": 10, "state": "failed"}
+    failed_result = update_fbc_catalog.update_fbc_catalog.RunResult(
+        build_info=previous_build,
+        state="failed",
+        state_reason="Build failed with exit code 1",
+        index_image_digests="",
+        iib_log_url="",
+        exit_code=1,
+        stale_reuse=False,
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    with (
+        mock.patch(
+            f"{TASK}.update_fbc_catalog.check_previous_build",
+            return_value=previous_build,
+        ),
+        mock.patch(
+            f"{TASK}.update_fbc_catalog._poll_and_collect",
+            return_value=failed_result,
+        ) as poll_mock,
+        mock.patch(f"{TASK}.update_fbc_catalog._submit_fresh_build") as submit_mock,
+    ):
+        result = update_fbc_catalog.update_fbc_catalog._authenticated_run(
+            _fbc_input(),
+            "https://iib",
+            "principal",
+            "",
+            "owner",
+            "token123",
+        )
+    assert result == failed_result
+    poll_mock.assert_called_once()
+    submit_mock.assert_not_called()
