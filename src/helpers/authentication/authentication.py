@@ -126,6 +126,8 @@ def kinit_with_retry(
         p = subprocess.run(
             ["kinit", princ, "-k", "-t", str(keytab)],
             check=False,
+            capture_output=True,
+            text=True,
             env={**os.environ, **extra_env},
         )
         if p.returncode == 0:
@@ -133,6 +135,8 @@ def kinit_with_retry(
         raise subprocess.CalledProcessError(
             p.returncode,
             f"kinit {princ} -k -t {keytab!s}",
+            output=p.stdout,
+            stderr=p.stderr,
         )
 
     retry.retry_with_exponential_backoff(
