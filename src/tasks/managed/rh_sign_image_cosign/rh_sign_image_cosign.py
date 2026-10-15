@@ -29,20 +29,22 @@ MANIFEST_LIST_MEDIA_TYPES = frozenset(
 
 BURST_SIZE = 5
 STABILIZATION_DELAY = 2
+NON_RETRYABLE_VERIFY_ERRORS = ("no signatures found", "no matching signatures")
 
 
 @dataclass
 class SignItem:
     """A container image that needs to be signed by cosign.
 
-    ``identity`` is the public reference used as the cosign identity
-    (e.g. ``registry.redhat.io/myrepo:v1.0``).  ``source`` is the
+    ``identities`` contains the public references used as cosign identities
+    (e.g. ``registry.redhat.io/myrepo:v1.0`` and its registry.access alias).
+    ``source`` is the
     internal image location used for authentication and the cosign
     reference argument (e.g. ``quay.io/internal/myrepo``).  ``digest``
     is the manifest digest (e.g. ``sha256:abc123``).
     """
 
-    identity: str
+    identities: tuple[str, ...]
     source: str
     digest: str
 
@@ -147,7 +149,8 @@ def collect_component_sign_items(
     """Enumerate all SignItems for a single snapshot component.
 
     For each repository defined on the component, signing items are
-    produced for every combination of digest, tag, and registry reference.
+    produced for every digest and tag. All registry references for the same
+    digest and tag are kept together so cosign can sign them in one command.
     Multi-arch manifest lists generate one item per nested manifest in
     addition to one item for the top-level digest.
 
@@ -170,7 +173,9 @@ def collect_component_sign_items(
     is_list, digests = get_manifest_digests(component)
     if is_list:
         logger.info(
-            "Component %s is a manifest list with %d digests", component_name, len(digests)
+            "Component %s is a manifest list with %d digests",
+            component_name,
+            len(digests),
         )
 
     items: list[SignItem] = []
@@ -200,25 +205,24 @@ def collect_component_sign_items(
 
         top_level_digest = digests[0]
 
-        for registry_ref in registry_refs:
-            if is_list:
-                for nested_digest in digests[1:]:
-                    for tag in tags:
-                        items.append(
-                            SignItem(
-                                identity=f"{registry_ref}:{tag}",
-                                source=internal_ref,
-                                digest=nested_digest,
-                            )
+        if is_list:
+            for nested_digest in digests[1:]:
+                for tag in tags:
+                    items.append(
+                        SignItem(
+                            identities=tuple(f"{ref}:{tag}" for ref in registry_refs),
+                            source=internal_ref,
+                            digest=nested_digest,
                         )
-            for tag in tags:
-                items.append(
-                    SignItem(
-                        identity=f"{registry_ref}:{tag}",
-                        source=internal_ref,
-                        digest=top_level_digest,
                     )
+        for tag in tags:
+            items.append(
+                SignItem(
+                    identities=tuple(f"{ref}:{tag}" for ref in registry_refs),
+                    source=internal_ref,
+                    digest=top_level_digest,
                 )
+            )
 
     logger.info("Found %d signing candidates for component %s", len(items), component_name)
     return items
@@ -242,7 +246,11 @@ def _cosign_rekor_args(
     if secrets.rekor_url and rekor_key_path:
         if verify:
             return [f"--rekor-url={secrets.rekor_url}"]
-        return ["-y", f"--rekor-url={secrets.rekor_url}"]
+        return [
+            "-y",
+            f"--rekor-url={secrets.rekor_url}",
+            "--use-signing-config=false",
+        ]
     if verify:
         return ["--insecure-ignore-tlog=true"]
     return ["--tlog-upload=false"]
@@ -314,8 +322,8 @@ def _is_missing_signature_error(stderr: str) -> bool:
     )
 
 
-def check_existing_cosign_signature(
-    identity: str,
+def check_missing_cosign_signatures(
+    identities: tuple[str, ...],
     source: str,
     digest: str,
     secrets: SigningSecrets,
@@ -324,15 +332,14 @@ def check_existing_cosign_signature(
     rekor_key_path: Path | None,
     retries: int,
     aws_env: dict[str, str],
-) -> bool:
-    """Return True if a cosign signature for the given identity and digest exists.
+) -> tuple[str, ...]:
+    """Return identities without an existing cosign signature for the digest.
 
     Runs ``cosign verify`` against ``source@digest`` and inspects the JSON
     output for a record matching both ``identity`` and ``digest``.
 
     Args:
-        identity: Public image reference with tag (e.g.
-            ``registry.redhat.io/myrepo:v1.0``).
+        identities: Public image references with tags to check.
         source: Internal image location used as the cosign reference target
             (e.g. ``quay.io/internal/myrepo``).
         digest: Manifest digest to check (e.g. ``sha256:abc123``).
@@ -343,12 +350,11 @@ def check_existing_cosign_signature(
         aws_env: AWS credential environment variables for cosign.
 
     Returns:
-        True when a matching signature is found, False otherwise.
+        Identities which do not have a matching signature.
 
     Raises:
-        subprocess.CalledProcessError: When ``cosign verify`` fails for a
-            reason other than finding no signature matching the configured
-            public key.
+        subprocess.CalledProcessError: When verification fails for a reason
+            other than the absence of a matching signature.
         ValueError: When ``cosign verify`` exits successfully but prints
             output that is not valid JSON.
 
@@ -358,7 +364,7 @@ def check_existing_cosign_signature(
         verify_env["SIGSTORE_REKOR_PUBLIC_KEY"] = str(rekor_key_path)
 
     verify_args = (
-        ["cosign", "verify"]
+        ["cosign3", "verify", "--new-bundle-format=false"]
         + _cosign_rekor_args(secrets, rekor_key_path, verify=True)
         + ["--key", str(public_key_path), f"{source}@{digest}"]
     )
@@ -368,36 +374,52 @@ def check_existing_cosign_signature(
             verify_args,
             retries=retries,
             env=verify_env,
-            non_retryable_errors=("no signatures found", "crypto/rsa: verification error"),
+            non_retryable_errors=NON_RETRYABLE_VERIFY_ERRORS,
         )
     except subprocess.CalledProcessError as exc:
-        if _is_missing_signature_error(exc.stderr or ""):
-            logger.info(
-                "No signature matching the configured key for %s (%s)", identity, digest
-            )
-            return False
+        error_message = (exc.stderr or "").strip()
+        if _is_missing_signature_error(error_message):
+            logger.info("No matching signatures found for %s@%s", source, digest)
+            return identities
+        logger.warning(
+            "cosign verify failed for %s@%s: %s",
+            source,
+            digest,
+            error_message[:500],
+        )
         raise
-    verify_output = result.stdout.strip() or "[]"
+    else:
+        verify_output = result.stdout.strip() or "[]"
 
     try:
         sigs = json.loads(verify_output)
-    except json.JSONDecodeError as exc:
+        if not isinstance(sigs, list):
+            raise TypeError("cosign verify output is not a JSON array")
+    except (json.JSONDecodeError, TypeError) as exc:
         raise ValueError(
             f"cosign verify output for {source}@{digest} was not valid JSON: "
             f"{verify_output[:200]}"
         ) from exc
 
-    found = sum(
-        1
-        for sig in sigs
-        if digest in sig.get("critical", {}).get("image", {}).get("docker-manifest-digest", "")
-        and sig.get("critical", {}).get("identity", {}).get("docker-reference") == identity
-    )
-    if found:
-        logger.info(
-            "Skip signing %s (%s): %d existing signature(s) found", identity, digest, found
+    found = {
+        (
+            sig.get("critical", {}).get("identity", {}).get("docker-reference"),
+            sig.get("critical", {}).get("image", {}).get("docker-manifest-digest"),
         )
-    return bool(found)
+        for sig in sigs
+        if isinstance(sig, dict)
+    }
+    missing = tuple(identity for identity in identities if (identity, digest) not in found)
+    if missing:
+        logger.info(
+            "%d of %d signature(s) missing for %s",
+            len(missing),
+            len(identities),
+            digest,
+        )
+    else:
+        logger.info("Skip signing %s: all expected signatures exist", digest)
+    return missing
 
 
 def sign_item(
@@ -429,8 +451,8 @@ def sign_item(
         # auth file scoped to it is required for every cosign call against it.
         cosign_env = {**aws_env, "DOCKER_CONFIG": str(docker_config_dir)}
 
-        already_signed = check_existing_cosign_signature(
-            item.identity,
+        missing_identities = check_missing_cosign_signatures(
+            item.identities,
             item.source,
             item.digest,
             secrets,
@@ -439,7 +461,7 @@ def sign_item(
             retries=retries,
             aws_env=cosign_env,
         )
-        if already_signed:
+        if not missing_identities:
             return
 
         sign_env = dict(cosign_env)
@@ -447,20 +469,20 @@ def sign_item(
             sign_env["SIGSTORE_REKOR_PUBLIC_KEY"] = str(rekor_key_path)
 
         sign_args = (
-            ["cosign", "-t", "3m0s", "sign"]
+            ["cosign3", "-t", "3m0s", "sign", "--new-bundle-format=false"]
             + _cosign_rekor_args(secrets, rekor_key_path, verify=False)
             + [
                 "--key",
                 secrets.sign_key,
                 "--sign-container-identity",
-                item.identity,
+                ",".join(missing_identities),
                 f"{item.source}@{item.digest}",
             ]
         )
 
-        logger.info("Signing %s (%s)", item.identity, item.digest)
+        logger.info("Signing %s (%s)", ",".join(missing_identities), item.digest)
         run_cosign_with_retry(sign_args, retries=retries, env=sign_env)
-        logger.info("Signed %s (%s) successfully", item.identity, item.digest)
+        logger.info("Signed %s (%s) successfully", ",".join(missing_identities), item.digest)
 
 
 def sign_all(

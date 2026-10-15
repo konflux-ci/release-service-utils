@@ -6,7 +6,7 @@ from .rh_sign_image_cosign import (  # noqa: F401
     STABILIZATION_DELAY,
     SigningSecrets,
     SignItem,
-    check_existing_cosign_signature,
+    check_missing_cosign_signatures,
     collect_component_sign_items,
     get_manifest_digests,
     load_signing_secrets,
