@@ -9,7 +9,7 @@ import tarfile
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, call, patch
 
-from release_service_utils.helpers import oras_utils
+from release_service_utils.helpers import file, oras_utils
 from release_service_utils.helpers.oras_utils import oras_utils as _oras_utils
 import pytest
 
@@ -171,6 +171,55 @@ def test_oras_resolve_with_auth_file_raises_when_check_true(tmp_path: Path) -> N
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="denied")
         with pytest.raises(RuntimeError, match="oras resolve failed"):
             oras_resolve("registry.io/repo:tag", auth_file=af)
+
+
+# ---------------------------------------------------------------------------
+# registry_auth_file
+# ---------------------------------------------------------------------------
+
+
+def test_registry_auth_file_writes_select_oci_auth_output() -> None:
+    """select-oci-auth stdout is written to a temp file that is deleted on exit."""
+    with patch(
+        "release_service_utils.helpers.oras_utils.oras_utils.subprocess_cmd.run_cmd"
+    ) as mock_run:
+        mock_run.return_value = MagicMock(stdout='{"auths":{}}')
+        with oras_utils.registry_auth_file("quay.io/org/repo") as auth_file:
+            assert auth_file.read_text(encoding="utf-8") == '{"auths":{}}'
+            auth_path = auth_file
+        assert not auth_path.exists()
+    mock_run.assert_called_once_with(
+        ["select-oci-auth", "quay.io/org/repo"],
+        stderr_path=None,
+        check=True,
+    )
+
+
+def test_registry_auth_file_deletes_temp_file_when_select_oci_auth_fails() -> None:
+    """The temp auth file is removed even if select-oci-auth raises."""
+    created: list[Path] = []
+    real_make = file.make_tempfile_path
+
+    def tracking_make(prefix: str, data: bytes | None = None) -> Path:
+        path = real_make(prefix, data)
+        created.append(path)
+        return path
+
+    with (
+        patch(
+            "release_service_utils.helpers.oras_utils.oras_utils.file.make_tempfile_path",
+            side_effect=tracking_make,
+        ),
+        patch(
+            "release_service_utils.helpers.oras_utils.oras_utils.subprocess_cmd.run_cmd",
+            side_effect=subprocess.CalledProcessError(1, "select-oci-auth"),
+        ),
+        pytest.raises(subprocess.CalledProcessError),
+    ):
+        with oras_utils.registry_auth_file("quay.io/org/repo"):
+            pass
+    assert created
+    assert not created[0].exists()
 
 
 # ---------------------------------------------------------------------------
