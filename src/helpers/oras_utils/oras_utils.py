@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from release_service_utils.helpers import file
@@ -163,6 +165,30 @@ def oras_login(registry: str, username: str, password: str) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+@contextmanager
+def registry_auth_file(
+    reference: str,
+    *,
+    stderr_path: Path | None = None,
+) -> Iterator[Path]:
+    """Yield a temp registry-config file produced by ``select-oci-auth``.
+
+    The file is always deleted when the context exits, including when
+    ``select-oci-auth`` or the caller raises.
+    """
+    auth_file = file.make_tempfile_path("oras-auth-")
+    try:
+        auth_out = subprocess_cmd.run_cmd(
+            ["select-oci-auth", str(reference)],
+            stderr_path=stderr_path,
+            check=True,
+        ).stdout
+        auth_file.write_text(auth_out, encoding="utf-8")
+        yield auth_file
+    finally:
+        auth_file.unlink(missing_ok=True)
 
 
 def oras_pull(

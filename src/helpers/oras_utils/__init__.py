@@ -14,6 +14,7 @@ from .oras_utils import (  # noqa: F401
     oras_push,
     oras_resolve,
     os_arch_dir,
+    registry_auth_file,
     safe_extract_archive,
     safe_relative_path,
     subprocess_cmd,
