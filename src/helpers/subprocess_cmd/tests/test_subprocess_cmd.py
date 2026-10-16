@@ -34,11 +34,55 @@ def test_run_cmd_stderr_path_logs_failed_command(tmp_path) -> None:
     assert "false" in text
 
 
+def test_run_cmd_failure_marker_follows_child_stderr(tmp_path: Path) -> None:
+    """Child stderr is flushed to the log before the failure marker."""
+    log = tmp_path / "log.txt"
+    with pytest.raises(subprocess.CalledProcessError):
+        subprocess_cmd.run_cmd(
+            ["sh", "-c", "echo child-err >&2; exit 1"],
+            stderr_path=log,
+            check=True,
+        )
+    text = log.read_text(encoding="utf-8")
+    err_at = text.find("child-err")
+    marker_at = text.find("command exited with failure")
+    assert err_at != -1
+    assert marker_at != -1
+    assert err_at < marker_at
+
+
 def test_run_cmd_stderr_path_on_success(tmp_path) -> None:
     """Successful commands leave *stderr_path* empty."""
     log = tmp_path / "log.txt"
     subprocess_cmd.run_cmd(["echo", "ok"], stderr_path=log, check=True)
     assert log.read_text(encoding="utf-8") == ""
+
+
+def test_run_cmd_tees_stderr_to_path_and_console(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """Child stderr is appended to *stderr_path* and copied to the process stderr.
+
+    Matches bash ``2> >(tee -a file >&2)`` so Tekton step logs stay live.
+    """
+    log = tmp_path / "log.txt"
+    subprocess_cmd.run_cmd(
+        ["sh", "-c", "echo live-err >&2"],
+        stderr_path=log,
+        check=True,
+    )
+    assert "live-err" in log.read_text(encoding="utf-8")
+    captured = capfd.readouterr()
+    assert "live-err" in captured.err
+
+
+def test_run_cmd_sets_pythonunbuffered() -> None:
+    """Child processes inherit PYTHONUNBUFFERED so Python wrappers flush logs."""
+    result = subprocess_cmd.run_cmd(
+        ["python3", "-c", "import os; print(os.environ.get('PYTHONUNBUFFERED', ''))"],
+        check=True,
+    )
+    assert result.stdout.strip() == "1"
 
 
 def test_run_cmd_captures_stderr_when_no_path_given() -> None:
