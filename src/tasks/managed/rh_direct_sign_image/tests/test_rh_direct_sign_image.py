@@ -973,7 +973,7 @@ def test_submit_batch_calls_create_with_expected_params(tmp_path: Path) -> None:
     assert call_kwargs.kwargs["pipeline_timeout"] == "0h30m0s"
     assert call_kwargs.kwargs["task_timeout"] == "0h25m0s"
     assert call_kwargs.kwargs["service_account"] == "signing-pipeline-sa"
-    assert call_kwargs.kwargs["cleanup"] is False
+    assert call_kwargs.kwargs["cleanup"] is True
 
 
 def test_submit_batch_omits_pipeline_image_when_empty(tmp_path: Path) -> None:
