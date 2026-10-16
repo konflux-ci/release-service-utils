@@ -17,7 +17,12 @@ from typing import Any
 
 
 def load_json_dict(path: Path) -> dict[str, Any]:
-    """Load a JSON file whose root value must be an object."""
+    """Load a JSON file whose root value must be an object.
+
+    Raise ``FileNotFoundError`` when *path* does not exist or is not a file.
+    """
+    if not path.is_file():
+        raise FileNotFoundError(f"JSON file does not exist: {path}")
     with open(path, encoding="utf-8") as handle:
         try:
             data = json.load(handle)
