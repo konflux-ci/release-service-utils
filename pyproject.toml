@@ -30,6 +30,7 @@ dependencies = [
     "jq",
     "kubernetes>=28.0",
     "RestrictedPython>=7.0",
+    "boto3",
 ]
 
 [tool.black]
