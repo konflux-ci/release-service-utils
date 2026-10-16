@@ -61,10 +61,12 @@ class SigningRequest:
         verbose: Enable verbose Kerberos diagnostics in the pipeline.
         task_id: Task run UID used as a label on the InternalRequest.
         pipelinerun_uid: Pipeline run UID used as a label on the InternalRequest.
+        intention: Release intention label (e.g. "production", "staging").
         request_timeout: InternalRequest timeout in seconds.
         pipeline_timeout: Pipeline timeout in XhYmZs format.
         task_timeout: Task timeout in XhYmZs format.
         service_account: Service account for the signing PipelineRun.
+        cleanup: Delete prior InternalRequests for the same pipeline run.
 
     """
 
@@ -91,10 +93,12 @@ class SigningRequest:
     verbose: bool = False
     task_id: str = ""
     pipelinerun_uid: str = ""
+    intention: str = ""
     request_timeout: int = 1800
     pipeline_timeout: str = "0h30m0s"
     task_timeout: str = "0h25m0s"
     service_account: str = "signing-pipeline-sa"
+    cleanup: bool = False
 
 
 def submit(request: SigningRequest) -> dict[str, Any]:
@@ -145,6 +149,7 @@ def submit(request: SigningRequest) -> dict[str, Any]:
     labels = {
         _TASK_LABEL: request.task_id,
         internal_request.PIPELINERUN_UID_LABEL: request.pipelinerun_uid,
+        internal_request.INTENTION_LABEL: request.intention,
         _RATE_LIMITED_LABEL: "true",
         _RATE_LIMITING_GROUP_LABEL: _RATE_LIMITING_GROUP,
     }
@@ -164,5 +169,6 @@ def submit(request: SigningRequest) -> dict[str, Any]:
         service_account=request.service_account,
         pipeline_timeout=request.pipeline_timeout,
         task_timeout=request.task_timeout,
+        cleanup=request.cleanup,
     )
     return internal_request.fetch_results(ir_name)

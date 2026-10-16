@@ -6,6 +6,7 @@ from .internal_request import (  # noqa: F401
     CLEANUP_PROPAGATION_SLEEP_SECONDS,
     EXIT_FAILED,
     EXIT_TIMEOUT,
+    INTENTION_LABEL,
     InternalRequestWaitError,
     PIPELINERUN_UID_LABEL,
     PIPELINE_NAME_LABEL,
