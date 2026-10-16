@@ -3,7 +3,8 @@
 Parse ``cli.toml`` files, authenticate via Basic or OAuth2
 client-credentials, and query the Pulp REST API for domains,
 distributions, repository versions, and RPM content digests.
-Chunked RPM content upload goes through the ``pulp`` CLI.
+Chunked RPM content upload and file-repository operations go through
+the ``pulp`` CLI.
 """
 
 from .pulp_client import (  # noqa: F401
@@ -11,4 +12,8 @@ from .pulp_client import (  # noqa: F401
     PulpClient,
     PulpAuth,
     parse_pulp_config,
+    list_file_repository_names,
+    ensure_file_repo_exists,
+    check_file_content,
+    upload_file_content,
 )

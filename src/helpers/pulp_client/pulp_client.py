@@ -3,7 +3,8 @@
 Parse ``cli.toml`` files, authenticate via Basic or OAuth2
 client-credentials, and query the Pulp REST API for domains,
 distributions, repository versions, and RPM content digests.
-Chunked RPM content upload goes through the ``pulp`` CLI.
+Chunked RPM content upload and file-repository operations go through
+the ``pulp`` CLI.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import requests
 import requests.auth
 import tomllib
 
+from release_service_utils.helpers import file as file_helper
 from release_service_utils.helpers import http_client
 from release_service_utils.helpers import retry
 from release_service_utils.helpers import subprocess_cmd
@@ -377,7 +379,7 @@ class PulpClient:
                 check=False,
             )
             elapsed = int(time.monotonic() - started)
-            cli_error = (result.stderr or "").strip() or (result.stdout or "").strip()
+            cli_error = _cli_error_text(result)
             if result.returncode != 0:
                 suffix = f": {cli_error}" if cli_error else ""
                 logger.error(
@@ -481,3 +483,154 @@ class PulpClient:
                 return PulpDigestStatus.MATCH
 
         return PulpDigestStatus.MISMATCH
+
+
+def _pulp_file_cmd(config_file: Path, domain: str, *args: str) -> list[str]:
+    """Build a pulp CLI argv for file-plugin operations."""
+    return [
+        "pulp",
+        "--config",
+        str(config_file),
+        "--domain",
+        domain,
+        *args,
+    ]
+
+
+def _cli_error_text(result: Any) -> str:
+    """Return stderr, falling back to stdout, from a pulp CLI result."""
+    return (result.stderr or "").strip() or (result.stdout or "").strip()
+
+
+def list_file_repository_names(config_file: Path, domain: str) -> set[str]:
+    """Return file repository names in *domain* via the pulp CLI."""
+    result = subprocess_cmd.run_cmd(
+        _pulp_file_cmd(config_file, domain, "file", "repository", "list"),
+        check=False,
+    )
+    if result.returncode != 0:
+        error = _cli_error_text(result)
+        suffix = f": {error}" if error else ""
+        raise RuntimeError(f"Failed to list file repositories in Pulp domain {domain}{suffix}")
+    try:
+        data = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Failed to list file repositories in Pulp domain {domain}: invalid JSON"
+        ) from exc
+    if not isinstance(data, list):
+        raise RuntimeError(
+            f"Failed to list file repositories in Pulp domain {domain}: expected a JSON array"
+        )
+    names: set[str] = set()
+    for item in data:
+        if isinstance(item, dict) and item.get("name"):
+            names.add(str(item["name"]))
+    return names
+
+
+def ensure_file_repo_exists(config_file: Path, domain: str, name: str) -> None:
+    """Raise if the file repository *name* is missing from *domain*."""
+    existing = list_file_repository_names(config_file, domain)
+    if name not in existing:
+        raise RuntimeError(
+            f"Metadata file repository '{name}' not found in Pulp domain {domain}. "
+            "Create the file repository before running this task."
+        )
+    logger.info("Metadata repository '%s' exists.", name)
+
+
+def check_file_content(
+    config_file: Path,
+    domain: str,
+    relative_path: str,
+    local_file: Path,
+) -> PulpDigestStatus:
+    """Compare *local_file* SHA-256 to Pulp file content at *relative_path*.
+
+    Return ``MATCH`` when the remote checksum matches, ``NOT_FOUND`` when
+    Pulp has no content at that path (or the list call fails), and
+    ``MISMATCH`` when a different checksum is present.
+    """
+    local_sha256 = file_helper.sha256(local_file)
+    result = subprocess_cmd.run_cmd(
+        _pulp_file_cmd(
+            config_file,
+            domain,
+            "file",
+            "content",
+            "list",
+            "--relative-path",
+            relative_path,
+        ),
+        check=False,
+    )
+    if result.returncode != 0:
+        return PulpDigestStatus.NOT_FOUND
+    try:
+        parsed = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Failed to list file content for {relative_path}: invalid JSON"
+        ) from exc
+    if not isinstance(parsed, list) or not parsed:
+        return PulpDigestStatus.NOT_FOUND
+    first = parsed[0]
+    remote_sha256 = ""
+    if isinstance(first, dict):
+        remote_sha256 = str(first.get("sha256") or "")
+    if local_sha256 == remote_sha256:
+        logger.info("File already exists with matching checksum: %s", relative_path)
+        return PulpDigestStatus.MATCH
+    logger.error(
+        "File exists with different checksum: %s\n  Local:  %s\n  Remote: %s",
+        relative_path,
+        local_sha256,
+        remote_sha256,
+    )
+    return PulpDigestStatus.MISMATCH
+
+
+def upload_file_content(
+    config_file: Path,
+    domain: str,
+    file_path: Path,
+    relative_path: str,
+    repository: str,
+) -> None:
+    """Upload *file_path* to the Pulp file *repository* at *relative_path*."""
+
+    def _do_upload() -> None:
+        logger.info("Uploading file to Pulp: %s", relative_path)
+        started = time.monotonic()
+        result = subprocess_cmd.run_cmd(
+            _pulp_file_cmd(
+                config_file,
+                domain,
+                "file",
+                "content",
+                "upload",
+                "--repository",
+                repository,
+                "--file",
+                str(file_path),
+                "--relative-path",
+                relative_path,
+            ),
+            check=False,
+        )
+        elapsed = int(time.monotonic() - started)
+        if result.returncode != 0:
+            error = _cli_error_text(result)
+            suffix = f": {error}" if error else ""
+            raise RuntimeError(
+                f"Failed to upload {relative_path} (rc={result.returncode}){suffix}"
+            )
+        logger.info("Upload end: %s (took %ss)", relative_path, elapsed)
+
+    retry.retry_with_exponential_backoff(
+        _do_upload,
+        max_attempts=UPLOAD_ATTEMPTS,
+        retry_on=RuntimeError,
+        base_sleep_seconds=UPLOAD_BASE_SLEEP_SECONDS,
+    )

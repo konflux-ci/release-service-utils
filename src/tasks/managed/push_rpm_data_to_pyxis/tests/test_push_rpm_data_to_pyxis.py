@@ -191,132 +191,34 @@ class TestImageCollection:
 
 
 class TestDownloadSbom:
-    """Test authenticated and retried SBOM downloads."""
+    """Test that SBOM downloads delegate to the shared cosign helper."""
 
     @pytest.mark.parametrize(
-        ("job", "expected_tail"),
+        ("job", "retries", "expected_attempts"),
         [
-            (_job(), ["quay.io/example/image@sha256:index"]),
-            (
-                _job(platform="linux/amd64"),
-                ["--platform", "linux/amd64", "quay.io/example/image@sha256:index"],
-            ),
+            (_job(), 3, 4),
+            (_job(platform="linux/amd64"), 0, 1),
         ],
     )
-    def test_downloads_single_and_multi_arch_sboms(
-        self, tmp_path: Path, job: task.ImageJob, expected_tail: list[str]
+    def test_delegates_to_cosign_helper(
+        self,
+        tmp_path: Path,
+        job: task.ImageJob,
+        retries: int,
+        expected_attempts: int,
     ) -> None:
-        """Build the correct cosign command and temporary Docker configuration."""
-        commands: list[list[str]] = []
-        docker_configs: list[str] = []
-
-        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-            commands.append(command)
-            if command[0] == "select-oci-auth":
-                return _completed(command, stdout='{"auths": {}}')
-            config_dir = Path(str(kwargs["env"]["DOCKER_CONFIG"]))  # type: ignore[index]
-            docker_configs.append((config_dir / "config.json").read_text())
-            (tmp_path / f"{job.image_id}.json").write_text("{}", encoding="utf-8")
-            return _completed(command, stdout="downloaded", stderr="cosign status")
-
+        """Map ImageJob fields and retry count onto cosign.download."""
         with patch.object(task, "SBOM_DIR", tmp_path):
-            with patch(f"{TASK}.subprocess_cmd.run_cmd", side_effect=fake_run):
-                task.download_sbom(job, retries=3)
+            with patch(f"{TASK}.cosign.download") as download:
+                task.download_sbom(job, retries=retries)
 
-        assert commands[0] == ["select-oci-auth", job.container_image]
-        assert commands[1][:5] == [
-            "cosign",
-            "download",
+        download.assert_called_once_with(
             "sbom",
-            "--output-file",
-            str(tmp_path / f"{job.image_id}.json"),
-        ]
-        assert commands[1][-len(expected_tail) :] == expected_tail
-        assert docker_configs == ['{"auths": {}}']
-
-    def test_uses_empty_config_for_empty_auth_output(self, tmp_path: Path) -> None:
-        """Write an empty JSON object when select-oci-auth prints nothing."""
-
-        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-            if command[0] == "select-oci-auth":
-                return _completed(command)
-            config_dir = Path(str(kwargs["env"]["DOCKER_CONFIG"]))  # type: ignore[index]
-            assert (config_dir / "config.json").read_text() == "{}"
-            (tmp_path / "abcdef.json").write_text("{}", encoding="utf-8")
-            return _completed(command)
-
-        with patch.object(task, "SBOM_DIR", tmp_path):
-            with patch(f"{TASK}.subprocess_cmd.run_cmd", side_effect=fake_run):
-                task.download_sbom(_job(), retries=0)
-
-    def test_retries_cosign_failure(self, tmp_path: Path) -> None:
-        """Retry a failed cosign process and succeed on the next attempt."""
-        cosign_calls = 0
-
-        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-            nonlocal cosign_calls
-            if command[0] == "select-oci-auth":
-                return _completed(command)
-            cosign_calls += 1
-            if cosign_calls == 1:
-                raise subprocess.CalledProcessError(1, command)
-            (tmp_path / "abcdef.json").write_text("{}", encoding="utf-8")
-            return _completed(command)
-
-        with patch.object(task, "SBOM_DIR", tmp_path):
-            with patch(f"{TASK}.subprocess_cmd.run_cmd", side_effect=fake_run):
-                with patch("release_service_utils.helpers.retry.retry.time.sleep") as sleep:
-                    task.download_sbom(_job(), retries=1)
-
-        assert cosign_calls == 2
-        sleep.assert_called_once_with(2)
-
-    def test_propagates_authentication_failure(self, tmp_path: Path) -> None:
-        """Log safe diagnostics and fail when registry credential selection fails."""
-        error = subprocess.CalledProcessError(
-            1,
-            ["select-oci-auth"],
-            output='{"auths": {"registry": "secret"}}',
-            stderr="credential selection failed",
+            job.container_image,
+            tmp_path / f"{job.image_id}.json",
+            max_attempts=expected_attempts,
+            platform=job.platform,
         )
-        with patch.object(task, "SBOM_DIR", tmp_path):
-            with patch(f"{TASK}.subprocess_cmd.run_cmd", side_effect=error):
-                with patch(f"{TASK}.logger.info") as log:
-                    with pytest.raises(subprocess.CalledProcessError):
-                        task.download_sbom(_job(), retries=3)
-
-        assert call("credential selection failed") in log.call_args_list
-        assert all("secret" not in str(log_call) for log_call in log.call_args_list)
-
-    def test_raises_when_cosign_exhausts_retries(self, tmp_path: Path) -> None:
-        """Log every failed cosign attempt and propagate the final error."""
-
-        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-            if command[0] == "select-oci-auth":
-                return _completed(command)
-            raise subprocess.CalledProcessError(
-                1, command, output="cosign output", stderr="cosign error"
-            )
-
-        with patch.object(task, "SBOM_DIR", tmp_path):
-            with patch(f"{TASK}.subprocess_cmd.run_cmd", side_effect=fake_run):
-                with patch("release_service_utils.helpers.retry.retry.time.sleep"):
-                    with patch(f"{TASK}.logger.info") as log:
-                        with pytest.raises(subprocess.CalledProcessError):
-                            task.download_sbom(_job(), retries=1)
-
-        assert log.call_args_list.count(call("cosign output")) == 2
-        assert log.call_args_list.count(call("cosign error")) == 2
-
-    def test_requires_cosign_to_create_output(self, tmp_path: Path) -> None:
-        """Reject a successful cosign process that produced no SBOM file."""
-        with patch.object(task, "SBOM_DIR", tmp_path):
-            with patch(
-                f"{TASK}.subprocess_cmd.run_cmd",
-                side_effect=[_completed(stdout="{}"), _completed()],
-            ):
-                with pytest.raises(RuntimeError, match="was not created"):
-                    task.download_sbom(_job(), retries=0)
 
 
 class TestUploadRpmData:

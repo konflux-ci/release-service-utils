@@ -581,3 +581,42 @@ def test_copy_all_and_auth_files() -> None:
         "docker://img:v1",
         "dir:/tmp/out",
     ]
+
+
+def test_copy_authenticated_uses_oci_auth_file(tmp_path: Path) -> None:
+    """Authenticated copies obtain credentials via oci_auth.auth_file."""
+    dest = tmp_path / "destination"
+    auth_path = tmp_path / "auth.json"
+    auth_path.write_text("{}", encoding="utf-8")
+
+    with (
+        mock.patch(
+            "release_service_utils.helpers.skopeo.skopeo.oci_auth.auth_file",
+        ) as auth_file,
+        mock.patch(
+            "release_service_utils.helpers.skopeo.skopeo.subprocess.run",
+            return_value=_completed(),
+        ) as run_mock,
+    ):
+        auth_file.return_value.__enter__.return_value = auth_path
+        result = skopeo.copy(
+            "quay.io/org/image:tag",
+            dest,
+            extra_args=["--all"],
+            check=True,
+            authenticated=True,
+        )
+
+    auth_file.assert_called_once_with("quay.io/org/image:tag")
+    assert result.returncode == 0
+    assert run_mock.call_args[0][0] == [
+        "skopeo",
+        "copy",
+        "--retry-times",
+        "3",
+        "--authfile",
+        str(auth_path),
+        "--all",
+        "docker://quay.io/org/image:tag",
+        f"dir:{dest}",
+    ]
