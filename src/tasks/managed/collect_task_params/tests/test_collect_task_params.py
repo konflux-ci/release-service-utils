@@ -40,6 +40,7 @@ def _sample_data() -> dict:
         "items": ["first", "second", "third"],
         "numeric": 42,
         "boolean": True,
+        "booleanFalse": False,
     }
 
 
@@ -292,14 +293,34 @@ def test_collect_task_params_numeric_value(tmp_path: Path) -> None:
 
 
 def test_collect_task_params_boolean_value(tmp_path: Path) -> None:
-    """Extract and stringify a boolean value."""
+    """Booleans must render as lowercase "true"/"false" (jq-compatible).
+
+    Tekton when-expressions compare extracted values against the string
+    literals "true"/"false". Python's str(True) yields "True", which would
+    silently skip boolean-gated tasks (e.g. pushToGit/pushToS3), so booleans
+    are serialized via json.dumps instead.
+    """
     data_file = tmp_path / "data.json"
     _write_json(data_file, _sample_data())
 
-    keys_json = '[{"resultIndex": 0, "key": ".boolean"}]'
+    keys_json = """[
+        {"resultIndex": 0, "key": ".boolean"},
+        {"resultIndex": 1, "key": ".booleanFalse"}
+    ]"""
     result = collect_task_params(data_file=data_file, keys_json=keys_json)
 
-    assert result == ["True"]
+    assert result == ["true", "false"]
+
+
+def test_collect_task_params_boolean_default_stays_lowercase(tmp_path: Path) -> None:
+    """A string default for a missing boolean key is passed through verbatim."""
+    data_file = tmp_path / "data.json"
+    _write_json(data_file, {"foo": "bar"})
+
+    keys_json = '[{"resultIndex": 0, "key": ".pushToGit", "default": "false"}]'
+    result = collect_task_params(data_file=data_file, keys_json=keys_json)
+
+    assert result == ["false"]
 
 
 def test_collect_task_params_dict_value(tmp_path: Path) -> None:
