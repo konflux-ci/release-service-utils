@@ -15,7 +15,7 @@ from itertools import zip_longest
 from pathlib import Path
 from typing import Any
 
-from release_service_utils.helpers import file, memory_throttle, skopeo
+from release_service_utils.helpers import file, memory_throttle, retry_safety, skopeo
 from release_service_utils.helpers.logger import logger
 from release_service_utils.helpers.subprocess_cmd import run_cmd
 
@@ -409,6 +409,7 @@ def sign_item(
     rekor_key_path: Path | None,
     retries: int,
     aws_env: dict[str, str],
+    retry_safety_recorder: retry_safety.RetrySafetyRecorder,
 ) -> None:
     """Sign a single container image reference with cosign.
 
@@ -422,6 +423,7 @@ def sign_item(
         rekor_key_path: Path to the temporary rekor public key file, or None.
         retries: Number of cosign retries for each command.
         aws_env: AWS credential environment variables for cosign.
+        retry_safety_recorder: Shared recorder for unsafe signing operations.
 
     """
     with tempfile.TemporaryDirectory() as docker_config_dir:
@@ -465,7 +467,15 @@ def sign_item(
         )
 
         logger.info("Signing %s (%s)", item.identity, item.digest)
+        retry_safety_recorder.mark_unsafe_operation_started(
+            "Started signing container image",
+            details={"identity": item.identity, "digest": item.digest},
+        )
         run_cosign_with_retry(sign_args, retries=retries, env=sign_env)
+        retry_safety_recorder.mark_unsafe_operation_completed(
+            "Signed container image",
+            details={"identity": item.identity, "digest": item.digest},
+        )
         logger.info("Signed %s (%s) successfully", item.identity, item.digest)
 
 
@@ -500,6 +510,7 @@ def sign_all(
         aws_env: AWS credential environment variables for cosign.
 
     """
+    retry_safety_recorder = retry_safety.RetrySafetyRecorder.from_env()
     digest_groups: dict[str, list[SignItem]] = {}
     for item in items:
         group_key = f"{item.source}@{item.digest}"
@@ -530,6 +541,7 @@ def sign_all(
                     rekor_key_path=rekor_key_path,
                     retries=retries,
                     aws_env=aws_env,
+                    retry_safety_recorder=retry_safety_recorder,
                 )
                 batch_futures.append(future)
                 spawn_count += 1
