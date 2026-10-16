@@ -90,6 +90,16 @@ def _rpm_repos() -> list[dict]:
     ]
 
 
+def _unreleased_hello() -> dict[str, str]:
+    return {
+        "name": "c1",
+        "purl": (
+            "pkg:rpm/redhat/hello@1.0-1.el9" "?arch=x86_64&distro=el9&repository_id=rpm-x86_64"
+        ),
+        "repository_name": "x86_64",
+    }
+
+
 def _setup_base_files(
     tmp_path: Path,
     data: dict | None = None,
@@ -945,6 +955,15 @@ class TestValidatePulpDigests:
         pulp.check_digest.return_value = filt.PulpDigestStatus.NOT_FOUND
         filt.validate_pulp_digests([self._rpm_entry()], pulp)
 
+    def test_legacy_match_fails_before_pulp_lookup(self) -> None:
+        """Current Pulp content cannot prove which epoch a legacy advisory meant."""
+        pulp = MagicMock(spec=filt.PulpClient)
+        entry = {**self._rpm_entry(), "epoch": "32", "legacy_advisory_purl": True}
+
+        with pytest.raises(RuntimeError, match="Resolve the advisory epoch"):
+            filt.validate_pulp_digests([entry], pulp)
+        pulp.check_digest.assert_not_called()
+
 
 class TestFilterSnapshot:
     """Test snapshot filtering."""
@@ -1042,7 +1061,7 @@ class TestRun:
         """Unreleased RPMs produce a filtered snapshot."""
         tarball = _make_filter_tarball(
             tmp_path,
-            unreleased=[{"name": "c1"}],
+            unreleased=[_unreleased_hello()],
             in_advisory=[],
         )
         cfg, res = _make_config_and_results(
@@ -1159,6 +1178,53 @@ class TestRun:
                 for repo in target_repos
             ]
 
+    def test_partial_release_only_publishes_unreleased_rpm(self, tmp_path: Path) -> None:
+        """Avoid carrying an already-advised RPM into a new advisory."""
+        new_entry = {
+            "name": "c1",
+            "purl": (
+                "pkg:rpm/redhat/new@2.0-1.el9"
+                "?arch=x86_64&distro=el9&repository_id=rpm-x86_64"
+            ),
+            "repository_name": "x86_64",
+        }
+        tarball = _make_filter_tarball(
+            tmp_path,
+            unreleased=[new_entry],
+            in_advisory=[
+                {
+                    "name": "c1",
+                    "rpmname": "hello",
+                    "epoch": "0",
+                    "version": "1.0",
+                    "release": "1.el9",
+                    "arch": "x86_64",
+                    "sha256": "sha",
+                    "repository_name": "x86_64",
+                }
+            ],
+        )
+        cfg, res = _make_config_and_results(
+            tmp_path,
+            snapshot=_snapshot([{"containerImage": "quay.io/t/i@sha256:a", "name": "c1"}]),
+            data=_data(rpm_repos=_rpm_repos()),
+        )
+        mock_run = _mock_run_cmd_for_oras_and_rpm(
+            ["hello-1.0-1.el9.x86_64.rpm", "new-2.0-1.el9.x86_64.rpm"],
+            filter_tarball=tarball,
+        )
+
+        with (
+            patch.object(filt.subprocess_cmd, "run_cmd", mock_run),
+            patch.object(filt.file_helper, "sha256", return_value="sha"),
+            patch.object(filt.PulpClient, "from_config", return_value=MagicMock()),
+            patch.object(filt, "validate_pulp_digests"),
+        ):
+            filt.run(cfg, res)
+
+        snap = json.loads(cfg.snapshot_file.read_text(encoding="utf-8"))
+        assert [rpm["rpmname"] for rpm in snap["components"][0]["rpmsToPublish"]] == ["new"]
+
     def test_in_advisory_rpms_validated(self, tmp_path: Path) -> None:
         """In-advisory RPMs trigger Pulp digest validation."""
         in_advisory = [
@@ -1175,7 +1241,7 @@ class TestRun:
         ]
         tarball = _make_filter_tarball(
             tmp_path,
-            unreleased=[{"name": "c1"}],
+            unreleased=[_unreleased_hello()],
             in_advisory=in_advisory,
         )
         cfg, res = _make_config_and_results(
@@ -1331,7 +1397,7 @@ class TestRun:
         ]
         tarball = _make_filter_tarball(
             tmp_path,
-            unreleased=[{"name": "c1"}],
+            unreleased=[_unreleased_hello()],
             in_advisory=in_advisory,
         )
         cfg, res = _make_config_and_results(
