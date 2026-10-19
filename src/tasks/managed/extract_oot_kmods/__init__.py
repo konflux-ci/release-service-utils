@@ -12,6 +12,5 @@ from .extract_oot_kmods import (  # noqa: F401
     extract_single_arch,
     get_image_architectures,
     main,
-    resolve_arch_name,
     run,
 )
