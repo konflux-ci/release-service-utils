@@ -65,21 +65,50 @@ def _filter_image(content: list[Any], existing: list[Any]) -> list[Any]:
     return out
 
 
-def _filter_rpm(content: list[Any], existing: list[Any]) -> list[Any]:
-    """Drop artifact rows whose `purl` exactly matches an existing row."""
+def _rpm_purl_without_epoch(purl: str) -> tuple[str, bool] | None:
+    """Return an RPM PURL without its epoch qualifier and whether it had one."""
+    if not purl.startswith("pkg:rpm/") or "?" not in purl:
+        return None
+    base, query = purl.split("?", 1)
+    qualifiers = query.split("&")
+    has_epoch = any(part.startswith("epoch=") for part in qualifiers)
+    non_epoch = (part for part in qualifiers if not part.startswith("epoch="))
+    without_epoch = "&".join(sorted(non_epoch))
+    return f"{base}?{without_epoch}", has_epoch
+
+
+def _filter_rpm(
+    content: list[Any], existing: list[Any], *, reject_ambiguous_epoch: bool = False
+) -> list[Any]:
+    """Drop exact RPM PURL matches and reject ambiguous mixed-epoch identities."""
     existing_purls = {
         existing_row.get("purl")
         for existing_row in existing
         if isinstance(existing_row, dict) and existing_row.get("purl") is not None
     }
+    mixed_epoch_keys: dict[str, set[bool]] = {}
+    if reject_ambiguous_epoch:
+        for purl in existing_purls:
+            if not isinstance(purl, str):
+                continue
+            key = _rpm_purl_without_epoch(purl)
+            if key is not None:
+                mixed_epoch_keys.setdefault(key[0], set()).add(key[1])
     out: list[Any] = []
     for item in content:
         if not isinstance(item, dict):
             continue
         purl = item.get("purl")
         # Without `purl` there is nothing to compare; skip the row.
-        if purl is None or purl not in existing_purls:
-            out.append(item)
+        if purl is not None and purl in existing_purls:
+            continue
+        if reject_ambiguous_epoch and isinstance(purl, str):
+            key = _rpm_purl_without_epoch(purl)
+            if key is not None and (not key[1]) in mixed_epoch_keys.get(key[0], set()):
+                raise ValueError(
+                    f"Cannot compare RPM advisory PURLs with and without epoch: {purl}"
+                )
+        out.append(item)
     return out
 
 
@@ -362,7 +391,9 @@ def filter_content_by_existing(
 
     if content_type in ("generic", "binary"):
         filtered = _filter_generic_binary(content_rows, existing_rows)
-    elif content_type in ("rpm", "disk-image"):
+    elif content_type == "rpm":
+        filtered = _filter_rpm(content_rows, existing_rows, reject_ambiguous_epoch=True)
+    elif content_type == "disk-image":
         filtered = _filter_rpm(content_rows, existing_rows)
     else:
         filtered = _filter_image(content_rows, existing_rows)

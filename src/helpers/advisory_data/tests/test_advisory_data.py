@@ -223,6 +223,55 @@ def test_filter_rpm_exact_purl(tmp_path: Path) -> None:
     assert json.loads(out) == []
 
 
+@pytest.mark.parametrize("incoming_has_epoch", [False, True])
+def test_filter_rpm_rejects_unverified_mixed_epoch(
+    tmp_path: Path, incoming_has_epoch: bool
+) -> None:
+    """Prevent a second advisory when one RPM identity has an unknown epoch."""
+    legacy = "pkg:rpm/redhat/bind@9.20.27-0.1.hum1?arch=x86_64&distro=hb&repository_id=repo"
+    qualified = (
+        "pkg:rpm/redhat/bind@9.20.27-0.1.hum1"
+        "?repository_id=repo&epoch=32&distro=hb&arch=x86_64"
+    )
+    content = tmp_path / "c.json"
+    existing = tmp_path / "e.json"
+    content.write_text(
+        json.dumps([{"purl": qualified if incoming_has_epoch else legacy}]),
+        encoding="utf-8",
+    )
+    existing.write_text(
+        json.dumps([{"purl": legacy if incoming_has_epoch else qualified}]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="with and without epoch"):
+        advisory_data.filter_content_by_existing("rpm", content, existing, stderr_path=None)
+
+
+def test_filter_rpm_keeps_distinct_explicit_epochs(tmp_path: Path) -> None:
+    """Allow a new epoch when both advisory identities state their epochs."""
+    content = tmp_path / "c.json"
+    existing = tmp_path / "e.json"
+    base = "pkg:rpm/redhat/bind@9.20.27-0.1.hum1?arch=x86_64&epoch="
+    content.write_text(json.dumps([{"purl": base + "32"}]), encoding="utf-8")
+    existing.write_text(json.dumps([{"purl": base + "31"}]), encoding="utf-8")
+
+    out = advisory_data.filter_content_by_existing("rpm", content, existing, stderr_path=None)
+    assert json.loads(out) == [{"purl": base + "32"}]
+
+
+def test_filter_rpm_ignores_non_string_existing_purl(tmp_path: Path) -> None:
+    """Keep valid RPMs when older advisory data has a malformed PURL."""
+    content = tmp_path / "c.json"
+    existing = tmp_path / "e.json"
+    row = {"purl": "pkg:rpm/redhat/new@1-1?arch=x86_64&epoch=2"}
+    content.write_text(json.dumps([row]), encoding="utf-8")
+    existing.write_text(json.dumps([{"purl": 42}]), encoding="utf-8")
+
+    out = advisory_data.filter_content_by_existing("rpm", content, existing, stderr_path=None)
+    assert json.loads(out) == [row]
+
+
 def test_filter_disk_image_exact_purl(tmp_path: Path) -> None:
     """Drop disk-image rows whose purl exactly matches an existing row."""
     content = tmp_path / "c.json"

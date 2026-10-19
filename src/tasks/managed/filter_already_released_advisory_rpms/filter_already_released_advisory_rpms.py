@@ -456,6 +456,14 @@ def validate_pulp_digests(
     )
 
     for rpm_entry in in_advisory_rpms:
+        if rpm_entry.get("legacy_advisory_purl"):
+            raise RuntimeError(
+                "Cannot verify an epoch-qualified RPM against an epochless "
+                f"advisory PURL for {rpm_entry['rpmname']}-"
+                f"{rpm_entry['version']}-{rpm_entry['release']}."
+                f"{rpm_entry['arch']}. Resolve the advisory epoch before "
+                "releasing this RPM."
+            )
         rpmname = rpm_entry["rpmname"]
         epoch = rpm_entry["epoch"]
         version = rpm_entry["version"]
@@ -663,7 +671,22 @@ def run(
         )
         return
 
-    component_rpms_map = entries_to_rpms_map(rpm_entries)
+    unreleased_keys = {
+        (entry["name"], entry["purl"], entry["repository_name"])
+        for entry in filtering.unreleased_rpms
+    }
+    component_rpms_map = entries_to_rpms_map(
+        [
+            entry
+            for entry in rpm_entries
+            if (
+                entry.component_name,
+                entry.purl,
+                entry.target_repo.get("repository_name", ""),
+            )
+            in unreleased_keys
+        ]
+    )
     filtered = filter_snapshot(ctx.snapshot, filtering.unreleased_rpms, component_rpms_map)
     logger.info(
         "Filtered snapshot components: %d",
