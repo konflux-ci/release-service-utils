@@ -1,0 +1,76 @@
+---
+name: PR Label Management
+run-name: ${{ github.event.workflow_run.display_title }}
+
+on:
+  workflow_run:
+    workflows: [PR Review Events]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  label-pr:
+    if: github.event.workflow_run.event == 'pull_request_review'
+    permissions:
+      pull-requests: write
+    concurrency:
+      group: pr-review-label-${{ github.event.workflow_run.display_title }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Synchronize approval label
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          REVIEW_RUN_TITLE: ${{ github.event.workflow_run.display_title }}
+          LABEL: prod/needs-approval
+        run: |
+          set -euo pipefail
+
+          # Fork runs can have an empty pull_requests array. The title only selects a PR;
+          # approval and permissions are always read from GitHub, never from the listener.
+          if [[ ! "$REVIEW_RUN_TITLE" =~ ^Review\ labels\ for\ PR\ \#([1-9][0-9]*)$ ]]; then
+            echo 'Unexpected review run title' >&2
+            exit 1
+          fi
+          pr_number="${BASH_REMATCH[1]}"
+          pull_request=$(gh api "repos/$GH_REPO/pulls/$pr_number")
+          if [[ $(jq -r '.state' <<< "$pull_request") != open ]]; then
+            exit 0
+          fi
+
+          reviews=$(gh api --paginate --slurp "repos/$GH_REPO/pulls/$pr_number/reviews?per_page=100")
+          # Comments do not revoke an approval. A later decision or dismissal does.
+          approvers=$(jq -r '
+            flatten
+            | map(select(.user != null and
+                (.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")))
+            | group_by(.user.id)
+            | map(max_by(.id))
+            | .[] | select(.state == "APPROVED") | .user.login
+          ' <<< "$reviews")
+
+          has_approval=false
+          while IFS= read -r reviewer; do
+            [[ -n "$reviewer" ]] || continue
+            permission=$(gh api "repos/$GH_REPO/collaborators/$reviewer/permission" --jq '.permission')
+            # GitHub maps the maintain role to write in this API response.
+            if [[ "$permission" == write || "$permission" == admin ]]; then
+              has_approval=true
+              break
+            fi
+          done <<< "$approvers"
+
+          has_label=$(jq --arg label "$LABEL" 'any(.labels[]; .name == $label)' <<< "$pull_request")
+          if [[ "$has_approval" == true && "$has_label" == false ]]; then
+            gh api --method POST "repos/$GH_REPO/issues/$pr_number/labels" -f "labels[]=$LABEL" --silent
+            echo "Added $LABEL to PR #$pr_number"
+          elif [[ "$has_approval" == false && "$has_label" == true ]]; then
+            encoded_label=$(jq -rn --arg label "$LABEL" '$label | @uri')
+            gh api --method DELETE "repos/$GH_REPO/issues/$pr_number/labels/$encoded_label" --silent
+            echo "Removed $LABEL from PR #$pr_number"
+          else
+            echo "Label already matches approvals for PR #$pr_number"
+          fi
