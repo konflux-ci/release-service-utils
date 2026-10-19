@@ -715,6 +715,90 @@ def test_oras_blob_fetch_runs_oras(tmp_path: Path) -> None:
     assert cmd[:3] == ["oras", "blob", "fetch"]
     assert str(output) in cmd
     assert "quay.io/org/img@sha256:abc" in cmd
+    mock_run.assert_called_once()
+
+
+def test_oras_blob_fetch_obtains_auth_when_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When auth_file is omitted, select-oci-auth runs and the temp file is removed."""
+    calls: list[list[str]] = []
+    created: list[Path] = []
+    original = _oras_utils.file.make_tempfile_path
+
+    def track_tempfile(prefix: str, data: bytes | None = None) -> Path:
+        path = original(prefix, data)
+        created.append(path)
+        return path
+
+    monkeypatch.setattr(_oras_utils.file, "make_tempfile_path", track_tempfile)
+
+    def fake_run_cmd(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append([str(x) for x in cmd])
+        if cmd[0] == "select-oci-auth":
+            return subprocess.CompletedProcess(cmd, 0, stdout='{"auths":{}}', stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(_oras_utils, "run_cmd", fake_run_cmd)
+    output = tmp_path / "signed-rpms"
+    oras_utils.oras_blob_fetch("quay.io/org/img@sha256:abc", output)
+
+    assert calls[0] == ["select-oci-auth", "quay.io/org/img@sha256:abc"]
+    assert calls[1][:3] == ["oras", "blob", "fetch"]
+    assert calls[1][-1] == "quay.io/org/img@sha256:abc"
+    assert str(output) in calls[1]
+    assert len(created) == 1
+    assert not created[0].exists()
+
+
+def test_oras_blob_fetch_cleans_up_auth_when_select_oci_auth_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Temporary auth file is removed when select-oci-auth fails."""
+    created: list[Path] = []
+    original = _oras_utils.file.make_tempfile_path
+
+    def track_tempfile(prefix: str, data: bytes | None = None) -> Path:
+        path = original(prefix, data)
+        created.append(path)
+        return path
+
+    monkeypatch.setattr(_oras_utils.file, "make_tempfile_path", track_tempfile)
+
+    def fake_run_cmd(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        raise subprocess.CalledProcessError(1, cmd, stderr="no credentials")
+
+    monkeypatch.setattr(_oras_utils, "run_cmd", fake_run_cmd)
+    with pytest.raises(subprocess.CalledProcessError):
+        oras_utils.oras_blob_fetch("quay.io/org/img@sha256:abc", tmp_path / "blob")
+    assert len(created) == 1
+    assert not created[0].exists()
+
+
+def test_oras_blob_fetch_cleans_up_auth_when_fetch_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Temporary auth file is removed when blob fetch fails."""
+    created: list[Path] = []
+    original = _oras_utils.file.make_tempfile_path
+
+    def track_tempfile(prefix: str, data: bytes | None = None) -> Path:
+        path = original(prefix, data)
+        created.append(path)
+        return path
+
+    monkeypatch.setattr(_oras_utils.file, "make_tempfile_path", track_tempfile)
+
+    def fake_run_cmd(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[0] == "select-oci-auth":
+            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+        raise subprocess.CalledProcessError(1, cmd, stderr="oras blob fetch failed")
+
+    monkeypatch.setattr(_oras_utils, "run_cmd", fake_run_cmd)
+    with pytest.raises(subprocess.CalledProcessError):
+        oras_utils.oras_blob_fetch("quay.io/org/img@sha256:abc", tmp_path / "blob")
+    assert len(created) == 1
+    assert not created[0].exists()
 
 
 class TestOrasCp:
