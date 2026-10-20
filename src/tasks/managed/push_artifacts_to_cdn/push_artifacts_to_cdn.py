@@ -55,12 +55,16 @@ def extract_artifact_files(snapshot: dict[str, Any]) -> list[str]:
     return filenames
 
 
-def write_results_file(results_dir: Path, filenames: list[str]) -> None:
-    """Write ``push-artifacts-results.json`` with staged artifact filenames."""
+def write_results_file(
+    results_dir: Path,
+    filenames: list[str],
+    results_file: str = "push-artifacts-results.json",
+) -> None:
+    """Write staged artifact filenames to the selected results JSON file."""
     results_dir.mkdir(parents=True, exist_ok=True)
-    results_file = results_dir / "push-artifacts-results.json"
+    results_path = results_dir / results_file
     payload = {"artifacts": filenames}
-    results_file.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    results_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
 
 
 def resolve_quay_url(intention: str) -> str:
