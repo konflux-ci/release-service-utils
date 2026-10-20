@@ -6,6 +6,7 @@ service-account / secret file layouts.
 """
 
 from .authentication import (  # noqa: F401
+    AuthenticationHelper,
     create_container_auth_config,
     kerberos_login,
     kinit_with_retry,

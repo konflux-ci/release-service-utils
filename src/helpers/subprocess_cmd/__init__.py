@@ -2,6 +2,7 @@
 
 from .subprocess_cmd import (  # noqa: F401
     RunCmd,
+    SubprocessCmdHelper,
     run_cmd,
     run_cmd_text,
     run_yq_json,

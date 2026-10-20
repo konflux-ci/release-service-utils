@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from release_service_utils.helpers.redact import redact_secrets
+from release_service_utils.helpers.redact import RedactHelper, redact_secrets
+
+
+def test_redact_helper_class() -> None:
+    """RedactHelper class can be instantiated and used."""
+    helper = RedactHelper()
+    assert (
+        helper.redact_secrets("https://usr:pwd@host.com") == "https://usr:[REDACTED]@host.com"
+    )
 
 
 def test_redact_secrets_oauth_url(monkeypatch: pytest.MonkeyPatch) -> None:

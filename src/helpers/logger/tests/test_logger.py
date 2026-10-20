@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import logging
 
-from release_service_utils.helpers.logger import logger, setup_logger
+from release_service_utils.helpers.logger import LoggerHelper, logger, setup_logger
+
+
+def test_logger_helper_class() -> None:
+    """LoggerHelper class can be instantiated and used."""
+    helper = LoggerHelper()
+    log = helper.setup_logger(name="test_helper_class")
+    assert log.name == "test_helper_class"
 
 
 def test_handler_formatter_matches_task_format() -> None:

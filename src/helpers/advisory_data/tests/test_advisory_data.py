@@ -352,7 +352,7 @@ def test_append_signing_key_skips_existing() -> None:
 
 def test_filter_image_skips_non_dict_rows() -> None:
     """Ignore non-dict rows when filtering images."""
-    out = advisory_data._filter_image(
+    out = advisory_data._helper._filter_image(
         ["x", {"containerImage": "a", "tags": [], "repository": "r"}],
         [],
     )
@@ -362,13 +362,13 @@ def test_filter_image_skips_non_dict_rows() -> None:
 def test_filter_image_skips_non_dict_existing() -> None:
     """Ignore non-dict rows in the existing image list."""
     rows = [{"containerImage": "a", "tags": ["t"], "repository": "r"}]
-    out = advisory_data._filter_image(rows, ["bad", {"containerImage": "b"}])
+    out = advisory_data._helper._filter_image(rows, ["bad", {"containerImage": "b"}])
     assert out == rows
 
 
 def test_filter_rpm_skips_non_dict_and_keeps_unknown_purl() -> None:
     """Keep rows with missing purl and skip invalid existing entries."""
-    out = advisory_data._filter_rpm(
+    out = advisory_data._helper._filter_rpm(
         ["x", {"purl": None}, {"purl": "pkg:a"}],
         [{"purl": "pkg:b"}],
     )
@@ -377,7 +377,7 @@ def test_filter_rpm_skips_non_dict_and_keeps_unknown_purl() -> None:
 
 def test_filter_generic_skips_invalid_rows() -> None:
     """Ignore invalid rows when filtering generic or binary content."""
-    out = advisory_data._filter_generic_binary(
+    out = advisory_data._helper._filter_generic_binary(
         ["x", {"purl": None}, {"purl": "pkg:new"}],
         [{"purl": "pkg:base?checksum=1"}],
     )
