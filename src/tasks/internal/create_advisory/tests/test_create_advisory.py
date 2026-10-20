@@ -9,6 +9,7 @@ import gzip
 import json
 import os
 import subprocess
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -1541,6 +1542,184 @@ def test_write_success_from_published_yaml_reads_synced_main(tmp_path: Path) -> 
     )
 
 
+@pytest.mark.parametrize("has_approved", [False, True])
+def test_approve_advisory_merge_request(has_approved: bool) -> None:
+    """Approve the refreshed SHA once within the remaining task budget."""
+    merge_request = mock.Mock(state="opened", sha="old-sha")
+    current_merge_request = merge_request.manager.get.return_value
+    current_merge_request.state = "opened"
+    current_merge_request.sha = "current-sha"
+    current_merge_request.approvals.get.return_value.user_has_approved = has_approved
+
+    with mock.patch(f"{TASK}.create_advisory.time.monotonic", return_value=50):
+        create_advisory.create_advisory._approve_advisory_merge_request(
+            merge_request, deadline=70
+        )
+
+    merge_request.manager.get.assert_called_once_with(
+        merge_request.get_id(), timeout=20, max_retries=0
+    )
+    current_merge_request.approvals.get.assert_called_once_with(timeout=20, max_retries=0)
+    if has_approved:
+        current_merge_request.approve.assert_not_called()
+    else:
+        current_merge_request.approve.assert_called_once_with(
+            sha="current-sha", timeout=20, max_retries=0
+        )
+
+
+@pytest.mark.parametrize("is_already_merged", [False, True])
+def test_approve_advisory_merge_request_skips_merged(is_already_merged: bool) -> None:
+    """Skip approval when the MR has already merged, including during a refresh."""
+    merge_request = mock.Mock(state="merged" if is_already_merged else "opened")
+    current_merge_request = merge_request.manager.get.return_value
+    current_merge_request.state = "merged"
+
+    create_advisory.create_advisory._approve_advisory_merge_request(
+        merge_request, deadline=time.monotonic() + 100
+    )
+
+    current_merge_request.approvals.get.assert_not_called()
+    current_merge_request.approve.assert_not_called()
+    if is_already_merged:
+        merge_request.manager.get.assert_not_called()
+
+
+def test_approve_advisory_merge_request_rejects_missing_sha() -> None:
+    """Never submit an approval without binding it to a commit."""
+    merge_request = mock.Mock(state="opened")
+    current_merge_request = merge_request.manager.get.return_value
+    current_merge_request.state = "opened"
+    current_merge_request.sha = None
+    current_merge_request.approvals.get.return_value.user_has_approved = False
+
+    with pytest.raises(tekton.CheckStepError, match="approving the advisory") as caught:
+        create_advisory.create_advisory._approve_advisory_merge_request(
+            merge_request, deadline=time.monotonic() + 100
+        )
+    assert isinstance(caught.value.__cause__, ValueError)
+    assert "no HEAD SHA" in str(caught.value.__cause__)
+    current_merge_request.approve.assert_not_called()
+
+
+@pytest.mark.parametrize("response_code", [401, 403, 422])
+def test_approve_advisory_merge_request_reports_failure(response_code: int) -> None:
+    """Surface permanent approval failures without retrying."""
+    merge_request = mock.Mock(state="opened")
+    current_merge_request = merge_request.manager.get.return_value
+    current_merge_request.state = "opened"
+    current_merge_request.sha = "current-sha"
+    current_merge_request.approvals.get.return_value.user_has_approved = False
+    error = GitlabError("approval rejected", response_code=response_code)
+    current_merge_request.approve.side_effect = error
+
+    with pytest.raises(tekton.CheckStepError, match="approving the advisory") as caught:
+        create_advisory.create_advisory._approve_advisory_merge_request(
+            merge_request, deadline=time.monotonic() + 100
+        )
+    assert caught.value.__cause__ is error
+    current_merge_request.approve.assert_called_once()
+
+
+@pytest.mark.parametrize("failure_stage", ["refresh", "lookup", "submission"])
+@pytest.mark.parametrize(
+    "error",
+    [
+        GitlabError("unavailable", response_code=503),
+        GitlabError("rate limited", response_code=429),
+        requests.Timeout("response lost"),
+    ],
+)
+def test_approve_advisory_merge_request_retries(failure_stage: str, error: Exception) -> None:
+    """Retry lookups and submissions by refreshing the MR within the same budget."""
+    merge_request = mock.Mock(state="opened")
+    current_merge_request = mock.Mock(state="opened", sha="current-sha")
+    current_merge_request.approvals.get.return_value.user_has_approved = False
+    merge_request.manager.get.return_value = current_merge_request
+    if failure_stage == "refresh":
+        merge_request.manager.get.side_effect = [error, current_merge_request]
+    elif failure_stage == "lookup":
+        current_merge_request.approvals.get.side_effect = [
+            error,
+            mock.Mock(user_has_approved=False),
+        ]
+    else:
+        current_merge_request.approve.side_effect = [error, None]
+
+    with mock.patch(f"{TASK}.create_advisory.time.sleep") as sleep:
+        create_advisory.create_advisory._approve_advisory_merge_request(
+            merge_request, deadline=time.monotonic() + 100
+        )
+    assert merge_request.manager.get.call_count == 2
+    sleep.assert_called_once_with(10)
+    assert current_merge_request.approve.call_args.kwargs["sha"] == "current-sha"
+
+
+def test_approve_advisory_merge_request_refreshes_changed_sha() -> None:
+    """Approve the new revision after GitLab rejects an outdated SHA."""
+    merge_request = mock.Mock(state="opened")
+    original_request = mock.Mock(state="opened", sha="old-sha")
+    updated_request = mock.Mock(state="opened", sha="new-sha")
+    for request in (original_request, updated_request):
+        request.approvals.get.return_value.user_has_approved = False
+    original_request.approve.side_effect = GitlabError("SHA changed", response_code=409)
+    merge_request.manager.get.side_effect = [original_request, updated_request]
+
+    with mock.patch(f"{TASK}.create_advisory.time.sleep"):
+        create_advisory.create_advisory._approve_advisory_merge_request(
+            merge_request, deadline=time.monotonic() + 100
+        )
+    assert original_request.approve.call_args.kwargs["sha"] == "old-sha"
+    assert updated_request.approve.call_args.kwargs["sha"] == "new-sha"
+
+
+def test_approve_advisory_merge_request_recovers_lost_response() -> None:
+    """Do not submit a duplicate approval after the first response is lost."""
+    merge_request = mock.Mock(state="opened")
+    current_merge_request = merge_request.manager.get.return_value
+    current_merge_request.state = "opened"
+    current_merge_request.sha = "current-sha"
+    current_merge_request.approvals.get.side_effect = [
+        mock.Mock(user_has_approved=False),
+        mock.Mock(user_has_approved=True),
+    ]
+    current_merge_request.approve.side_effect = requests.ConnectionError("response lost")
+
+    with mock.patch(f"{TASK}.create_advisory.time.sleep"):
+        create_advisory.create_advisory._approve_advisory_merge_request(
+            merge_request, deadline=time.monotonic() + 100
+        )
+    current_merge_request.approve.assert_called_once()
+    assert merge_request.manager.get.call_count == 2
+
+
+def test_approve_advisory_merge_request_retry_deadline() -> None:
+    """Bound retries and sleeps by the shared deadline and report the approval step."""
+    merge_request = mock.Mock(state="opened")
+    merge_request.manager.get.side_effect = GitlabError("unavailable", response_code=503)
+    current_time = 0.0
+
+    def advance_time(seconds: float) -> None:
+        nonlocal current_time
+        current_time += seconds
+
+    with (
+        mock.patch(f"{TASK}.create_advisory.time.monotonic", side_effect=lambda: current_time),
+        mock.patch(f"{TASK}.create_advisory.time.sleep", side_effect=advance_time) as sleep,
+        pytest.raises(tekton.CheckStepError, match="approving the advisory") as caught,
+    ):
+        create_advisory.create_advisory._approve_advisory_merge_request(
+            merge_request, deadline=35
+        )
+    assert isinstance(caught.value.__cause__, TimeoutError)
+    assert sleep.call_args_list == [mock.call(10), mock.call(20), mock.call(5)]
+    assert [call.kwargs["timeout"] for call in merge_request.manager.get.call_args_list] == [
+        30,
+        25,
+        5,
+    ]
+
+
 def test_finish_from_merged_uses_known_advisory_metadata(
     tmp_path: Path, creds: gitlab.GitLabCredentials
 ) -> None:
@@ -1563,7 +1742,11 @@ def test_finish_from_merged_uses_known_advisory_metadata(
         "advisory_internal_url": tmp_path / "i",
     }
     with (
-        mock.patch(f"{TASK}.create_advisory.gitlab.push_merge_request_to_main"),
+        mock.patch(f"{TASK}.create_advisory._approve_advisory_merge_request") as approve,
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.push_merge_request_to_main",
+            side_effect=lambda *args, **kwargs: approve.assert_called_once(),
+        ),
         mock.patch(f"{TASK}.create_advisory.git.sync_to_origin_main") as sync_main,
     ):
         out = create_advisory.create_advisory._finish_from_merged_merge_request(
@@ -2455,11 +2638,13 @@ def test_release_claimed_work_logs_merge_request_lookup_failure(
     )
 
 
-def test_run_create_advisory_cleans_up_merge_request_after_create_raises(
+@pytest.mark.parametrize("failure_kind", ["creation", "approval", "timeout", "other_step"])
+def test_run_create_advisory_cleanup_after_failure(
     tmp_path: Path,
     creds: gitlab.GitLabCredentials,
+    failure_kind: str,
 ) -> None:
-    """Close an open MR left behind when merge-request creation raises."""
+    """Retain committed approval failures while still cleaning up unrelated failures."""
     secret = tmp_path / "gitlab"
     _write_gitlab_secret(secret)
     errata = tmp_path / "errata"
@@ -2476,71 +2661,112 @@ def test_run_create_advisory_cleans_up_merge_request_after_create_raises(
     }
     client = mock.Mock()
     merge_request = mock.Mock()
-    with (
-        mock.patch(
-            f"{TASK}.create_advisory.gitlab.read_credentials_from_mount",
-            return_value=creds,
-        ),
-        mock.patch(
-            f"{TASK}.create_advisory._clone_advisory_repo",
-            return_value=(repo, base),
-        ),
-        mock.patch(
-            f"{TASK}.create_advisory._finish_if_all_content_already_published",
-            return_value=False,
-        ),
-        mock.patch(
-            f"{TASK}.create_advisory.git.rev_parse",
-            return_value="mainsha",
-        ),
-        mock.patch(
-            f"{TASK}.create_advisory.gitlab.client_from_credentials",
-            return_value=client,
-        ),
-        mock.patch(
-            f"{TASK}.create_advisory._try_finish_via_existing_merge_request",
-            return_value=False,
-        ),
-        mock.patch(
-            f"{TASK}.create_advisory._claim_source_branch",
-            return_value=(True, "claimsha"),
-        ),
-        mock.patch(
-            f"{TASK}.create_advisory._sync_main_and_finish_if_published",
-            return_value=False,
-        ),
-        mock.patch(
-            f"{TASK}.create_advisory.subprocess_cmd.run_cmd",
-            return_value=mock.MagicMock(stdout=_configmap_signing_key_stdout()),
-        ),
-        mock.patch(
-            f"{TASK}.create_advisory._reserve_errata_live_id",
-            return_value=42,
-        ),
-        mock.patch(
-            f"{TASK}.create_advisory.git.origin_main_has_path_matching",
-            return_value=False,
-        ),
-        mock.patch(
-            f"{TASK}.create_advisory._render_and_validate_advisory_yaml",
-            return_value="data/advisories/t/2026/0042/advisory.yaml",
-        ),
-        mock.patch(f"{TASK}.create_advisory.git.checkout"),
-        mock.patch(f"{TASK}.create_advisory.git.index_add_commit"),
-        mock.patch(f"{TASK}.create_advisory.git.push"),
-        mock.patch(
-            f"{TASK}.create_advisory.gitlab.get_or_create_merge_request",
-            side_effect=RuntimeError("mr created remotely but not returned"),
-        ),
-        mock.patch(
-            f"{TASK}.create_advisory.gitlab.find_open_merge_request_by_source_branch",
-            return_value=merge_request,
-        ) as find_mr,
-        mock.patch(
-            f"{TASK}.create_advisory.gitlab.cleanup_merge_request_branch",
-        ) as cleanup,
-        pytest.raises(RuntimeError, match="mr created remotely"),
-    ):
+    if failure_kind == "creation":
+        error = RuntimeError("mr created remotely but not returned")
+    else:
+        action = (
+            "another step"
+            if failure_kind == "other_step"
+            else ("approving the advisory merge request")
+        )
+        cause = (
+            TimeoutError("deadline expired")
+            if failure_kind == "timeout"
+            else (GitlabError("forbidden", response_code=403))
+        )
+        error = tekton.CheckStepError(action, cause)
+    with ExitStack() as stack:
+        stack.enter_context(
+            mock.patch(
+                f"{TASK}.create_advisory.gitlab.read_credentials_from_mount",
+                return_value=creds,
+            )
+        )
+        stack.enter_context(
+            mock.patch(
+                f"{TASK}.create_advisory._clone_advisory_repo", return_value=(repo, base)
+            )
+        )
+        stack.enter_context(
+            mock.patch(
+                f"{TASK}.create_advisory._finish_if_all_content_already_published",
+                return_value=False,
+            )
+        )
+        stack.enter_context(
+            mock.patch(f"{TASK}.create_advisory.git.rev_parse", return_value="mainsha")
+        )
+        stack.enter_context(
+            mock.patch(
+                f"{TASK}.create_advisory.gitlab.client_from_credentials", return_value=client
+            )
+        )
+        stack.enter_context(
+            mock.patch(
+                f"{TASK}.create_advisory._try_finish_via_existing_merge_request",
+                return_value=False,
+            )
+        )
+        stack.enter_context(
+            mock.patch(
+                f"{TASK}.create_advisory._claim_source_branch", return_value=(True, "claimsha")
+            )
+        )
+        stack.enter_context(
+            mock.patch(
+                f"{TASK}.create_advisory._sync_main_and_finish_if_published",
+                return_value=False,
+            )
+        )
+        stack.enter_context(
+            mock.patch(
+                f"{TASK}.create_advisory.subprocess_cmd.run_cmd",
+                return_value=mock.MagicMock(stdout=_configmap_signing_key_stdout()),
+            )
+        )
+        stack.enter_context(
+            mock.patch(f"{TASK}.create_advisory._reserve_errata_live_id", return_value=42)
+        )
+        stack.enter_context(
+            mock.patch(
+                f"{TASK}.create_advisory.git.origin_main_has_path_matching", return_value=False
+            )
+        )
+        stack.enter_context(
+            mock.patch(
+                f"{TASK}.create_advisory._render_and_validate_advisory_yaml",
+                return_value="data/advisories/t/2026/0042/advisory.yaml",
+            )
+        )
+        stack.enter_context(mock.patch(f"{TASK}.create_advisory.git.checkout"))
+        stack.enter_context(mock.patch(f"{TASK}.create_advisory.git.index_add_commit"))
+        stack.enter_context(mock.patch(f"{TASK}.create_advisory.git.push"))
+        stack.enter_context(
+            mock.patch(
+                f"{TASK}.create_advisory.gitlab.get_or_create_merge_request",
+                side_effect=error if failure_kind == "creation" else None,
+                return_value=merge_request,
+            )
+        )
+        find_mr = stack.enter_context(
+            mock.patch(
+                f"{TASK}.create_advisory.gitlab.find_open_merge_request_by_source_branch",
+                return_value=merge_request,
+            )
+        )
+        cleanup = stack.enter_context(
+            mock.patch(f"{TASK}.create_advisory.gitlab.cleanup_merge_request_branch")
+        )
+        stack.enter_context(
+            mock.patch(
+                f"{TASK}.create_advisory._approve_advisory_merge_request", side_effect=error
+            )
+        )
+        merge = stack.enter_context(
+            mock.patch(f"{TASK}.create_advisory.gitlab.push_merge_request_to_main")
+        )
+        remove_local = stack.enter_context(mock.patch(f"{TASK}.create_advisory.shutil.rmtree"))
+        caught = stack.enter_context(pytest.raises(type(error)))
         create_advisory.create_advisory.run_create_advisory(
             advisory_secret=secret,
             errata_mount=errata,
@@ -2559,13 +2785,17 @@ def test_run_create_advisory_cleans_up_merge_request_after_create_raises(
                 "content": {"images": [{"x": 1}]},
             },
         )
-    find_mr.assert_called_once()
-    cleanup.assert_called_once_with(
-        client,
-        creds.git_repo,
-        merge_request,
-        mock.ANY,
-    )
+    assert caught.value is error
+    merge.assert_not_called()
+    remove_local.assert_called_once()
+    assert not results["result"].exists()
+    if failure_kind in {"approval", "timeout"}:
+        find_mr.assert_not_called()
+        cleanup.assert_not_called()
+    else:
+        if failure_kind == "creation":
+            find_mr.assert_called_once()
+        cleanup.assert_called_once_with(client, creds.git_repo, merge_request, mock.ANY)
 
 
 def test_release_claimed_work_logs_branch_delete_failure(
