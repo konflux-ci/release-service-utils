@@ -5,6 +5,7 @@ from __future__ import annotations
 from .file import (  # noqa: F401
     MAX_SBOM_UNCOMPRESSED_BYTES,
     contained_regular_files,
+    FileHelper,
     decompress_gzip_bounded,
     encode_json_gzip_b64,
     is_gzip_or_tar_archive,

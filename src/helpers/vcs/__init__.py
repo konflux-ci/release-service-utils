@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from .git import (  # noqa: F401
+    GitHelper,
     changed_paths_from_status,
     checkout,
     clone,
     commit_and_push,
     commit_staged,
     configure_git_global_user,
+    diff_files,
     fetch,
+    file_change_log,
     index_add_commit,
     is_ancestor,
+    last_commit_date,
     origin_main_has_path_matching,
     push,
     push_new_branch,
@@ -21,6 +25,7 @@ from .git import (  # noqa: F401
     repository_workdir_name,
     rev_parse,
     set_remote_url,
+    show_file,
     sync_to_origin_main,
     working_tree_diff,
     working_tree_status,

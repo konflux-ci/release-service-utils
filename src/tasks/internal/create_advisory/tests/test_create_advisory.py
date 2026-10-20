@@ -1105,10 +1105,11 @@ def _setup_main_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
 
 
 def test_main_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Exit zero when the advisory workflow completes successfully."""
-    _setup_main_env(tmp_path, monkeypatch)
+    """Exit zero and preserve the exact successful Tekton result value."""
+    paths = _setup_main_env(tmp_path, monkeypatch)
     with mock.patch(f"{TASK}.create_advisory.run_create_advisory"):
         assert create_advisory.create_advisory.main(["create_advisory.py"]) == 0
+    assert paths["RESULT_RESULT"].read_text(encoding="utf-8") == "Success"
 
 
 def test_task_logger_is_a_logger_instance() -> None:
@@ -2994,7 +2995,7 @@ def test_recover_after_merge_request_wait_timeout_without_branch(
     }
     with (
         mock.patch(
-            f"{TASK}.create_advisory.git.remote_branch_exists",
+            f"{TASK}.create_advisory.git._instance.remote_branch_exists",
             return_value=False,
         ),
         mock.patch(

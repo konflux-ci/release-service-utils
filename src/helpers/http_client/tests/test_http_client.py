@@ -9,6 +9,14 @@ import requests
 from requests.adapters import HTTPAdapter
 
 from release_service_utils.helpers import http_client
+from release_service_utils.helpers.http_client import HttpClientHelper
+
+
+def test_http_client_helper_class() -> None:
+    """HttpClientHelper class can be instantiated and used."""
+    helper = HttpClientHelper()
+    session = helper.get_retry_session(allowed_methods=frozenset({"GET"}))
+    assert session is not None
 
 
 def test_get_retry_session_custom_methods_and_status_codes() -> None:

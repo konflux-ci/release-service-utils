@@ -137,7 +137,7 @@ def test_all_managed_pipeline_tokens_from_rpa(tmp_path: Path) -> None:
 
 
 def test_changed_paths_trigger_global_catalog_run() -> None:
-    """Integration-tests plumbing (with exclusions), Dockerfile, dataKeys schema."""
+    """Recognize global integration, image, schema, and framework changes."""
     g = fc._changed_paths_trigger_global_catalog_run
     assert g(["integration-tests/lib/x.py"]) is True
     assert g(["integration-tests/run-test.sh"]) is False
@@ -155,6 +155,9 @@ def test_changed_paths_trigger_global_catalog_run() -> None:
     assert g(["./schemas/dataKeys.json"]) is True
     assert g(["  schemas/dataKeys.json  "]) is True
     assert g(["schemas/other.json"]) is False
+    assert g(["src/framework/tasks.py"]) is True
+    assert g(["src/framework/README.md"]) is True
+    assert g(["src/frameworking/tasks.py"]) is False
 
 
 def test_is_under_task_tests_dir(tmp_path: Path) -> None:

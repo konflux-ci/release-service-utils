@@ -139,9 +139,9 @@ def _changed_paths_trigger_global_catalog_run(changed: list[str]) -> bool:
     """Return whether changed paths force union of all catalog RPA pipeline tokens.
 
     Triggers when the repo-root ``Dockerfile`` or ``schemas/dataKeys.json``
-    changes, or when any path under ``integration-tests/`` changes except
-    ``integration-tests/run-test.sh`` and except Markdown files (``*.md``,
-    case-insensitive).
+    changes, when framework code changes, or when any path under
+    ``integration-tests/`` changes except ``integration-tests/run-test.sh``
+    and except Markdown files (``*.md``, case-insensitive).
     """
     for raw in changed:
         s = raw.strip()
@@ -153,6 +153,8 @@ def _changed_paths_trigger_global_catalog_run(changed: list[str]) -> bool:
         if p == "Dockerfile":
             return True
         if p == "schemas/dataKeys.json":
+            return True
+        if p.startswith("src/framework/"):
             return True
         if Path(p).suffix.lower() == ".md":
             continue

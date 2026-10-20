@@ -4,6 +4,13 @@ from __future__ import annotations
 
 import pytest
 from release_service_utils.helpers import retry
+from release_service_utils.helpers.retry import RetryHelper
+
+
+def test_retry_helper_class() -> None:
+    """RetryHelper class can be instantiated and used."""
+    helper = RetryHelper()
+    assert helper.retry_with_exponential_backoff(lambda: "ok", max_attempts=1) == "ok"
 
 
 def test_retry_with_exponential_backoff_succeeds_after_retries() -> None:
