@@ -1,6 +1,7 @@
 """File, path, and temporary-file helpers for task scripts."""
 
 from .file import (  # noqa: F401
+    FileHelper,
     decompress_gzip_bounded,
     encode_json_gzip_b64,
     is_gzip_or_tar_archive,

@@ -16,6 +16,19 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 - `utils/` — General utilities (apply_template, get_resource, find_matching_purl)
 - `integration-tests/` — Orchestration harness that detects which catalog E2E suites are affected by utils changes, patches a temporary catalog fork with the new image, and runs the matching tests
 - `schemas/` - Schema files to describe structs such as the `data` one used in various python scripts
+- `src/framework/` — Base classes for task and helper framework (Helper, BinaryHelper, Task, InternalTask, ManagedTask)
+- `src/helpers/` — Class-based helpers with backward-compatible function exports
+- `src/tasks/` — Class-based task implementations (internal/, managed/, aux/)
+
+## Framework
+
+**Use class-based helpers and tasks for dependency tracking and smart test selection.**
+
+See [skills/framework.md](skills/framework.md) for complete documentation on:
+- Helper classes (Helper, BinaryHelper)
+- Task classes (InternalTask, ManagedTask)
+- Conversion instructions
+- Examples and patterns
 
 ## Python
 
