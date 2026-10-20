@@ -30,14 +30,20 @@ def setup_ca_cert() -> None:
         logger.info("Using CA certificate: %s", ca_cert)
 
 
-def read_mounted_text(mount: Path, filename: str) -> str:
+def read_mounted_text(mount: Path, filename: str, *, optional: bool = False) -> str:
     """Read a UTF-8 file (``mount / filename``) and return stripped text.
 
     Returns the text with leading and trailing whitespace removed.
     Use for one-line secret values (API base URL, principal name) when
     a pod mounts a volume as a directory of small files.
+
+    When *optional* is true and the file is absent, return an empty string.
+    Kubernetes omits a key from a secret volume when that field is not set.
     """
-    return (mount / filename).read_text(encoding="utf-8").strip()
+    path = mount / filename
+    if optional and not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
 
 
 def load_keytab_from_mount(
