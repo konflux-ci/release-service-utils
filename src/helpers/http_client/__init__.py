@@ -2,6 +2,7 @@
 
 from .http_client import (  # noqa: F401
     BASE_SLEEP_TIME_SECONDS,
+    HttpClientHelper,
     MAX_404_ATTEMPTS,
     MAX_429_ATTEMPTS,
     get_retry_session,
