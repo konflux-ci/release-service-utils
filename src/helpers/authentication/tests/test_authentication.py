@@ -11,6 +11,17 @@ from unittest import mock
 import pytest
 
 from release_service_utils.helpers import authentication
+from release_service_utils.helpers.authentication import AuthenticationHelper
+
+
+def test_authentication_helper_class() -> None:
+    """AuthenticationHelper class can be instantiated and used."""
+    helper = AuthenticationHelper()
+    assert (
+        helper.patch_krb5_config("[libdefaults]\n")
+        == "[libdefaults]\n    dns_canonicalize_hostname = false\n"
+    )
+
 
 # ---------------------------------------------------------------------------
 # read_mounted_text
