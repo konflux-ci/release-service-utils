@@ -113,8 +113,25 @@ def test_clone_project_sparse_delegates_to_git(tmp_path: Path) -> None:
     assert out is repo_root
     m.assert_called_once()
     assert m.call_args.args[1] == "https://gitlab.example.com/g/r.git"
+    assert m.call_args.kwargs["revision"] == "main"
     assert m.call_args.kwargs["shallow"] is True
     assert "oauth2:" not in m.call_args.args[1]
+
+
+def test_clone_project_sparse_without_revision_uses_remote_head(
+    tmp_path: Path,
+) -> None:
+    """``revision=None`` clones the remote default HEAD."""
+    repo_root = tmp_path / "repo"
+    with mock.patch.object(git, "clone", return_value=repo_root) as m:
+        gitlab.clone_project_sparse(
+            "https://gitlab.example.com/g/r.git",
+            None,
+            ["schema"],
+            parent_dir=tmp_path,
+            stderr_path=None,
+        )
+    assert m.call_args.kwargs["revision"] is None
 
 
 @pytest.mark.parametrize(

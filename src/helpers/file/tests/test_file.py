@@ -122,8 +122,21 @@ def test_encode_json_gzip_b64_roundtrip() -> None:
     """Compact JSON survives gzip+base64 encoding."""
     payload = [{"repository": "foo", "cves": {"fixed": {"CVE-1": {}}}}]
     encoded = file.encode_json_gzip_b64(payload)
-    decoded = json.loads(gzip.decompress(base64.standard_b64decode(encoded)))
-    assert decoded == payload
+    assert file.decode_json_gzip_b64(encoded) == payload
+
+
+def test_decode_json_gzip_b64_rejects_invalid_payload() -> None:
+    """Invalid gzip+base64 text raises ValueError."""
+    with pytest.raises(ValueError, match="invalid gzip\\+base64 JSON payload"):
+        file.decode_json_gzip_b64("not-valid")
+
+
+def test_decode_json_gzip_b64_rejects_truncated_gzip() -> None:
+    """A cut-off gzip stream raises ValueError, not a raw EOFError."""
+    raw = gzip.compress(json.dumps({"a": 1}).encode("utf-8"))
+    truncated = base64.standard_b64encode(raw[:8]).decode("ascii")
+    with pytest.raises(ValueError, match="invalid gzip\\+base64 JSON payload"):
+        file.decode_json_gzip_b64(truncated)
 
 
 def test_encode_json_gzip_b64_uses_compact_separators() -> None:

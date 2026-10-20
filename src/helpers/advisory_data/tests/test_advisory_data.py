@@ -592,3 +592,134 @@ def test_generate_purl_rpm_rejects_invalid_epoch(epoch: str | int) -> None:
         advisory_data.generate_purl_rpm(
             "bind", "9.20.27", "0.1.hum1", "x86_64", "", "", epoch=epoch
         )
+
+
+_RELEASED = "pkg:rpm/redhat/released-rpm@1.0-1.fc44?arch=x86_64"
+_BIND_LEGACY = "pkg:rpm/redhat/bind@9.20.27-0.1.hum1?arch=x86_64&distro=hb&repository_id=repo"
+_BIND_EPOCH_32 = (
+    "pkg:rpm/redhat/bind@9.20.27-0.1.hum1" "?arch=x86_64&epoch=32&distro=hb&repository_id=repo"
+)
+
+
+def test_match_rpm_advisory_purl_exact_epoch_zero() -> None:
+    """An epoch-zero candidate matches its exact advisory PURL without a legacy flag."""
+    entry = {"purl": _RELEASED, "epoch": "0"}
+    match = advisory_data.match_rpm_advisory_purl(entry, {_RELEASED: "a.yaml"})
+    assert match == (_RELEASED, False)
+
+
+def test_match_rpm_advisory_purl_injects_header_epoch() -> None:
+    """A legacy candidate PURL matches the advisory identity for its header epoch."""
+    entry = {"purl": _BIND_LEGACY, "epoch": "32"}
+    match = advisory_data.match_rpm_advisory_purl(entry, {_BIND_EPOCH_32: "a.yaml"})
+    assert match == (_BIND_EPOCH_32, False)
+
+
+def test_match_rpm_advisory_purl_rejects_different_header_epoch() -> None:
+    """A different header epoch does not match a qualified advisory PURL."""
+    entry = {"purl": _BIND_LEGACY, "epoch": "33"}
+    assert advisory_data.match_rpm_advisory_purl(entry, {_BIND_EPOCH_32: "a.yaml"}) is None
+
+
+def test_match_rpm_advisory_purl_falls_back_to_original() -> None:
+    """Match the original PURL when the qualified form is absent."""
+    entry = {"purl": _RELEASED, "epoch": "32"}
+    match = advisory_data.match_rpm_advisory_purl(entry, {_RELEASED: "a.yaml"})
+    assert match == (_RELEASED, True)
+
+
+def test_match_rpm_advisory_purl_strips_legacy_epoch() -> None:
+    """A qualified candidate PURL can match an epoch-less advisory PURL."""
+    entry = {"purl": _BIND_EPOCH_32, "epoch": "32"}
+    match = advisory_data.match_rpm_advisory_purl(entry, {_BIND_LEGACY: "a.yaml"})
+    assert match == (_BIND_LEGACY, True)
+
+
+def test_match_rpm_advisory_purl_missing_epoch_is_legacy() -> None:
+    """A missing candidate epoch on an epoch-less match needs digest verification."""
+    entry = {"purl": _RELEASED}
+    match = advisory_data.match_rpm_advisory_purl(entry, {_RELEASED: "a.yaml"})
+    assert match == (_RELEASED, True)
+
+
+def test_match_rpm_advisory_purl_skips_blank_purl() -> None:
+    """Rows without a usable PURL are treated as unmatched."""
+    assert advisory_data.match_rpm_advisory_purl({"purl": ""}, {_RELEASED: "a.yaml"}) is None
+    assert advisory_data.match_rpm_advisory_purl({"name": "x"}, {_RELEASED: "a.yaml"}) is None
+    assert advisory_data.match_rpm_advisory_purl({"purl": 42}, {_RELEASED: "a.yaml"}) is None
+
+
+def test_categorize_rpm_entries_partial_and_sorted_advisories() -> None:
+    """Split released and new RPMs and sort unique advisory paths."""
+    entries = [
+        {"name": "released", "purl": _RELEASED, "epoch": "0"},
+        {"name": "new", "purl": "pkg:rpm/redhat/new-rpm@2.0-1.fc44?arch=x86_64"},
+    ]
+    unreleased, in_advisory, files = advisory_data.categorize_rpm_entries(
+        entries,
+        {_RELEASED: "data/advisories/o/2025/1602/advisory.yaml"},
+    )
+    assert [row["name"] for row in unreleased] == ["new"]
+    assert in_advisory == [
+        {"name": "released", "purl": _RELEASED, "epoch": "0", "legacy_advisory_purl": False}
+    ]
+    assert files == ["data/advisories/o/2025/1602/advisory.yaml"]
+
+
+@pytest.mark.parametrize(
+    ("entries", "match"),
+    [
+        (["skip-me"], r"entry 0 must be an object, got str"),
+        ([{"name": "x"}], r"entry 0 field 'purl' must be a string, got NoneType"),
+        ([{"purl": 42}], r"entry 0 field 'purl' must be a string, got int"),
+    ],
+)
+def test_categorize_rpm_entries_rejects_malformed_rows(
+    entries: list[object], match: str
+) -> None:
+    """Non-object rows and non-string purls fail instead of being skipped."""
+    with pytest.raises(TypeError, match=match):
+        advisory_data.categorize_rpm_entries(entries, {})
+
+
+def test_categorize_rpm_entries_empty_purl_is_unreleased() -> None:
+    """An empty purl string is a valid unmatched row."""
+    unreleased, in_advisory, files = advisory_data.categorize_rpm_entries(
+        [{"name": "empty", "purl": ""}],
+        {},
+    )
+    assert unreleased == [{"name": "empty", "purl": ""}]
+    assert in_advisory == []
+    assert files == []
+
+
+def test_build_purl_to_advisory_map_oldest_wins(tmp_path: Path) -> None:
+    """Older advisories overwrite colliding PURLs from newer ones."""
+    repo = tmp_path / "repo"
+    root = repo / "data" / "advisories" / "origin"
+    newer = root / "2025" / "1602"
+    older = root / "2025" / "1601"
+    newer.mkdir(parents=True)
+    older.mkdir(parents=True)
+    (newer / "advisory.yaml").write_text(
+        "spec:\n  content:\n    artifacts:\n      - purl: pkg:rpm/redhat/a@1-1?arch=x86_64\n",
+        encoding="utf-8",
+    )
+    (older / "advisory.yaml").write_text(
+        "spec:\n  content:\n    artifacts:\n"
+        "      - purl: pkg:rpm/redhat/a@1-1?arch=x86_64\n"
+        "      - purl: pkg:rpm/redhat/b@1-1?arch=x86_64\n"
+        "      - not-a-mapping\n"
+        "      - {}\n"
+        "      - purl:\n",
+        encoding="utf-8",
+    )
+    (root / "2025" / "1599").mkdir(parents=True)
+    mapping = advisory_data.build_purl_to_advisory_map(
+        repo,
+        root,
+        ["2025/1602", "2025/1601", "2025/1599"],
+    )
+    assert mapping["pkg:rpm/redhat/a@1-1?arch=x86_64"].endswith("2025/1601/advisory.yaml")
+    assert mapping["pkg:rpm/redhat/b@1-1?arch=x86_64"].endswith("2025/1601/advisory.yaml")
+    assert len(mapping) == 2

@@ -222,13 +222,16 @@ def raw_file_url(
 
 def clone_project_sparse(
     repository: str,
-    revision: str,
+    revision: str | None,
     sparse_dirs: Sequence[str],
     *,
     parent_dir: Path,
     stderr_path: Path | None,
 ) -> Path:
     """Shallow sparse clone of a GitLab *repository* HTTPS URL.
+
+    *revision* is the branch or tag to check out. ``None`` uses the remote
+    default HEAD (no ``--branch``).
 
     Requires `configure_git_oauth2_auth()` in this process so git can
     authenticate without a token embedded in the clone URL.
