@@ -28,6 +28,3 @@ from .filter_already_released_advisory_rpms import (  # noqa: F401
     submit_advisory_filter,
     validate_pulp_digests,
 )
-
-if __name__ == "__main__":
-    raise SystemExit(main())

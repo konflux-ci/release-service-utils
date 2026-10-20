@@ -77,10 +77,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def decode_transformed_snapshot(value: str) -> list[dict[str, Any]]:
     """Decode a gzip+base64 JSON array of arch-specific snapshot rows."""
     try:
-        raw = base64.b64decode(value, validate=True)
-        text = gzip.decompress(raw).decode("utf-8")
-        data = json.loads(text)
-    except (OSError, ValueError, json.JSONDecodeError) as e:
+        data = file.decode_json_gzip_b64(value)
+    except ValueError as e:
         raise ValueError("invalid transformed snapshot payload") from e
     if not isinstance(data, list):
         raise ValueError("transformed snapshot must be a JSON array")
