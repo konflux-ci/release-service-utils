@@ -51,6 +51,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from catalog_e2e_helpers import require_env, opt_env
+from release_service_utils.helpers.logger import logger
 
 DEFAULT_CATALOG_E2E_NAMESPACE = "konflux-release-service-tenant"
 CHILD_PIPELINE_SERVICE_ACCOUNT = "konflux-integration-runner"
@@ -121,37 +122,49 @@ def _wait_pipelinerun_terminal(*, name: str, ns: str, timeout_seconds: float) ->
     interval = 10.0
     heartbeat = 60.0
     last_hb = time.monotonic()
-    while time.monotonic() < deadline:
-        fin = _pipelinerun_finished(name, ns)
-        if fin is not None:
-            success, msg = fin
-            if success:
-                return True
-            print(f"PipelineRun {name} failed: {msg}", file=sys.stderr)
-            return False
-        now = time.monotonic()
-        if now - last_hb >= heartbeat:
-            left = int(deadline - now)
-            print(
-                f"Waiting on pipelinerun/{name} in {ns} ({left}s remaining before timeout)...",
-                flush=True,
-            )
-            last_hb = now
-        time.sleep(interval)
-    print(
-        f"ERROR: timeout waiting for pipelinerun/{name} in {ns} ({timeout_seconds:g}s)",
-        file=sys.stderr,
-    )
-    sys.exit(124)
+    log_stream: subprocess.Popen | None = None
+    try:
+        while time.monotonic() < deadline:
+            fin = _pipelinerun_finished(name, ns)
+            if fin is not None:
+                success, msg = fin
+                if success:
+                    return True
+                logger.error("PipelineRun %s failed: %s", name, msg)
+                return False
+            # Retry startup or connection failures; reconnects may replay earlier logs.
+            if log_stream is None or log_stream.poll() not in (None, 0):
+                log_stream = _start_run_test_log_stream(name, ns, deadline=deadline)
+            now = time.monotonic()
+            if now - last_hb >= heartbeat:
+                left = int(deadline - now)
+                logger.info(
+                    "Waiting on pipelinerun/%s in %s (%ss remaining before timeout)...",
+                    name,
+                    ns,
+                    max(0, left),
+                )
+                last_hb = now
+            time.sleep(min(interval, max(0, deadline - now)))
+        logger.error(
+            "timeout waiting for pipelinerun/%s in %s (%gs)", name, ns, timeout_seconds
+        )
+        sys.exit(124)
+    finally:
+        if log_stream is not None:
+            _stop_run_test_log_stream(log_stream)
 
 
-def _taskrun_name_for_pipeline_task(pr_name: str, ns: str, pipeline_task: str) -> str | None:
+def _taskrun_name_for_pipeline_task(
+    pr_name: str, ns: str, pipeline_task: str, *, deadline: float | None = None
+) -> str | None:
     """Resolve the TaskRun name for a pipeline task from the PipelineRun's childReferences."""
     plr = subprocess.run(
         ["kubectl", "get", "pipelinerun", pr_name, "-n", ns, "-o", "json"],
         capture_output=True,
         text=True,
         check=False,
+        timeout=_log_discovery_timeout(deadline) if deadline is not None else None,
     )
     if plr.returncode != 0:
         print(plr.stderr or plr.stdout, file=sys.stderr)
@@ -163,6 +176,78 @@ def _taskrun_name_for_pipeline_task(pr_name: str, ns: str, pipeline_task: str) -
             if isinstance(name, str) and name:
                 return name
     return None
+
+
+def _log_discovery_timeout(deadline: float) -> float:
+    """Limit each log lookup to ten seconds and the remaining wait budget."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise subprocess.TimeoutExpired("log discovery", 0)
+    return min(10.0, remaining)
+
+
+def _start_run_test_log_stream(
+    pr_name: str, ns: str, *, deadline: float
+) -> subprocess.Popen | None:
+    """Follow the catalog test container's logs on stderr once its TaskRun exists."""
+    try:
+        taskrun_name = _taskrun_name_for_pipeline_task(
+            pr_name, ns, "run-test", deadline=deadline
+        )
+        if not taskrun_name:
+            return None
+        # A selector-based logs call can exit successfully before any pod exists.
+        pod = subprocess.run(
+            [
+                "kubectl",
+                "get",
+                "taskrun",
+                taskrun_name,
+                "-n",
+                ns,
+                "-o",
+                "jsonpath={.status.podName}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_log_discovery_timeout(deadline),
+        )
+        if pod.returncode != 0 or not pod.stdout.strip():
+            return None
+        pod_name = pod.stdout.strip()
+        return subprocess.Popen(
+            [
+                "kubectl",
+                "logs",
+                "-n",
+                ns,
+                f"pod/{pod_name}",
+                "-c",
+                "step-run-test",
+                "--follow",
+                "--tail=-1",
+            ],
+            stdout=sys.stderr,
+            stderr=sys.stderr,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("Timed out discovering run-test logs for pipelinerun/%s", pr_name)
+        return None
+
+
+def _stop_run_test_log_stream(log_stream: subprocess.Popen) -> None:
+    """Drain final log output briefly, then stop and reap the follower."""
+    try:
+        # Completion can arrive before kubectl has forwarded the last log lines.
+        log_stream.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        log_stream.terminate()
+        try:
+            log_stream.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            log_stream.kill()
+            log_stream.wait()
 
 
 def _print_run_test_step_logs(pr_name: str, ns: str) -> None:
