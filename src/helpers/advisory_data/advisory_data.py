@@ -6,6 +6,7 @@ import base64
 import gzip
 import json
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,9 @@ import yaml
 
 DEFAULT_ADVISORY_TYPE = "RHBA"
 VALID_ADVISORY_TYPES = frozenset({"RHSA", "RHBA", "RHEA"})
+_ARCH_QUALIFIER = re.compile(r"(\?arch=[^&]+)")
+_LEGACY_EPOCH = re.compile(r"&epoch=[^&]+")
+_EPOCH_QUALIFIER = re.compile(r"[?&]epoch=")
 # "image" is the default content type and is intentionally omitted (uses .content.images).
 ARTIFACT_CONTENT_TYPES = frozenset({"binary", "generic", "disk-image", "rpm"})
 # Advisory GitLab instances (prod and staging) each have matching secrets.
@@ -341,6 +345,122 @@ def advisory_url_prefix(git_repo: str) -> str:
     if "/rhtap-release/" in git_repo:
         return "https://access.stage.redhat.com/errata"
     return "https://access.redhat.com/errata"
+
+
+def _entry_epoch_str(entry: Mapping[str, Any]) -> str:
+    """Return the candidate RPM epoch as a string, defaulting to ``"0"``."""
+    epoch = entry.get("epoch")
+    if epoch is None:
+        return "0"
+    return str(epoch)
+
+
+def _epoch_qualified_purl(purl: str, epoch: str) -> str:
+    """Return *purl* with a header epoch injected after ``?arch=`` when needed."""
+    if epoch == "0" or _EPOCH_QUALIFIER.search(purl):
+        return purl
+    return _ARCH_QUALIFIER.sub(rf"\1&epoch={epoch}", purl, count=1)
+
+
+def _legacy_purl(purl: str) -> str:
+    """Strip the first ``&epoch=`` qualifier from *purl*."""
+    return _LEGACY_EPOCH.sub("", purl, count=1)
+
+
+def _unresolved_legacy(entry: Mapping[str, Any], matched_purl: str) -> bool:
+    """Return whether *matched_purl* is an epoch-less identity that needs verification."""
+    if _EPOCH_QUALIFIER.search(matched_purl):
+        return False
+    epoch = entry.get("epoch")
+    return epoch is None or str(epoch) != "0"
+
+
+def match_rpm_advisory_purl(
+    entry: Mapping[str, Any],
+    purl_to_advisory: Mapping[str, str],
+) -> tuple[str, bool] | None:
+    """Return ``(matched_purl, legacy_advisory_purl)`` when *entry* is in an advisory.
+
+    Tries the epoch-qualified PURL, then the original PURL, then a legacy PURL
+    with ``&epoch=`` stripped. ``legacy_advisory_purl`` is true when the match
+    has no epoch qualifier and the candidate epoch is missing or nonzero.
+    """
+    purl = entry.get("purl")
+    if not isinstance(purl, str) or not purl:
+        return None
+    qualified = _epoch_qualified_purl(purl, _entry_epoch_str(entry))
+    if qualified in purl_to_advisory:
+        return qualified, _unresolved_legacy(entry, qualified)
+    if purl in purl_to_advisory:
+        return purl, _unresolved_legacy(entry, purl)
+    if _EPOCH_QUALIFIER.search(purl):
+        legacy = _legacy_purl(purl)
+        if legacy in purl_to_advisory:
+            return legacy, _unresolved_legacy(entry, legacy)
+    return None
+
+
+def categorize_rpm_entries(
+    entries: Sequence[Any],
+    purl_to_advisory: Mapping[str, str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    """Split snapshot RPM rows into unreleased and in-advisory lists.
+
+    In-advisory rows gain ``legacy_advisory_purl``. Advisory file paths are
+    unique and sorted, matching ``jq keys`` order used by the Tekton result.
+    Non-object rows and non-string ``purl`` values raise ``TypeError``.
+    """
+    unreleased: list[dict[str, Any]] = []
+    in_advisory: list[dict[str, Any]] = []
+    advisories: dict[str, None] = {}
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise TypeError(
+                f"transformed snapshot entry {index} must be an object, "
+                f"got {type(entry).__name__}"
+            )
+        purl = entry.get("purl")
+        if not isinstance(purl, str):
+            raise TypeError(
+                f"transformed snapshot entry {index} field 'purl' must be a string, "
+                f"got {type(purl).__name__}"
+            )
+        match = match_rpm_advisory_purl(entry, purl_to_advisory)
+        if match is None:
+            unreleased.append(entry)
+            continue
+        matched_purl, is_legacy = match
+        in_advisory.append({**entry, "legacy_advisory_purl": is_legacy})
+        advisories[purl_to_advisory[matched_purl]] = None
+    return unreleased, in_advisory, sorted(advisories)
+
+
+def build_purl_to_advisory_map(
+    repo_dir: Path,
+    advisory_root: Path,
+    subdirs: Sequence[str],
+) -> dict[str, str]:
+    """Map artifact PURLs to advisory.yaml paths relative to *repo_dir*.
+
+    *subdirs* is newest-first. Later (older) advisories overwrite, so the
+    oldest advisory wins when the same PURL appears more than once.
+    """
+    purl_to_advisory: dict[str, str] = {}
+    for subdir in subdirs:
+        advisory_file = advisory_root / subdir / "advisory.yaml"
+        if not advisory_file.is_file():
+            continue
+        rel = advisory_file.relative_to(repo_dir).as_posix()
+        doc = load_advisory_yaml(advisory_file)
+        artifacts = spec_content_array_from_advisory_yaml(doc, ".content.artifacts")
+        for row in artifacts:
+            if not isinstance(row, dict):
+                continue
+            purl = row.get("purl")
+            if purl is None:
+                continue
+            purl_to_advisory[str(purl)] = rel
+    return purl_to_advisory
 
 
 def list_existing_advisory_subdirs(advisory_base: Path) -> list[str]:
