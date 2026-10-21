@@ -57,6 +57,7 @@ ADVISORY_TEMPLATE_PATH = Path("/home/templates/advisory.yaml.jinja")
 # Shared wait budget for every MR open/merge poll in one task run. Must stay
 # below the create-advisory InternalRequest task timeout (01h00m00s).
 _ADVISORY_MR_MERGE_TIMEOUT_SECONDS = 3300
+_ADVISORY_APPROVAL_ACTION = "approving the advisory merge request"
 # Subprocess/git failures append here; on error the tail is copied into RESULT_RESULT.
 _COMMAND_LOG_PATH = Path("/tmp/create_advisory_command_log.txt")
 _GITLAB_API_SCOPE_HINT = (
@@ -785,6 +786,67 @@ def _recover_after_merge_request_wait_timeout(
     return True
 
 
+def _approve_advisory_merge_request(merge_request: Any, *, deadline: float) -> None:
+    """Approve the advisory MR with the existing GitLab credentials."""
+    if merge_request.state == "merged":
+        return
+
+    # Own the retry budget; disable SDK retries so its backoff cannot exceed our deadline.
+    retry_interval = 10.0
+    try:
+        while True:
+            is_submitting = False
+            try:
+                current_merge_request = merge_request.manager.get(
+                    merge_request.get_id(),
+                    timeout=min(30, _timeout_seconds_until(deadline)),
+                    max_retries=0,
+                )
+                if current_merge_request.state == "merged":
+                    return
+                approval_state = current_merge_request.approvals.get(
+                    timeout=min(30, _timeout_seconds_until(deadline)),
+                    max_retries=0,
+                )
+                # A previous submission may have succeeded despite a lost response.
+                if approval_state.user_has_approved:
+                    return
+                if not current_merge_request.sha:
+                    raise ValueError("advisory merge request has no HEAD SHA to approve")
+                logger.info(
+                    "approving advisory merge request %s", current_merge_request.web_url
+                )
+                is_submitting = True
+                # Bind approval to this revision, including while GitLab processes its diff.
+                current_merge_request.approve(
+                    sha=current_merge_request.sha,
+                    timeout=min(30, _timeout_seconds_until(deadline)),
+                    max_retries=0,
+                )
+                return
+            except (
+                GitlabError,
+                requests.ConnectionError,
+                requests.Timeout,
+                requests.exceptions.ChunkedEncodingError,
+            ) as exc:
+                has_changed_sha = is_submitting and getattr(exc, "response_code", None) == 409
+                is_transport_error = isinstance(exc, requests.RequestException)
+                if (
+                    not gitlab.is_transient_gitlab_error(exc)
+                    and not has_changed_sha
+                    and not is_transport_error
+                ):
+                    raise
+                logger.warning("retrying advisory merge request approval: %s", exc)
+
+            # Refresh the MR and its approval state on every retry, including SHA changes.
+            time.sleep(min(retry_interval, _timeout_seconds_until(deadline)))
+            retry_interval = min(retry_interval * 2, 60.0)
+    except (GitlabError, requests.RequestException, TimeoutError, ValueError) as exc:
+        raise tekton.CheckStepError(_ADVISORY_APPROVAL_ACTION, exc) from exc
+
+
 def _finish_from_merged_merge_request(
     *,
     gitlab_client: Gitlab,
@@ -811,6 +873,7 @@ def _finish_from_merged_merge_request(
         mr_url,
         source_branch,
     )
+    _approve_advisory_merge_request(merge_request, deadline=deadline)
     gitlab.push_merge_request_to_main(
         gitlab_client,
         credentials.git_repo,
@@ -1379,6 +1442,17 @@ def run_create_advisory(
         claim_holder["branch"] = None
         claim_holder["merge_request"] = None
         logger.info("create advisory workflow completed successfully")
+    except tekton.CheckStepError as exc:
+        if exc.action == _ADVISORY_APPROVAL_ACTION:
+            # Approval only starts after advisory commits are pushed. Retain that work
+            # so a later run can reuse it, including when we joined a competing MR.
+            logger.warning(
+                "retaining advisory branch %s and its merge request after approval failure",
+                source_branch,
+            )
+            claim_holder["branch"] = None
+            claim_holder["merge_request"] = None
+        raise
     finally:
         if gitlab_client is not None and (
             claim_holder.get("branch") or claim_holder.get("merge_request")
