@@ -47,7 +47,7 @@ from pathlib import Path
 
 from release_service_utils.helpers import authentication
 from release_service_utils.helpers import file as file_utils
-from release_service_utils.helpers import retry
+from release_service_utils.helpers import gssapi_ssh
 
 PROG = "generate_checksums.py"
 
@@ -58,28 +58,6 @@ CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 SHARED_DIR = Path(os.environ.get("SHARED_DIR", "/shared"))
 
 logger = logging.getLogger(__name__)
-
-
-class _SSHConnectionError(Exception):
-    """Transient SSH connection failure (exit code 255)."""
-
-
-def _run_ssh_command(cmd: list[str], *, max_attempts: int = 3) -> None:
-    """Run an SSH/SCP command, retrying on transient connection errors (RC 255)."""
-
-    def _attempt() -> None:
-        result = subprocess.run(cmd, check=False)
-        if result.returncode == 255:
-            logger.warning("SSH connection failed (exit 255), will retry: %s", shlex.join(cmd))
-            raise _SSHConnectionError(f"SSH connection failed (exit 255): {shlex.join(cmd)}")
-        if result.returncode != 0:
-            raise subprocess.CalledProcessError(result.returncode, cmd)
-
-    retry.retry_with_exponential_backoff(
-        _attempt,
-        max_attempts=max_attempts,
-        retry_on=_SSHConnectionError,
-    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -138,10 +116,8 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
             "checksum-credentials secret must provide both 'bastion_host' and "
             "'bastion_fingerprint' together, or neither"
         )
-    known_hosts_content = (CHECKSUM_CREDENTIALS_MOUNT / "fingerprint").read_text().rstrip(
-        "\n"
-    ) + "\n"
-    bastion_host = ""
+    extra_fingerprints: list[Path] = []
+    proxy_jump: str | None = None
     if bastion_host_path.exists():
         bastion_host = bastion_host_path.read_text().strip()
         bastion_fingerprint = bastion_fingerprint_path.read_text().strip()
@@ -150,49 +126,22 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
                 "checksum-credentials secret must provide non-empty 'bastion_host' "
                 "and 'bastion_fingerprint' values"
             )
-        known_hosts_content += bastion_fingerprint + "\n"
+        extra_fingerprints.append(bastion_fingerprint_path)
+        proxy_jump = f"{checksum_user}@{bastion_host}"
 
-    ssh_dir = Path("/tmp/.ssh")
-    ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    known_hosts = ssh_dir / "known_hosts"
-    known_hosts.write_text(known_hosts_content)
-    known_hosts.chmod(0o600)
-
-    if bastion_host:
+    known_hosts = gssapi_ssh.install_known_hosts(
+        CHECKSUM_CREDENTIALS_MOUNT / "fingerprint",
+        Path("/tmp/.ssh"),
+        extra_fingerprints,
+    )
+    if proxy_jump:
         # ProxyJump's implicit jump-host connection checks the default
         # UserKnownHostsFile location, so add the required keys there without
         # replacing trust entries created by other tasks.
-        default_ssh_dir = Path.home() / ".ssh"
-        default_ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        default_known_hosts = default_ssh_dir / "known_hosts"
-        existing_content = (
-            default_known_hosts.read_text() if default_known_hosts.exists() else ""
+        gssapi_ssh.append_known_hosts_entries(
+            known_hosts, Path.home() / ".ssh" / "known_hosts"
         )
-        existing_entries = existing_content.splitlines()
-        entries_to_add = [
-            entry
-            for entry in known_hosts_content.splitlines()
-            if entry not in existing_entries
-        ]
-        if entries_to_add:
-            with default_known_hosts.open("a") as known_hosts_file:
-                if existing_content and not existing_content.endswith("\n"):
-                    known_hosts_file.write("\n")
-                known_hosts_file.write("\n".join(entries_to_add) + "\n")
-        default_known_hosts.chmod(0o600)
-
-    ssh_opts = [
-        "-o",
-        "UserKnownHostsFile=/tmp/.ssh/known_hosts",
-        "-o",
-        "GSSAPIAuthentication=yes",
-        "-o",
-        "GSSAPIDelegateCredentials=yes",
-        "-o",
-        "IdentitiesOnly=yes",
-    ]
-    if bastion_host:
-        ssh_opts += ["-o", f"ProxyJump={checksum_user}@{bastion_host}"]
+    ssh_opts = gssapi_ssh.ssh_options(known_hosts, identities_only=True, proxy_jump=proxy_jump)
 
     shared_snapshot = SHARED_DIR / "snapshot.json"
     if shared_snapshot.exists():
@@ -243,7 +192,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
     remote_target = f"{checksum_user}@{checksum_host}"
 
     try:
-        _run_ssh_command(
+        gssapi_ssh.run_ssh(
             [
                 "ssh",
                 *ssh_opts,
@@ -251,7 +200,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
                 "mkdir -p " + shlex.quote(remote_checksum_dir),
             ]
         )
-        _run_ssh_command(
+        gssapi_ssh.run_ssh(
             [
                 "scp",
                 *ssh_opts,
@@ -261,7 +210,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
         )
 
         logger.info("Signing merged sha256sum.txt with --clearsign")
-        _run_ssh_command(
+        gssapi_ssh.run_ssh(
             [
                 "ssh",
                 *ssh_opts,
@@ -283,7 +232,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
         )
 
         logger.info("Signing merged sha256sum.txt with --gpgsign")
-        _run_ssh_command(
+        gssapi_ssh.run_ssh(
             [
                 "ssh",
                 *ssh_opts,
@@ -307,7 +256,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
         first_ready_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(sha_sums_path), str(first_ready_dir / "sha256sum.txt"))
 
-        _run_ssh_command(
+        gssapi_ssh.run_ssh(
             [
                 "scp",
                 *ssh_opts,
@@ -316,7 +265,7 @@ def run(kerberos_realm: str, pipeline_run_uid: str) -> None:
             ]
         )
 
-        _run_ssh_command(
+        gssapi_ssh.run_ssh(
             [
                 "scp",
                 *ssh_opts,

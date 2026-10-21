@@ -24,6 +24,23 @@ def test_read_mounted_text(tmp_path: Path) -> None:
     assert authentication.read_mounted_text(tmp_path, "secret") == "value"
 
 
+def test_read_mounted_text_optional_missing(tmp_path: Path) -> None:
+    """A missing optional file returns an empty string."""
+    assert authentication.read_mounted_text(tmp_path, "missing", optional=True) == ""
+
+
+def test_read_mounted_text_optional_empty(tmp_path: Path) -> None:
+    """An empty optional file returns an empty string after stripping."""
+    (tmp_path / "empty").write_text("\n", encoding="utf-8")
+    assert authentication.read_mounted_text(tmp_path, "empty", optional=True) == ""
+
+
+def test_read_mounted_text_required_missing(tmp_path: Path) -> None:
+    """A missing required file raises FileNotFoundError."""
+    with pytest.raises(FileNotFoundError):
+        authentication.read_mounted_text(tmp_path, "missing")
+
+
 # ---------------------------------------------------------------------------
 # load_keytab_from_mount
 # ---------------------------------------------------------------------------
