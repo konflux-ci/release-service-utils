@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -355,6 +356,23 @@ class TestPulpClient:
             ]
         )
         assert client.get_published_version_href("myrepo") == ""
+
+    def test_fallback_to_latest_no_repository(self) -> None:
+        """fallback_to_latest with no repository href returns empty string."""
+        client = self._client(
+            [
+                {
+                    "results": [
+                        {
+                            "repository_version": None,
+                            "publication": None,
+                            "repository": None,
+                        }
+                    ]
+                }
+            ]
+        )
+        assert client.get_published_version_href("myrepo", fallback_to_latest=True) == ""
 
     def test_repository_latest_none(self) -> None:
         """Repository exists but latest_version_href is None."""
@@ -714,6 +732,11 @@ class TestPulpClient:
         with pytest.raises(RuntimeError, match="not found"):
             client.ensure_domain_exists()
 
+    def test_list_rpm_repository_names_skips_non_dict(self) -> None:
+        """Ignore non-object entries in a repository list page."""
+        client = self._client([{"results": ["skip", {"name": "x86_64"}, None], "next": None}])
+        assert client.list_rpm_repository_names() == {"x86_64"}
+
     def test_list_rpm_repository_names_paginates(self) -> None:
         """Follow next links and collect repository names."""
         client = self._client(
@@ -1057,3 +1080,296 @@ class TestUploadRpm:
         with patch(self._RUN_CMD, return_value=self._completed("")):
             with pytest.raises(RuntimeError, match="href missing"):
                 client.upload_rpm(rpm, "100MB", tmp_path / "cli.toml")
+
+
+class TestFileRepositoryCli:
+    """Test pulp CLI wrappers for file repositories and content."""
+
+    _SLEEP = "release_service_utils.helpers.retry.retry.time.sleep"
+    _RUN_CMD = "release_service_utils.helpers.pulp_client.pulp_client.subprocess_cmd.run_cmd"
+
+    def _completed(
+        self, stdout: str = "", returncode: int = 0, stderr: str = ""
+    ) -> subprocess.CompletedProcess[str]:
+        """Build a CompletedProcess for pulp CLI mocks."""
+        return subprocess.CompletedProcess(
+            args=["pulp"], returncode=returncode, stdout=stdout, stderr=stderr
+        )
+
+    def _local_file(self, tmp_path: Path, content: bytes = b"sbom-bytes") -> Path:
+        """Write a local file used for checksum comparisons and uploads."""
+        path = tmp_path / "artifact.sbom"
+        path.write_bytes(content)
+        return path
+
+    def test_list_file_repository_names(self, tmp_path: Path) -> None:
+        """Parse repository names from a JSON array, skipping invalid entries."""
+        stdout = (
+            '[{"name": "metadata"}, {"name": ""}, "skip", {"other": "x"}, '
+            '{"name": "other"}]'
+        )
+        with patch(self._RUN_CMD, return_value=self._completed(stdout)) as mock_run:
+            names = pulp_client.list_file_repository_names(tmp_path / "cli.toml", "dom")
+        assert names == {"metadata", "other"}
+        mock_run.assert_called_once_with(
+            [
+                "pulp",
+                "--config",
+                str(tmp_path / "cli.toml"),
+                "--domain",
+                "dom",
+                "file",
+                "repository",
+                "list",
+            ],
+            check=False,
+        )
+
+    def test_list_file_repository_names_empty_stdout(self, tmp_path: Path) -> None:
+        """Treat empty stdout as an empty repository list."""
+        with patch(self._RUN_CMD, return_value=self._completed("")):
+            assert (
+                pulp_client.list_file_repository_names(tmp_path / "cli.toml", "dom") == set()
+            )
+
+    def test_list_file_repository_names_nonzero(self, tmp_path: Path) -> None:
+        """Raise when the pulp CLI fails, preferring stderr."""
+        with patch(
+            self._RUN_CMD,
+            return_value=self._completed("", returncode=1, stderr="boom\n"),
+        ):
+            with pytest.raises(RuntimeError, match="boom"):
+                pulp_client.list_file_repository_names(tmp_path / "cli.toml", "dom")
+
+    def test_list_file_repository_names_nonzero_stdout(self, tmp_path: Path) -> None:
+        """Fall back to stdout when stderr is empty."""
+        with patch(
+            self._RUN_CMD,
+            return_value=self._completed("auth failed", returncode=2),
+        ):
+            with pytest.raises(RuntimeError, match="auth failed"):
+                pulp_client.list_file_repository_names(tmp_path / "cli.toml", "dom")
+
+    def test_list_file_repository_names_nonzero_no_output(self, tmp_path: Path) -> None:
+        """Raise without a suffix when the CLI prints nothing."""
+        with patch(self._RUN_CMD, return_value=self._completed("", returncode=1)):
+            with pytest.raises(
+                RuntimeError,
+                match=r"Failed to list file repositories in Pulp domain dom$",
+            ):
+                pulp_client.list_file_repository_names(tmp_path / "cli.toml", "dom")
+
+    def test_list_file_repository_names_invalid_json(self, tmp_path: Path) -> None:
+        """Raise when repository list output is not JSON."""
+        with patch(self._RUN_CMD, return_value=self._completed("not-json")):
+            with pytest.raises(RuntimeError, match="invalid JSON"):
+                pulp_client.list_file_repository_names(tmp_path / "cli.toml", "dom")
+
+    def test_list_file_repository_names_non_array(self, tmp_path: Path) -> None:
+        """Raise when repository list output is not a JSON array."""
+        with patch(self._RUN_CMD, return_value=self._completed('{"name": "metadata"}')):
+            with pytest.raises(RuntimeError, match="expected a JSON array"):
+                pulp_client.list_file_repository_names(tmp_path / "cli.toml", "dom")
+
+    def test_ensure_file_repo_exists(self, tmp_path: Path) -> None:
+        """Succeed when the named file repository is present."""
+        with patch(self._RUN_CMD, return_value=self._completed('[{"name": "metadata"}]')):
+            pulp_client.ensure_file_repo_exists(tmp_path / "cli.toml", "dom", "metadata")
+
+    def test_ensure_file_repo_exists_missing(self, tmp_path: Path) -> None:
+        """Raise when the named file repository is absent."""
+        with patch(self._RUN_CMD, return_value=self._completed("[]")):
+            with pytest.raises(RuntimeError, match="Metadata file repository 'metadata'"):
+                pulp_client.ensure_file_repo_exists(tmp_path / "cli.toml", "dom", "metadata")
+
+    def test_check_file_content_match(self, tmp_path: Path) -> None:
+        """Return MATCH when the remote checksum equals the local file."""
+        local = self._local_file(tmp_path)
+        digest = hashlib.sha256(b"sbom-bytes").hexdigest()
+        with patch(
+            self._RUN_CMD,
+            return_value=self._completed(f'[{{"sha256": "{digest}"}}]'),
+        ) as mock_run:
+            status = pulp_client.check_file_content(
+                tmp_path / "cli.toml", "dom", "sboms/n/a.sbom", local
+            )
+        assert status == pulp_client.PulpDigestStatus.MATCH
+        mock_run.assert_called_once_with(
+            [
+                "pulp",
+                "--config",
+                str(tmp_path / "cli.toml"),
+                "--domain",
+                "dom",
+                "file",
+                "content",
+                "list",
+                "--relative-path",
+                "sboms/n/a.sbom",
+            ],
+            check=False,
+        )
+
+    def test_check_file_content_not_found_empty(self, tmp_path: Path) -> None:
+        """Return NOT_FOUND when Pulp lists no content."""
+        local = self._local_file(tmp_path)
+        with patch(self._RUN_CMD, return_value=self._completed("[]")):
+            status = pulp_client.check_file_content(
+                tmp_path / "cli.toml", "dom", "sboms/n/a.sbom", local
+            )
+        assert status == pulp_client.PulpDigestStatus.NOT_FOUND
+
+    def test_check_file_content_not_found_empty_stdout(self, tmp_path: Path) -> None:
+        """Treat empty stdout as an empty content list."""
+        local = self._local_file(tmp_path)
+        with patch(self._RUN_CMD, return_value=self._completed("")):
+            status = pulp_client.check_file_content(
+                tmp_path / "cli.toml", "dom", "sboms/n/a.sbom", local
+            )
+        assert status == pulp_client.PulpDigestStatus.NOT_FOUND
+
+    def test_check_file_content_not_found_cli_error(self, tmp_path: Path) -> None:
+        """Return NOT_FOUND when the content list CLI call fails."""
+        local = self._local_file(tmp_path)
+        with patch(self._RUN_CMD, return_value=self._completed("", returncode=1)):
+            status = pulp_client.check_file_content(
+                tmp_path / "cli.toml", "dom", "sboms/n/a.sbom", local
+            )
+        assert status == pulp_client.PulpDigestStatus.NOT_FOUND
+
+    def test_check_file_content_not_found_non_array(self, tmp_path: Path) -> None:
+        """Return NOT_FOUND when content list JSON is not an array."""
+        local = self._local_file(tmp_path)
+        with patch(self._RUN_CMD, return_value=self._completed('{"sha256": "abc"}')):
+            status = pulp_client.check_file_content(
+                tmp_path / "cli.toml", "dom", "sboms/n/a.sbom", local
+            )
+        assert status == pulp_client.PulpDigestStatus.NOT_FOUND
+
+    def test_check_file_content_mismatch(self, tmp_path: Path) -> None:
+        """Return MISMATCH when the remote checksum differs."""
+        local = self._local_file(tmp_path)
+        with patch(
+            self._RUN_CMD,
+            return_value=self._completed('[{"sha256": "' + "0" * 64 + '"}]'),
+        ):
+            status = pulp_client.check_file_content(
+                tmp_path / "cli.toml", "dom", "sboms/n/a.sbom", local
+            )
+        assert status == pulp_client.PulpDigestStatus.MISMATCH
+
+    def test_check_file_content_mismatch_non_dict(self, tmp_path: Path) -> None:
+        """Return MISMATCH when the first list entry is not an object."""
+        local = self._local_file(tmp_path)
+        with patch(self._RUN_CMD, return_value=self._completed('["nope"]')):
+            status = pulp_client.check_file_content(
+                tmp_path / "cli.toml", "dom", "sboms/n/a.sbom", local
+            )
+        assert status == pulp_client.PulpDigestStatus.MISMATCH
+
+    def test_check_file_content_mismatch_missing_sha(self, tmp_path: Path) -> None:
+        """Return MISMATCH when the remote object has no sha256 field."""
+        local = self._local_file(tmp_path)
+        with patch(self._RUN_CMD, return_value=self._completed('[{"relative_path": "x"}]')):
+            status = pulp_client.check_file_content(
+                tmp_path / "cli.toml", "dom", "sboms/n/a.sbom", local
+            )
+        assert status == pulp_client.PulpDigestStatus.MISMATCH
+
+    def test_check_file_content_invalid_json(self, tmp_path: Path) -> None:
+        """Raise when a successful content list returns invalid JSON."""
+        local = self._local_file(tmp_path)
+        with patch(self._RUN_CMD, return_value=self._completed("not-json")):
+            with pytest.raises(RuntimeError, match="invalid JSON"):
+                pulp_client.check_file_content(
+                    tmp_path / "cli.toml", "dom", "sboms/n/a.sbom", local
+                )
+
+    @patch(_SLEEP)
+    def test_upload_file_content_success(self, _sleep: MagicMock, tmp_path: Path) -> None:
+        """Upload file content through the pulp CLI."""
+        local = self._local_file(tmp_path)
+        with patch(self._RUN_CMD, return_value=self._completed("{}")) as mock_run:
+            pulp_client.upload_file_content(
+                tmp_path / "cli.toml",
+                "dom",
+                local,
+                "sboms/n/a.sbom",
+                "metadata",
+            )
+        mock_run.assert_called_once_with(
+            [
+                "pulp",
+                "--config",
+                str(tmp_path / "cli.toml"),
+                "--domain",
+                "dom",
+                "file",
+                "content",
+                "upload",
+                "--repository",
+                "metadata",
+                "--file",
+                str(local),
+                "--relative-path",
+                "sboms/n/a.sbom",
+            ],
+            check=False,
+        )
+
+    @patch(_SLEEP)
+    def test_upload_file_content_retries(self, mock_sleep: MagicMock, tmp_path: Path) -> None:
+        """Retry a failed upload then succeed."""
+        local = self._local_file(tmp_path)
+        with patch(
+            self._RUN_CMD,
+            side_effect=[self._completed("", returncode=1), self._completed("{}")],
+        ):
+            pulp_client.upload_file_content(
+                tmp_path / "cli.toml", "dom", local, "sboms/n/a.sbom", "metadata"
+            )
+        mock_sleep.assert_called_once()
+
+    @patch(_SLEEP)
+    def test_upload_file_content_exhausted_stderr(
+        self, _sleep: MagicMock, tmp_path: Path
+    ) -> None:
+        """Raise after retries, preferring stderr."""
+        local = self._local_file(tmp_path)
+        with patch(
+            self._RUN_CMD,
+            return_value=self._completed("", returncode=1, stderr="disk full\n"),
+        ):
+            with pytest.raises(RuntimeError, match="disk full"):
+                pulp_client.upload_file_content(
+                    tmp_path / "cli.toml", "dom", local, "sboms/n/a.sbom", "metadata"
+                )
+
+    @patch(_SLEEP)
+    def test_upload_file_content_exhausted_stdout(
+        self, _sleep: MagicMock, tmp_path: Path
+    ) -> None:
+        """Fall back to stdout when stderr is empty."""
+        local = self._local_file(tmp_path)
+        with patch(
+            self._RUN_CMD,
+            return_value=self._completed("upload denied", returncode=2),
+        ):
+            with pytest.raises(RuntimeError, match="upload denied"):
+                pulp_client.upload_file_content(
+                    tmp_path / "cli.toml", "dom", local, "sboms/n/a.sbom", "metadata"
+                )
+
+    @patch(_SLEEP)
+    def test_upload_file_content_exhausted_no_output(
+        self, _sleep: MagicMock, tmp_path: Path
+    ) -> None:
+        """Raise without a suffix when the CLI prints nothing."""
+        local = self._local_file(tmp_path)
+        with patch(self._RUN_CMD, return_value=self._completed("", returncode=1)):
+            with pytest.raises(
+                RuntimeError, match=r"Failed to upload sboms/n/a.sbom \(rc=1\)$"
+            ):
+                pulp_client.upload_file_content(
+                    tmp_path / "cli.toml", "dom", local, "sboms/n/a.sbom", "metadata"
+                )

@@ -117,15 +117,7 @@ class TestWriteAuthFile:
     def test_writes_select_oci_auth_output(self, tmp_path: Path) -> None:
         """Verify auth file is written from select-oci-auth stdout."""
         auth = tmp_path / "auth.json"
-        with patch(
-            f"{TASK}.subprocess.run",
-            return_value=subprocess.CompletedProcess(
-                [],
-                0,
-                stdout='{"auths":{}}',
-                stderr="",
-            ),
-        ):
+        with patch(f"{TASK}.oci_auth.auth_json", return_value='{"auths":{}}'):
             create_pyxis_image._write_auth_file("quay.io/org/img", auth)
         assert json.loads(auth.read_text()) == {"auths": {}}
 
@@ -133,12 +125,9 @@ class TestWriteAuthFile:
         """Raise RuntimeError when select-oci-auth fails."""
         auth = tmp_path / "auth.json"
         with patch(
-            f"{TASK}.subprocess.run",
-            return_value=subprocess.CompletedProcess(
-                [],
-                1,
-                stdout="",
-                stderr="no credentials found",
+            f"{TASK}.oci_auth.auth_json",
+            side_effect=subprocess.CalledProcessError(
+                1, ["select-oci-auth"], stderr="no credentials found"
             ),
         ):
             with pytest.raises(RuntimeError, match="select-oci-auth failed"):

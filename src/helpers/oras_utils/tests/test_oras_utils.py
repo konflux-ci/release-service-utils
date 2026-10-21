@@ -7,13 +7,16 @@ import json
 import subprocess
 import tarfile
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, call, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from release_service_utils.helpers import oras_utils
 from release_service_utils.helpers.oras_utils import oras_utils as _oras_utils
 import pytest
 
 from release_service_utils.helpers.oras_utils.oras_utils import oras_resolve
+
+_AUTH_JSON = "release_service_utils.helpers.oci_auth.oci_auth.auth_json"
+_RUN_CMD = "release_service_utils.helpers.oras_utils.oras_utils.run_cmd"
 
 # ---------------------------------------------------------------------------
 # oras_resolve
@@ -22,28 +25,22 @@ from release_service_utils.helpers.oras_utils.oras_utils import oras_resolve
 
 def test_oras_resolve_calls_select_oci_auth_with_reference() -> None:
     """select-oci-auth is called with the image reference."""
-    with patch("release_service_utils.helpers.oras_utils.oras_utils.run_cmd") as mock_run:
-        mock_run.side_effect = [
-            MagicMock(stdout='{"auths": {}}'),
-            MagicMock(returncode=0, stdout="sha256:abc\n"),
-        ]
-        oras_resolve("registry.io/repo:tag")
+    with patch(_AUTH_JSON, return_value="{}") as mock_auth:
+        with patch(_RUN_CMD) as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="sha256:abc\n")
+            oras_resolve("registry.io/repo:tag")
 
-    first_call = mock_run.call_args_list[0]
-    assert first_call == call(["select-oci-auth", "registry.io/repo:tag"], check=False)
+    mock_auth.assert_called_once_with("registry.io/repo:tag", check=False, stderr_path=None)
 
 
 def test_oras_resolve_passes_auth_file_to_oras() -> None:
     """Oras resolve is called with --registry-config pointing to the auth temp file."""
-    with patch("release_service_utils.helpers.oras_utils.oras_utils.run_cmd") as mock_run:
-        mock_run.side_effect = [
-            MagicMock(stdout='{"auths": {}}'),
-            MagicMock(returncode=0, stdout="sha256:abc\n"),
-        ]
-        oras_resolve("registry.io/repo:tag")
+    with patch(_AUTH_JSON, return_value="{}"):
+        with patch(_RUN_CMD) as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="sha256:abc\n")
+            oras_resolve("registry.io/repo:tag")
 
-    second_call = mock_run.call_args_list[1]
-    cmd = second_call.args[0]
+    cmd = mock_run.call_args.args[0]
     assert cmd[0] == "oras"
     assert cmd[1] == "resolve"
     assert "--registry-config" in cmd
@@ -52,90 +49,63 @@ def test_oras_resolve_passes_auth_file_to_oras() -> None:
 
 def test_oras_resolve_returns_stripped_digest() -> None:
     """Returns the digest from oras resolve output, stripped of whitespace."""
-    with patch("release_service_utils.helpers.oras_utils.oras_utils.run_cmd") as mock_run:
-        mock_run.side_effect = [
-            MagicMock(stdout="{}"),
-            MagicMock(returncode=0, stdout="sha256:deadbeef\n"),
-        ]
-        result = oras_resolve("registry.io/repo:tag")
+    with patch(_AUTH_JSON, return_value="{}"):
+        with patch(_RUN_CMD) as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="sha256:deadbeef\n")
+            result = oras_resolve("registry.io/repo:tag")
 
     assert result == "sha256:deadbeef"
 
 
 def test_oras_resolve_raises_on_nonzero_returncode() -> None:
     """Raises RuntimeError when oras resolve exits non-zero."""
-    with patch("release_service_utils.helpers.oras_utils.oras_utils.run_cmd") as mock_run:
-        mock_run.side_effect = [
-            MagicMock(stdout="{}"),
-            MagicMock(returncode=1, stdout="", stderr="unauthorized"),
-        ]
-        with pytest.raises(RuntimeError):
-            oras_resolve("registry.io/repo:tag")
+    with patch(_AUTH_JSON, return_value="{}"):
+        with patch(_RUN_CMD) as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="unauthorized")
+            with pytest.raises(RuntimeError):
+                oras_resolve("registry.io/repo:tag")
 
 
 def test_oras_resolve_returns_none_when_check_false() -> None:
     """Returns None instead of raising when check=False."""
-    with patch("release_service_utils.helpers.oras_utils.oras_utils.run_cmd") as mock_run:
-        mock_run.side_effect = [
-            MagicMock(stdout="{}"),
-            MagicMock(returncode=1, stdout="", stderr="not found"),
-        ]
-        result = oras_resolve("registry.io/repo:tag", check=False)
+    with patch(_AUTH_JSON, return_value="{}"):
+        with patch(_RUN_CMD) as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
+            result = oras_resolve("registry.io/repo:tag", check=False)
 
     assert result is None
 
 
 def test_oras_resolve_returns_none_on_empty_output_when_check_false() -> None:
     """Returns None when oras outputs only whitespace (check=False)."""
-    with patch("release_service_utils.helpers.oras_utils.oras_utils.run_cmd") as mock_run:
-        mock_run.side_effect = [
-            MagicMock(stdout="{}"),
-            MagicMock(returncode=0, stdout="  \n"),
-        ]
-        result = oras_resolve("registry.io/repo:tag", check=False)
+    with patch(_AUTH_JSON, return_value="{}"):
+        with patch(_RUN_CMD) as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="  \n")
+            result = oras_resolve("registry.io/repo:tag", check=False)
 
     assert result is None
 
 
 def test_oras_resolve_uses_auth_ref_for_select_oci_auth() -> None:
     """auth_ref overrides reference for select-oci-auth."""
-    with patch("release_service_utils.helpers.oras_utils.oras_utils.run_cmd") as mock_run:
-        mock_run.side_effect = [
-            MagicMock(stdout="{}"),
-            MagicMock(returncode=0, stdout="sha256:abc\n"),
-        ]
-        oras_resolve("registry.io/repo:v1", auth_ref="registry.io/repo")
+    with patch(_AUTH_JSON, return_value="{}") as mock_auth:
+        with patch(_RUN_CMD) as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="sha256:abc\n")
+            oras_resolve("registry.io/repo:v1", auth_ref="registry.io/repo")
 
-    auth_call = mock_run.call_args_list[0]
-    assert auth_call == call(["select-oci-auth", "registry.io/repo"], check=False)
-    resolve_call = mock_run.call_args_list[1]
-    assert "registry.io/repo:v1" in resolve_call.args[0]
+    mock_auth.assert_called_once_with("registry.io/repo", check=False, stderr_path=None)
+    assert "registry.io/repo:v1" in mock_run.call_args.args[0]
 
 
-def test_oras_resolve_falls_back_to_empty_auth_on_select_oci_auth_failure() -> None:
-    """select-oci-auth failure falls back to empty auth and still resolves."""
-    with patch("release_service_utils.helpers.oras_utils.oras_utils.run_cmd") as mock_run:
-        mock_run.side_effect = [
-            MagicMock(returncode=1, stdout="", stderr="no creds"),
-            MagicMock(returncode=0, stdout="sha256:abc\n"),
-        ]
-        result = oras_resolve("registry.io/repo:tag")
+def test_oras_resolve_requests_empty_auth_fallback() -> None:
+    """oras_resolve asks the auth helper to treat lookup failures as empty auth."""
+    with patch(_AUTH_JSON, return_value="{}") as mock_auth:
+        with patch(_RUN_CMD) as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="sha256:abc\n")
+            result = oras_resolve("registry.io/repo:tag")
 
     assert result == "sha256:abc"
-    auth_call = mock_run.call_args_list[0]
-    assert auth_call == call(["select-oci-auth", "registry.io/repo:tag"], check=False)
-
-
-def test_oras_resolve_falls_back_to_empty_auth_on_empty_stdout() -> None:
-    """select-oci-auth returning empty stdout falls back to empty auth."""
-    with patch("release_service_utils.helpers.oras_utils.oras_utils.run_cmd") as mock_run:
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="  \n"),
-            MagicMock(returncode=0, stdout="sha256:abc\n"),
-        ]
-        result = oras_resolve("registry.io/repo:tag")
-
-    assert result == "sha256:abc"
+    assert mock_auth.call_args.kwargs["check"] is False
 
 
 def test_oras_resolve_uses_auth_file_directly(tmp_path: Path) -> None:
@@ -234,14 +204,16 @@ def test_oras_pull_cleans_up_auth_file(
 ) -> None:
     """Temporary auth file created for oras is removed after pull completes."""
     created: list[Path] = []
-    original = _oras_utils.file.make_tempfile_path
+    from release_service_utils.helpers.oci_auth import oci_auth as _oci_auth
+
+    original = _oci_auth.file.make_tempfile_path
 
     def track_tempfile(prefix: str, data: bytes | None = None) -> Path:
         path = original(prefix, data)
         created.append(path)
         return path
 
-    monkeypatch.setattr(_oras_utils.file, "make_tempfile_path", track_tempfile)
+    monkeypatch.setattr(_oci_auth.file, "make_tempfile_path", track_tempfile)
 
     def fake_run_cmd(cmd, **kwargs):  # type: ignore[no-untyped-def]
         if cmd[0] == "select-oci-auth":

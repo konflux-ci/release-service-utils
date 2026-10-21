@@ -22,6 +22,7 @@ from release_service_utils.helpers.internal_request import (
 )
 from release_service_utils.helpers.kubectl import get_configmap
 from release_service_utils.helpers.logger import logger as LOGGER
+from release_service_utils.helpers import oci_auth
 from release_service_utils.helpers.oras_utils import oras_resolve
 from release_service_utils.helpers.subprocess_cmd import run_cmd
 
@@ -263,11 +264,7 @@ def get_all_image_digests(image_reference: str) -> list[str]:
     """
     top_level_digest = image_reference.split("@", 1)[1]
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as auth_file:
-        select_auth = run_cmd(["select-oci-auth", image_reference])
-        auth_file.write(select_auth.stdout)
-        auth_file.flush()
-
+    with oci_auth.auth_file(image_reference) as auth_path:
         result = run_cmd(
             [
                 "skopeo",
@@ -276,7 +273,7 @@ def get_all_image_digests(image_reference: str) -> list[str]:
                 "3",
                 "--raw",
                 "--authfile",
-                auth_file.name,
+                str(auth_path),
                 f"docker://{image_reference}",
             ]
         )
