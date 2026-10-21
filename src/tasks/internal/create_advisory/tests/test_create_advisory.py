@@ -77,6 +77,11 @@ def _valid_advisory_yaml_dict() -> dict:
     }
 
 
+def _owned_train_timeout(*_args: Any, **kwargs: Any) -> None:
+    kwargs["train_attempt"].queued_by_this_run = True
+    raise TimeoutError("merge wait expired")
+
+
 @pytest.fixture
 def creds(tmp_path: Path) -> gitlab.GitLabCredentials:
     """GitLab credentials loaded from a temporary secret mount."""
@@ -529,6 +534,7 @@ def test_commit_and_merge_new_advisory(
 ) -> None:
     """Commit on a feature branch, open an MR, and merge it to main."""
     client = mock.Mock()
+    claim_holder: dict[str, Any] = {"branch": "konflux-advisory-t-deadbeef0001"}
     results = {
         "result": tmp_path / "r",
         "advisory_url": tmp_path / "u",
@@ -559,6 +565,7 @@ def test_commit_and_merge_new_advisory(
             results,
             advisory_type="RHSA",
             advisory_name="2025:0001",
+            claim_holder=claim_holder,
             stderr_path=tmp_path / "e.log",
             deadline=time.monotonic() + 100,
         )
@@ -572,6 +579,7 @@ def test_commit_and_merge_new_advisory(
     push.assert_called_once()
     get_mr.assert_called_once()
     finish.assert_called_once()
+    assert claim_holder["branch"] is None
     assert finish.call_args.kwargs["yaml_repo_path"] == "data/2025/0001/advisory.yaml"
     assert finish.call_args.kwargs["advisory_type"] == "RHSA"
     assert finish.call_args.kwargs["advisory_name"] == "2025:0001"
@@ -1728,7 +1736,7 @@ def test_finish_from_merged_uses_known_advisory_metadata(
     merge_request = mock.Mock()
     merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/1"
     merge_request.state = "merged"
-    merge_request.merge_commit_sha = "abc123"
+    merge_request.merge_commit_sha = None
     yaml_repo_path = "data/advisories/t/2025/0042/advisory.yaml"
     published = tmp_path / yaml_repo_path
     published.parent.mkdir(parents=True)
@@ -1746,7 +1754,7 @@ def test_finish_from_merged_uses_known_advisory_metadata(
         mock.patch(
             f"{TASK}.create_advisory.gitlab.push_merge_request_to_main",
             side_effect=lambda *args, **kwargs: approve.assert_called_once(),
-        ),
+        ) as push_mr,
         mock.patch(f"{TASK}.create_advisory.git.sync_to_origin_main") as sync_main,
     ):
         out = create_advisory.create_advisory._finish_from_merged_merge_request(
@@ -1764,6 +1772,8 @@ def test_finish_from_merged_uses_known_advisory_metadata(
             deadline=time.monotonic() + 100,
         )
     sync_main.assert_called_once()
+    assert push_mr.call_args.kwargs["use_merge_train"] is True
+    assert push_mr.call_args.kwargs["cleanup_on_conflict"] is True
     merge_request.changes.assert_not_called()
     assert out == yaml_repo_path
     assert results["result"].read_text(encoding="utf-8") == "Success"
@@ -1771,6 +1781,180 @@ def test_finish_from_merged_uses_known_advisory_metadata(
         "https://access.stage.redhat.com/errata/RHSA-2025:0042"
     )
     assert "advisory.yaml" in results["advisory_internal_url"].read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("merged_during_cleanup", [False, True])
+def test_finish_cancels_auto_merge_after_wait_failure(
+    tmp_path: Path, creds: gitlab.GitLabCredentials, merged_during_cleanup: bool
+) -> None:
+    """Cancel a timed-out train or finish if it merged during cancellation."""
+    merge_request = mock.Mock()
+    merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/7"
+    merge_request.state = "opened"
+    merge_request.manager.get.return_value.state = (
+        "merged" if merged_during_cleanup else "opened"
+    )
+    merge_request._update_attrs.side_effect = lambda attrs: setattr(
+        merge_request, "state", attrs["state"]
+    )
+    yaml_repo_path = "data/advisories/t/2025/0042/advisory.yaml"
+    published = tmp_path / yaml_repo_path
+    published.parent.mkdir(parents=True)
+    published.write_text("spec:\n  type: RHSA\n", encoding="utf-8")
+    results = {
+        "result": tmp_path / "r",
+        "advisory_url": tmp_path / "u",
+        "advisory_internal_url": tmp_path / "i",
+    }
+    with (
+        mock.patch(f"{TASK}.create_advisory._approve_advisory_merge_request"),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.push_merge_request_to_main",
+            side_effect=_owned_train_timeout,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.cancel_merge_request_auto_merge",
+            return_value=True,
+        ) as cancel,
+        mock.patch(f"{TASK}.create_advisory.git.sync_to_origin_main") as sync_main,
+    ):
+        kwargs = dict(
+            gitlab_client=mock.Mock(),
+            credentials=creds,
+            repo_root=tmp_path,
+            merge_request=merge_request,
+            source_branch="feat",
+            url_prefix="https://access.stage.redhat.com/errata",
+            stderr_path=tmp_path / "e.log",
+            result_paths=results,
+            deadline=time.monotonic() + 100,
+            yaml_repo_path=yaml_repo_path,
+            advisory_type="RHSA",
+            advisory_name="2025:0042",
+        )
+        if merged_during_cleanup:
+            assert (
+                create_advisory.create_advisory._finish_from_merged_merge_request(**kwargs)
+                == yaml_repo_path
+            )
+            sync_main.assert_called_once()
+            assert results["result"].read_text(encoding="utf-8") == "Success"
+        else:
+            with pytest.raises(TimeoutError, match="merge wait expired"):
+                create_advisory.create_advisory._finish_from_merged_merge_request(**kwargs)
+            sync_main.assert_not_called()
+            assert not results["result"].exists()
+    cancel.assert_called_once()
+    merge_request.manager.get.assert_called_once_with(
+        merge_request.get_id.return_value, timeout=30, max_retries=0
+    )
+
+
+def test_finish_reports_uncertain_auto_merge_after_cancel_failure(
+    tmp_path: Path, creds: gitlab.GitLabCredentials
+) -> None:
+    """Tell the operator when a failed task may still merge its advisory."""
+    merge_request = mock.Mock()
+    merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/7"
+    merge_request.state = "opened"
+    merge_request.manager.get.return_value.state = "opened"
+    with (
+        mock.patch(f"{TASK}.create_advisory._approve_advisory_merge_request"),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.push_merge_request_to_main",
+            side_effect=_owned_train_timeout,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.cancel_merge_request_auto_merge",
+            side_effect=GitlabError("GitLab unavailable", response_code=503),
+        ),
+        pytest.raises(RuntimeError, match="may merge after this task fails"),
+    ):
+        create_advisory.create_advisory._finish_from_merged_merge_request(
+            gitlab_client=mock.Mock(),
+            credentials=creds,
+            repo_root=tmp_path,
+            merge_request=merge_request,
+            source_branch="feat",
+            url_prefix="https://access.stage.redhat.com/errata",
+            stderr_path=tmp_path / "e.log",
+            result_paths={},
+            deadline=time.monotonic() + 100,
+        )
+
+
+def test_finish_reports_unknown_merge_state_if_cleanup_refresh_fails(
+    tmp_path: Path, creds: gitlab.GitLabCredentials
+) -> None:
+    """Require an MR state check after canceling a timed-out train entry."""
+    merge_request = mock.Mock()
+    merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/7"
+    merge_request.state = "opened"
+    merge_request.manager.get.side_effect = GitlabError(
+        "GitLab unavailable", response_code=503
+    )
+    with (
+        mock.patch(f"{TASK}.create_advisory._approve_advisory_merge_request"),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.push_merge_request_to_main",
+            side_effect=_owned_train_timeout,
+        ),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.cancel_merge_request_auto_merge",
+            return_value=True,
+        ),
+        pytest.raises(RuntimeError, match="could not confirm whether"),
+    ):
+        create_advisory.create_advisory._finish_from_merged_merge_request(
+            gitlab_client=mock.Mock(),
+            credentials=creds,
+            repo_root=tmp_path,
+            merge_request=merge_request,
+            source_branch="feat",
+            url_prefix="https://access.stage.redhat.com/errata",
+            stderr_path=tmp_path / "e.log",
+            result_paths={},
+            deadline=time.monotonic() + 100,
+        )
+
+
+def test_finish_reused_mr_does_not_cancel_train_even_if_it_queued(
+    tmp_path: Path, creds: gitlab.GitLabCredentials
+) -> None:
+    """Leave auto-merge armed when a retry queues a reused MR and times out."""
+    merge_request = mock.Mock()
+    merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/7"
+    merge_request.state = "opened"
+    merge_request.manager.get.return_value.state = "opened"
+
+    def _joining_wait_failure(*_args: Any, **kwargs: Any) -> None:
+        assert kwargs["cleanup_on_conflict"] is False
+        assert kwargs["retry_failed_pipeline"] is True
+        kwargs["train_attempt"].queued_by_this_run = True
+        raise TimeoutError("joining task timed out")
+
+    with (
+        mock.patch(f"{TASK}.create_advisory._approve_advisory_merge_request"),
+        mock.patch(
+            f"{TASK}.create_advisory.gitlab.push_merge_request_to_main",
+            side_effect=_joining_wait_failure,
+        ),
+        mock.patch(f"{TASK}.create_advisory.gitlab.cancel_merge_request_auto_merge") as cancel,
+        pytest.raises(RuntimeError, match="may still merge after this task fails"),
+    ):
+        create_advisory.create_advisory._finish_from_merged_merge_request(
+            gitlab_client=mock.Mock(),
+            credentials=creds,
+            repo_root=tmp_path,
+            merge_request=merge_request,
+            source_branch="feat",
+            url_prefix="https://access.stage.redhat.com/errata",
+            stderr_path=tmp_path / "e.log",
+            result_paths={},
+            deadline=time.monotonic() + 100,
+            owns_advisory_branch=False,
+        )
+    cancel.assert_not_called()
 
 
 def test_finish_from_merged_fails_when_yaml_missing_on_main(
@@ -2362,6 +2546,7 @@ def test_try_finish_waits_for_merge_request_when_branch_exists(tmp_path: Path) -
     assert finished is True
     wait_mr.assert_called_once()
     create_mr.assert_not_called()
+    assert finish.call_args.kwargs["owns_advisory_branch"] is False
     finish.assert_called_once()
 
 
@@ -2448,6 +2633,7 @@ def test_commit_and_merge_push_race_joins_competitor_mr(
 ) -> None:
     """Report the merged advisory from a competing MR after a rejected push."""
     client = mock.Mock()
+    claim_holder: dict[str, Any] = {"branch": "konflux-advisory-t-deadbeef0001"}
     results = {
         "result": tmp_path / "r",
         "advisory_url": tmp_path / "u",
@@ -2495,10 +2681,12 @@ def test_commit_and_merge_push_race_joins_competitor_mr(
             advisory_type="RHSA",
             advisory_name="2025:1234",
             claim_commit_sha="claimsha",
+            claim_holder=claim_holder,
             stderr_path=tmp_path / "e.log",
             deadline=time.monotonic() + 100,
         )
     finish.assert_called_once()
+    assert claim_holder["branch"] is None
     assert out == "data/advisories/t/2025/0999/advisory.yaml"
 
 
@@ -2548,33 +2736,10 @@ def test_commit_and_merge_rejects_push_when_remote_still_at_claim(
         )
 
 
-def test_release_claimed_work_closes_merge_request(
-    creds: gitlab.GitLabCredentials,
-) -> None:
-    """Close the merge request before deleting the branch when both exist."""
-    client = mock.Mock()
-    merge_request = mock.Mock()
-    with mock.patch(
-        f"{TASK}.create_advisory.gitlab.cleanup_merge_request_branch",
-    ) as cleanup:
-        create_advisory.create_advisory._release_claimed_work(
-            client,
-            creds,
-            "konflux-advisory-t-abc",
-            merge_request,
-        )
-    cleanup.assert_called_once_with(
-        client,
-        creds.git_repo,
-        merge_request,
-        "konflux-advisory-t-abc",
-    )
-
-
 def test_release_claimed_work_looks_up_open_merge_request(
     creds: gitlab.GitLabCredentials,
 ) -> None:
-    """Close a remotely created MR when cleanup has no merge request object."""
+    """Preserve a remotely created MR even when this task lacks its object."""
     client = mock.Mock()
     merge_request = mock.Mock()
     with (
@@ -2599,24 +2764,19 @@ def test_release_claimed_work_looks_up_open_merge_request(
         creds.git_repo,
         "konflux-advisory-t-abc",
     )
-    cleanup.assert_called_once_with(
-        client,
-        creds.git_repo,
-        merge_request,
-        "konflux-advisory-t-abc",
-    )
+    cleanup.assert_not_called()
     delete_branch.assert_not_called()
 
 
 def test_release_claimed_work_logs_merge_request_lookup_failure(
     creds: gitlab.GitLabCredentials,
 ) -> None:
-    """Fall back to branch deletion when MR lookup fails during cleanup."""
+    """Keep the branch when GitLab cannot establish whether an MR exists."""
     client = mock.Mock()
     with (
         mock.patch(
             f"{TASK}.create_advisory.gitlab.find_open_merge_request_by_source_branch",
-            side_effect=RuntimeError("lookup failed"),
+            side_effect=GitlabError("lookup failed", response_code=503),
         ),
         mock.patch(
             f"{TASK}.create_advisory.gitlab.delete_remote_branch",
@@ -2628,11 +2788,7 @@ def test_release_claimed_work_logs_merge_request_lookup_failure(
             creds,
             "konflux-advisory-t-abc",
         )
-    delete_branch.assert_called_once_with(
-        client,
-        creds.git_repo,
-        "konflux-advisory-t-abc",
-    )
+    delete_branch.assert_not_called()
     assert warn.call_args.args[0] == (
         "failed to look up merge request for branch %s during cleanup: %s"
     )
@@ -2644,7 +2800,7 @@ def test_run_create_advisory_cleanup_after_failure(
     creds: gitlab.GitLabCredentials,
     failure_kind: str,
 ) -> None:
-    """Retain committed approval failures while still cleaning up unrelated failures."""
+    """Retain pushed advisory work after creation or merge failures."""
     secret = tmp_path / "gitlab"
     _write_gitlab_secret(secret)
     errata = tmp_path / "errata"
@@ -2789,13 +2945,8 @@ def test_run_create_advisory_cleanup_after_failure(
     merge.assert_not_called()
     remove_local.assert_called_once()
     assert not results["result"].exists()
-    if failure_kind in {"approval", "timeout"}:
-        find_mr.assert_not_called()
-        cleanup.assert_not_called()
-    else:
-        if failure_kind == "creation":
-            find_mr.assert_called_once()
-        cleanup.assert_called_once_with(client, creds.git_repo, merge_request, mock.ANY)
+    find_mr.assert_not_called()
+    cleanup.assert_not_called()
 
 
 def test_release_claimed_work_logs_branch_delete_failure(
@@ -2810,7 +2961,7 @@ def test_release_claimed_work_logs_branch_delete_failure(
         ),
         mock.patch(
             f"{TASK}.create_advisory.gitlab.delete_remote_branch",
-            side_effect=RuntimeError("boom"),
+            side_effect=GitlabError("boom", response_code=503),
         ),
         mock.patch(f"{TASK}.create_advisory.logger.warning") as warn,
     ):
@@ -2928,6 +3079,7 @@ def test_recover_after_merge_request_wait_timeout_creates_merge_request(
     assert finished is True
     create_mr.assert_called_once()
     finish.assert_called_once()
+    assert finish.call_args.kwargs["owns_advisory_branch"] is False
     wait_mr.assert_not_called()
 
 
@@ -3311,28 +3463,6 @@ def test_release_claimed_work_noop_without_branch(
     cleanup.assert_not_called()
 
 
-def test_release_claimed_work_logs_cleanup_failure(
-    creds: gitlab.GitLabCredentials,
-) -> None:
-    """Log and continue when merge-request cleanup raises."""
-    merge_request = mock.Mock()
-    with (
-        mock.patch(
-            f"{TASK}.create_advisory.gitlab.cleanup_merge_request_branch",
-            side_effect=RuntimeError("cleanup failed"),
-        ),
-        mock.patch(f"{TASK}.create_advisory.logger.warning") as warn,
-    ):
-        create_advisory.create_advisory._release_claimed_work(
-            mock.Mock(),
-            creds,
-            "konflux-advisory-t-abc",
-            merge_request,
-        )
-    warn.assert_called_once()
-    assert "failed to clean up merge request" in warn.call_args.args[0]
-
-
 def test_is_claim_only_branch_when_tip_is_ancestor_of_main(
     tmp_path: Path,
 ) -> None:
@@ -3405,8 +3535,8 @@ def test_is_claim_only_branch_false_when_branch_or_main_missing(
         )
 
 
-def test_recover_after_timeout_releases_claim_only_branch(tmp_path: Path) -> None:
-    """Delete a claim-only branch before rechecking published content."""
+def test_recover_after_timeout_retains_unowned_claim_branch(tmp_path: Path) -> None:
+    """Do not delete another task's claim branch while checking published content."""
     repo = tmp_path / "repo"
     work = tmp_path / "work"
     work.mkdir()
@@ -3418,7 +3548,7 @@ def test_recover_after_timeout_releases_claim_only_branch(tmp_path: Path) -> Non
     with (
         mock.patch(
             f"{TASK}.create_advisory._is_claim_only_branch",
-            side_effect=[True, False],
+            return_value=True,
         ),
         mock.patch(f"{TASK}.create_advisory._release_claimed_work") as release,
         mock.patch(
@@ -3449,7 +3579,7 @@ def test_recover_after_timeout_releases_claim_only_branch(tmp_path: Path) -> Non
             deadline=time.monotonic() + 100,
         )
     assert finished is True
-    release.assert_called_once()
+    release.assert_not_called()
 
 
 def test_recover_after_timeout_returns_false_for_claim_only_after_sync(
@@ -3469,7 +3599,7 @@ def test_recover_after_timeout_returns_false_for_claim_only_after_sync(
             f"{TASK}.create_advisory._is_claim_only_branch",
             return_value=True,
         ),
-        mock.patch(f"{TASK}.create_advisory._release_claimed_work"),
+        mock.patch(f"{TASK}.create_advisory._release_claimed_work") as release,
         mock.patch(
             f"{TASK}.create_advisory._sync_main_and_finish_if_published",
             return_value=False,
@@ -3498,6 +3628,7 @@ def test_recover_after_timeout_returns_false_for_claim_only_after_sync(
             deadline=time.monotonic() + 100,
         )
     assert finished is False
+    release.assert_not_called()
 
 
 def test_finish_from_merged_reads_published_yaml_without_known_metadata(

@@ -319,16 +319,167 @@ def test_find_open_merge_request_by_source_branch_missing() -> None:
     assert gitlab.find_open_merge_request_by_source_branch(client, "g/r", "feat") is None
 
 
-def test_merge_request_is_merged_requires_commit_sha() -> None:
-    """Treat state=merged without merge_commit_sha as still open."""
+def test_merge_request_is_merged_allows_fast_forward() -> None:
+    """Recognize a merged MR when no separate merge commit exists."""
     merge_request = mock.Mock()
     merge_request.state = "merged"
     merge_request.merge_commit_sha = None
-    assert not gitlab.merge_request_is_merged(merge_request)
+    assert gitlab.merge_request_is_merged(merge_request)
     merge_request.merge_commit_sha = "abc123"
     assert gitlab.merge_request_is_merged(merge_request)
     merge_request.state = "opened"
     assert not gitlab.merge_request_is_merged(merge_request)
+
+
+def test_push_merge_request_logs_merged_fast_forward(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Show the merge-poll result in task logs without a merge commit SHA."""
+    merge_request = mock.Mock()
+    merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/1"
+    merge_request.state = "merged"
+    merge_request.merge_commit_sha = None
+    _stub_merge_request_reload(merge_request)
+
+    out = gitlab.push_merge_request_to_main(
+        _mock_gitlab_client(),
+        "g/r",
+        merge_request,
+        "feat",
+        timeout_seconds=10,
+        use_merge_train=True,
+    )
+
+    assert out is merge_request
+    merge_request.merge.assert_not_called()
+    assert "merge request https://gitlab.example.com/g/r/-/merge_requests/1 is merged" in (
+        caplog.text
+    )
+
+
+@pytest.mark.parametrize("response_code", [None, 409, 400])
+def test_add_merge_request_to_train(response_code: int | None) -> None:
+    """Queue the train, treating already-queued and checked MRs correctly."""
+    client = _mock_gitlab_client()
+    client.projects.get.return_value.id = 42
+    merge_request = mock.Mock(
+        iid=7, web_url="https://gitlab.example.com/g/r/-/merge_requests/7"
+    )
+    if response_code is not None:
+        responses: list[object] = [GitlabError("rejected", response_code=response_code)]
+        if response_code == 400:
+            responses.append({})
+        client.http_post.side_effect = responses
+
+    created = gitlab.add_merge_request_to_train(
+        client,
+        "g/r",
+        merge_request,
+        request_timeout=10,
+    )
+    assert created is (response_code != 409)
+
+    client.projects.get.assert_called_once_with("g/r", timeout=10, max_retries=0)
+    path = "/projects/42/merge_trains/merge_requests/7"
+    calls = [mock.call(path, post_data={"auto_merge": True}, timeout=10, max_retries=0)]
+    if response_code == 400:
+        calls.append(
+            mock.call(path, post_data={"auto_merge": False}, timeout=10, max_retries=0)
+        )
+    assert client.http_post.call_args_list == calls
+
+
+def test_add_merge_request_to_train_handles_immediate_add_conflict() -> None:
+    """A fallback 409 does not establish which run requested the train entry."""
+    client = _mock_gitlab_client()
+    merge_request = mock.Mock(
+        iid=7, web_url="https://gitlab.example.com/g/r/-/merge_requests/7"
+    )
+    client.http_post.side_effect = [
+        GitlabError("checks passed", response_code=400),
+        GitlabError("already queued", response_code=409),
+    ]
+
+    assert not gitlab.add_merge_request_to_train(
+        client, "g/r", merge_request, request_timeout=10
+    )
+    assert client.http_post.call_count == 2
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_get_merge_request_train_entry(missing: bool) -> None:
+    """Read the train entry and distinguish a missing entry from other errors."""
+    client = _mock_gitlab_client()
+    client.projects.get.return_value.id = 42
+    merge_request = mock.Mock(
+        iid=7, web_url="https://gitlab.example.com/g/r/-/merge_requests/7"
+    )
+    entry = {"status": "fresh", "pipeline": {"web_url": "https://example.com/p/1"}}
+    if missing:
+        client.http_get.side_effect = GitlabError("missing", response_code=404)
+    else:
+        client.http_get.return_value = entry
+
+    assert gitlab.get_merge_request_train_entry(
+        client, "g/r", merge_request, request_timeout=10
+    ) == (None if missing else entry)
+    client.http_get.assert_called_once_with(
+        "/projects/42/merge_trains/merge_requests/7", timeout=10, max_retries=0
+    )
+
+
+def test_add_merge_request_to_train_rejects_other_errors() -> None:
+    """Preserve a GitLab error that cannot be fixed by an immediate train add."""
+    client = _mock_gitlab_client()
+    merge_request = mock.Mock(
+        iid=7, web_url="https://gitlab.example.com/g/r/-/merge_requests/7"
+    )
+    client.http_post.side_effect = GitlabError("forbidden", response_code=403)
+
+    with pytest.raises(GitlabError, match="forbidden"):
+        gitlab.add_merge_request_to_train(client, "g/r", merge_request, request_timeout=10)
+    client.http_post.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [({"status": "success"}, True), ({"status": "error"}, False)],
+)
+def test_cancel_merge_request_auto_merge(response: dict[str, str], expected: bool) -> None:
+    """Cancel a train entry and distinguish a request with no pending merge."""
+    client = _mock_gitlab_client()
+    client.projects.get.return_value.id = 42
+    client.http_post.return_value = response
+    merge_request = mock.Mock(
+        iid=7, web_url="https://gitlab.example.com/g/r/-/merge_requests/7"
+    )
+
+    assert (
+        gitlab.cancel_merge_request_auto_merge(
+            client, "g/r", merge_request, request_timeout=10
+        )
+        is expected
+    )
+    client.projects.get.assert_called_once_with("g/r", timeout=10, max_retries=0)
+    client.http_post.assert_called_once_with(
+        "/projects/42/merge_requests/7/cancel_merge_when_pipeline_succeeds",
+        timeout=10,
+        max_retries=0,
+    )
+
+
+def test_cancel_merge_request_auto_merge_rejects_unknown_response() -> None:
+    """Treat an unrecognized response as an uncertain cancellation outcome."""
+    client = _mock_gitlab_client()
+    client.http_post.return_value = {"status": "pending"}
+    merge_request = mock.Mock(
+        iid=7, web_url="https://gitlab.example.com/g/r/-/merge_requests/7"
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected auto-merge cancellation response"):
+        gitlab.cancel_merge_request_auto_merge(
+            client, "g/r", merge_request, request_timeout=10
+        )
 
 
 def test_accept_merge_request() -> None:
@@ -339,6 +490,7 @@ def test_accept_merge_request() -> None:
     merge_request.merge.assert_called_once_with(
         should_remove_source_branch=True,
         timeout=12.5,
+        max_retries=0,
     )
 
 
@@ -519,6 +671,7 @@ def test_wait_until_merged_passes_request_timeout_to_refresh() -> None:
     timeout = merge_request.manager.get.call_args.kwargs["timeout"]
     assert 0 < timeout <= 10
     assert timeout <= gitlab._DEFAULT_GITLAB_REQUEST_TIMEOUT_SECONDS
+    assert merge_request.manager.get.call_args.kwargs["max_retries"] == 0
 
 
 def test_gitlab_request_timeout_caps_at_default(
@@ -566,10 +719,12 @@ def test_wait_until_merged_rejects_success_after_deadline(
         )
 
 
+@pytest.mark.parametrize("response_code", [429, 503])
 def test_wait_until_merged_retries_transient_refresh_error(
     monkeypatch: pytest.MonkeyPatch,
+    response_code: int,
 ) -> None:
-    """Retry transient GitLab failures while reloading a merge request."""
+    """Retry rate limits and transient failures within the caller's budget."""
     merge_request = mock.Mock()
     merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/1"
     merge_request.state = "merged"
@@ -585,7 +740,7 @@ def test_wait_until_merged_retries_transient_refresh_error(
     _stub_merge_request_reload(
         merge_request,
         get_side_effect=[
-            GitlabError("service unavailable", response_code=503),
+            GitlabError("transient failure", response_code=response_code),
             merged,
         ],
     )
@@ -611,7 +766,7 @@ def test_wait_until_merged_retries_transient_refresh_error(
 @pytest.mark.parametrize(
     ("merge_status", "detailed", "expected"),
     [
-        ("cannot_be_merged", "", True),
+        ("cannot_be_merged", "", False),
         ("", "conflict", True),
         ("", "conflict_severity_blocked", True),
         ("can_be_merged", "", False),
@@ -879,12 +1034,356 @@ def test_push_merge_request_to_main_merges_when_ready(
         merge_request,
         "feat",
         timeout_seconds=10,
+        use_merge_train=False,
     )
     assert out is merge_request
     merge_request.merge.assert_called_once_with(
         should_remove_source_branch=True,
         timeout=10.0,
+        max_retries=0,
     )
+
+
+def test_push_merge_request_to_main_queues_train_and_recognizes_fast_forward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Queue before CI passes and finish when GitLab reports a fast-forward merge."""
+    merge_request = mock.Mock()
+    merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/7"
+    merge_request.iid = 7
+    merge_request.state = "opened"
+    merge_request.merge_status = "cannot_be_merged"
+    merge_request.detailed_merge_status = "ci_must_pass"
+    merge_request.merge_commit_sha = None
+    merge_request.head_pipeline = None
+    _stub_merge_request_reload(merge_request)
+    client = _mock_gitlab_client()
+    client.http_get.return_value = {"status": "fresh", "pipeline": None}
+    attempt = gitlab.MergeTrainAttempt()
+
+    def _merge_after_train_queue(_seconds: float) -> None:
+        assert client.http_post.call_count == 1
+        merge_request.state = "merged"
+
+    monkeypatch.setattr(gitlab.time, "sleep", _merge_after_train_queue)
+    out = gitlab.push_merge_request_to_main(
+        client,
+        "g/r",
+        merge_request,
+        "feat",
+        timeout_seconds=10,
+        poll_interval_seconds=1,
+        use_merge_train=True,
+        train_attempt=attempt,
+    )
+
+    assert out is merge_request
+    assert merge_request.merge_commit_sha is None
+    merge_request.merge.assert_not_called()
+    client.http_post.assert_called_once()
+    assert attempt.queued_by_this_run
+
+
+def test_push_merge_request_to_main_detects_dropped_train(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail promptly when a previously observed train entry disappears."""
+    merge_request = mock.Mock(
+        iid=7,
+        web_url="https://gitlab.example.com/g/r/-/merge_requests/7",
+        state="opened",
+        merge_status="cannot_be_merged",
+        detailed_merge_status="ci_must_pass",
+        head_pipeline={"status": "success"},
+        merge_when_pipeline_succeeds=True,
+    )
+    _stub_merge_request_reload(merge_request)
+    monkeypatch.setattr(gitlab.time, "sleep", lambda _seconds: None)
+    client = _mock_gitlab_client()
+    client.http_get.side_effect = [
+        {"status": "fresh", "pipeline": {"web_url": "https://example.com/p/17"}},
+        GitlabError("dropped", response_code=404),
+    ]
+    with pytest.raises(RuntimeError, match="no longer on the merge train.*p/17"):
+        gitlab.push_merge_request_to_main(
+            client,
+            "g/r",
+            merge_request,
+            "feat",
+            timeout_seconds=10,
+            poll_interval_seconds=1,
+            use_merge_train=True,
+        )
+    client.http_post.assert_called_once()
+    assert client.http_get.call_count == 2
+
+
+def test_push_merge_request_waits_for_scheduled_train(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not treat a scheduled auto-merge's initial 404 as a dropped entry."""
+    merge_request = mock.Mock(
+        iid=7,
+        web_url="https://gitlab.example.com/g/r/-/merge_requests/7",
+        state="opened",
+        merge_status="cannot_be_merged",
+        detailed_merge_status="ci_must_pass",
+        head_pipeline={"status": "running"},
+        merge_when_pipeline_succeeds=True,
+    )
+    _stub_merge_request_reload(merge_request)
+    sleeps = 0
+
+    def _advance(_seconds: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 2:
+            merge_request.state = "merged"
+
+    monkeypatch.setattr(gitlab.time, "sleep", _advance)
+    client = _mock_gitlab_client()
+    client.http_get.side_effect = [
+        GitlabError("not yet materialized", response_code=404),
+        {"status": "fresh", "pipeline": None},
+    ]
+    result = gitlab.push_merge_request_to_main(
+        client,
+        "g/r",
+        merge_request,
+        "feat",
+        timeout_seconds=10,
+        poll_interval_seconds=1,
+        use_merge_train=True,
+    )
+    assert result is merge_request
+    assert client.http_get.call_count == 2
+
+
+def test_push_merge_request_fails_if_train_never_arms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stop promptly when a successful queue request never creates an entry."""
+    merge_request = mock.Mock(
+        iid=7,
+        web_url="https://gitlab.example.com/g/r/-/merge_requests/7",
+        state="opened",
+        merge_status="cannot_be_merged",
+        detailed_merge_status="ci_must_pass",
+        head_pipeline={"status": "success"},
+        merge_when_pipeline_succeeds=False,
+    )
+    _stub_merge_request_reload(merge_request)
+    monkeypatch.setattr(gitlab, "_MERGE_TRAIN_ENTRY_GRACE_SECONDS", 0)
+    client = _mock_gitlab_client()
+    client.http_get.side_effect = GitlabError("missing", response_code=404)
+
+    with pytest.raises(RuntimeError, match="no longer on the merge train"):
+        gitlab.push_merge_request_to_main(
+            client,
+            "g/r",
+            merge_request,
+            "feat",
+            timeout_seconds=10,
+            use_merge_train=True,
+        )
+    client.http_post.assert_called_once()
+
+
+def test_push_merge_request_reused_mr_observes_existing_train(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retry can observe an existing train without claiming cancellation rights."""
+    merge_request = mock.Mock(
+        iid=7,
+        web_url="https://gitlab.example.com/g/r/-/merge_requests/7",
+        state="opened",
+        merge_status="cannot_be_merged",
+        detailed_merge_status="ci_must_pass",
+        head_pipeline={"status": "running"},
+    )
+    _stub_merge_request_reload(merge_request)
+    monkeypatch.setattr(
+        gitlab.time, "sleep", lambda _seconds: setattr(merge_request, "state", "merged")
+    )
+    client = _mock_gitlab_client()
+    client.http_post.side_effect = GitlabError("already queued", response_code=409)
+    client.http_get.return_value = {"status": "fresh", "pipeline": None}
+    attempt = gitlab.MergeTrainAttempt()
+
+    assert (
+        gitlab.push_merge_request_to_main(
+            client,
+            "g/r",
+            merge_request,
+            "feat",
+            timeout_seconds=10,
+            poll_interval_seconds=1,
+            use_merge_train=True,
+            cleanup_on_conflict=False,
+            train_attempt=attempt,
+        )
+        is merge_request
+    )
+    client.http_post.assert_called_once()
+    assert not attempt.queued_by_this_run
+    assert attempt.may_merge_without_this_run
+
+
+def test_push_merge_request_reused_mr_queues_if_unqueued(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retry can resume an open MR after its earlier train request was canceled."""
+    merge_request = mock.Mock(
+        iid=7,
+        web_url="https://gitlab.example.com/g/r/-/merge_requests/7",
+        state="opened",
+        merge_status="cannot_be_merged",
+        detailed_merge_status="ci_must_pass",
+        head_pipeline={"status": "running"},
+    )
+    _stub_merge_request_reload(merge_request)
+    monkeypatch.setattr(
+        gitlab.time, "sleep", lambda _seconds: setattr(merge_request, "state", "merged")
+    )
+    client = _mock_gitlab_client()
+    client.http_get.return_value = {"status": "fresh", "pipeline": None}
+    attempt = gitlab.MergeTrainAttempt()
+
+    assert (
+        gitlab.push_merge_request_to_main(
+            client,
+            "g/r",
+            merge_request,
+            "feat",
+            timeout_seconds=10,
+            poll_interval_seconds=1,
+            use_merge_train=True,
+            cleanup_on_conflict=False,
+            train_attempt=attempt,
+        )
+        is merge_request
+    )
+    client.http_post.assert_called_once()
+    assert attempt.queued_by_this_run
+
+
+def test_push_merge_request_already_queued_is_not_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An already queued MR belongs to another task for cleanup purposes."""
+    merge_request = mock.Mock(
+        iid=7,
+        web_url="https://gitlab.example.com/g/r/-/merge_requests/7",
+        state="opened",
+        merge_status="cannot_be_merged",
+        detailed_merge_status="ci_must_pass",
+        head_pipeline={"status": "running"},
+    )
+    _stub_merge_request_reload(merge_request)
+    monkeypatch.setattr(
+        gitlab.time, "sleep", lambda _seconds: setattr(merge_request, "state", "merged")
+    )
+    client = _mock_gitlab_client()
+    client.http_post.side_effect = GitlabError("already queued", response_code=409)
+    client.http_get.return_value = {"status": "fresh", "pipeline": None}
+    attempt = gitlab.MergeTrainAttempt()
+
+    gitlab.push_merge_request_to_main(
+        client,
+        "g/r",
+        merge_request,
+        "feat",
+        timeout_seconds=10,
+        poll_interval_seconds=1,
+        use_merge_train=True,
+        train_attempt=attempt,
+    )
+    assert not attempt.queued_by_this_run
+    assert attempt.may_merge_without_this_run
+
+
+def test_push_merge_request_joiner_does_not_delete_conflicted_branch() -> None:
+    """A joining task leaves the MR and branch for its owner to clean up."""
+    merge_request = mock.Mock(
+        iid=7,
+        web_url="https://gitlab.example.com/g/r/-/merge_requests/7",
+        state="opened",
+        merge_status="cannot_be_merged",
+        detailed_merge_status="conflict",
+        head_pipeline=None,
+    )
+    _stub_merge_request_reload(merge_request)
+    with (
+        mock.patch.object(gitlab, "cleanup_merge_request_branch") as cleanup,
+        pytest.raises(RuntimeError, match="merge conflict"),
+    ):
+        gitlab.push_merge_request_to_main(
+            _mock_gitlab_client(),
+            "g/r",
+            merge_request,
+            "feat",
+            timeout_seconds=10,
+            use_merge_train=True,
+            cleanup_on_conflict=False,
+        )
+    cleanup.assert_not_called()
+
+
+@pytest.mark.parametrize("response_code", [500, 403])
+def test_push_merge_request_to_main_handles_train_queue_errors(
+    monkeypatch: pytest.MonkeyPatch, response_code: int
+) -> None:
+    """Retry transient queue failures and propagate permanent queue failures."""
+    merge_request = mock.Mock()
+    merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/7"
+    merge_request.iid = 7
+    merge_request.state = "opened"
+    merge_request.merge_status = "cannot_be_merged"
+    merge_request.detailed_merge_status = "ci_must_pass"
+    merge_request.head_pipeline = None
+    _stub_merge_request_reload(merge_request)
+    error = GitlabError("queue failed", response_code=response_code)
+    attempts = [error, True]
+    slept = 0
+
+    def _after_poll(_seconds: float) -> None:
+        nonlocal slept
+        slept += 1
+        if slept == 2:
+            merge_request.state = "merged"
+
+    monkeypatch.setattr(gitlab.time, "sleep", _after_poll)
+    with (
+        mock.patch.object(gitlab, "add_merge_request_to_train", side_effect=attempts) as add,
+        mock.patch.object(
+            gitlab, "get_merge_request_train_entry", return_value={"status": "fresh"}
+        ),
+    ):
+        if response_code == 403:
+            with pytest.raises(GitlabError, match="queue failed"):
+                gitlab.push_merge_request_to_main(
+                    _mock_gitlab_client(),
+                    "g/r",
+                    merge_request,
+                    "feat",
+                    timeout_seconds=10,
+                    poll_interval_seconds=1,
+                    use_merge_train=True,
+                )
+            add.assert_called_once()
+        else:
+            result = gitlab.push_merge_request_to_main(
+                _mock_gitlab_client(),
+                "g/r",
+                merge_request,
+                "feat",
+                timeout_seconds=10,
+                poll_interval_seconds=1,
+                use_merge_train=True,
+            )
+            assert result is merge_request
+            assert add.call_count == 2
+    merge_request.merge.assert_not_called()
 
 
 def test_push_merge_request_to_main_waits_for_pipeline(
@@ -935,11 +1434,13 @@ def test_push_merge_request_to_main_waits_for_pipeline(
         "feat",
         timeout_seconds=10,
         poll_interval_seconds=1,
+        use_merge_train=False,
     )
     assert out is merge_request
     merge_request.merge.assert_called_once_with(
         should_remove_source_branch=True,
         timeout=mock.ANY,
+        max_retries=0,
     )
 
 
@@ -982,11 +1483,13 @@ def test_push_merge_request_to_main_accept_uses_capped_timeout(
         merge_request,
         "feat",
         timeout_seconds=100,
+        use_merge_train=False,
     )
     assert out is merge_request
     merge_request.merge.assert_called_once_with(
         should_remove_source_branch=True,
         timeout=gitlab._DEFAULT_GITLAB_REQUEST_TIMEOUT_SECONDS,
+        max_retries=0,
     )
 
 
@@ -1033,6 +1536,7 @@ def test_push_merge_request_to_main_accept_timeout_exhausted(
             merge_request,
             "feat",
             timeout_seconds=10,
+            use_merge_train=False,
         )
     merge_request.merge.assert_not_called()
 
@@ -1086,6 +1590,7 @@ def test_push_merge_request_to_main_retries_after_405(
         "feat",
         timeout_seconds=10,
         poll_interval_seconds=1,
+        use_merge_train=False,
     )
     assert out is merge_request
     assert merge_request.merge.call_count == 2
@@ -1107,8 +1612,137 @@ def test_push_merge_request_to_main_pipeline_failed_raises() -> None:
             merge_request,
             "feat",
             timeout_seconds=10,
+            use_merge_train=False,
         )
     merge_request.merge.assert_not_called()
+
+
+def test_push_merge_request_to_main_restarts_failed_pipeline_on_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A task retry starts new MR CI and waits for GitLab to show its status."""
+    merge_request = mock.Mock(
+        iid=7,
+        web_url="https://gitlab.example.com/g/r/-/merge_requests/7",
+        state="opened",
+        merge_status="cannot_be_merged",
+        detailed_merge_status="ci_must_pass",
+        head_pipeline={"id": 11, "status": "failed"},
+    )
+    merge_request.pipelines.create.return_value.id = 12
+    _stub_merge_request_reload(merge_request)
+    sleeps = 0
+
+    def advance(_seconds: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 1:
+            merge_request.head_pipeline = {"id": 12, "status": "running"}
+        else:
+            merge_request.state = "merged"
+
+    monkeypatch.setattr(gitlab.time, "sleep", advance)
+    client = _mock_gitlab_client()
+    client.http_get.return_value = {"status": "fresh", "pipeline": None}
+
+    out = gitlab.push_merge_request_to_main(
+        client,
+        "g/r",
+        merge_request,
+        "feat",
+        timeout_seconds=10,
+        poll_interval_seconds=1,
+        use_merge_train=True,
+        retry_failed_pipeline=True,
+    )
+
+    assert out is merge_request
+    assert sleeps == 2
+    merge_request.pipelines.create.assert_called_once()
+    assert merge_request.pipelines.create.call_args.args == ({},)
+    client.http_post.assert_called_once()
+
+
+@pytest.mark.parametrize("failed_pipeline_id", [12, 13])
+def test_push_merge_request_to_main_stops_after_restarted_pipeline_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    failed_pipeline_id: int,
+) -> None:
+    """Stop if this task's or a newer concurrent pipeline fails."""
+    merge_request = mock.Mock(
+        iid=7,
+        web_url="https://gitlab.example.com/g/r/-/merge_requests/7",
+        state="opened",
+        merge_status="cannot_be_merged",
+        detailed_merge_status="ci_must_pass",
+        head_pipeline={"id": 11, "status": "failed"},
+    )
+    merge_request.pipelines.create.return_value.id = 12
+    _stub_merge_request_reload(merge_request)
+    monkeypatch.setattr(
+        gitlab.time,
+        "sleep",
+        lambda _seconds: setattr(
+            merge_request, "head_pipeline", {"id": failed_pipeline_id, "status": "failed"}
+        ),
+    )
+    client = _mock_gitlab_client()
+
+    with pytest.raises(RuntimeError, match="pipeline 'failed' failed"):
+        gitlab.push_merge_request_to_main(
+            client,
+            "g/r",
+            merge_request,
+            "feat",
+            timeout_seconds=10,
+            poll_interval_seconds=1,
+            use_merge_train=True,
+            retry_failed_pipeline=True,
+        )
+
+    merge_request.pipelines.create.assert_called_once()
+    client.http_post.assert_not_called()
+
+
+def test_push_merge_request_to_main_failed_ci_keeps_queued_mr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed pipeline stops the wait without closing a queued advisory MR."""
+    merge_request = mock.Mock(
+        iid=7,
+        web_url="https://gitlab.example.com/g/r/-/merge_requests/7",
+        state="opened",
+        merge_status="cannot_be_merged",
+        detailed_merge_status="ci_must_pass",
+        head_pipeline={"status": "running"},
+    )
+    _stub_merge_request_reload(merge_request)
+    monkeypatch.setattr(
+        gitlab.time,
+        "sleep",
+        lambda _seconds: setattr(merge_request, "head_pipeline", {"status": "failed"}),
+    )
+    client = _mock_gitlab_client()
+    client.http_get.return_value = {"status": "fresh", "pipeline": None}
+    attempt = gitlab.MergeTrainAttempt()
+
+    with (
+        mock.patch.object(gitlab, "cleanup_merge_request_branch") as cleanup,
+        pytest.raises(RuntimeError, match="pipeline 'failed' failed"),
+    ):
+        gitlab.push_merge_request_to_main(
+            client,
+            "g/r",
+            merge_request,
+            "feat",
+            timeout_seconds=10,
+            poll_interval_seconds=1,
+            use_merge_train=True,
+            train_attempt=attempt,
+        )
+    assert attempt.queued_by_this_run
+    assert merge_request.state == "opened"
+    cleanup.assert_not_called()
 
 
 def test_push_merge_request_to_main_conflict_cleans_up() -> None:
@@ -1129,8 +1763,42 @@ def test_push_merge_request_to_main_conflict_cleans_up() -> None:
                 merge_request,
                 "feat",
                 timeout_seconds=10,
+                use_merge_train=False,
             )
     cleanup.assert_called_once_with(client, "g/r", merge_request, "feat")
+
+
+def test_push_merge_request_keeps_branch_when_merge_status_is_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserve the branch while GitLab reports only cannot_be_merged."""
+    merge_request = mock.Mock()
+    merge_request.web_url = "https://gitlab.example.com/g/r/-/merge_requests/1"
+    merge_request.state = "opened"
+    merge_request.merge_status = "cannot_be_merged"
+    merge_request.detailed_merge_status = ""
+    merge_request.merge_commit_sha = None
+    merge_request.head_pipeline = None
+    _stub_merge_request_reload(merge_request)
+
+    def _merged_by_another_actor(_seconds: float) -> None:
+        merge_request.state = "merged"
+        merge_request.merge_commit_sha = "abc123"
+
+    monkeypatch.setattr(gitlab.time, "sleep", _merged_by_another_actor)
+    with mock.patch.object(gitlab, "cleanup_merge_request_branch") as cleanup:
+        result = gitlab.push_merge_request_to_main(
+            _mock_gitlab_client(),
+            "g/r",
+            merge_request,
+            "feat",
+            timeout_seconds=10,
+            poll_interval_seconds=1,
+            use_merge_train=False,
+        )
+    assert result is merge_request
+    cleanup.assert_not_called()
+    merge_request.merge.assert_not_called()
 
 
 def test_is_transient_gitlab_error_connection_and_unrelated() -> None:
@@ -1357,6 +2025,7 @@ def test_push_merge_request_continues_after_transient_post_accept_refresh(
         "feat",
         timeout_seconds=10,
         poll_interval_seconds=1,
+        use_merge_train=False,
     )
     assert out is merge_request
     merge_request.merge.assert_called_once()
@@ -1421,6 +2090,7 @@ def test_push_merge_request_propagates_non_transient_post_accept_refresh() -> No
             "feat",
             timeout_seconds=10,
             poll_interval_seconds=1,
+            use_merge_train=False,
         )
 
 
@@ -1572,6 +2242,7 @@ def test_push_merge_request_to_main_uses_bounded_exponential_backoff(
         "feat",
         timeout_seconds=100,
         poll_interval_seconds=1,
+        use_merge_train=False,
     )
     assert out is merge_request
     assert slept == [1.0, 2.0, 4.0]

@@ -596,42 +596,28 @@ def _release_claimed_work(
     gitlab_client: Gitlab,
     credentials: gitlab.GitLabCredentials,
     source_branch: str | None,
-    merge_request: Any | None = None,
 ) -> None:
-    """Best-effort cleanup of a claimed branch and optional merge request."""
+    """Delete an unused claim branch only when no open MR may depend on it."""
     if source_branch is None:
         return
 
-    if merge_request is None:
-        try:
-            merge_request = gitlab.find_open_merge_request_by_source_branch(
-                gitlab_client,
-                credentials.git_repo,
-                source_branch,
-            )
-        except Exception as exc:
-            logger.warning(
-                "failed to look up merge request for branch %s during cleanup: %s",
-                source_branch,
-                exc,
-                exc_info=True,
-            )
+    try:
+        merge_request = gitlab.find_open_merge_request_by_source_branch(
+            gitlab_client,
+            credentials.git_repo,
+            source_branch,
+        )
+    except (GitlabError, requests.RequestException) as exc:
+        logger.warning(
+            "failed to look up merge request for branch %s during cleanup: %s",
+            source_branch,
+            exc,
+            exc_info=True,
+        )
+        return
 
     if merge_request is not None:
-        try:
-            gitlab.cleanup_merge_request_branch(
-                gitlab_client,
-                credentials.git_repo,
-                merge_request,
-                source_branch,
-            )
-        except Exception as exc:
-            logger.warning(
-                "failed to clean up merge request for branch %s: %s",
-                source_branch,
-                exc,
-                exc_info=True,
-            )
+        logger.info("retaining branch %s with an open merge request", source_branch)
         return
 
     try:
@@ -640,7 +626,7 @@ def _release_claimed_work(
             credentials.git_repo,
             source_branch,
         )
-    except Exception as exc:
+    except (GitlabError, requests.RequestException) as exc:
         logger.warning(
             "failed to delete claimed branch %s: %s",
             source_branch,
@@ -706,21 +692,9 @@ def _recover_after_merge_request_wait_timeout(
     """Sync main, rerun idempotency, and join advisory work on *source_branch*.
 
     Used after an MR wait times out or when the branch could not be claimed.
-    Claim-only branches are deleted; branches with advisory commits get an MR.
+    Leave an unowned claim-only branch to its original task. Branches with
+    advisory commits get an MR.
     """
-    # A claim-only tip means this run reserved the branch but never landed an
-    # advisory commit. Drop it so another run can reclaim the fingerprint.
-    if _is_claim_only_branch(
-        repo_root,
-        source_branch,
-        stderr_path=stderr_path,
-    ):
-        _release_claimed_work(
-            gitlab_client,
-            credentials,
-            source_branch,
-        )
-
     # The timed-out MR may still have merged after we stopped waiting. Re-sync
     # main and finish if the advisory is already published there.
     if _sync_main_and_finish_if_published(
@@ -782,6 +756,7 @@ def _recover_after_merge_request_wait_timeout(
         stderr_path=stderr_path,
         result_paths=result_paths,
         deadline=deadline,
+        owns_advisory_branch=False,
     )
     return True
 
@@ -861,11 +836,13 @@ def _finish_from_merged_merge_request(
     yaml_repo_path: str | None = None,
     advisory_type: str | None = None,
     advisory_name: str | None = None,
+    owns_advisory_branch: bool = True,
 ) -> str:
     """Merge *merge_request* and write success only after the YAML is on main.
 
     Do not trust known *advisory_type* / *advisory_name* alone — sync main and
-    require the file before reporting Success.
+    require the file before reporting Success. A task reusing another run's MR
+    can queue it if needed, but cannot cancel auto-merge or delete its branch.
     """
     mr_url = getattr(merge_request, "web_url", None) or str(getattr(merge_request, "iid", "?"))
     logger.info(
@@ -874,13 +851,62 @@ def _finish_from_merged_merge_request(
         source_branch,
     )
     _approve_advisory_merge_request(merge_request, deadline=deadline)
-    gitlab.push_merge_request_to_main(
-        gitlab_client,
-        credentials.git_repo,
-        merge_request,
-        source_branch,
-        timeout_seconds=_timeout_seconds_until(deadline),
-    )
+    logger.info("approval completed for advisory merge request %s", mr_url)
+    train_attempt = gitlab.MergeTrainAttempt()
+    try:
+        gitlab.push_merge_request_to_main(
+            gitlab_client,
+            credentials.git_repo,
+            merge_request,
+            source_branch,
+            timeout_seconds=_timeout_seconds_until(deadline),
+            use_merge_train=True,
+            train_attempt=train_attempt,
+            cleanup_on_conflict=owns_advisory_branch,
+            retry_failed_pipeline=not owns_advisory_branch,
+        )
+    except (GitlabError, requests.RequestException, RuntimeError, TimeoutError) as merge_error:
+        # Only the run that claimed the branch may cancel its train request.
+        # Another run may still be relying on a reused MR, even if we queued it.
+        logger.warning("advisory merge wait failed for %s: %s", mr_url, merge_error)
+        cancel_error: Exception | None = None
+        if owns_advisory_branch and train_attempt.queued_by_this_run:
+            try:
+                gitlab.cancel_merge_request_auto_merge(
+                    gitlab_client,
+                    credentials.git_repo,
+                    merge_request,
+                    request_timeout=30,
+                )
+            except (GitlabError, requests.RequestException, RuntimeError) as exc:
+                cancel_error = exc
+                logger.warning("could not cancel auto-merge for %s: %s", mr_url, exc)
+        elif not owns_advisory_branch or train_attempt.may_merge_without_this_run:
+            logger.info("leaving unowned merge train state unchanged for %s", mr_url)
+        try:
+            fresh = merge_request.manager.get(
+                merge_request.get_id(), timeout=30, max_retries=0
+            )
+        except (GitlabError, requests.RequestException) as exc:
+            raise RuntimeError(
+                f"could not confirm whether {mr_url} merged after the merge wait; "
+                "check the merge request before retrying"
+            ) from exc
+        if fresh.state == "merged":
+            merge_request._update_attrs({"state": "merged"})
+            logger.info("advisory merge request %s merged during cleanup", mr_url)
+        elif cancel_error is not None:
+            raise RuntimeError(
+                f"could not cancel auto-merge for {mr_url}; it may merge after "
+                "this task fails, so check the merge request before retrying"
+            ) from cancel_error
+        elif not owns_advisory_branch or train_attempt.may_merge_without_this_run:
+            raise RuntimeError(
+                f"{merge_error}; merge request {mr_url} may still merge after this "
+                "task fails; check its state before retrying"
+            ) from merge_error
+        else:
+            raise
     if not gitlab.merge_request_is_merged(merge_request):
         msg = f"merge request {mr_url} is not merged"
         err = RuntimeError(msg)
@@ -1009,6 +1035,7 @@ def _try_finish_via_existing_merge_request(
         stderr_path=stderr_path,
         result_paths=result_paths,
         deadline=deadline,
+        owns_advisory_branch=False,
     )
     return True
 
@@ -1107,6 +1134,10 @@ def _commit_and_merge_new_advisory(
         if claim_commit_sha is not None and remote_sha == claim_commit_sha:
             raise push_error
         if remote_sha != local_sha:
+            # The remote now has advisory work from another run. Neither the
+            # losing pusher nor its finalizer may delete that branch.
+            if claim_holder is not None:
+                claim_holder["branch"] = None
             merge_request = gitlab.wait_for_open_merge_request_by_source_branch(
                 gitlab_client,
                 credentials.git_repo,
@@ -1125,6 +1156,7 @@ def _commit_and_merge_new_advisory(
                     stderr_path=stderr_path,
                     result_paths=result_paths,
                     deadline=deadline,
+                    owns_advisory_branch=False,
                 )
             if remote_yaml_path != yaml_repo_path:
                 msg = (
@@ -1137,6 +1169,10 @@ def _commit_and_merge_new_advisory(
                     err,
                 ) from err
 
+    # The advisory commit is now remote. Keep it available for a retry even if
+    # MR creation, approval, or merge fails after this point.
+    if claim_holder is not None:
+        claim_holder["branch"] = None
     logger.info("creating or reusing merge request for branch %s", source_branch)
     merge_request = gitlab.get_or_create_merge_request(
         gitlab_client,
@@ -1153,8 +1189,6 @@ def _commit_and_merge_new_advisory(
             task_run_name,
         ),
     )
-    if claim_holder is not None:
-        claim_holder["merge_request"] = merge_request
     return _finish_from_merged_merge_request(
         gitlab_client=gitlab_client,
         credentials=credentials,
@@ -1269,7 +1303,7 @@ def run_create_advisory(
     gitlab.configure_git_oauth2_auth(credentials.access_token)
 
     work_dir = Path(tempfile.mkdtemp(prefix="create-advisory-"))
-    claim_holder: dict[str, Any] = {"branch": None, "merge_request": None}
+    claim_holder: dict[str, Any] = {"branch": None}
     gitlab_client: Gitlab | None = None
     # One budget for every MR wait/merge in this run so chained waits cannot
     # together exceed the InternalRequest task timeout.
@@ -1440,28 +1474,13 @@ def run_create_advisory(
             claim_holder=claim_holder,
         )
         claim_holder["branch"] = None
-        claim_holder["merge_request"] = None
         logger.info("create advisory workflow completed successfully")
-    except tekton.CheckStepError as exc:
-        if exc.action == _ADVISORY_APPROVAL_ACTION:
-            # Approval only starts after advisory commits are pushed. Retain that work
-            # so a later run can reuse it, including when we joined a competing MR.
-            logger.warning(
-                "retaining advisory branch %s and its merge request after approval failure",
-                source_branch,
-            )
-            claim_holder["branch"] = None
-            claim_holder["merge_request"] = None
-        raise
     finally:
-        if gitlab_client is not None and (
-            claim_holder.get("branch") or claim_holder.get("merge_request")
-        ):
+        if gitlab_client is not None and claim_holder.get("branch"):
             _release_claimed_work(
                 gitlab_client,
                 credentials,
                 claim_holder.get("branch"),
-                claim_holder.get("merge_request"),
             )
         shutil.rmtree(work_dir, ignore_errors=True)
 
