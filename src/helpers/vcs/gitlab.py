@@ -508,14 +508,17 @@ def add_merge_request_to_train(
     merge_request: Any,
     *,
     request_timeout: float,
-) -> bool:
-    """Queue an MR; return whether this call created its train request."""
+) -> bool | None:
+    """Queue an MR: True if added, False if queued, None if trains are disabled."""
     project = get_project(
         gitlab_client,
         repository,
         timeout=request_timeout,
         max_retries=0,
     )
+    if getattr(project, "merge_trains_enabled", None) is False:
+        logger.info("merge trains are disabled for %s; using a direct merge", repository)
+        return None
     path = f"/projects/{project.id}/merge_trains/merge_requests/{merge_request.iid}"
     try:
         gitlab_client.http_post(
@@ -779,10 +782,10 @@ def push_merge_request_to_main(
 ) -> Any:
     """Merge *merge_request* when ready and wait until it lands on main.
 
-    Queue the MR on a merge train when *use_merge_train* is true. A task
-    reusing another run's MR can queue it if needed, but must disable conflict
-    cleanup so it does not delete the other run's branch. Otherwise poll until
-    GitLab reports the MR mergeable, then accept it directly.
+    Queue the MR on a merge train when *use_merge_train* is true and the project
+    enables trains. A task reusing another run's MR can queue it if needed, but
+    must disable conflict cleanup so it does not delete the other run's branch.
+    Otherwise poll until GitLab reports the MR mergeable, then accept it directly.
 
     A task retry may restart one failed MR pipeline on a reused MR. Wait until
     GitLab reports that pipeline as the head before handling another failure.
@@ -901,10 +904,13 @@ def push_merge_request_to_main(
                         "transient GitLab error queuing merge request %s: %s", url, exc
                     )
                 else:
-                    merge_queued = True
-                    train_attempt.queued_by_this_run = queued_by_this_run
-                    train_attempt.may_merge_without_this_run = not queued_by_this_run
-                    train_queued_at = time.monotonic()
+                    if queued_by_this_run is None:
+                        use_merge_train = False
+                    else:
+                        merge_queued = True
+                        train_attempt.queued_by_this_run = queued_by_this_run
+                        train_attempt.may_merge_without_this_run = not queued_by_this_run
+                        train_queued_at = time.monotonic()
 
             if use_merge_train and merge_queued:
                 train_request_timeout = _gitlab_request_timeout_seconds(deadline)

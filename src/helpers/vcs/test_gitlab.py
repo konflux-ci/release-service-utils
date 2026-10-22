@@ -362,6 +362,7 @@ def test_add_merge_request_to_train(response_code: int | None) -> None:
     """Queue the train, treating already-queued and checked MRs correctly."""
     client = _mock_gitlab_client()
     client.projects.get.return_value.id = 42
+    client.projects.get.return_value.merge_trains_enabled = True
     merge_request = mock.Mock(
         iid=7, web_url="https://gitlab.example.com/g/r/-/merge_requests/7"
     )
@@ -404,6 +405,19 @@ def test_add_merge_request_to_train_handles_immediate_add_conflict() -> None:
         client, "g/r", merge_request, request_timeout=10
     )
     assert client.http_post.call_count == 2
+
+
+def test_add_merge_request_to_train_when_disabled() -> None:
+    """Do not call the train API when the project has disabled merge trains."""
+    client = _mock_gitlab_client()
+    client.projects.get.return_value.merge_trains_enabled = False
+    merge_request = mock.Mock(iid=7)
+
+    assert (
+        gitlab.add_merge_request_to_train(client, "g/r", merge_request, request_timeout=10)
+        is None
+    )
+    client.http_post.assert_not_called()
 
 
 @pytest.mark.parametrize("missing", [False, True])
@@ -1058,6 +1072,7 @@ def test_push_merge_request_to_main_queues_train_and_recognizes_fast_forward(
     merge_request.head_pipeline = None
     _stub_merge_request_reload(merge_request)
     client = _mock_gitlab_client()
+    client.projects.get.return_value.merge_trains_enabled = True
     client.http_get.return_value = {"status": "fresh", "pipeline": None}
     attempt = gitlab.MergeTrainAttempt()
 
@@ -1082,6 +1097,53 @@ def test_push_merge_request_to_main_queues_train_and_recognizes_fast_forward(
     merge_request.merge.assert_not_called()
     client.http_post.assert_called_once()
     assert attempt.queued_by_this_run
+
+
+def test_push_merge_request_to_main_merges_directly_when_trains_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wait for green CI and accept directly if the project has no train."""
+    merge_request = mock.Mock(
+        iid=7,
+        web_url="https://gitlab.example.com/g/r/-/merge_requests/7",
+        state="opened",
+        merge_status="checking",
+        detailed_merge_status="ci_still_running",
+        head_pipeline={"status": "running"},
+        merge_commit_sha=None,
+    )
+    _stub_merge_request_reload(merge_request)
+    merge_request.merge.side_effect = lambda **_kwargs: setattr(
+        merge_request, "state", "merged"
+    )
+
+    def _finish_ci(_seconds: float) -> None:
+        merge_request.merge_status = "can_be_merged"
+        merge_request.detailed_merge_status = "mergeable"
+        merge_request.head_pipeline = {"status": "success"}
+
+    monkeypatch.setattr(gitlab.time, "sleep", _finish_ci)
+    client = _mock_gitlab_client()
+    client.projects.get.return_value.merge_trains_enabled = False
+    attempt = gitlab.MergeTrainAttempt()
+
+    result = gitlab.push_merge_request_to_main(
+        client,
+        "g/r",
+        merge_request,
+        "feat",
+        timeout_seconds=10,
+        poll_interval_seconds=1,
+        use_merge_train=True,
+        train_attempt=attempt,
+    )
+
+    assert result is merge_request
+    merge_request.merge.assert_called_once()
+    client.http_post.assert_not_called()
+    client.http_get.assert_not_called()
+    assert not attempt.queued_by_this_run
+    assert not attempt.may_merge_without_this_run
 
 
 def test_push_merge_request_to_main_detects_dropped_train(
