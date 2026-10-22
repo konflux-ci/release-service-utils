@@ -20,6 +20,7 @@ from release_service_utils.helpers.internal_request import (
     SPAWN_OVERHEAD_SECONDS,
     create,
     fetch_results,
+    log_internal_run_names,
     seconds_to_duration,
 )
 from release_service_utils.helpers.logger import logger
@@ -101,14 +102,7 @@ def _request_advisory_severity(
     logger.info("done (%s)", ir_name)
 
     results = fetch_results(ir_name)
-    logger.info(
-        "** internalRequestPipelineRunName: %s",
-        results.get("internalRequestPipelineRunName", ""),
-    )
-    logger.info(
-        "** internalRequestTaskRunName: %s",
-        results.get("internalRequestTaskRunName", ""),
-    )
+    log_internal_run_names(results)
 
     if results.get("result") != "Success":
         logger.error("%s: %s", _IR_FAILURE_MSG, results.get("result", ""))
