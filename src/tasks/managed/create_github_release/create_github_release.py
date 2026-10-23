@@ -17,6 +17,7 @@ import tempfile
 from pathlib import Path
 
 from release_service_utils.helpers import extract_artifacts
+from release_service_utils.helpers import retry_safety
 from release_service_utils.helpers import skopeo
 from release_service_utils.helpers import snapshot
 from release_service_utils.helpers import tekton
@@ -146,6 +147,7 @@ def run_create_github_release(
     Return the release URL.
     """
     owner_repo = github.owner_repo_from_url(repository)
+    retry_safety_recorder = retry_safety.RetrySafetyRecorder.from_env()
     logger.info("Processing release for %s v%s", owner_repo, release_version)
 
     existing_url = check_release_exists(owner_repo, release_version, gh_token, repository)
@@ -188,6 +190,10 @@ def run_create_github_release(
         content_dir = data_dir / content_directory
         logger.info("Creating release with files from %s and %s", binaries_tmp, content_dir)
 
+        retry_safety_recorder.mark_unsafe_operation_started(
+            "Started creating GitHub release",
+            details={"repository": repository, "release_version": release_version},
+        )
         release_url = create_release(
             repository,
             release_version,
@@ -196,6 +202,10 @@ def run_create_github_release(
             gh_token,
         )
         logger.info("Release created: %s", release_url)
+        retry_safety_recorder.mark_unsafe_operation_completed(
+            "Created GitHub release",
+            details={"repository": repository, "release_version": release_version},
+        )
 
         result_url_path.write_text(release_url, encoding="utf-8")
         results_file = data_dir / results_dir_path / "create-github-release-results.json"

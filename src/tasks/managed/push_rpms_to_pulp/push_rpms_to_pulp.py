@@ -12,6 +12,7 @@ from typing import Any
 
 from release_service_utils.helpers import file as file_helper
 from release_service_utils.helpers import oras_utils
+from release_service_utils.helpers import retry_safety
 from release_service_utils.helpers import tekton
 from release_service_utils.helpers.logger import logger
 from release_service_utils.helpers.pulp_client import (
@@ -121,6 +122,7 @@ class PushContext:
     docs: OutputDocs
     timeout: int
     first_arch: str
+    retry_safety_recorder: retry_safety.RetrySafetyRecorder
 
 
 def build_rpm_repo_map(snapshot: dict[str, Any]) -> dict[str, list[str]]:
@@ -367,6 +369,11 @@ def process_local_rpm(
         return {}
 
     _log_upload(rpm, to_add)
+    retry_safety_recorder = ctx.retry_safety_recorder
+    retry_safety_recorder.mark_unsafe_operation_started(
+        "Started uploading RPM to Pulp",
+        details={"rpm": rpm.filename},
+    )
     href = ctx.client.upload_rpm(rpm.path, ctx.chunk_size, ctx.config_file)
     hrefs_by_repo: dict[str, list[str]] = {}
     for placement in to_add:
@@ -375,6 +382,10 @@ def process_local_rpm(
         if not artifact_recorded:
             _record_artifact(ctx, rpm, placement)
             artifact_recorded = True
+    retry_safety_recorder.mark_unsafe_operation_completed(
+        "Uploaded RPM to Pulp",
+        details={"rpm": rpm.filename},
+    )
     return hrefs_by_repo
 
 
@@ -392,7 +403,15 @@ def add_content_by_repo(
             logger.info("Adding %s source packages to source repository", len(hrefs))
         else:
             logger.info("Adding %s packages to %s repository", len(hrefs), repo)
+        ctx.retry_safety_recorder.mark_unsafe_operation_started(
+            "Started adding content to Pulp repository",
+            details={"repository": repo},
+        )
         ctx.client.add_content(repo, hrefs, ctx.timeout)
+        ctx.retry_safety_recorder.mark_unsafe_operation_completed(
+            "Added content to Pulp repository",
+            details={"repository": repo},
+        )
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
@@ -451,6 +470,7 @@ def _run(config: PushConfig) -> None:
         docs=docs,
         timeout=config.pulp_task_timeout,
         first_arch=arches[0] if arches else "x86_64",
+        retry_safety_recorder=retry_safety.RetrySafetyRecorder.from_env(),
     )
 
     hrefs_by_repo: dict[str, list[str]] = {}
