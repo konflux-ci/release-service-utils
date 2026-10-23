@@ -535,8 +535,6 @@ def add_merge_request_to_train(
             return False
         if getattr(exc, "response_code", None) != 400:
             raise
-        # Hummingbird's releng-sync uses an immediate add when GitLab rejects auto_merge
-        # after the merge checks have already passed.
         try:
             gitlab_client.http_post(
                 path,
