@@ -16,6 +16,14 @@ import run_single_catalog_e2e_suite as rs
 _SUITE_PY = Path(rs.__file__).resolve()
 
 
+@pytest.fixture
+def operational_logs(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture):
+    """Capture operational messages through the configured logging framework."""
+    monkeypatch.setattr(rs.logger, "propagate", True)
+    caplog.set_level("INFO", logger=rs.logger.name)
+    return caplog
+
+
 def _plr_json(
     *,
     completion_time: str | None = None,
@@ -120,6 +128,7 @@ def test_pipelinerun_finished_invalid_json_exits(
 
 def test_wait_pipelinerun_terminal_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     """Return True when first poll shows Succeeded=True."""
+    monkeypatch.setattr(rs, "_start_run_test_log_stream", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         rs,
         "_pipelinerun_finished",
@@ -130,7 +139,7 @@ def test_wait_pipelinerun_terminal_succeeds(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_wait_pipelinerun_terminal_timeout_exits_124(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, operational_logs: pytest.LogCaptureFixture
 ) -> None:
     """Exit 124 when monotonic time passes the deadline while still running."""
     tick = [0.0]
@@ -139,17 +148,18 @@ def test_wait_pipelinerun_terminal_timeout_exits_124(
         tick[0] += 1000.0
         return tick[0]
 
+    monkeypatch.setattr(rs, "_start_run_test_log_stream", lambda *args, **kwargs: None)
     monkeypatch.setattr(rs, "_pipelinerun_finished", lambda n, ns: None)
     monkeypatch.setattr(rs.time, "monotonic", mono)
     monkeypatch.setattr(rs.time, "sleep", lambda _: None)
     with pytest.raises(SystemExit) as ei:
         rs._wait_pipelinerun_terminal(name="x", ns="ns", timeout_seconds=30.0)
     assert ei.value.code == 124
-    assert "timeout" in capsys.readouterr().err
+    assert "timeout" in operational_logs.text
 
 
 def test_wait_pipelinerun_terminal_heartbeat_and_sleep_while_running(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, operational_logs: pytest.LogCaptureFixture
 ) -> None:
     """Emit heartbeat and sleep while polling until the run eventually succeeds."""
     poll_calls = [0]
@@ -168,21 +178,23 @@ def test_wait_pipelinerun_terminal_heartbeat_and_sleep_while_running(
     def mono() -> float:
         return next(monotonic_vals)
 
+    monkeypatch.setattr(rs, "_start_run_test_log_stream", lambda *args, **kwargs: None)
     monkeypatch.setattr(rs, "_pipelinerun_finished", finished)
     monkeypatch.setattr(rs.time, "monotonic", mono)
     monkeypatch.setattr(rs.time, "sleep", lambda s: sleeps.append(float(s)))
 
     assert rs._wait_pipelinerun_terminal(name="pr", ns="ns1", timeout_seconds=120.0) is True
-    out = capsys.readouterr().out
-    assert "Waiting on pipelinerun/pr" in out
+    out = operational_logs.text
+    assert "Waiting on pipelinerun/pr" in out, out
     assert "remaining before timeout" in out
     assert sleeps == [10.0]
 
 
 def test_wait_pipelinerun_terminal_failed_prints_to_stderr(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, operational_logs: pytest.LogCaptureFixture
 ) -> None:
     """Failure path prints the PipelineRun message to stderr."""
+    monkeypatch.setattr(rs, "_start_run_test_log_stream", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         rs,
         "_pipelinerun_finished",
@@ -190,7 +202,7 @@ def test_wait_pipelinerun_terminal_failed_prints_to_stderr(
     )
     monkeypatch.setattr(rs.time, "sleep", lambda _: None)
     assert rs._wait_pipelinerun_terminal(name="bad", ns="ns", timeout_seconds=30.0) is False
-    assert "step foo died" in capsys.readouterr().err
+    assert "step foo died" in operational_logs.text
 
 
 def test_print_run_test_step_logs_no_taskrun(
@@ -785,3 +797,140 @@ def test_script_main_guard_exits_when_required_env_missing() -> None:
     )
     assert proc.returncode == 1
     assert "required" in proc.stderr
+
+
+@pytest.mark.parametrize("taskrun_name,pod_name", [(None, ""), ("tr", ""), ("tr", "pod")])
+def test_start_run_test_log_stream(
+    monkeypatch: pytest.MonkeyPatch, taskrun_name: str | None, pod_name: str
+) -> None:
+    """Wait for pod discovery and follow the test container without capturing its output."""
+    monkeypatch.setattr(
+        rs, "_taskrun_name_for_pipeline_task", lambda *args, **kwargs: taskrun_name
+    )
+    monkeypatch.setattr(
+        rs.subprocess,
+        "run",
+        MagicMock(return_value=subprocess.CompletedProcess([], 0, pod_name, "")),
+    )
+    start_process = MagicMock()
+    monkeypatch.setattr(rs.subprocess, "Popen", start_process)
+    result = rs._start_run_test_log_stream("pr", "ns", deadline=rs.time.monotonic() + 60)
+    if not pod_name:
+        assert result is None
+        start_process.assert_not_called()
+    else:
+        assert result is start_process.return_value
+        command = start_process.call_args.args[0]
+        assert "pod/pod" in command
+        assert command[command.index("-c") + 1] == "step-run-test"
+        assert "--follow" in command
+        assert "--tail=-1" in command
+        assert start_process.call_args.kwargs == {"stdout": sys.stderr, "stderr": sys.stderr}
+
+
+@pytest.mark.parametrize("stream_exit", [None, 0, 1])
+def test_wait_pipelinerun_stream_retries(
+    monkeypatch: pytest.MonkeyPatch, stream_exit: int | None
+) -> None:
+    """Retry discovery and failed streams, but retain running or completed streams."""
+    stream = MagicMock()
+    stream.poll.return_value = stream_exit
+    start_stream = MagicMock(side_effect=[None, stream, stream])
+    monkeypatch.setattr(rs, "_start_run_test_log_stream", start_stream)
+    monkeypatch.setattr(
+        rs, "_pipelinerun_finished", MagicMock(side_effect=[None, None, None, (True, "ok")])
+    )
+    monkeypatch.setattr(rs.time, "sleep", lambda _: None)
+    assert rs._wait_pipelinerun_terminal(name="pr", ns="ns", timeout_seconds=60)
+    assert start_stream.call_count == (3 if stream_exit == 1 else 2)
+    stream.wait.assert_called_once_with(timeout=5)
+
+
+@pytest.mark.parametrize("failure", ["timeout", "kubectl"])
+def test_wait_pipelinerun_cleans_up_log_stream(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    """Reap the follower even when the status poll or wait exits early."""
+    stream = MagicMock()
+    monkeypatch.setattr(rs, "_start_run_test_log_stream", lambda *args, **kwargs: stream)
+    monkeypatch.setattr(
+        rs, "_pipelinerun_finished", MagicMock(side_effect=[None, SystemExit(1)])
+    )
+    current_time = [0.0]
+
+    def sleep(_seconds: float) -> None:
+        current_time[0] += 100 if failure == "timeout" else 10
+
+    monkeypatch.setattr(rs.time, "monotonic", lambda: current_time[0])
+    monkeypatch.setattr(rs.time, "sleep", sleep)
+    with pytest.raises(SystemExit) as error:
+        rs._wait_pipelinerun_terminal(name="pr", ns="ns", timeout_seconds=60)
+    assert error.value.code == (124 if failure == "timeout" else 1)
+    stream.wait.assert_called_once_with(timeout=5)
+
+
+@pytest.mark.parametrize("timeouts", [0, 1, 2])
+def test_stop_run_test_log_stream(timeouts: int) -> None:
+    """Allow final output to drain, escalating to terminate and kill only if necessary."""
+    stream = MagicMock()
+    stream.wait.side_effect = [subprocess.TimeoutExpired("kubectl", 5)] * timeouts + [0]
+    rs._stop_run_test_log_stream(stream)
+    assert stream.terminate.call_count == int(timeouts >= 1)
+    assert stream.kill.call_count == int(timeouts == 2)
+    assert stream.wait.call_count == timeouts + 1
+
+
+@pytest.mark.parametrize("success", [True, False])
+def test_terminal_poll_does_not_start_follower(
+    monkeypatch: pytest.MonkeyPatch, success: bool
+) -> None:
+    """Do not launch a follower when the PipelineRun has already finished."""
+    monkeypatch.setattr(rs, "_pipelinerun_finished", lambda *args: (success, "done"))
+    start_stream = MagicMock()
+    monkeypatch.setattr(rs, "_start_run_test_log_stream", start_stream)
+    assert rs._wait_pipelinerun_terminal(name="pr", ns="ns", timeout_seconds=60) == success
+    start_stream.assert_not_called()
+
+
+@pytest.mark.parametrize("timed_out_lookup", [1, 2])
+def test_log_discovery_timeout_is_retryable(
+    monkeypatch: pytest.MonkeyPatch, timed_out_lookup: int
+) -> None:
+    """Bound both discovery commands by the shrinking deadline and retry timeouts."""
+    current_time = [0.0]
+    lookup_timeouts = []
+
+    def lookup(command, **kwargs):
+        lookup_timeouts.append(kwargs["timeout"])
+        if len(lookup_timeouts) == timed_out_lookup:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        current_time[0] += 2
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                {
+                    "status": {
+                        "childReferences": [{"pipelineTaskName": "run-test", "name": "tr"}]
+                    }
+                }
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(rs.time, "monotonic", lambda: current_time[0])
+    monkeypatch.setattr(rs.subprocess, "run", lookup)
+    start_process = MagicMock()
+    monkeypatch.setattr(rs.subprocess, "Popen", start_process)
+    assert rs._start_run_test_log_stream("pr", "ns", deadline=5) is None
+    assert lookup_timeouts == ([5] if timed_out_lookup == 1 else [5, 3])
+    start_process.assert_not_called()
+
+
+def test_expired_log_discovery_does_not_run_kubectl(monkeypatch) -> None:
+    """Skip discovery entirely once the PipelineRun wait budget is exhausted."""
+    monkeypatch.setattr(rs.time, "monotonic", lambda: 5)
+    lookup = MagicMock()
+    monkeypatch.setattr(rs.subprocess, "run", lookup)
+    assert rs._start_run_test_log_stream("pr", "ns", deadline=5) is None
+    lookup.assert_not_called()
