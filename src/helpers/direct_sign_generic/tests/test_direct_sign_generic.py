@@ -75,7 +75,7 @@ def test_submit_builds_params_and_labels() -> None:
     assert params["kerberos_keytab"] == "keytab"
     assert params["kerberos_principal"] == "signer@EXAMPLE.COM"
     assert params["verbose"] == "true"
-    assert "cleanup" not in call.kwargs
+    assert call.kwargs["cleanup"] is True
 
     labels = call.kwargs["labels"]
     assert labels["pl-uid"] == "uid-1"
