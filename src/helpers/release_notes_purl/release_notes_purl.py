@@ -15,6 +15,7 @@ from release_service_utils.helpers import content_gateway
 from release_service_utils.helpers import disk_image_utils
 from release_service_utils.helpers import file
 from release_service_utils.helpers import subprocess_cmd
+from release_service_utils.helpers.pypi_purl import pypi_purl_matches
 from release_service_utils.helpers.logger import logger
 
 PURL_CONTENT_TYPES = frozenset({"binary", "generic", "disk-image"})
@@ -43,17 +44,6 @@ def _all_artifacts_have_purls(artifacts: list[dict[str, Any]]) -> bool:
     return True
 
 
-def _component_content_type(component: dict[str, Any]) -> str:
-    """Return contentGateway.contentType, else top-level contentType, else empty."""
-    content_gateway_cfg = component.get("contentGateway")
-    if isinstance(content_gateway_cfg, dict):
-        content_type = content_gateway_cfg.get("contentType")
-        if content_type:
-            return str(content_type)
-    content_type = component.get("contentType")
-    return str(content_type) if content_type else ""
-
-
 def _first_purl_content_type(data: dict[str, Any]) -> str:
     """Return the first mapping component content type that needs PURL updates.
 
@@ -66,7 +56,7 @@ def _first_purl_content_type(data: dict[str, Any]) -> str:
     for component in components:
         if not isinstance(component, dict):
             continue
-        content_type = _component_content_type(component)
+        content_type = content_gateway.component_content_type(component)
         if content_type in PURL_CONTENT_TYPES:
             return content_type
     return ""
@@ -238,6 +228,10 @@ def _updated_binary_or_generic_entries(
     per-file expansion _updated_disk_image_entries uses for disk-images. See
     _merge_updated_artifacts for how same-key rows are merged back without
     dropping any of them.
+
+    Rows that already carry a ``pkg:pypi`` PURL for this component name
+    and version are kept as-is so Python wheel identities survive generic
+    mapping classification. Mismatched identities are rebuilt.
     """
     component_name = str(component.get("name", ""))
     version_name = _component_version_name(component)
@@ -266,6 +260,13 @@ def _updated_binary_or_generic_entries(
     )
     updated: list[dict[str, Any]] = []
     for entry in matching_entries:
+        if pypi_purl_matches(
+            entry.get("purl"),
+            str(entry.get("component") or component_name),
+            version_name,
+        ):
+            updated.append(entry)
+            continue
         architecture = str(entry.get("architecture", ""))
         operating_system = str(entry.get("os", ""))
         # Match files by arch/os, falling back to staged.files for teams that use
@@ -534,7 +535,7 @@ def update_artifact_purls(
         # Resolve content type per component so mixed releases (e.g. binary +
         # disk-image) each go through the correct code path. Unspecified or
         # container "image" types do not need PURL updates here.
-        content_type = _component_content_type(component)
+        content_type = content_gateway.component_content_type(component)
         if content_type not in PURL_CONTENT_TYPES:
             logger.info(
                 "Component %s content type '%s'. Skipping.",
