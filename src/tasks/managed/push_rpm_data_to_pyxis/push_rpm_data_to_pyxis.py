@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import string
 import subprocess
@@ -18,6 +20,7 @@ from release_service_utils.helpers import (
     authentication,
     cosign,
     file,
+    image_ref,
     memory_throttle,
     pyxis_api,
     subprocess_cmd,
@@ -38,6 +41,7 @@ class ImageJob:
     image_id: str
     container_image: str
     platform: str | None
+    arch_digest: str
 
 
 def _image_job(component: dict[str, Any], image: dict[str, Any]) -> ImageJob:
@@ -65,7 +69,12 @@ def _image_job(component: dict[str, Any], image: dict[str, Any]) -> ImageJob:
             )
         platform = f"{os_name}/{architecture}"
 
-    return ImageJob(image_id=image_id, container_image=container_image, platform=platform)
+    return ImageJob(
+        image_id=image_id,
+        container_image=container_image,
+        platform=platform,
+        arch_digest=arch_digest,
+    )
 
 
 def collect_image_jobs(pyxis_data: dict[str, Any]) -> list[ImageJob]:
@@ -114,15 +123,106 @@ def _log_process_output(
         logger.info(result.stderr.rstrip())
 
 
-def download_sbom(job: ImageJob, retries: int) -> None:
-    """Download one image SBOM with registry authentication and retries."""
-    cosign.download(
-        "sbom",
-        job.container_image,
-        SBOM_DIR / f"{job.image_id}.json",
-        max_attempts=retries + 1,
-        platform=job.platform,
+def _ecp_public_key(policy_json: str | None) -> str:
+    """Return the ``publicKey`` of an EnterpriseContractPolicy resource or spec."""
+    no_policy = (
+        "No EnterpriseContractPolicy provided; it is needed for the referrers API "
+        "SPDX attestation fallback"
     )
+    if policy_json is None or not policy_json.strip():
+        raise ValueError(no_policy)
+    try:
+        policy = json.loads(policy_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError("EnterpriseContractPolicy is not valid JSON") from exc
+    if not policy:
+        raise ValueError(no_policy)
+    if not isinstance(policy, dict):
+        raise ValueError("EnterpriseContractPolicy must be a JSON object")
+    spec = policy.get("spec", policy)
+    if not isinstance(spec, dict):
+        raise ValueError("EnterpriseContractPolicy 'spec' must be a JSON object")
+    key = spec.get("publicKey")
+    if not isinstance(key, str) or not key:
+        raise ValueError(
+            "Provided EnterpriseContractPolicy has no publicKey to verify the SPDX "
+            "attestation signature against (needed for referrers API SPDX fallback)"
+        )
+    return key
+
+
+def _statement(line: str, context: str) -> dict[str, Any]:
+    """Decode one verified envelope or bundle *line* into its in-toto statement.
+
+    Keep the intermediate copies local so they are freed on return.
+    """
+    try:
+        attestation = json.loads(line)
+        envelope = attestation.get("dsseEnvelope", attestation)
+        statement = json.loads(base64.b64decode(envelope["payload"]))
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise ValueError(f"Malformed attestation envelope for {context}: {exc!r}") from exc
+    if not isinstance(statement, dict):
+        raise ValueError(f"Attestation payload for {context} is not a JSON object")
+    return statement
+
+
+def _write_spdx_from_attestations(
+    verified_attestations: str, reference: str, arch_digest: str, output_path: Path
+) -> None:
+    """Write the SPDX predicate whose subject matches *arch_digest* to *output_path*.
+
+    *verified_attestations* contains DSSE envelopes or Cosign v3 bundles, one per
+    line. Decode lines individually and stream the predicate to disk without
+    building another JSON string.
+    """
+    algorithm, _, digest = arch_digest.partition(":")
+    for index, line in enumerate(verified_attestations.splitlines(), start=1):
+        if not line.strip():
+            continue
+        statement = _statement(line, f"{reference} (line {index})")
+        if any(
+            subject.get("digest", {}).get(algorithm) == digest
+            for subject in statement.get("subject", [])
+        ):
+            predicate = statement.get("predicate")
+            if predicate is None:
+                raise ValueError(f"SPDX attestation for {reference} has no predicate")
+            with output_path.open("w", encoding="utf-8") as handle:
+                json.dump(predicate, handle)
+            return
+    raise ValueError(f"No SPDX attestation found for {arch_digest}")
+
+
+def download_sbom(job: ImageJob, retries: int, enterprise_contract_policy: str | None) -> None:
+    """Download a legacy SBOM or a verified SPDX attestation via OCI referrers."""
+    output_path = SBOM_DIR / f"{job.image_id}.json"
+    try:
+        cosign.download(
+            "sbom",
+            job.container_image,
+            output_path,
+            max_attempts=retries + 1,
+            platform=job.platform,
+        )
+    except cosign.SbomNotFoundError as exc:
+        logger.info("No legacy SBOM for image %s; trying OCI referrers", job.image_id)
+        reference = f"{image_ref.repository(job.container_image)}@{job.arch_digest}"
+        try:
+            verified_attestations = cosign.verify_spdx_attestation(
+                reference,
+                key=_ecp_public_key(enterprise_contract_policy),
+                max_attempts=retries + 1,
+            )
+            _write_spdx_from_attestations(
+                verified_attestations, reference, job.arch_digest, output_path
+            )
+        except (RuntimeError, ValueError, OSError) as fallback_exc:
+            raise RuntimeError(
+                f"Legacy SBOM download for {job.container_image} failed "
+                f"({exc}) and the SPDX attestation "
+                f"fallback failed too: {fallback_exc}"
+            ) from fallback_exc
 
 
 def upload_rpm_data(job: ImageJob) -> None:
@@ -189,7 +289,13 @@ def _run_phase(
         raise RuntimeError(f"One or more {phase_name} jobs failed:\n{details}")
 
 
-def run(pyxis_file: Path, concurrent_limit: int, retries: int) -> None:
+def run(
+    pyxis_file: Path,
+    concurrent_limit: int,
+    retries: int,
+    *,
+    enterprise_contract_policy: str | None,
+) -> None:
     """Download unique SBOMs and upload RPM data for every listed Pyxis image.
 
     Raise ``RuntimeError`` when the Pyxis file contains no images.
@@ -213,7 +319,11 @@ def run(pyxis_file: Path, concurrent_limit: int, retries: int) -> None:
     memory_throttle.log_memory_throttle_status(MEMORY_THRESHOLD)
     _run_phase(
         download_jobs,
-        partial(download_sbom, retries=retries),
+        partial(
+            download_sbom,
+            retries=retries,
+            enterprise_contract_policy=enterprise_contract_policy,
+        ),
         concurrent_limit,
         "SBOM download",
     )
@@ -239,7 +349,12 @@ def main() -> int:
     os.environ["PYXIS_GRAPHQL_API"] = pyxis_api.pyxis_graphql_url_for_server(server)
     authentication.setup_ca_cert()
 
-    run(pyxis_file, concurrent_limit, retries)
+    run(
+        pyxis_file,
+        concurrent_limit,
+        retries,
+        enterprise_contract_policy=os.environ.get("ENTERPRISE_CONTRACT_POLICY"),
+    )
     return 0
 
 
