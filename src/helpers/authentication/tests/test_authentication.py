@@ -137,6 +137,27 @@ def test_kinit_with_retry_fails_after_max_attempts(tmp_path: Path) -> None:
     assert mock_run.call_count == 2
 
 
+def test_kinit_with_retry_caps_sleep(tmp_path: Path) -> None:
+    """Backoff waits stay at max_sleep_seconds instead of growing without bound."""
+    keytab = tmp_path / "test.keytab"
+    keytab.write_bytes(b"fake")
+
+    with (
+        mock.patch("subprocess.run", return_value=mock.Mock(returncode=1)),
+        mock.patch("release_service_utils.helpers.retry.retry.time.sleep") as mock_sleep,
+    ):
+        with pytest.raises(subprocess.CalledProcessError):
+            authentication.kinit_with_retry(
+                "user@REALM",
+                keytab,
+                {},
+                max_attempts=4,
+                max_sleep_seconds=2,
+            )
+
+    assert [call.args[0] for call in mock_sleep.call_args_list] == [2, 2, 2]
+
+
 # ---------------------------------------------------------------------------
 # write_docker_config
 # ---------------------------------------------------------------------------
