@@ -220,23 +220,32 @@ def test_run_check_wraps_krb5_read_errors(sa_mount: Path, tmp_path: Path) -> Non
     assert "reading the Kerberos configuration" in str(e.value)
 
 
-def test_run_check_wraps_kinit_called_process_error(sa_mount: Path, tmp_path: Path) -> None:
+def test_run_check_wraps_kinit_called_process_error(
+    sa_mount: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """`CalledProcessError` from the injected `kinit` is wrapped with a kinit action."""
     krb5 = _minimal_krb5(tmp_path / "k5.conf")
 
     def _kfail(*_a: object, **_k: object) -> None:
-        raise subprocess.CalledProcessError(1, "kinit")
+        exc = subprocess.CalledProcessError(1, "kinit")
+        exc.stdout = "kinit stdout output"
+        exc.stderr = "kinit stderr output"
+        raise exc
 
-    with pytest.raises(tekton.CheckStepError) as e:
-        check_embargoed_cves.run_check(
-            ["CVE-1"],
-            sa_mount,
-            kinit=_kfail,
-            get_token=lambda _: "dummy-token",
-            get_flaw=lambda _u, _t, _c: {"results": [{"embargoed": False}]},
-            krb5_template=krb5,
-        )
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(tekton.CheckStepError) as e:
+            check_embargoed_cves.run_check(
+                ["CVE-1"],
+                sa_mount,
+                kinit=_kfail,
+                get_token=lambda _: "dummy-token",
+                get_flaw=lambda _u, _t, _c: {"results": [{"embargoed": False}]},
+                krb5_template=krb5,
+            )
     assert "logging in with Kerberos (kinit)" in str(e.value)
+    assert "kinit failed with exit code 1" in caplog.text
+    assert "kinit stdout output" in caplog.text
+    assert "kinit stderr output" in caplog.text
 
 
 def test_run_check_wraps_get_token_errors(sa_mount: Path, tmp_path: Path) -> None:
