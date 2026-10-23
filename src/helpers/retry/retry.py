@@ -16,14 +16,15 @@ def retry_with_exponential_backoff(
     retry_on: type[BaseException] | tuple[type[BaseException], ...] = Exception,
     base_sleep_seconds: int = 5,
     max_sleep_seconds: int | None = None,
+    retry_if: Callable[[BaseException], bool] | None = None,
     sleep_fn: Callable[[float], None] | None = None,
 ) -> T:
     """Run ``operation`` up to ``max_attempts`` times, retrying selected failures.
 
     On each retry, waits ``base_sleep_seconds * 2 ** (attempt - 1)`` seconds (5,
-    10, 20, 40, ... by default). If a failure is not in ``retry_on``, it is
-    raised immediately. If retries are exhausted, the last matching exception is
-    raised.
+    10, 20, 40, ... by default). Only exceptions matching ``retry_on`` are retried.
+    If provided, ``retry_if(exception)`` must also return ``True`` to retry.
+    Otherwise, or when attempts are exhausted, re-raise the exception.
 
     When ``max_sleep_seconds`` is set, the computed delay is capped at that
     value, turning unbounded exponential growth into a fixed-interval poll
@@ -36,8 +37,8 @@ def retry_with_exponential_backoff(
     for attempt in range(1, max_attempts + 1):
         try:
             return operation()
-        except retry_on:
-            if attempt >= max_attempts:
+        except retry_on as exc:
+            if attempt >= max_attempts or (retry_if is not None and not retry_if(exc)):
                 raise
             sleep_seconds = base_sleep_seconds * (2 ** (attempt - 1))
             if max_sleep_seconds is not None:

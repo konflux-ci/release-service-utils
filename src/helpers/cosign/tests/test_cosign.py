@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from release_service_utils.helpers import cosign
@@ -292,3 +292,156 @@ def test_docker_config_shared_across_downloads(tmp_path: Path) -> None:
             cosign.download("attestation", _IMAGE, att, docker_config_dir=config_dir)
 
     assert commands == ["select-oci-auth", "cosign", "cosign"]
+
+
+@pytest.mark.parametrize("key", ["k8s://ns/key", "awskms:///alias/k", "/path/cosign.pub"])
+def test_verify_spdx_attestation_uses_key_and_returns_stdout(key: str) -> None:
+    """Use Cosign v3 with the supplied key reference and return its stdout."""
+    # Minimal DSSE-shaped output; signature verification is mocked in this test.
+    stdout = (
+        '{"payloadType":"application/vnd.in-toto+json",' '"payload":"e30=","signatures":[]}\n'
+    )
+    with patch(_RUN_CMD) as run:
+        run.side_effect = [
+            _completed([], stdout='{"auths": {}}'),
+            _completed([], stdout=stdout),
+        ]
+        out = cosign.verify_spdx_attestation(_IMAGE, key=key, max_attempts=1)
+
+    assert out == stdout
+    assert run.call_args.args[0] == [
+        "cosign3",
+        "verify-attestation",
+        "--type",
+        "spdxjson",
+        "--key",
+        key,
+        "--insecure-ignore-tlog=true",
+        _IMAGE,
+    ]
+    assert "DOCKER_CONFIG" in run.call_args.kwargs["env"]
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "Error: no sbom attached to reference\n"
+        "error during command execution: no sbom attached to reference\n",
+        "Error: no SBOM found attached to image index\n",
+    ],
+)
+@patch(_SLEEP)
+def test_download_missing_sbom_raises_without_retry(
+    mock_sleep: MagicMock, tmp_path: Path, stderr: str
+) -> None:
+    """Raise SbomNotFoundError at the first failure that says no SBOM is attached."""
+    calls = {"cosign": 0}
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if cmd[0] == "select-oci-auth":
+            return _completed(cmd, stdout="{}")
+        calls["cosign"] += 1
+        raise _called_process_error(cmd, stderr=stderr)
+
+    with patch(_RUN_CMD, side_effect=fake_run):
+        with pytest.raises(cosign.SbomNotFoundError) as caught:
+            cosign.download("sbom", _IMAGE, tmp_path / "x", max_attempts=3)
+
+    assert calls["cosign"] == 1
+    mock_sleep.assert_not_called()
+    assert isinstance(caught.value.__cause__, subprocess.CalledProcessError)
+
+
+@patch(_SLEEP)
+def test_download_transient_failure_still_retries(
+    mock_sleep: MagicMock, tmp_path: Path
+) -> None:
+    """Exhaust network retries without reporting a missing SBOM."""
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if cmd[0] == "select-oci-auth":
+            return _completed(cmd, stdout="{}")
+        raise _called_process_error(cmd, stderr="TLS handshake timeout")
+
+    with patch(_RUN_CMD, side_effect=fake_run) as run:
+        with pytest.raises(RuntimeError, match="after 3 attempts") as caught:
+            cosign.download("sbom", _IMAGE, tmp_path / "x")
+    assert not isinstance(caught.value, cosign.SbomNotFoundError)
+    assert run.call_count == 4  # Authentication plus three download attempts.
+    assert mock_sleep.call_args_list == [call(2), call(4)]
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "Error: no matching signatures: crypto/ecdsa: verification error",
+        "none of the attestations matched the predicate type: spdxjson",
+        "net/http: TLS handshake timeout",
+        "no matching signatures: net/http: TLS handshake timeout",
+        "no matching attestations: connection reset by peer",
+    ],
+)
+@patch(_SLEEP)
+def test_verify_spdx_attestation_retry_policy(mock_sleep: MagicMock, stderr: str) -> None:
+    """Retry verification failures, including wrapped transient errors."""
+    calls = {"cosign": 0}
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if cmd[0] == "select-oci-auth":
+            return _completed(cmd, stdout="{}")
+        calls["cosign"] += 1
+        raise _called_process_error(cmd, stderr=stderr)
+
+    with patch(_RUN_CMD, side_effect=fake_run):
+        with pytest.raises(RuntimeError, match="after 3 attempts") as caught:
+            cosign.verify_spdx_attestation(_IMAGE, key="k", max_attempts=3)
+    assert calls["cosign"] == 3
+    assert mock_sleep.call_args_list == [call(2), call(4)]
+    assert stderr in str(caught.value)
+    assert isinstance(caught.value.__cause__, subprocess.CalledProcessError)
+
+
+@patch(_SLEEP)
+def test_download_timeout_then_missing_sbom(mock_sleep: MagicMock, tmp_path: Path) -> None:
+    """Report absence without claiming no retries occurred after an earlier timeout."""
+    timeout = _called_process_error(["cosign"], stderr="TLS handshake timeout")
+    missing = _called_process_error(
+        ["cosign"], stderr="Error: no sbom attached to reference\n"
+    )
+    with patch(_RUN_CMD, side_effect=[timeout, missing]) as run:
+        with pytest.raises(cosign.SbomNotFoundError) as caught:
+            cosign.download(
+                "sbom", _IMAGE, tmp_path / "x", docker_config_dir=tmp_path, max_attempts=3
+            )
+
+    assert run.call_count == 2
+    mock_sleep.assert_called_once_with(2)
+    assert "no sbom attached to reference" in str(caught.value)
+    assert "not retried" not in str(caught.value)
+    assert caught.value.__cause__ is missing
+
+
+@pytest.mark.parametrize("operation", ["download", "verify"])
+@pytest.mark.parametrize("stderr", ["final registry failure\n", "", "  \n"])
+@patch(_SLEEP)
+def test_failure_message_preserves_last_error(
+    mock_sleep: MagicMock, tmp_path: Path, operation: str, stderr: str
+) -> None:
+    """Include the last error or exit status, never captured stdout, on exhaustion."""
+    first = _called_process_error(["cosign"], stderr="first failure")
+    last = _called_process_error(
+        ["cosign"], stderr=stderr, stdout="stdout must not appear in the error"
+    )
+    with patch(_RUN_CMD, side_effect=[_completed([], stdout="{}"), first, last]) as run:
+        with pytest.raises(RuntimeError, match="after 2 attempts") as caught:
+            if operation == "download":
+                cosign.download("sbom", _IMAGE, tmp_path / "x", max_attempts=2)
+            else:
+                cosign.verify_spdx_attestation(_IMAGE, key="k", max_attempts=2)
+
+    assert run.call_count == 3
+    mock_sleep.assert_called_once_with(2)
+    assert (stderr.strip() or str(last)) in str(caught.value)
+    assert "first failure" not in str(caught.value)
+    assert "stdout must not appear" not in str(caught.value)
+    assert caught.value.__cause__ is last
