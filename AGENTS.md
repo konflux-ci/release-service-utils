@@ -54,3 +54,4 @@ Container image (UBI9) with Python scripts, wrappers, and templates used by Tekt
 
 - Internal task scripts (`scripts/python/tasks/internal/`) must catch all exceptions in `main()` and save errors to Tekton result files (the script itself must succeed).
 - Managed task scripts (`scripts/python/tasks/managed/`) must not catch exceptions in `main()` — let the script fail with traceback.
+- Keep child CLI output visible in Tekton logs: `run_cmd(..., stream_stdout=True)` for long-running commands, or `stderr_path=` to tee stderr to the step; log captured `stderr` on failure.
