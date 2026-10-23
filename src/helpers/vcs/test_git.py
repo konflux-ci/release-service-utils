@@ -309,6 +309,71 @@ def test_sync_to_origin_main(tmp_path: Path) -> None:
     assert run_cmd.call_args_list[1].args[0] == ["git", "reset", "--hard", "origin/main"]
 
 
+@pytest.mark.parametrize("status_code", [429, 504])
+def test_sync_to_origin_main_retries_transient_fetch(tmp_path: Path, status_code: int) -> None:
+    """Retry a temporary GitLab HTTP failure before resetting to main."""
+    failure = subprocess.CalledProcessError(
+        128,
+        ["git", "fetch", "origin", "main"],
+        stderr=f"error: RPC failed; HTTP {status_code} curl 22",
+    )
+    with (
+        mock.patch.object(git, "fetch", side_effect=[failure, None]) as fetch,
+        mock.patch.object(git.time, "sleep") as sleep,
+        mock.patch.object(git, "_run_git_cmd") as run_cmd,
+    ):
+        git.sync_to_origin_main(tmp_path)
+
+    assert fetch.call_count == 2
+    sleep.assert_called_once_with(2)
+    assert run_cmd.call_args_list[0].args[0] == ["git", "checkout", "main"]
+    assert run_cmd.call_args_list[1].args[0] == ["git", "reset", "--hard", "origin/main"]
+
+
+def test_sync_to_origin_main_does_not_retry_permanent_fetch_failure(
+    tmp_path: Path,
+) -> None:
+    """Preserve non-transient fetch errors and leave the worktree untouched."""
+    failure = subprocess.CalledProcessError(
+        128,
+        ["git", "fetch", "origin", "main"],
+        stderr="error: HTTP 403 Forbidden",
+    )
+    with (
+        mock.patch.object(git, "fetch", side_effect=failure) as fetch,
+        mock.patch.object(git.time, "sleep") as sleep,
+        mock.patch.object(git, "_run_git_cmd") as run_cmd,
+        pytest.raises(subprocess.CalledProcessError) as caught,
+    ):
+        git.sync_to_origin_main(tmp_path)
+
+    assert caught.value is failure
+    fetch.assert_called_once()
+    sleep.assert_not_called()
+    run_cmd.assert_not_called()
+
+
+def test_sync_to_origin_main_stops_after_transient_fetch_retries(tmp_path: Path) -> None:
+    """Stop after three failed fetches without resetting to stale main."""
+    failure = subprocess.CalledProcessError(
+        128,
+        ["git", "fetch", "origin", "main"],
+        stderr="error: RPC failed; HTTP 504 curl 22",
+    )
+    with (
+        mock.patch.object(git, "fetch", side_effect=failure) as fetch,
+        mock.patch.object(git.time, "sleep") as sleep,
+        mock.patch.object(git, "_run_git_cmd") as run_cmd,
+        pytest.raises(subprocess.CalledProcessError) as caught,
+    ):
+        git.sync_to_origin_main(tmp_path)
+
+    assert caught.value is failure
+    assert fetch.call_count == 3
+    assert sleep.call_args_list == [mock.call(2), mock.call(4)]
+    run_cmd.assert_not_called()
+
+
 def test_push_new_branch_uses_create_only_lease(tmp_path: Path) -> None:
     """Create-only pushes use force-with-lease against an empty remote ref."""
     with mock.patch.object(git, "_run_git_cmd") as run_cmd:

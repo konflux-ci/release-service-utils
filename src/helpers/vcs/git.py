@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import subprocess
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import IO, Any
 
 from release_service_utils.helpers import retry
-
 from release_service_utils.helpers.redact import redact_secrets
+
+logger = logging.getLogger(__name__)
+_TRANSIENT_FETCH_HTTP_ERROR = re.compile(r"\bHTTP\s+(?:429|5\d\d)\b", re.IGNORECASE)
+_FETCH_MAX_ATTEMPTS = 3
 
 
 def repository_workdir_name(repository_url: str) -> str:
@@ -335,7 +340,23 @@ def sync_to_origin_main(
     stderr_path: Path | None = None,
 ) -> None:
     """Fetch *base_branch* and reset the working tree to *remote*/*base_branch*."""
-    fetch(repo_dir, remote, base_branch, stderr_path=stderr_path)
+    for attempt in range(1, _FETCH_MAX_ATTEMPTS + 1):
+        try:
+            fetch(repo_dir, remote, base_branch, stderr_path=stderr_path)
+            break
+        except subprocess.CalledProcessError as exc:
+            if attempt == _FETCH_MAX_ATTEMPTS or not _TRANSIENT_FETCH_HTTP_ERROR.search(
+                exc.stderr or ""
+            ):
+                raise
+            logger.warning(
+                "retrying git fetch %s %s after a transient HTTP error (%d/%d)",
+                remote,
+                base_branch,
+                attempt,
+                _FETCH_MAX_ATTEMPTS,
+            )
+            time.sleep(2**attempt)
     _run_git_cmd(
         ["git", "checkout", base_branch],
         cwd=repo_dir,

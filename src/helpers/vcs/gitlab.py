@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import atexit
-import logging
 import math
 import os
 import stat
@@ -18,15 +17,16 @@ from gitlab import Gitlab
 from gitlab.exceptions import GitlabConnectionError, GitlabError
 
 from release_service_utils.helpers import authentication
+from release_service_utils.helpers.logger import logger
 
 from . import git
-
-logger = logging.getLogger(__name__)
 
 DEFAULT_BRANCH = "main"
 _DEFAULT_GITLAB_REQUEST_TIMEOUT_SECONDS = 60.0
 # Cap merge-poll backoff so a finished pipeline is still noticed promptly.
 _MAX_MERGE_POLL_INTERVAL_SECONDS = 60.0
+# GitLab can accept auto-merge before the train entry is materialized.
+_MERGE_TRAIN_ENTRY_GRACE_SECONDS = 60.0
 
 
 _TRANSIENT_GITLAB_LOOKUP_CODES = frozenset({429, 500, 502, 503, 504})
@@ -110,6 +110,9 @@ def _refresh_merge_request(merge_request: Any, *, deadline: float) -> None:
     fresh = merge_request.manager.get(
         merge_request.get_id(),
         timeout=request_timeout,
+        # The SDK can sleep for Retry-After longer than our merge deadline.
+        # Let the caller log and retry transient errors within its own budget.
+        max_retries=0,
     )
     # Use server fields only. ``attributes`` includes parent ids that belong
     # on ``_parent_attrs``, not in the MR ``_attrs`` map.
@@ -142,6 +145,14 @@ class GitLabCredentials:
     git_author_name: str
     git_author_email: str
     git_repo: str
+
+
+@dataclass
+class MergeTrainAttempt:
+    """Track whether this task may cancel an advisory merge train entry."""
+
+    queued_by_this_run: bool = False
+    may_merge_without_this_run: bool = False
 
 
 def read_credentials_from_mount(secret_mount: Path) -> GitLabCredentials:
@@ -380,6 +391,7 @@ def accept_merge_request(
     merge_request.merge(
         should_remove_source_branch=should_remove_source_branch,
         timeout=request_timeout,
+        max_retries=0,
     )
     return merge_request
 
@@ -409,6 +421,16 @@ def _head_pipeline_status(merge_request: Any) -> str | None:
     return str(status).lower()
 
 
+def _head_pipeline_id(merge_request: Any) -> str | None:
+    """Return the MR head pipeline ID, if GitLab has reported one."""
+    pipeline = getattr(merge_request, "head_pipeline", None)
+    if isinstance(pipeline, dict):
+        pipeline_id = pipeline.get("id")
+    else:
+        pipeline_id = getattr(pipeline, "id", None)
+    return str(pipeline_id) if pipeline_id is not None else None
+
+
 def merge_request_pipeline_failed(merge_request: Any) -> bool:
     """Return True when the MR head pipeline has failed or been canceled."""
     status = _head_pipeline_status(merge_request)
@@ -418,17 +440,12 @@ def merge_request_pipeline_failed(merge_request: Any) -> bool:
 def merge_request_has_conflict(merge_request: Any) -> bool:
     """Return True when GitLab reports the MR cannot merge due to conflicts.
 
-    Prefer ``detailed_merge_status`` when present. Legacy ``cannot_be_merged``
-    alone is only treated as a conflict when detailed status is absent, because
-    GitLab also uses that merge_status for failing CI.
+    Only an explicit detailed conflict is enough to delete the source branch.
+    GitLab also reports ``cannot_be_merged`` while CI or mergeability checks
+    are pending, so that legacy status alone must not trigger cleanup.
     """
     detailed = (getattr(merge_request, "detailed_merge_status", None) or "").lower()
-    if detailed in {"conflict", "conflict_severity_blocked"}:
-        return True
-    if detailed:
-        return False
-    merge_status = (getattr(merge_request, "merge_status", None) or "").lower()
-    return merge_status == "cannot_be_merged"
+    return detailed in {"conflict", "conflict_severity_blocked"}
 
 
 def merge_request_is_mergeable(merge_request: Any) -> bool:
@@ -476,13 +493,131 @@ def cleanup_merge_request_branch(
 
 
 def merge_request_is_merged(merge_request: Any) -> bool:
-    """Return True when *merge_request* is fully merged onto the target branch.
+    """Return True when GitLab reports *merge_request* as merged.
 
-    Require both ``state=merged`` and a non-empty ``merge_commit_sha``.
+    Fast-forward merges do not create a merge commit, so GitLab can return
+    ``merge_commit_sha=null`` even after the MR lands on the target branch.
+    Callers that need a particular file must still verify it on main.
     """
-    if (getattr(merge_request, "state", "") or "") != "merged":
-        return False
-    return bool(getattr(merge_request, "merge_commit_sha", None))
+    return (getattr(merge_request, "state", "") or "") == "merged"
+
+
+def add_merge_request_to_train(
+    gitlab_client: Gitlab,
+    repository: str,
+    merge_request: Any,
+    *,
+    request_timeout: float,
+) -> bool | None:
+    """Queue an MR: True if added, False if queued, None if trains are disabled."""
+    project = get_project(
+        gitlab_client,
+        repository,
+        timeout=request_timeout,
+        max_retries=0,
+    )
+    if getattr(project, "merge_trains_enabled", None) is False:
+        logger.info("merge trains are disabled for %s; using a direct merge", repository)
+        return None
+    path = f"/projects/{project.id}/merge_trains/merge_requests/{merge_request.iid}"
+    try:
+        gitlab_client.http_post(
+            path,
+            post_data={"auto_merge": True},
+            timeout=request_timeout,
+            max_retries=0,
+        )
+    except GitlabError as exc:
+        if getattr(exc, "response_code", None) == 409:
+            logger.info(
+                "merge request %s is already on the merge train", merge_request.web_url
+            )
+            return False
+        if getattr(exc, "response_code", None) != 400:
+            raise
+        try:
+            gitlab_client.http_post(
+                path,
+                post_data={"auto_merge": False},
+                timeout=request_timeout,
+                max_retries=0,
+            )
+        except GitlabError as immediate_exc:
+            if getattr(immediate_exc, "response_code", None) != 409:
+                raise
+            logger.info(
+                "GitLab returned 409 when adding merge request %s directly to the train",
+                merge_request.web_url,
+            )
+            return False
+    logger.info("queued merge request %s on the merge train", merge_request.web_url)
+    return True
+
+
+def get_merge_request_train_entry(
+    gitlab_client: Gitlab,
+    repository: str,
+    merge_request: Any,
+    *,
+    request_timeout: float,
+) -> dict[str, Any] | None:
+    """Return the MR's train entry, or None while it has no entry."""
+    project = get_project(
+        gitlab_client,
+        repository,
+        timeout=request_timeout,
+        max_retries=0,
+    )
+    path = f"/projects/{project.id}/merge_trains/merge_requests/{merge_request.iid}"
+    try:
+        response = gitlab_client.http_get(
+            path,
+            timeout=request_timeout,
+            max_retries=0,
+        )
+    except GitlabError as exc:
+        if getattr(exc, "response_code", None) == 404:
+            return None
+        raise
+    if not isinstance(response, dict):
+        raise RuntimeError(f"unexpected merge train response for {merge_request.web_url}")
+    return response
+
+
+def cancel_merge_request_auto_merge(
+    gitlab_client: Gitlab,
+    repository: str,
+    merge_request: Any,
+    *,
+    request_timeout: float,
+) -> bool:
+    """Remove an MR from its merge train; return whether GitLab canceled it."""
+    project = get_project(
+        gitlab_client,
+        repository,
+        timeout=request_timeout,
+        max_retries=0,
+    )
+    # GitLab 19.2 uses this endpoint to cancel both auto-merge and train entry.
+    path = (
+        f"/projects/{project.id}/merge_requests/{merge_request.iid}"
+        "/cancel_merge_when_pipeline_succeeds"
+    )
+    response = gitlab_client.http_post(
+        path,
+        timeout=request_timeout,
+        max_retries=0,
+    )
+    if isinstance(response, dict):
+        if response.get("status") == "success":
+            logger.info("canceled auto-merge for %s", merge_request.web_url)
+            return True
+        if response.get("status") == "error":
+            logger.info("no auto-merge was pending for %s", merge_request.web_url)
+            return False
+    raise RuntimeError(
+        f"unexpected auto-merge cancellation response for {merge_request.web_url}"
+    )
 
 
 def get_or_create_merge_request(
@@ -637,14 +772,21 @@ def push_merge_request_to_main(
     source_branch: str,
     *,
     timeout_seconds: float,
+    use_merge_train: bool,
     poll_interval_seconds: float = 10,
+    train_attempt: MergeTrainAttempt | None = None,
+    cleanup_on_conflict: bool = True,
+    retry_failed_pipeline: bool = False,
 ) -> Any:
     """Merge *merge_request* when ready and wait until it lands on main.
 
-    Polls until GitLab reports the MR mergeable (pipeline green when CI is
-    required, or immediately when the project has no pipelines), then accepts
-    the merge. Timing out leaves the MR open without an auto-merge latch. On
-    merge conflict, close the MR, delete *source_branch*, and raise.
+    Queue the MR on a merge train when *use_merge_train* is true and the project
+    enables trains. A task reusing another run's MR can queue it if needed, but
+    must disable conflict cleanup so it does not delete the other run's branch.
+    Otherwise poll until GitLab reports the MR mergeable, then accept it directly.
+
+    A task retry may restart one failed MR pipeline on a reused MR. Wait until
+    GitLab reports that pipeline as the head before handling another failure.
 
     Polls immediately, then uses bounded exponential backoff between checks so
     long-running pipelines do not generate a fixed high rate of API calls.
@@ -657,8 +799,17 @@ def push_merge_request_to_main(
     # After a successful accept, only refresh until merged — do not call merge()
     # again (the MR may already be merged on the server).
     merge_accepted = False
+    merge_queued = False
+    train_seen = False
+    train_queued_at: float | None = None
+    last_train_pipeline: str | None = None
+    restarted_pipeline_id: str | None = None
+    previous_failed_pipeline_id: str | None = None
+    if train_attempt is None:
+        train_attempt = MergeTrainAttempt()
 
     while True:
+        logger.info("checking merge request %s", _merge_request_display_url(merge_request))
         try:
             _refresh_merge_request(merge_request, deadline=deadline)
         except GitlabError as exc:
@@ -678,24 +829,147 @@ def push_merge_request_to_main(
             if state in ("closed", "locked"):
                 raise RuntimeError(f"merge request {url} is {state}")
             if merge_request_has_conflict(merge_request):
-                cleanup_merge_request_branch(
-                    gitlab_client,
-                    repository,
-                    merge_request,
-                    source_branch,
-                )
+                if cleanup_on_conflict:
+                    cleanup_merge_request_branch(
+                        gitlab_client,
+                        repository,
+                        merge_request,
+                        source_branch,
+                    )
                 raise RuntimeError(f"merge request {url} has a merge conflict")
             if merge_request_pipeline_failed(merge_request):
-                raise RuntimeError(
-                    f"merge request {url} pipeline "
-                    f"{_head_pipeline_status(merge_request)!r} failed"
-                )
+                if retry_failed_pipeline and restarted_pipeline_id is None:
+                    request_timeout = _gitlab_request_timeout_seconds(deadline)
+                    if request_timeout <= 0:
+                        _raise_merge_request_timeout(merge_request)
+                    previous_failed_pipeline_id = _head_pipeline_id(merge_request)
+                    if previous_failed_pipeline_id is None:
+                        raise RuntimeError(
+                            f"GitLab did not report the failed pipeline ID for {url}"
+                        )
+                    # Tekton retries reuse this MR. Start one new MR pipeline
+                    # per task attempt instead of rereading the old failure.
+                    pipeline = merge_request.pipelines.create(
+                        {}, timeout=request_timeout, max_retries=0
+                    )
+                    pipeline_id = getattr(pipeline, "id", None)
+                    if pipeline_id is None:
+                        raise RuntimeError(
+                            f"GitLab did not return an ID for the new pipeline of {url}"
+                        )
+                    restarted_pipeline_id = str(pipeline_id)
+                    logger.info(
+                        "started pipeline %s for reused merge request %s",
+                        restarted_pipeline_id,
+                        url,
+                    )
+                elif (
+                    restarted_pipeline_id is None
+                    or _head_pipeline_id(merge_request) != previous_failed_pipeline_id
+                ):
+                    raise RuntimeError(
+                        f"merge request {url} pipeline "
+                        f"{_head_pipeline_status(merge_request)!r} failed"
+                    )
+                # GitLab can still report the previous failed head pipeline
+                # immediately after accepting a new one. Wait for it to appear.
+                if _poll_remaining_seconds(deadline) <= 0:
+                    _raise_merge_request_timeout(merge_request)
+                _sleep_for_poll_interval(deadline, interval)
+                interval = _next_merge_poll_interval(interval, base_interval=base_interval)
+                continue
 
             request_timeout = _gitlab_request_timeout_seconds(deadline)
             if request_timeout <= 0:
                 _raise_merge_request_timeout(merge_request)
 
-            if merge_request_is_mergeable(merge_request) and not merge_accepted:
+            if use_merge_train and not merge_queued:
+                logger.info("adding merge request %s to the merge train", url)
+                try:
+                    queued_by_this_run = add_merge_request_to_train(
+                        gitlab_client,
+                        repository,
+                        merge_request,
+                        request_timeout=request_timeout,
+                    )
+                except GitlabError as exc:
+                    if not is_transient_gitlab_error(exc):
+                        raise
+                    # The POST may have succeeded despite a lost response. A
+                    # later 409 cannot establish ownership in that case.
+                    train_attempt.may_merge_without_this_run = True
+                    logger.warning(
+                        "transient GitLab error queuing merge request %s: %s", url, exc
+                    )
+                else:
+                    if queued_by_this_run is None:
+                        use_merge_train = False
+                    else:
+                        merge_queued = True
+                        train_attempt.queued_by_this_run = queued_by_this_run
+                        train_attempt.may_merge_without_this_run = not queued_by_this_run
+                        train_queued_at = time.monotonic()
+
+            if use_merge_train and merge_queued:
+                train_request_timeout = _gitlab_request_timeout_seconds(deadline)
+                if train_request_timeout <= 0:
+                    _raise_merge_request_timeout(merge_request)
+                try:
+                    train_entry = get_merge_request_train_entry(
+                        gitlab_client,
+                        repository,
+                        merge_request,
+                        request_timeout=train_request_timeout,
+                    )
+                except GitlabError as exc:
+                    if not is_transient_gitlab_error(exc):
+                        raise
+                    logger.warning(
+                        "transient GitLab error checking train for %s: %s", url, exc
+                    )
+                else:
+                    if train_entry is None:
+                        # A 202 response schedules entry after MR checks pass.
+                        # Once an entry was observed, 404 means GitLab dropped it.
+                        waiting_to_enter = bool(
+                            getattr(merge_request, "merge_when_pipeline_succeeds", False)
+                        )
+                        within_grace = (
+                            train_queued_at is not None
+                            and time.monotonic() - train_queued_at
+                            < _MERGE_TRAIN_ENTRY_GRACE_SECONDS
+                        )
+                        if train_seen or not (waiting_to_enter or within_grace):
+                            detail = (
+                                f"; last train pipeline: {last_train_pipeline}"
+                                if last_train_pipeline
+                                else ""
+                            )
+                            raise RuntimeError(
+                                f"merge request {url} is no longer on the merge train{detail}"
+                            )
+                        logger.info(
+                            "waiting for merge request %s to enter the merge train", url
+                        )
+                    else:
+                        train_seen = True
+                        pipeline = train_entry.get("pipeline")
+                        if isinstance(pipeline, dict):
+                            last_train_pipeline = (
+                                pipeline.get("web_url") or last_train_pipeline
+                            )
+                        logger.info(
+                            "merge request %s train status=%s pipeline=%s",
+                            url,
+                            train_entry.get("status"),
+                            last_train_pipeline,
+                        )
+
+            if (
+                not use_merge_train
+                and merge_request_is_mergeable(merge_request)
+                and not merge_accepted
+            ):
                 logger.info("accepting merge request %s", url)
                 try:
                     accept_merge_request(
