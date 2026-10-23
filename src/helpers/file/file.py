@@ -113,6 +113,16 @@ def encode_json_gzip_b64(value: Any) -> str:
     return base64.standard_b64encode(gzip.compress(raw)).decode("ascii")
 
 
+def decode_json_gzip_b64(value: str) -> Any:
+    """Decode standard-base64 gzip-compressed JSON from `encode_json_gzip_b64`."""
+    try:
+        raw = base64.standard_b64decode(value.strip())
+        text = gzip.decompress(raw).decode("utf-8")
+        return json.loads(text)
+    except (OSError, EOFError, ValueError) as e:
+        raise ValueError("invalid gzip+base64 JSON payload") from e
+
+
 def decompress_gzip_bounded(data: bytes, *, max_bytes: int) -> bytes:
     """Decompress gzip *data* in chunks.
 
