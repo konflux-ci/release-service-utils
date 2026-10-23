@@ -2,6 +2,8 @@
 
 from .tekton import (  # noqa: F401
     CheckStepError,
+    TektonHelper,
+    exit_with_usage,
     missing_blank_option_values,
     require_env,
     result_paths_from_env,
@@ -9,5 +11,4 @@ from .tekton import (  # noqa: F401
     subprocess_cmd_preview_for_tekton_result,
     tekton_argument_parser,
     write_failure_result,
-    exit_with_usage,
 )

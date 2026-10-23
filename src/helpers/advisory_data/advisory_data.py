@@ -11,6 +11,8 @@ from typing import Any
 
 import yaml
 
+from release_service_utils.framework import Helper
+
 DEFAULT_ADVISORY_TYPE = "RHBA"
 VALID_ADVISORY_TYPES = frozenset({"RHSA", "RHBA", "RHEA"})
 # "image" is the default content type and is intentionally omitted (uses .content.images).
@@ -20,277 +22,6 @@ ADVISORY_SECRET_STAGE = "create-advisory-stage-secret"
 ADVISORY_SECRET_PROD = "create-advisory-prod-secret"
 ERRATA_SECRET_STAGE = "errata-stage-service-account"
 ERRATA_SECRET_PROD = "errata-prod-service-account"
-
-
-def advisory_secret_name(environment: str) -> str:
-    """Return the advisory secret name for *environment* (``"stage"`` or ``"production"``)."""
-    if environment == "stage":
-        return ADVISORY_SECRET_STAGE
-    return ADVISORY_SECRET_PROD
-
-
-def _strip_checksum_from_purl(purl: str) -> str:
-    """Strip `checksum` query/fragment parts from a package URL for comparison."""
-    # purl checksum may appear as `&checksum=` (extra param), `?checksum=` in
-    # the query, or trailing `?checksum=` before end — strip all three shapes.
-    stripped = re.sub(r"&checksum=[^&]*", "", purl)
-    stripped = re.sub(r"\?checksum=[^&]*&", "?", stripped)
-    stripped = re.sub(r"\?checksum=[^&]*$", "", stripped)
-    return stripped
-
-
-def _filter_image(content: list[Any], existing: list[Any]) -> list[Any]:
-    """Drop image rows that already exist (same image, tags, repository)."""
-    # `tags` is compared as JSON lists (order and length must match).
-    out: list[Any] = []
-    for item in content:
-        if not isinstance(item, dict):
-            continue
-        container_image = item.get("containerImage")
-        tags = item.get("tags")
-        repo = item.get("repository")
-        is_duplicate = False
-        for existing_row in existing:
-            if not isinstance(existing_row, dict):
-                continue
-            if (
-                existing_row.get("containerImage") == container_image
-                and existing_row.get("tags") == tags
-                and existing_row.get("repository") == repo
-            ):
-                is_duplicate = True
-                break
-        if not is_duplicate:
-            out.append(item)
-    return out
-
-
-def _rpm_purl_without_epoch(purl: str) -> tuple[str, bool] | None:
-    """Return an RPM PURL without its epoch qualifier and whether it had one."""
-    if not purl.startswith("pkg:rpm/") or "?" not in purl:
-        return None
-    base, query = purl.split("?", 1)
-    qualifiers = query.split("&")
-    has_epoch = any(part.startswith("epoch=") for part in qualifiers)
-    non_epoch = (part for part in qualifiers if not part.startswith("epoch="))
-    without_epoch = "&".join(sorted(non_epoch))
-    return f"{base}?{without_epoch}", has_epoch
-
-
-def _filter_rpm(
-    content: list[Any], existing: list[Any], *, reject_ambiguous_epoch: bool = False
-) -> list[Any]:
-    """Drop exact RPM PURL matches and reject ambiguous mixed-epoch identities."""
-    existing_purls = {
-        existing_row.get("purl")
-        for existing_row in existing
-        if isinstance(existing_row, dict) and existing_row.get("purl") is not None
-    }
-    mixed_epoch_keys: dict[str, set[bool]] = {}
-    if reject_ambiguous_epoch:
-        for purl in existing_purls:
-            if not isinstance(purl, str):
-                continue
-            key = _rpm_purl_without_epoch(purl)
-            if key is not None:
-                mixed_epoch_keys.setdefault(key[0], set()).add(key[1])
-    out: list[Any] = []
-    for item in content:
-        if not isinstance(item, dict):
-            continue
-        purl = item.get("purl")
-        # Without `purl` there is nothing to compare; skip the row.
-        if purl is not None and purl in existing_purls:
-            continue
-        if reject_ambiguous_epoch and isinstance(purl, str):
-            key = _rpm_purl_without_epoch(purl)
-            if key is not None and (not key[1]) in mixed_epoch_keys.get(key[0], set()):
-                raise ValueError(
-                    f"Cannot compare RPM advisory PURLs with and without epoch: {purl}"
-                )
-        out.append(item)
-    return out
-
-
-def _filter_generic_binary(content: list[Any], existing: list[Any]) -> list[Any]:
-    """Drop rows whose `purl` matches existing after stripping `checksum`."""
-    # Re-signing can change checksum query params; compare logical purls only.
-    stripped_existing = {
-        _strip_checksum_from_purl(str(existing_row["purl"]))
-        for existing_row in existing
-        if isinstance(existing_row, dict) and existing_row.get("purl") is not None
-    }
-    out: list[Any] = []
-    for item in content:
-        if not isinstance(item, dict) or item.get("purl") is None:
-            continue
-        if _strip_checksum_from_purl(str(item["purl"])) not in stripped_existing:
-            out.append(item)
-    return out
-
-
-def decode_advisory_param(advisory_b64gzip: str) -> dict[str, Any]:
-    """Decode `ADVISORY_JSON` (base64 + gzip) to a dict."""
-    # Task param is a single string; pipeline supplies gzip then base64.
-    b64_decoded = base64.standard_b64decode(advisory_b64gzip.strip())
-    gzip_decoded = gzip.decompress(b64_decoded)
-    return json.loads(gzip_decoded.decode("utf-8"))
-
-
-def encode_advisory_param(advisory: dict[str, Any]) -> str:
-    """Gzip and base64-encode advisory JSON for InternalRequest parameters."""
-    raw = json.dumps(advisory, separators=(",", ":")).encode("utf-8")
-    compressed = gzip.compress(raw)
-    return base64.standard_b64encode(compressed).decode("ascii")
-
-
-def first_mapping_content_type(data: dict[str, Any]) -> str:
-    """Return the first component content type from mapping.components."""
-    components = data.get("mapping", {}).get("components")
-    if not isinstance(components, list):
-        return ""
-    for component in components:
-        if not isinstance(component, dict):
-            continue
-        content_gateway = component.get("contentGateway")
-        if isinstance(content_gateway, dict):
-            content_type = content_gateway.get("contentType")
-            if content_type:
-                return str(content_type)
-        content_type = component.get("contentType")
-        if content_type:
-            return str(content_type)
-    return ""
-
-
-def content_array_from_decoded(root: dict[str, Any], content_list_path: str) -> list[Any]:
-    """Return the list at *content_list_path* under advisory *root*.
-
-    Returns `[]` if missing or not a list.
-
-    *content_list_path* is a dotted path with an optional leading dot, for
-    example `.content.images` or `.content.artifacts`.
-
-    Each segment is the next dict key under *root*; the value stepped through
-    along the path must stay a dict until the final key, which must hold a list.
-    """
-    # Decoded advisory JSON stores `content` at the top level (not under `spec`).
-    segments = [s for s in content_list_path.strip(".").split(".") if s]
-    current_value: Any = root
-    for segment in segments:
-        if not isinstance(current_value, dict):
-            return []
-        current_value = current_value.get(segment)
-    if current_value is None:
-        return []
-    return current_value if isinstance(current_value, list) else []
-
-
-def set_decoded_content_array(
-    root: dict[str, Any],
-    content_list_path: str,
-    content_rows: list[Any],
-) -> None:
-    """Set `root['content'][images|artifacts]` from *content_list_path*."""
-    # Only `.content.images` and `.content.artifacts` are valid paths here.
-    segments = [s for s in content_list_path.strip(".").split(".") if s]
-    if len(segments) != 2 or segments[0] != "content":
-        msg = f"unsupported content list path for merge: {content_list_path!r}"
-        raise ValueError(msg)
-    images_or_artifacts_key = segments[1]
-    if "content" not in root or not isinstance(root["content"], dict):
-        root["content"] = {}
-    root["content"][images_or_artifacts_key] = content_rows
-
-
-def append_signing_key_to_content(
-    root: dict[str, Any],
-    content_list_path: str,
-    signing_key: str,
-) -> None:
-    """Set `signingKey` on each content row that does not already have one."""
-    # Mutates *root* in place.
-    for item in content_array_from_decoded(root, content_list_path):
-        if isinstance(item, dict) and not item.get("signingKey"):
-            item["signingKey"] = signing_key
-
-
-def load_advisory_yaml(path: Path) -> dict[str, Any]:
-    """Load `advisory.yaml` (or any YAML document) as a `dict`."""
-    yaml_source = path.read_text(encoding="utf-8")
-    data = yaml.safe_load(yaml_source)
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        msg = f"YAML root must be a mapping: {path}"
-        raise TypeError(msg)
-    return data
-
-
-def spec_content_array_from_advisory_yaml(
-    doc: dict[str, Any],
-    content_list_path: str,
-) -> list[Any]:
-    """Return the list at *content_list_path* under `doc['spec']`.
-
-    Reads from an advisory YAML document that uses the `metadata` / `spec`
-    layout. *content_list_path* is the same dotted path as for decoded JSON
-    (e.g. `.content.images`), but is applied under `spec`, not at the document
-    root.
-
-    Walking starts at `doc['spec']`; each segment is the next dict key, same
-    rules as `content_array_from_decoded`.
-    """
-    # Repo advisories nest the payload under `spec` (alongside `metadata`).
-    segments = [s for s in content_list_path.strip(".").split(".") if s]
-    current_value: Any = doc.get("spec")
-    if not isinstance(current_value, dict):
-        return []
-    for segment in segments:
-        if not isinstance(current_value, dict):
-            return []
-        current_value = current_value.get(segment)
-    if current_value is None:
-        return []
-    return current_value if isinstance(current_value, list) else []
-
-
-def get_advisory_spec_type(doc: dict[str, Any]) -> str:
-    """Return `spec.type` from an advisory YAML document."""
-    spec = doc.get("spec")
-    if isinstance(spec, dict) and spec.get("type") is not None:
-        return str(spec["type"])
-    return ""
-
-
-def get_advisory_metadata_name(doc: dict[str, Any]) -> str:
-    """Return `metadata.name` from an advisory YAML document."""
-    metadata = doc.get("metadata")
-    if isinstance(metadata, dict) and metadata.get("name") is not None:
-        return str(metadata["name"])
-    return ""
-
-
-def template_data_for_apply(keyed_advisory: dict[str, Any]) -> dict[str, Any]:
-    """Build the `{"advisory": {"spec": ...}}` object for `apply_template`."""
-    return {"advisory": {"spec": keyed_advisory}}
-
-
-def template_context_merge(
-    tmpl_data: dict[str, Any],
-    advisory_name: str,
-    ship_date: str,
-) -> dict[str, Any]:
-    """Merge *advisory_name* and *ship_date* into *tmpl_data* for Jinja.
-
-    Duplicate top-level keys keep the value already in *tmpl_data* (later dict
-    in the merge wins).
-    """
-    # `{**a, **b}`: keys from *b* overwrite duplicates from *a*.
-    return {
-        **{"advisory_name": advisory_name, "advisory_ship_date": ship_date},
-        **tmpl_data,
-    }
 
 
 class _Dumper(yaml.SafeDumper):
@@ -314,120 +45,413 @@ def _quote_numeric_looking_strings(dumper: yaml.Dumper, data: str) -> yaml.Scala
 _Dumper.add_representer(str, _quote_numeric_looking_strings)
 
 
-def json_dict_to_yaml_text(document: Any) -> str:
-    """Serialize *document* to multi-line YAML (readable advisory file)."""
-    # `sort_keys=False` keeps stable-ish ordering for tag-preservation checks.
-    return yaml.dump(
-        document,
-        Dumper=_Dumper,
-        default_flow_style=False,
-        sort_keys=False,
-        allow_unicode=True,
-    )
+class AdvisoryData(Helper):
+    """Advisory data encoding, decoding, and content filtering."""
 
+    def advisory_secret_name(self, environment: str) -> str:
+        """Return the advisory secret name for *environment*.
 
-def spec_content_json_pointer(content_type: str) -> str:
-    """Return the dotted *content_list_path* for *content_type* (under `spec` in YAML)."""
-    if content_type == "image":
-        return ".content.images"
-    if content_type in ARTIFACT_CONTENT_TYPES:
-        return ".content.artifacts"
-    msg = f"Unsupported contentType: {content_type}"
-    raise ValueError(msg)
+        Environment is expected to be either "stage" or "prod".
+        """
+        if environment == "stage":
+            return ADVISORY_SECRET_STAGE
+        return ADVISORY_SECRET_PROD
 
+    @staticmethod
+    def _strip_checksum_from_purl(purl: str) -> str:
+        """Strip `checksum` query/fragment parts from a package URL for comparison."""
+        # purl checksum may appear as `&checksum=` (extra param), `?checksum=` in
+        # the query, or trailing `?checksum=` before end — strip all three shapes.
+        stripped = re.sub(r"&checksum=[^&]*", "", purl)
+        stripped = re.sub(r"\?checksum=[^&]*&", "?", stripped)
+        stripped = re.sub(r"\?checksum=[^&]*$", "", stripped)
+        return stripped
 
-def advisory_url_prefix(git_repo: str) -> str:
-    """Return the customer portal errata URL for *git_repo*."""
-    if "/rhtap-release/" in git_repo:
-        return "https://access.stage.redhat.com/errata"
-    return "https://access.redhat.com/errata"
-
-
-def list_existing_advisory_subdirs(advisory_base: Path) -> list[str]:
-    """List `year/num` paths under *advisory_base*, newest leaf mtime first."""
-    if not advisory_base.is_dir():
-        return []
-    pairs: list[tuple[float, str]] = []
-    for year_dir in advisory_base.iterdir():
-        if not year_dir.is_dir():
-            continue
-        for num_dir in year_dir.iterdir():
-            if not num_dir.is_dir():
+    @staticmethod
+    def _filter_image(content: list[Any], existing: list[Any]) -> list[Any]:
+        """Drop image rows that already exist (same image, tags, repository)."""
+        # `tags` is compared as JSON lists (order and length must match).
+        out: list[Any] = []
+        for item in content:
+            if not isinstance(item, dict):
                 continue
-            rel = f"{year_dir.name}/{num_dir.name}"
-            # Sort by leaf dir mtime so `year/num` matches `find … -printf %T@`.
-            pairs.append((num_dir.stat().st_mtime, rel))
-    pairs.sort(key=lambda mtime_and_relpath: -mtime_and_relpath[0])
-    return [relpath for _mtime, relpath in pairs]
+            container_image = item.get("containerImage")
+            tags = item.get("tags")
+            repo = item.get("repository")
+            is_duplicate = False
+            for existing_row in existing:
+                if not isinstance(existing_row, dict):
+                    continue
+                if (
+                    existing_row.get("containerImage") == container_image
+                    and existing_row.get("tags") == tags
+                    and existing_row.get("repository") == repo
+                ):
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                out.append(item)
+        return out
+
+    @staticmethod
+    def _rpm_purl_without_epoch(purl: str) -> tuple[str, bool] | None:
+        """Return an RPM PURL without its epoch qualifier and whether it had one."""
+        if not purl.startswith("pkg:rpm/") or "?" not in purl:
+            return None
+        base, query = purl.split("?", 1)
+        qualifiers = query.split("&")
+        has_epoch = any(part.startswith("epoch=") for part in qualifiers)
+        non_epoch = (part for part in qualifiers if not part.startswith("epoch="))
+        without_epoch = "&".join(sorted(non_epoch))
+        return f"{base}?{without_epoch}", has_epoch
+
+    @staticmethod
+    def _filter_rpm(
+        content: list[Any], existing: list[Any], *, reject_ambiguous_epoch: bool = False
+    ) -> list[Any]:
+        """Drop exact RPM PURL matches and reject ambiguous mixed-epoch identities."""
+        existing_purls = {
+            existing_row.get("purl")
+            for existing_row in existing
+            if isinstance(existing_row, dict) and existing_row.get("purl") is not None
+        }
+        mixed_epoch_keys: dict[str, set[bool]] = {}
+        if reject_ambiguous_epoch:
+            for purl in existing_purls:
+                if not isinstance(purl, str):
+                    continue
+                key = AdvisoryData._rpm_purl_without_epoch(purl)
+                if key is not None:
+                    mixed_epoch_keys.setdefault(key[0], set()).add(key[1])
+        out: list[Any] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            purl = item.get("purl")
+            # Without `purl` there is nothing to compare; skip the row.
+            if purl is not None and purl in existing_purls:
+                continue
+            if reject_ambiguous_epoch and isinstance(purl, str):
+                key = AdvisoryData._rpm_purl_without_epoch(purl)
+                if key is not None and (not key[1]) in mixed_epoch_keys.get(key[0], set()):
+                    raise ValueError(
+                        f"Cannot compare RPM advisory PURLs with and without epoch: {purl}"
+                    )
+            out.append(item)
+        return out
+
+    def _filter_generic_binary(self, content: list[Any], existing: list[Any]) -> list[Any]:
+        """Drop rows whose `purl` matches existing after stripping `checksum`."""
+        # Re-signing can change checksum query params; compare logical purls only.
+        stripped_existing = {
+            self._strip_checksum_from_purl(str(existing_row["purl"]))
+            for existing_row in existing
+            if isinstance(existing_row, dict) and existing_row.get("purl") is not None
+        }
+        out: list[Any] = []
+        for item in content:
+            if not isinstance(item, dict) or item.get("purl") is None:
+                continue
+            if self._strip_checksum_from_purl(str(item["purl"])) not in stripped_existing:
+                out.append(item)
+        return out
+
+    def decode_advisory_param(self, advisory_b64gzip: str) -> dict[str, Any]:
+        """Decode `ADVISORY_JSON` (base64 + gzip) to a dict."""
+        # Task param is a single string; pipeline supplies gzip then base64.
+        b64_decoded = base64.standard_b64decode(advisory_b64gzip.strip())
+        gzip_decoded = gzip.decompress(b64_decoded)
+        return json.loads(gzip_decoded.decode("utf-8"))
+
+    def encode_advisory_param(self, advisory: dict[str, Any]) -> str:
+        """Gzip and base64-encode advisory JSON for InternalRequest parameters."""
+        raw = json.dumps(advisory, separators=(",", ":")).encode("utf-8")
+        compressed = gzip.compress(raw)
+        return base64.standard_b64encode(compressed).decode("ascii")
+
+    def first_mapping_content_type(self, data: dict[str, Any]) -> str:
+        """Return the first component content type from mapping.components."""
+        components = data.get("mapping", {}).get("components")
+        if not isinstance(components, list):
+            return ""
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+            content_gateway = component.get("contentGateway")
+            if isinstance(content_gateway, dict):
+                content_type = content_gateway.get("contentType")
+                if content_type:
+                    return str(content_type)
+            content_type = component.get("contentType")
+            if content_type:
+                return str(content_type)
+        return ""
+
+    def content_array_from_decoded(
+        self, root: dict[str, Any], content_list_path: str
+    ) -> list[Any]:
+        """Return the list at *content_list_path* under advisory *root*.
+
+        Returns `[]` if missing or not a list.
+
+        *content_list_path* is a dotted path with an optional leading dot, for
+        example `.content.images` or `.content.artifacts`.
+
+        Each segment is the next dict key under *root*; the value stepped through
+        along the path must stay a dict until the final key, which must hold a list.
+        """
+        # Decoded advisory JSON stores `content` at the top level (not under `spec`).
+        segments = [s for s in content_list_path.strip(".").split(".") if s]
+        current_value: Any = root
+        for segment in segments:
+            if not isinstance(current_value, dict):
+                return []
+            current_value = current_value.get(segment)
+        if current_value is None:
+            return []
+        return current_value if isinstance(current_value, list) else []
+
+    def set_decoded_content_array(
+        self,
+        root: dict[str, Any],
+        content_list_path: str,
+        content_rows: list[Any],
+    ) -> None:
+        """Set `root['content'][images|artifacts]` from *content_list_path*."""
+        # Only `.content.images` and `.content.artifacts` are valid paths here.
+        segments = [s for s in content_list_path.strip(".").split(".") if s]
+        if len(segments) != 2 or segments[0] != "content":
+            msg = f"unsupported content list path for merge: {content_list_path!r}"
+            raise ValueError(msg)
+        images_or_artifacts_key = segments[1]
+        if "content" not in root or not isinstance(root["content"], dict):
+            root["content"] = {}
+        root["content"][images_or_artifacts_key] = content_rows
+
+    def append_signing_key_to_content(
+        self,
+        root: dict[str, Any],
+        content_list_path: str,
+        signing_key: str,
+    ) -> None:
+        """Set `signingKey` on each content row that does not already have one."""
+        # Mutates *root* in place.
+        for item in self.content_array_from_decoded(root, content_list_path):
+            if isinstance(item, dict) and not item.get("signingKey"):
+                item["signingKey"] = signing_key
+
+    def load_advisory_yaml(self, path: Path) -> dict[str, Any]:
+        """Load `advisory.yaml` (or any YAML document) as a `dict`."""
+        yaml_source = path.read_text(encoding="utf-8")
+        data = yaml.safe_load(yaml_source)
+        if data is None:
+            return {}
+        if not isinstance(data, dict):
+            msg = f"YAML root must be a mapping: {path}"
+            raise TypeError(msg)
+        return data
+
+    def spec_content_array_from_advisory_yaml(
+        self,
+        doc: dict[str, Any],
+        content_list_path: str,
+    ) -> list[Any]:
+        """Return the list at *content_list_path* under `doc['spec']`.
+
+        Reads from an advisory YAML document that uses the `metadata` / `spec`
+        layout. *content_list_path* is the same dotted path as for decoded JSON
+        (e.g. `.content.images`), but is applied under `spec`, not at the document
+        root.
+
+        Walking starts at `doc['spec']`; each segment is the next dict key, same
+        rules as `content_array_from_decoded`.
+        """
+        # Repo advisories nest the payload under `spec` (alongside `metadata`).
+        segments = [s for s in content_list_path.strip(".").split(".") if s]
+        current_value: Any = doc.get("spec")
+        if not isinstance(current_value, dict):
+            return []
+        for segment in segments:
+            if not isinstance(current_value, dict):
+                return []
+            current_value = current_value.get(segment)
+        if current_value is None:
+            return []
+        return current_value if isinstance(current_value, list) else []
+
+    def get_advisory_spec_type(self, doc: dict[str, Any]) -> str:
+        """Return `spec.type` from an advisory YAML document."""
+        spec = doc.get("spec")
+        if isinstance(spec, dict) and spec.get("type") is not None:
+            return str(spec["type"])
+        return ""
+
+    def get_advisory_metadata_name(self, doc: dict[str, Any]) -> str:
+        """Return `metadata.name` from an advisory YAML document."""
+        metadata = doc.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("name") is not None:
+            return str(metadata["name"])
+        return ""
+
+    def template_data_for_apply(self, keyed_advisory: dict[str, Any]) -> dict[str, Any]:
+        """Build the `{"advisory": {"spec": ...}}` object for `apply_template`."""
+        return {"advisory": {"spec": keyed_advisory}}
+
+    def template_context_merge(
+        self,
+        tmpl_data: dict[str, Any],
+        advisory_name: str,
+        ship_date: str,
+    ) -> dict[str, Any]:
+        """Merge *advisory_name* and *ship_date* into *tmpl_data* for Jinja.
+
+        Duplicate top-level keys keep the value already in *tmpl_data* (later dict
+        in the merge wins).
+        """
+        # `{**a, **b}`: keys from *b* overwrite duplicates from *a*.
+        return {
+            **{"advisory_name": advisory_name, "advisory_ship_date": ship_date},
+            **tmpl_data,
+        }
+
+    def json_dict_to_yaml_text(self, document: Any) -> str:
+        """Serialize *document* to multi-line YAML (readable advisory file)."""
+        # `sort_keys=False` keeps stable-ish ordering for tag-preservation checks.
+        return yaml.dump(
+            document,
+            Dumper=_Dumper,
+            default_flow_style=False,
+            sort_keys=False,
+            allow_unicode=True,
+        )
+
+    def spec_content_json_pointer(self, content_type: str) -> str:
+        """Return the dotted *content_list_path* for *content_type* (under `spec` in YAML)."""
+        if content_type == "image":
+            return ".content.images"
+        if content_type in ARTIFACT_CONTENT_TYPES:
+            return ".content.artifacts"
+        msg = f"Unsupported contentType: {content_type}"
+        raise ValueError(msg)
+
+    def advisory_url_prefix(self, git_repo: str) -> str:
+        """Return the customer portal errata URL for *git_repo*."""
+        if "/rhtap-release/" in git_repo:
+            return "https://access.stage.redhat.com/errata"
+        return "https://access.redhat.com/errata"
+
+    def list_existing_advisory_subdirs(self, advisory_base: Path) -> list[str]:
+        """List `year/num` paths under *advisory_base*, newest leaf mtime first."""
+        if not advisory_base.is_dir():
+            return []
+        pairs: list[tuple[float, str]] = []
+        for year_dir in advisory_base.iterdir():
+            if not year_dir.is_dir():
+                continue
+            for num_dir in year_dir.iterdir():
+                if not num_dir.is_dir():
+                    continue
+                rel = f"{year_dir.name}/{num_dir.name}"
+                # Sort by leaf dir mtime so `year/num` matches `find … -printf %T@`.
+                pairs.append((num_dir.stat().st_mtime, rel))
+        pairs.sort(key=lambda mtime_and_relpath: -mtime_and_relpath[0])
+        return [relpath for _mtime, relpath in pairs]
+
+    def filter_content_by_existing(
+        self,
+        content_type: str,
+        content_file: Path,
+        existing_file: Path,
+        *,
+        stderr_path: Path | None,
+    ) -> str:
+        """Return compact JSON array text: *content_file* rows not already in *existing_file*.
+
+        (Idempotency rules for image / rpm / generic / binary / disk-image.)
+        """
+        try:
+            content_rows = json.loads(content_file.read_text(encoding="utf-8"))
+            existing_rows = json.loads(existing_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            if stderr_path is not None:
+                with open(
+                    stderr_path,
+                    "a",
+                    encoding="utf-8",
+                    errors="replace",
+                ) as errf:
+                    errf.write(f"\nfilter_content_by_existing: invalid JSON: {exc}\n")
+            raise
+        if not isinstance(content_rows, list) or not isinstance(existing_rows, list):
+            msg = "content and existing JSON must be arrays"
+            raise TypeError(msg)
+
+        if content_type in ("generic", "binary"):
+            filtered = self._filter_generic_binary(content_rows, existing_rows)
+        elif content_type == "rpm":
+            filtered = self._filter_rpm(
+                content_rows, existing_rows, reject_ambiguous_epoch=True
+            )
+        elif content_type == "disk-image":
+            filtered = self._filter_rpm(content_rows, existing_rows)
+        else:
+            filtered = self._filter_image(content_rows, existing_rows)
+
+        # Compact JSON (no extra spaces) for small temp files in the idempotency loop.
+        return json.dumps(filtered, separators=(",", ":"))
+
+    def generate_purl_rpm(
+        self,
+        name: str,
+        version: str,
+        release: str,
+        arch: str,
+        distro: str,
+        repository_id: str,
+        vendor: str = "redhat",
+        *,
+        epoch: str | int | None = None,
+    ) -> str:
+        """Generate an RPM Package URL with a qualifier for a nonzero epoch.
+
+        Omit absent or zero epochs to preserve existing PURL identities. Accept
+        epoch as a keyword argument to preserve positional calls, including vendor.
+        """
+        normalized_epoch = int(epoch or 0)
+        if normalized_epoch < 0:
+            raise ValueError("RPM epoch must be non-negative")
+
+        purl = f"pkg:rpm/{vendor}/{name}@{version}-{release}?arch={arch}"
+        if normalized_epoch:
+            purl += f"&epoch={normalized_epoch}"
+        # Distro and repository_id are only added when non empty.
+        if distro:
+            purl += f"&distro={distro}"
+        if repository_id:
+            purl += f"&repository_id={repository_id}"
+        return purl
 
 
-def filter_content_by_existing(
-    content_type: str,
-    content_file: Path,
-    existing_file: Path,
-    *,
-    stderr_path: Path | None,
-) -> str:
-    """Return compact JSON array text: *content_file* rows not already in *existing_file*.
+# Singleton instance for backward compatibility
+_helper = AdvisoryData()
 
-    (Idempotency rules for image / rpm / generic / binary / disk-image.)
-    """
-    try:
-        content_rows = json.loads(content_file.read_text(encoding="utf-8"))
-        existing_rows = json.loads(existing_file.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        if stderr_path is not None:
-            with open(
-                stderr_path,
-                "a",
-                encoding="utf-8",
-                errors="replace",
-            ) as errf:
-                errf.write(f"\nfilter_content_by_existing: invalid JSON: {exc}\n")
-        raise
-    if not isinstance(content_rows, list) or not isinstance(existing_rows, list):
-        msg = "content and existing JSON must be arrays"
-        raise TypeError(msg)
-
-    if content_type in ("generic", "binary"):
-        filtered = _filter_generic_binary(content_rows, existing_rows)
-    elif content_type == "rpm":
-        filtered = _filter_rpm(content_rows, existing_rows, reject_ambiguous_epoch=True)
-    elif content_type == "disk-image":
-        filtered = _filter_rpm(content_rows, existing_rows)
-    else:
-        filtered = _filter_image(content_rows, existing_rows)
-
-    # Compact JSON (no extra spaces) for small temp files in the idempotency loop.
-    return json.dumps(filtered, separators=(",", ":"))
-
-
-def generate_purl_rpm(
-    name: str,
-    version: str,
-    release: str,
-    arch: str,
-    distro: str,
-    repository_id: str,
-    vendor: str = "redhat",
-    *,
-    epoch: str | int | None = None,
-) -> str:
-    """Generate an RPM Package URL with a qualifier for a nonzero epoch.
-
-    Omit absent or zero epochs to preserve existing PURL identities. Accept
-    epoch as a keyword argument to preserve positional calls, including vendor.
-    """
-    normalized_epoch = int(epoch or 0)
-    if normalized_epoch < 0:
-        raise ValueError("RPM epoch must be non-negative")
-
-    purl = f"pkg:rpm/{vendor}/{name}@{version}-{release}?arch={arch}"
-    if normalized_epoch:
-        purl += f"&epoch={normalized_epoch}"
-    # Distro and repository_id are only added when non empty.
-    if distro:
-        purl += f"&distro={distro}"
-    if repository_id:
-        purl += f"&repository_id={repository_id}"
-    return purl
+# Export instance methods as module-level functions
+advisory_secret_name = _helper.advisory_secret_name
+decode_advisory_param = _helper.decode_advisory_param
+encode_advisory_param = _helper.encode_advisory_param
+first_mapping_content_type = _helper.first_mapping_content_type
+content_array_from_decoded = _helper.content_array_from_decoded
+set_decoded_content_array = _helper.set_decoded_content_array
+append_signing_key_to_content = _helper.append_signing_key_to_content
+load_advisory_yaml = _helper.load_advisory_yaml
+spec_content_array_from_advisory_yaml = _helper.spec_content_array_from_advisory_yaml
+get_advisory_spec_type = _helper.get_advisory_spec_type
+get_advisory_metadata_name = _helper.get_advisory_metadata_name
+template_data_for_apply = _helper.template_data_for_apply
+template_context_merge = _helper.template_context_merge
+json_dict_to_yaml_text = _helper.json_dict_to_yaml_text
+spec_content_json_pointer = _helper.spec_content_json_pointer
+advisory_url_prefix = _helper.advisory_url_prefix
+list_existing_advisory_subdirs = _helper.list_existing_advisory_subdirs
+filter_content_by_existing = _helper.filter_content_by_existing
+generate_purl_rpm = _helper.generate_purl_rpm
