@@ -107,20 +107,20 @@ def test_happy_path(
     assert mock_oras_pull.call_count == 2
     mock_oras_pull.assert_any_call("quay.io/app1@sha256:aaa", results_dir)
     mock_oras_pull.assert_any_call("quay.io/app2@sha256:bbb", results_dir)
-    mock_run_cmd.assert_called_once_with(
-        [
-            "pulp-tool",
-            "--config",
-            str(rok_access_path / "cli.toml"),
-            "--build-id",
-            "build-123",
-            "--namespace",
-            "test-ns",
-            "upload",
-            "--rpm-path",
-            str(results_dir),
-        ]
-    )
+    assert mock_run_cmd.call_count == 2
+    expected_upload_cmd = [
+        "pulp-tool",
+        "--config",
+        str(rok_access_path / "cli.toml"),
+        "--build-id",
+        "build-123",
+        "--namespace",
+        "test-ns",
+        "upload",
+        "--rpm-path",
+        str(results_dir),
+    ]
+    mock_run_cmd.assert_any_call(expected_upload_cmd)
 
 
 @patch(f"{TASK}.run_cmd")
