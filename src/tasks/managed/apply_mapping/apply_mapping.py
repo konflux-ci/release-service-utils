@@ -23,6 +23,8 @@ Supported tag template variables:
 * ``{{ incrementer }}`` -- the next sequential numeric tag in the repository.
 * ``{{ component-incrementer }}`` -- like ``incrementer``, but computed
   uniformly across every repository the component is pushed to.
+* ``{{ annotations.myannotation }}`` -- the value of image annotation
+  ``myannotation``.
 * ``{{ labels.mylabel }}`` -- the value of image label ``mylabel``.
 * ``{{ labels.konflux.additional-tags }}`` -- Build lets a Containerfile
   have extra tags via ``LABEL konflux.additional-tags="tag1 tag2"``;
@@ -283,14 +285,25 @@ def _parse_additional_tags_label(labels: dict) -> list[str]:
     return tags
 
 
-def _substitute_value(var_name: str, substitute_map: dict[str, str], labels: dict) -> str:
+def _substitute_value(
+    var_name: str, substitute_map: dict[str, str], labels: dict, annotations: dict
+) -> str:
     """Look up a tag template variable's replacement value.
 
     ``labels.<name>`` variables are read from the image's labels; anything
     else is read from ``substitute_map``. Returns ``""`` when unset.
+    ``annotations.<name>`` variables are read from the image's annotations;
+    anything else is read from ``substitute_map``. Returns ``""`` when unset.
     """
-    if var_name.startswith("labels."):
-        return str(labels.get(var_name[len("labels.") :]) or "")
+    prefixes = {
+        "labels.": labels,
+        "annotations.": annotations,
+    }
+    for prefix, source_dict in prefixes.items():
+        if var_name.startswith(prefix):
+            key = var_name[len(prefix) :]
+            return str(source_dict.get(key) or "")
+
     return str(substitute_map.get(var_name) or "")
 
 
@@ -298,6 +311,7 @@ def translate_one_tag(
     tag: str,
     substitute_map: dict[str, str],
     labels: dict,
+    annotations: dict,
     repo: str,
     all_repos: list[str],
     inc_cache: dict[str, int],
@@ -314,7 +328,7 @@ def translate_one_tag(
         elif var_name == "component-incrementer":
             tag = component_increment_tag(tag, all_repos, inc_cache, list_tags_fn)
         else:
-            replacement = _substitute_value(var_name, substitute_map, labels)
+            replacement = _substitute_value(var_name, substitute_map, labels, annotations)
             if not replacement:
                 raise ValueError(f"Substitution variable unknown or empty: {var_name}")
             pattern = re.compile(r"\{\{\s*" + re.escape(var_name) + r"\s*\}\}")
@@ -327,6 +341,7 @@ def translate_tags(
     tags: list[str],
     substitute_map: dict[str, str],
     labels: dict,
+    annotations: dict,
     repo: str,
     all_repos: list[str],
     inc_cache: dict[str, int],
@@ -343,7 +358,14 @@ def translate_tags(
         else:
             results = [
                 translate_one_tag(
-                    tag, substitute_map, labels, repo, all_repos, inc_cache, list_tags_fn
+                    tag,
+                    substitute_map,
+                    labels,
+                    annotations,
+                    repo,
+                    all_repos,
+                    inc_cache,
+                    list_tags_fn,
                 )
             ]
         for result in results:
@@ -507,6 +529,7 @@ def process_component(
         inspect_fn, container_image, image_with_digest, arch, os_name
     )
     labels = manifest_info.labels
+    annotations = manifest_info.annotations
 
     if manifest_info.env_variables:
         _set_metadata_field(component, "env_variables", manifest_info.env_variables)
@@ -553,6 +576,7 @@ def process_component(
             staged_file.get("filename") or "",
             substitute_map,
             labels,
+            annotations,
             "",
             [],
             inc_cache,
@@ -584,6 +608,7 @@ def process_component(
             tags_pre_substitution,
             substitute_map,
             labels,
+            annotations,
             url,
             all_repos,
             inc_cache,
@@ -603,9 +628,10 @@ def process_component(
             repository["registry-access-repo"] = image_ref.convert_to_registry_access(url)
             repository["url"] = image_ref.convert_to_quay(url)
 
-    # Build template_data with labels dict for component-wide Jinja substitution
+    # Build template_data with labels and annotations for component-wide Jinja substitution
     template_data = substitute_map.copy()
     template_data["labels"] = labels
+    template_data["annotations"] = annotations
 
     component_json = json.dumps(component, indent=2, sort_keys=True)
     with tempfile.NamedTemporaryFile(
