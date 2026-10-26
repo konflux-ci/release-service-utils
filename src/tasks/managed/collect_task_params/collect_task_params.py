@@ -185,7 +185,13 @@ def collect_task_params(
                     f"Key {key} not found in data file and no default value was provided"
                 )
 
-        if isinstance(value, (dict, list)):
+        # Render booleans and containers as JSON so booleans become lowercase
+        # "true"/"false" (matching the previous jq-based implementation). This
+        # keeps Tekton when-expressions that compare against "true"/"false"
+        # working; str(True) would otherwise yield "True" and silently skip
+        # boolean-gated tasks (e.g. pushToGit/pushToS3). Note: bool is a
+        # subclass of int, so it must be handled here, not via str().
+        if isinstance(value, (bool, dict, list)):
             result_array[result_index] = json.dumps(value)
         else:
             result_array[result_index] = str(value)
