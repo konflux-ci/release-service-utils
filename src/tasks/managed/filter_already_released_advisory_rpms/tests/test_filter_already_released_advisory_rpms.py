@@ -1523,3 +1523,36 @@ class TestMain:
                 run_name="__main__",
             )
         assert exc_info.value.code == 0
+
+    def test_package_main_invokes_main(self) -> None:
+        """Running the package as a module calls main()."""
+        import runpy
+
+        module = "release_service_utils.tasks.managed.filter_already_released_advisory_rpms"
+        with (
+            patch(
+                f"{module}.filter_already_released_advisory_rpms.main",
+                return_value=0,
+            ) as mock_main,
+            pytest.raises(SystemExit) as exc,
+        ):
+            runpy.run_module(module, run_name="__main__")
+        assert exc.value.code == 0
+        mock_main.assert_called_once_with()
+
+    def test_package_main_not_run_on_import(self) -> None:
+        """Importing the package __main__ module does not call main()."""
+        import importlib
+        import sys
+
+        module_name = (
+            "release_service_utils.tasks.managed.filter_already_released_advisory_rpms"
+            ".__main__"
+        )
+        sys.modules.pop(module_name, None)
+        with patch(
+            "release_service_utils.tasks.managed.filter_already_released_advisory_rpms"
+            ".filter_already_released_advisory_rpms.main"
+        ) as mock_main:
+            importlib.import_module(module_name)
+        mock_main.assert_not_called()

@@ -101,8 +101,9 @@ def clone(
 ) -> Path:
     """Clone *clone_url* into *parent_dir*.
 
-    When *shallow* is true, perform a blob-filtered shallow clone and optional
-    sparse checkout of *sparse_dirs* at *revision*.
+    When *shallow* is true, perform a blob-filtered shallow clone and sparse
+    checkout of *sparse_dirs*. When *revision* is set, pass ``--branch`` and
+    check that ref out; otherwise clone and check out the remote default HEAD.
 
     Creates *parent_dir* when it does not exist yet.
     """
@@ -113,25 +114,22 @@ def clone(
         msg = f"clone destination already exists: {repo_dir}"
         raise FileExistsError(msg)
     if shallow:
-        if revision is None:
-            msg = "revision is required for a shallow clone"
-            raise ValueError(msg)
         if not sparse_dirs:
             msg = "sparse_dirs is required for a shallow clone"
             raise ValueError(msg)
+        clone_cmd = [
+            "git",
+            "clone",
+            "--filter=blob:none",
+            "--no-checkout",
+            "--depth",
+            "1",
+        ]
+        if revision is not None:
+            clone_cmd.extend(["--branch", revision])
+        clone_cmd.extend([clone_url, str(repo_dir)])
         _run_git_cmd(
-            [
-                "git",
-                "clone",
-                "--filter=blob:none",
-                "--no-checkout",
-                "--depth",
-                "1",
-                "--branch",
-                revision,
-                clone_url,
-                str(repo_dir),
-            ],
+            clone_cmd,
             cwd=parent_dir,
             stderr_path=stderr_path,
         )
@@ -140,8 +138,11 @@ def clone(
             cwd=repo_dir,
             stderr_path=stderr_path,
         )
+        checkout_cmd = ["git", "checkout"]
+        if revision is not None:
+            checkout_cmd.append(revision)
         _run_git_cmd(
-            ["git", "checkout", revision],
+            checkout_cmd,
             cwd=repo_dir,
             stderr_path=stderr_path,
         )

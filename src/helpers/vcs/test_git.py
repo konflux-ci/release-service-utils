@@ -146,12 +146,30 @@ def test_clone_shallow_sparse(tmp_path: Path) -> None:
         )
     assert out == repo_dir
     assert run_cmd.call_count == 3
+    clone_cmd = run_cmd.call_args_list[0].args[0]
+    assert clone_cmd[clone_cmd.index("--branch") + 1] == "main"
+    assert run_cmd.call_args_list[2].args[0] == ["git", "checkout", "main"]
 
 
-def test_clone_shallow_requires_revision(tmp_path: Path) -> None:
-    """Shallow clones require a revision."""
-    with pytest.raises(ValueError, match="revision"):
-        git.clone(tmp_path, "https://x/p.git", shallow=True, sparse_dirs=["a"])
+def test_clone_shallow_without_revision_uses_remote_head(tmp_path: Path) -> None:
+    """Omit ``--branch`` so git checks out the remote default HEAD."""
+    with mock.patch.object(git, "_run_git_cmd") as run_cmd:
+        git.clone(
+            tmp_path,
+            "https://x/p.git",
+            directory_name="p",
+            shallow=True,
+            sparse_dirs=["a"],
+        )
+    clone_cmd = run_cmd.call_args_list[0].args[0]
+    assert "--branch" not in clone_cmd
+    assert run_cmd.call_args_list[2].args[0] == ["git", "checkout"]
+
+
+def test_clone_shallow_requires_sparse_dirs(tmp_path: Path) -> None:
+    """Shallow clones require sparse checkout paths."""
+    with pytest.raises(ValueError, match="sparse_dirs"):
+        git.clone(tmp_path, "https://x/p.git", shallow=True)
 
 
 def test_clone_appends_stderr(tmp_path: Path) -> None:
