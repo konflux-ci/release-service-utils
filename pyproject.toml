@@ -36,6 +36,9 @@ dependencies = [
 [tool.black]
 line-length = 95
 
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
 [tool.pytest.ini_options]
 pythonpath = [
   ".",
