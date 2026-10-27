@@ -16,9 +16,6 @@ DEFAULT_S3_CREDENTIALS_MOUNT = Path("/var/secrets/s3")
 _S3_REGION = "us-east-1"
 _ACCESS_KEY_FILE = "aws_access_key_id"
 _SECRET_KEY_FILE = "aws_secret_access_key"
-_SIGNING_SUMMARY = "signing_summary.txt"
-_EXTRACTION_SUMMARY = "extraction_summary.txt"
-_MULTI_ARCH_SUFFIX = "multi-arch-summary"
 
 
 def _s3_client(endpoint: str, access_key: str, secret_key: str) -> Any:
@@ -75,7 +72,7 @@ def _upload_arch(client: Any, arch_dir: Path, bucket: str) -> None:
         relative = ko_file.relative_to(arch_dir).as_posix()
         _upload_file(client, ko_file, bucket, prefix + relative)
 
-    checksum = arch_dir / f"signed_kmods_checksums_{arch_dir.name}.txt"
+    checksum = arch_dir / oot_kmods.checksum_filename(arch_dir.name)
     if checksum.is_file():
         logger.info("Uploading architecture-specific checksums for %s", arch_dir.name)
         _upload_file(client, checksum, bucket, prefix + checksum.name)
@@ -92,7 +89,7 @@ def _upload_multi_arch_summaries(
     bucket: str,
 ) -> None:
     """Upload multi-arch signing and extraction summaries when present."""
-    signing = signed_kmods / _SIGNING_SUMMARY
+    signing = signed_kmods / oot_kmods.SIGNING_SUMMARY_FILE
     if not signing.is_file():
         return
 
@@ -102,15 +99,15 @@ def _upload_multi_arch_summaries(
         env["DRIVER_VENDOR"],
         env["DRIVER_VERSION"],
         kernel,
-        _MULTI_ARCH_SUFFIX,
+        oot_kmods.MULTI_ARCH_SUFFIX,
     )
     logger.info("Uploading multi-architecture summary to s3://%s/%s", bucket, prefix)
-    _upload_file(client, signing, bucket, prefix + _SIGNING_SUMMARY)
+    _upload_file(client, signing, bucket, prefix + oot_kmods.SIGNING_SUMMARY_FILE)
 
-    extraction = signed_kmods / _EXTRACTION_SUMMARY
+    extraction = signed_kmods / oot_kmods.EXTRACTION_SUMMARY_FILE
     if extraction.is_file():
         logger.info("Uploading extraction_summary.txt to S3")
-        _upload_file(client, extraction, bucket, prefix + _EXTRACTION_SUMMARY)
+        _upload_file(client, extraction, bucket, prefix + oot_kmods.EXTRACTION_SUMMARY_FILE)
 
 
 def run(

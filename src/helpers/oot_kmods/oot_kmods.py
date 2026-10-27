@@ -15,6 +15,9 @@ from release_service_utils.helpers.oras_utils import safe_extract_archive
 SIGNED_KMODS_DIR = "signed-kmods"
 SIGNED_KMODS_ARCHIVE = f"{SIGNED_KMODS_DIR}.tar.gz"
 ENVFILE_NAME = "envfile"
+SIGNING_SUMMARY_FILE = "signing_summary.txt"
+EXTRACTION_SUMMARY_FILE = "extraction_summary.txt"
+MULTI_ARCH_SUFFIX = "multi-arch-summary"
 _MULTI_PLATFORM = "MULTI_PLATFORM"
 _REQUIRED_ENVFILE_KEYS = ("DRIVER_VENDOR", "DRIVER_VERSION", "KERNEL_VERSION")
 _KERNEL_ARCH_SUFFIX = re.compile(r"\.(x86_64|amd64|aarch64|arm64|ppc64le|s390x)(\+.*)?$")
@@ -115,3 +118,8 @@ def arch_directories(signed_kmods_path: Path) -> list[Path]:
     if not dirs:
         raise RuntimeError(f"No architecture directories found in {signed_kmods_path}")
     return dirs
+
+
+def checksum_filename(arch_name: str) -> str:
+    """Return the architecture signed checksums filename for *arch_name*."""
+    return f"signed_kmods_checksums_{arch_name}.txt"
