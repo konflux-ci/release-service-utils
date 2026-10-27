@@ -561,6 +561,17 @@ def test_push_force_branch(tmp_path: Path) -> None:
     )
 
 
+def test_push_set_upstream(tmp_path: Path) -> None:
+    """``set_upstream=True`` adds `-u` ahead of the remote name."""
+    with mock.patch.object(git, "_run_git_cmd") as run_cmd:
+        git.push(tmp_path, branch="release", set_upstream=True)
+    run_cmd.assert_called_once_with(
+        ["git", "push", "-u", "origin", "release"],
+        cwd=tmp_path,
+        stderr_path=None,
+    )
+
+
 def test_push_retries_success_first_try(tmp_path: Path) -> None:
     """Return immediately when the first push succeeds."""
     with mock.patch.object(git, "_run_git_cmd") as run_cmd:
