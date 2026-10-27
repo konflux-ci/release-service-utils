@@ -93,7 +93,9 @@ def prepare_ssh(
     """Install known_hosts and return the SSH target plus GSSAPI options.
 
     When *bastion_host* is set, every ssh/scp hop uses ``ProxyJump``. The
-    jump user is *bastion_user* when provided, otherwise *sign_user*.
+    jump user is *bastion_user* when provided, otherwise *sign_user*. The
+    host keys are also appended to the default ``~/.ssh/known_hosts`` since
+    the jump-host connection does not inherit command-line ``-o`` options.
     """
     known_hosts = gssapi_ssh.install_known_hosts(fingerprint, ssh_dir)
     proxy_jump = None
@@ -101,6 +103,12 @@ def prepare_ssh(
         jump_user = bastion_user or sign_user
         proxy_jump = f"{jump_user}@{bastion_host}"
         logger.info("Routing SSH through bastion ProxyJump %s", proxy_jump)
+        # ProxyJump's implicit jump-host connection checks the default
+        # UserKnownHostsFile location, so add the required keys there without
+        # replacing trust entries created by other tasks.
+        gssapi_ssh.append_known_hosts_entries(
+            known_hosts, Path.home() / ".ssh" / "known_hosts"
+        )
     return f"{sign_user}@{sign_host}", gssapi_ssh.ssh_options(
         known_hosts, proxy_jump=proxy_jump
     )

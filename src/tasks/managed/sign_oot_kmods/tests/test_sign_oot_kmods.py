@@ -116,6 +116,7 @@ def _patch_paths(
     monkeypatch.setenv("KEYTAB_PATH", str(tmp_path / "keytab"))
     monkeypatch.setenv("FINGERPRINT_PATH", str(tmp_path / "fingerprint"))
     monkeypatch.setenv("SSH_DIR", str(tmp_path / "ssh"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
 
 def _run(
@@ -611,6 +612,8 @@ def test_bastion_host_adds_proxy_jump_using_sign_user(
     proxy = "ProxyJump=signer@bastion.example"
     assert any(call[0][0] == "ssh" and proxy in call[0] for call in remote.calls)
     assert any(call[0][0] == "scp" and proxy in call[0] for call in remote.calls)
+    default_known_hosts = tmp_path / "home" / ".ssh" / "known_hosts"
+    assert default_known_hosts.read_text() == "ssh-rsa AAAA host\n"
     _unpack_archive(data_dir)
 
 
@@ -654,6 +657,32 @@ def test_empty_bastion_host_omits_proxy_jump(
     )
 
     assert _option_values(remote, "ProxyJump") == []
+    assert not (tmp_path / "home" / ".ssh" / "known_hosts").exists()
+    _unpack_archive(data_dir)
+
+
+def test_bastion_host_keeps_existing_default_known_hosts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bastion keys are appended to, not replacing, ~/.ssh/known_hosts."""
+    data_dir = tmp_path / "data"
+    _arch_dir(data_dir, "x86_64", {"mod.ko": b"MODULE"})
+    default_known_hosts = tmp_path / "home" / ".ssh" / "known_hosts"
+    default_known_hosts.parent.mkdir(parents=True)
+    default_known_hosts.write_text("existing-host ssh-rsa CCCC\n")
+    remote = Remote()
+
+    _run(
+        tmp_path,
+        monkeypatch,
+        remote,
+        data_dir=data_dir,
+        bastion_host="bastion.example",
+    )
+
+    assert default_known_hosts.read_text() == (
+        "existing-host ssh-rsa CCCC\nssh-rsa AAAA host\n"
+    )
     _unpack_archive(data_dir)
 
 
