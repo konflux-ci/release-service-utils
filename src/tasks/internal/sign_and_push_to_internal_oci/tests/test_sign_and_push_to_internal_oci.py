@@ -51,7 +51,7 @@ def _setup_result_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_parse_args_defaults() -> None:
-    """Default values for concurrent_limit and signing script paths."""
+    """Default values for concurrent_limit and signing script bases."""
     args = wrapper.parse_args(
         [
             "--quay-url",
@@ -63,13 +63,13 @@ def test_parse_args_defaults() -> None:
         ]
     )
     assert args.concurrent_limit == 3
-    assert args.mac_signing_script is None
-    assert args.windows_signing_script is None
+    assert args.mac_signing_script_base is None
+    assert args.windows_signing_script_base is None
     assert args.dest_quay_url is None
 
 
-def test_parse_args_with_signing_scripts() -> None:
-    """Signing script paths are parsed correctly."""
+def test_parse_args_with_signing_script_bases() -> None:
+    """Signing script base directories are parsed correctly."""
     args = wrapper.parse_args(
         [
             "--quay-url",
@@ -78,14 +78,14 @@ def test_parse_args_with_signing_scripts() -> None:
             "uid-123",
             "--origin",
             "my-tenant",
-            "--mac-signing-script",
-            "/opt/sign_mac.sh",
-            "--windows-signing-script",
-            "C:/Scripts/sign.bat",
+            "--mac-signing-script-base",
+            "/opt/mac-signing",
+            "--windows-signing-script-base",
+            "C:/Scripts",
         ]
     )
-    assert args.mac_signing_script == "/opt/sign_mac.sh"
-    assert args.windows_signing_script == "C:/Scripts/sign.bat"
+    assert args.mac_signing_script_base == "/opt/mac-signing"
+    assert args.windows_signing_script_base == "C:/Scripts"
 
 
 def test_parse_args_requires_quay_url() -> None:
@@ -105,8 +105,10 @@ def test_parse_args_requires_pipeline_run_uid() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_main_passes_signing_scripts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """main() forwards signing_script to sign_mac/sign_windows.run_custom_signing."""
+def test_main_passes_signing_script_bases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Forward script base directories to the Mac and Windows helpers."""
     rpath = _setup_result_env(tmp_path, monkeypatch)
 
     with (
@@ -118,10 +120,10 @@ def test_main_passes_signing_scripts(tmp_path: Path, monkeypatch: pytest.MonkeyP
         rc = wrapper.main(
             REQUIRED_ARGS
             + [
-                "--mac-signing-script",
-                "/opt/sign.sh",
-                "--windows-signing-script",
-                "C:/sign.bat",
+                "--mac-signing-script-base",
+                "/opt/mac-signing",
+                "--windows-signing-script-base",
+                "C:/signing",
                 "--dest-quay-url",
                 "quay.io/internal",
             ]
@@ -133,22 +135,24 @@ def test_main_passes_signing_scripts(tmp_path: Path, monkeypatch: pytest.MonkeyP
     mock_mac.assert_called_once_with(
         "quay.io/org",
         "uid-123",
-        signing_script="/opt/sign.sh",
+        signing_script_base="/opt/mac-signing",
         dest_quay_url="quay.io/internal",
         origin="red-hat-desktop-tenant",
     )
     mock_win.assert_called_once_with(
         "quay.io/org",
         "uid-123",
-        signing_script="C:/sign.bat",
+        signing_script_base="C:/signing",
         dest_quay_url="quay.io/internal",
         origin="red-hat-desktop-tenant",
     )
     assert rpath.read_text() == "Success"
 
 
-def test_main_without_signing_scripts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """main() passes None when no signing script paths are given."""
+def test_main_without_signing_script_bases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pass None when no signing script bases are given."""
     _setup_result_env(tmp_path, monkeypatch)
 
     with (
@@ -163,14 +167,14 @@ def test_main_without_signing_scripts(tmp_path: Path, monkeypatch: pytest.Monkey
     mock_mac.assert_called_once_with(
         "quay.io/org",
         "uid-123",
-        signing_script=None,
+        signing_script_base=None,
         dest_quay_url=None,
         origin="red-hat-desktop-tenant",
     )
     mock_win.assert_called_once_with(
         "quay.io/org",
         "uid-123",
-        signing_script=None,
+        signing_script_base=None,
         dest_quay_url=None,
         origin="red-hat-desktop-tenant",
     )
