@@ -30,8 +30,8 @@ ENV_ARGS = {
     "PARAM_PIPELINE_RUN_UID": "pipeline_run_uid",
     "PARAM_TASK_RUN_UID": "task_run_uid",
     "PARAM_RESULTS_DIR_PATH": "results_dir_path",
-    "PARAM_MAC_SIGNING_SCRIPT": "mac_signing_script",
-    "PARAM_WINDOWS_SIGNING_SCRIPT": "windows_signing_script",
+    "PARAM_MAC_SIGNING_SCRIPT_BASE": "mac_signing_script_base",
+    "PARAM_WINDOWS_SIGNING_SCRIPT_BASE": "windows_signing_script_base",
     "PARAM_TASK_GIT_URL": "task_git_url",
     "PARAM_TASK_GIT_REVISION": "task_git_revision",
 }
@@ -50,6 +50,11 @@ def workflow_args(tmp_path: Path) -> dict[str, Any]:
                 "containerImage": "quay.io/test/mac@sha256:abc",
                 "metadata": {"labels": [{"name": "large", "value": "metadata"}]},
                 "staged": {"files": [{"filename": "app.dmg"}]},
+                "signingOptions": {
+                    "artifactType": "app",
+                    "buildDmg": True,
+                    "notarize": True,
+                },
             },
             {
                 "name": "windows-component",
@@ -72,8 +77,8 @@ def workflow_args(tmp_path: Path) -> dict[str, Any]:
         "pipeline_run_uid": "pipeline-uid",
         "task_run_uid": "task-uid",
         "results_dir_path": "pipeline-uid/results",
-        "mac_signing_script": "/opt/custom_mac_signing.py",
-        "windows_signing_script": "C:\\signing\\custom_windows_signing.ps1",
+        "mac_signing_script_base": "/opt/mac-signing",
+        "windows_signing_script_base": "C:/signing",
         "task_git_url": "https://github.com/konflux-ci/release-service-catalog.git",
         "task_git_revision": "test-revision",
     }
@@ -164,6 +169,11 @@ def test_run_success(
                 "name": "mac-component",
                 "containerImage": "quay.io/test/mac@sha256:abc",
                 "staged": {"files": [{"filename": "app.dmg"}]},
+                "signingOptions": {
+                    "artifactType": "app",
+                    "buildDmg": True,
+                    "notarize": True,
+                },
             },
             {
                 "name": "windows-component",
@@ -180,8 +190,8 @@ def test_run_success(
             "quayURL": quay_url,
             "destQuayURL": "quay.io/redhat-user-workloads",
             "origin": "tenant-namespace",
-            "macSigningScript": "/opt/custom_mac_signing.py",
-            "windowsSigningScript": "C:\\signing\\custom_windows_signing.ps1",
+            "macSigningScriptBase": "/opt/mac-signing",
+            "windowsSigningScriptBase": "C:/signing",
             "destQuaySecret": "quay-internal-oci",
             "taskGitUrl": "https://github.com/konflux-ci/release-service-catalog.git",
             "taskGitRevision": "test-revision",
@@ -334,12 +344,12 @@ def test_main(
         internal_request.TASK_GROUP_LABEL: task_environment["PARAM_TASK_RUN_UID"],
     }
     assert (
-        create.call_args.kwargs["params"]["macSigningScript"]
-        == task_environment["PARAM_MAC_SIGNING_SCRIPT"]
+        create.call_args.kwargs["params"]["macSigningScriptBase"]
+        == task_environment["PARAM_MAC_SIGNING_SCRIPT_BASE"]
     )
     assert (
-        create.call_args.kwargs["params"]["windowsSigningScript"]
-        == task_environment["PARAM_WINDOWS_SIGNING_SCRIPT"]
+        create.call_args.kwargs["params"]["windowsSigningScriptBase"]
+        == task_environment["PARAM_WINDOWS_SIGNING_SCRIPT_BASE"]
     )
     fetch_results.assert_called_once_with("sign-request-123")
 

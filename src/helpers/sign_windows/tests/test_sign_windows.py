@@ -322,12 +322,14 @@ def test_run_default_cleanup_warning(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("script_base", ["C:/Scripts", None])
 def test_run_custom_signing_skips_component_without_has_windows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    script_base: str | None,
 ) -> None:
-    """Component without has_windows is skipped in run_custom_signing."""
+    """Skip components without Windows content even without a script base."""
     monkeypatch.setenv(
         "SNAPSHOT_JSON",
         json.dumps({"components": [{"name": "prod"}]}),
@@ -346,10 +348,132 @@ def test_run_custom_signing_skips_component_without_has_windows(
         sign_windows.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="C:/Scripts/sign.bat",
+            signing_script_base=script_base,
         )
 
     assert "skipping Windows signing" in caplog.text
+
+
+def test_run_custom_signing_selects_binary_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Append the binary wrapper to the configured Windows script directory."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps(
+            {"components": [{"name": "prod", "signingOptions": {"artifactType": "binary"}}]}
+        ),
+    )
+    monkeypatch.setattr(sign_windows, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+    component_dir = tmp_path / "prod"
+    component_dir.mkdir()
+    (component_dir / "has_windows").touch()
+    (component_dir / "unsigned_windows_digest.txt").write_text("sha256:unsigned")
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch.object(sign_windows, "_run_custom_script") as run_script,
+    ):
+        sign_windows.run_custom_signing(
+            "quay.io/org", "uid-123", signing_script_base="C:/Scripts"
+        )
+
+    assert run_script.call_args.kwargs["signing_script"] == (
+        r"C:\Scripts\sign_windows_wrapper.ps1"
+    )
+
+
+def test_run_custom_signing_rejects_unsupported_artifact_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject a Windows component whose artifact type has no Windows wrapper."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps(
+            {"components": [{"name": "prod", "signingOptions": {"artifactType": "pkg"}}]}
+        ),
+    )
+    monkeypatch.setattr(sign_windows, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+    component_dir = tmp_path / "prod"
+    component_dir.mkdir()
+    (component_dir / "has_windows").touch()
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch.object(sign_windows, "_run_custom_script") as run_script,
+        pytest.raises(ValueError, match="Unsupported Windows artifactType"),
+    ):
+        sign_windows.run_custom_signing(
+            "quay.io/org", "uid-123", signing_script_base="C:/Scripts"
+        )
+    run_script.assert_not_called()
+
+
+def test_run_custom_signing_validates_all_windows_components_before_signing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject later invalid Windows options before signing and ignore Mac options."""
+    components = [
+        {"name": "mac", "signingOptions": {"artifactType": "pkg"}},
+        {"name": "first", "signingOptions": {"artifactType": "binary"}},
+        {"name": "later", "signingOptions": {"artifactType": "pkg"}},
+    ]
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps({"components": components}))
+    monkeypatch.setattr(sign_windows, "CONTENT_DIR", tmp_path)
+    for name in ("first", "later"):
+        component_dir = tmp_path / name
+        component_dir.mkdir()
+        (component_dir / "has_windows").touch()
+
+    with (
+        mock.patch.object(sign_windows, "_run_custom_script") as run_script,
+        pytest.raises(
+            ValueError, match="Unsupported Windows artifactType 'pkg' for component later"
+        ),
+    ):
+        sign_windows.run_custom_signing(
+            "quay.io/org", "uid-123", signing_script_base="C:/Scripts"
+        )
+    run_script.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("options", "script_base", "error"),
+    [
+        ([], "C:/Scripts", "signingOptions.*must be an object"),
+        ({"artifactType": "binary"}, None, "Windows signing script base must be configured"),
+    ],
+)
+def test_run_custom_signing_rejects_invalid_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    options: object,
+    script_base: str | None,
+    error: str,
+) -> None:
+    """Reject malformed options and a missing Windows script directory."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps({"components": [{"name": "prod", "signingOptions": options}]}),
+    )
+    monkeypatch.setattr(sign_windows, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+    component_dir = tmp_path / "prod"
+    component_dir.mkdir()
+    (component_dir / "has_windows").touch()
+
+    with (
+        mock.patch("shutil.copy2"),
+        pytest.raises(ValueError, match=error),
+    ):
+        sign_windows.run_custom_signing(
+            "quay.io/org", "uid-123", signing_script_base=script_base
+        )
 
 
 def test_run_custom_script_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -380,7 +504,7 @@ def test_run_custom_script_happy_path(tmp_path: Path, monkeypatch: pytest.Monkey
         sign_windows.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="C:/Scripts/sign.bat",
+            signing_script_base="C:/Scripts",
             signing_args=["--profile", "internal"],
         )
 
@@ -399,7 +523,7 @@ def test_run_custom_script_happy_path(tmp_path: Path, monkeypatch: pytest.Monkey
     assert "$env:SIGNED_REF=" in stdin_script
     assert "$env:OUTPUT_DIGEST=" in stdin_script
     assert "$env:WIN_CERT_THUMBPRINT='AABBCCDD'" in stdin_script
-    assert "C:/Scripts/sign.bat" in stdin_script
+    assert r"C:\Scripts\sign_windows_wrapper.ps1" in stdin_script
     assert "'--profile'" in stdin_script
     assert "'internal'" in stdin_script
 
@@ -444,7 +568,7 @@ def test_run_custom_script_with_dest_quay(
         sign_windows.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="C:/Scripts/sign.bat",
+            signing_script_base="C:/Scripts",
             dest_quay_url="quay.io/internal",
             origin="my-tenant",
         )
@@ -490,7 +614,7 @@ def test_run_custom_script_ssh_failure(
             sign_windows.run_custom_signing(
                 "quay.io/org",
                 "uid-123",
-                signing_script="C:/Scripts/sign.bat",
+                signing_script_base="C:/Scripts",
             )
 
 
@@ -526,7 +650,7 @@ def test_run_custom_script_scp_failure_raises(
         sign_windows.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="C:/Scripts/sign.bat",
+            signing_script_base="C:/Scripts",
             origin="my-tenant",
         )
 
@@ -566,7 +690,7 @@ def test_run_custom_script_cleanup_warning(
         sign_windows.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="C:/Scripts/sign.bat",
+            signing_script_base="C:/Scripts",
             origin="my-tenant",
         )
 

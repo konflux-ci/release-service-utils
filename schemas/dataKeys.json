@@ -593,6 +593,29 @@
                 "type": "string",
                 "description": "The component name found in the snapshot e.g. example-component"
               },
+              "signingOptions": {
+                "type": "object",
+                "description": "Component signing options for sign-and-push-to-internal-oci",
+                "properties": {
+                  "artifactType": {
+                    "type": "string",
+                    "enum": [
+                      "app",
+                      "pkg",
+                      "binary"
+                    ],
+                    "description": "Artifact type used to select the signing script"
+                  },
+                  "buildDmg": {
+                    "type": "boolean",
+                    "description": "Build and sign a DMG from a macOS app"
+                  },
+                  "notarize": {
+                    "type": "boolean",
+                    "description": "Notarize the signed macOS artifact"
+                  }
+                }
+              },
               "canonicalName": {
                 "type": "string",
                 "description": "Name to be used while comparing against the name label when multiple repositories are defined"
@@ -653,6 +676,18 @@
                         "source": {
                           "type": "string",
                           "description": "name of file within image"
+                        },
+                        "os": {
+                          "type": "string",
+                          "description": "Target operating system for signing"
+                        },
+                        "arch": {
+                          "type": "string",
+                          "description": "Target architecture for signing"
+                        },
+                        "entitlementsArtifact": {
+                          "type": "string",
+                          "description": "Entitlements file to include with the signing request"
                         }
                       }
                     }

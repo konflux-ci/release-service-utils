@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from jsonschema import Draft7Validator, ValidationError
 
 from release_service_utils.tasks.managed import check_data_keys
 
@@ -20,6 +21,95 @@ def schema_path() -> Path:
     if not SCHEMA_PATH.is_file():
         pytest.fail(f"missing dataKeys schema: {SCHEMA_PATH}")
     return SCHEMA_PATH
+
+
+def test_schema_accepts_component_signing_options(schema_path: Path) -> None:
+    """Accept app, package, and binary signing options in mapping components."""
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    data = {
+        "systems": [],
+        "mapping": {
+            "components": [
+                {
+                    "name": "pkg",
+                    "signingOptions": {"artifactType": "pkg", "notarize": True},
+                    "staged": {
+                        "files": [
+                            {
+                                "source": "package.tar.gz",
+                                "os": "darwin",
+                                "arch": "arm64",
+                                "entitlementsArtifact": "package.entitlements",
+                            }
+                        ]
+                    },
+                },
+                {
+                    "name": "app",
+                    "signingOptions": {
+                        "artifactType": "app",
+                        "buildDmg": True,
+                        "notarize": True,
+                    },
+                    "files": [
+                        {
+                            "source": "application.tar.gz",
+                            "os": "darwin",
+                            "arch": "arm64",
+                        }
+                    ],
+                },
+                {"name": "windows", "signingOptions": {"artifactType": "binary"}},
+            ]
+        },
+    }
+
+    Draft7Validator(schema).validate(data)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        [],
+        {"artifactType": "unknown"},
+        {"artifactType": "app", "buildDmg": "true"},
+        {"artifactType": "pkg", "notarize": "true"},
+    ],
+)
+def test_schema_rejects_invalid_component_signing_options(
+    schema_path: Path, options: object
+) -> None:
+    """Reject malformed signing options in mapping components."""
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    data = {
+        "systems": [],
+        "mapping": {"components": [{"name": "app", "signingOptions": options}]},
+    }
+
+    with pytest.raises(ValidationError):
+        Draft7Validator(schema).validate(data)
+
+
+@pytest.mark.parametrize(
+    "component_fields",
+    [
+        {"staged": {"files": [{"os": 123}]}},
+        {"staged": {"files": [{"arch": 123}]}},
+        {"staged": {"files": [{"entitlementsArtifact": 123}]}},
+    ],
+)
+def test_schema_rejects_invalid_signing_file_fields(
+    schema_path: Path, component_fields: dict[str, Any]
+) -> None:
+    """Reject nonstring platform and entitlements fields used by signing."""
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    data = {
+        "systems": [],
+        "mapping": {"components": [{"name": "app", **component_fields}]},
+    }
+
+    with pytest.raises(ValidationError, match="is not of type 'string'"):
+        Draft7Validator(schema).validate(data)
 
 
 def _valid_release_notes() -> dict[str, Any]:
