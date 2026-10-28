@@ -87,39 +87,6 @@ def test_derive_name_from_url(url: str, expected: str) -> None:
     assert check_labels.derive_name_from_url(url) == expected
 
 
-# --- get_label_value ---
-
-
-def test_get_label_value_found() -> None:
-    """Return the value when the label exists."""
-    comp = _make_component(labels=[_name_label("myname")])
-    assert check_labels.get_label_value(comp, "name") == "myname"
-
-
-def test_get_label_value_missing() -> None:
-    """Return None when the label is absent."""
-    comp = _make_component(labels=[])
-    assert check_labels.get_label_value(comp, "name") is None
-
-
-def test_get_label_value_no_labels_key() -> None:
-    """Return None when metadata has no labels at all."""
-    comp = _make_component()
-    assert check_labels.get_label_value(comp, "name") is None
-
-
-def test_get_label_value_present_but_empty() -> None:
-    """Return an empty string when the label is present with an empty value."""
-    comp = _make_component(labels=[_name_label("")])
-    assert check_labels.get_label_value(comp, "name") == ""
-
-
-def test_get_label_value_present_but_whitespace() -> None:
-    """Return an empty string when the label value is whitespace-only."""
-    comp = _make_component(labels=[_name_label("   ")])
-    assert check_labels.get_label_value(comp, "name") == ""
-
-
 # --- is_image_media_type ---
 
 

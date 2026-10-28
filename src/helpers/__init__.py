@@ -22,6 +22,7 @@ __all__ = [
     "internal_request",
     "jira",
     "kubectl",
+    "labels",
     "logger",
     "ocp_version",
     "oci_auth",
