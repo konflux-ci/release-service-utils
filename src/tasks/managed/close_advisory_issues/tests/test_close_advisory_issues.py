@@ -369,10 +369,10 @@ def test_process_fixed_issue_skips_unsupported_tracker(
     assert "Skipping issue" in caplog.text
 
 
-def test_process_fixed_issue_skips_already_closed_issue(
+def test_process_fixed_issue_comments_on_already_closed_issue(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Skip closing when the issue is already Closed."""
+    """Skip closing when the issue is already Closed and just leave a comment instead."""
     session = mock.MagicMock()
     auth = HTTPBasicAuth("user", "token")
     with mock.patch(
@@ -387,8 +387,38 @@ def test_process_fixed_issue_skips_already_closed_issue(
                 session=session,
             )
     get_json.assert_called_once()
-    session.post.assert_not_called()
-    assert "already in Closed state" in caplog.text
+    assert "already in a Closed state. Commenting instead" in caplog.text
+
+
+def test_process_fixed_issue_warns_when_comment_fails_on_closed_issue(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Log a warning when commenting on a closed issue fails.
+
+    KONFLUX-7489: the task must not fail the release when Jira denies
+    close/comment permission. The advisory is already published.
+    """
+    session = mock.MagicMock()
+    auth = HTTPBasicAuth("user", "token")
+    with mock.patch(
+        "close_advisory_issues.close_advisory_issues.jira_get_json",
+        side_effect=[
+            {"fields": {"status": {"name": "Closed"}}},
+            {"transitions": []},
+        ],
+    ):
+        with mock.patch(
+            "close_advisory_issues.close_advisory_issues.add_issue_comment",
+            side_effect=requests.HTTPError("comment failed"),
+        ):
+            with caplog.at_level(logging.WARNING, logger="release"):
+                close_advisory_issues.process_fixed_issue(
+                    _fixed_issue("FAIL-999"),
+                    advisory_url="https://access.redhat.com/errata/RHBA-2025:1111",
+                    auth=auth,
+                    session=session,
+                )
+    assert "failed to add comment to already closed issue" in caplog.text
 
 
 def test_process_fixed_issue_closes_open_issue() -> None:
