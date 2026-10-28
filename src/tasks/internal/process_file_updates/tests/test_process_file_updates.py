@@ -544,6 +544,109 @@ def test_gitlab_create_mr_raises_on_gitlab_error() -> None:
     assert "creating GitLab merge request" in str(exc.value)
 
 
+def test_gitlab_create_mr_closes_after_when_requested() -> None:
+    """E2e cleanup closes the MR after the URL is captured."""
+    client = _mock_gitlab_client()
+    created = client.projects.get.return_value.mergerequests.create.return_value
+    with mock.patch.object(
+        process_file_updates.process_file_updates.vcs_gitlab,
+        "cleanup_merge_request_branch",
+    ) as cleanup:
+        out = process_file_updates.process_file_updates.gitlab_create_mr(
+            head="branch-1",
+            title="t",
+            target_branch="main",
+            description="d",
+            upstream_repo="https://gitlab.cee.redhat.com/rhtap-release/managed-tenants-stage",
+            gitlab_client=client,
+            close_after=True,
+        )
+    assert json.loads(out) == {"merge_request": created.web_url}
+    cleanup.assert_called_once_with(
+        client,
+        "https://gitlab.cee.redhat.com/rhtap-release/managed-tenants-stage",
+        created,
+        "branch-1",
+    )
+
+
+def test_gitlab_create_mr_leaves_production_mr_open() -> None:
+    """Production MRs are not closed after create."""
+    client = _mock_gitlab_client()
+    with mock.patch.object(
+        process_file_updates.process_file_updates.vcs_gitlab,
+        "cleanup_merge_request_branch",
+    ) as cleanup:
+        process_file_updates.process_file_updates.gitlab_create_mr(
+            head="branch-1",
+            title="t",
+            target_branch="main",
+            description="d",
+            upstream_repo="https://gitlab.com/org/up.git",
+            gitlab_client=client,
+        )
+    cleanup.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, None),
+        ("", None),
+        (" true ", True),
+        ("FALSE", False),
+        ("nope", None),
+    ],
+)
+def test_parse_close_merge_request_override(raw: str | None, expected: bool | None) -> None:
+    """Env override is true, false, or unset."""
+    assert process_file_updates.parse_close_merge_request_override(raw) is expected
+
+
+@pytest.mark.parametrize(
+    ("repository", "expected"),
+    [
+        ("https://gitlab.cee.redhat.com/rhtap-release/managed-tenants-stage", True),
+        ("https://gitlab.cee.redhat.com/hacbs-release-tests/app-interface/", True),
+        ("https://gitlab.cee.redhat.com/service/app-interface", False),
+        ("https://gitlab.com/org/up.git", False),
+    ],
+)
+def test_is_e2e_file_updates_repo(repository: str, expected: bool) -> None:
+    """Only catalog e2e GitLab projects opt into auto-close."""
+    assert process_file_updates.is_e2e_file_updates_repo(repository) is expected
+
+
+def test_should_close_file_updates_mr_honors_override() -> None:
+    """Explicit true/false wins over the e2e-repo default."""
+    e2e = "https://gitlab.cee.redhat.com/rhtap-release/managed-tenants-stage"
+    prod = "https://gitlab.com/org/product.git"
+    assert (
+        process_file_updates.should_close_file_updates_mr(
+            upstream_repo=e2e, repo=e2e, close_requested=False
+        )
+        is False
+    )
+    assert (
+        process_file_updates.should_close_file_updates_mr(
+            upstream_repo=prod, repo=prod, close_requested=True
+        )
+        is True
+    )
+    assert (
+        process_file_updates.should_close_file_updates_mr(
+            upstream_repo=e2e, repo=e2e, close_requested=None
+        )
+        is True
+    )
+    assert (
+        process_file_updates.should_close_file_updates_mr(
+            upstream_repo=prod, repo=prod, close_requested=None
+        )
+        is False
+    )
+
+
 def test_iter_konflux_open_mrs_raises_on_project_lookup_error() -> None:
     """Project lookup failures raise ``CheckStepError``."""
     with pytest.raises(tekton.CheckStepError) as exc:
@@ -1400,6 +1503,49 @@ def test_find_existing_mr_with_same_diff(tmp_path: Path) -> None:
     assert "merge_requests/99" in info
 
 
+def test_find_existing_mr_with_same_diff_closes_when_requested(tmp_path: Path) -> None:
+    """E2e reuse still records the URL, then closes the leftover MR."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    existing_mr = mock.Mock()
+    existing_mr.iid = 99
+    existing_mr.web_url = "https://gitlab.com/org/up/-/merge_requests/99"
+    existing_mr.source_branch = "deadbeef"
+    client = _mock_gitlab_client()
+    with (
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "iter_konflux_open_mrs",
+            return_value=iter([existing_mr]),
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "_fetch_merge_request_head",
+            return_value="mr_99",
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates.vcs_git,
+            "working_tree_diff",
+            return_value="",
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates.vcs_gitlab,
+            "cleanup_merge_request_branch",
+        ) as cleanup,
+    ):
+        info = process_file_updates.find_existing_mr_with_same_diff(
+            "org/up",
+            repo,
+            tmp_path,
+            client,
+            "test-group",
+            close_after=True,
+        )
+    assert info is not None
+    assert "merge_requests/99" in info
+    cleanup.assert_called_once_with(client, "org/up", existing_mr, "deadbeef")
+
+
 def test_commit_and_create_mr(tmp_path: Path) -> None:
     """Staged changes are pushed and a merge request is opened."""
     repo = tmp_path / "repo"
@@ -1491,7 +1637,137 @@ def test_run_file_updates_creates_mr(tmp_path: Path) -> None:
             temp_dir=tmp_path,
             secrets=secrets,
         )
+        create_mr = process_file_updates.process_file_updates.commit_and_create_mr
     assert state == "Success" and "merge_request" in body
+    create_mr.assert_called_once()
+    assert create_mr.call_args.kwargs["close_after"] is False
+
+
+def test_run_file_updates_closes_mr_for_e2e_repo(tmp_path: Path) -> None:
+    """Catalog e2e GitLab repos close the MR after create."""
+    secrets = {
+        "gitlab_host": "h",
+        "gitlab_access_token": "t",
+        "git_author_name": "n",
+        "git_author_email": "e@x.com",
+    }
+    path_state = process_file_updates.PathProcessingState(replacements_performed=2)
+    e2e_repo = "https://gitlab.cee.redhat.com/rhtap-release/managed-tenants-stage"
+
+    with (
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "configure_git_environment",
+            return_value="t",
+        ),
+        mock.patch.object(process_file_updates.process_file_updates, "git_functions_init"),
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "write_paths_manifest",
+            return_value=(tmp_path / "p.json", []),
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "prepare_repository",
+            return_value=tmp_path / "repo",
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "process_all_paths",
+            return_value=(path_state, None),
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "get_cached_diff",
+            return_value="diff\n",
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "find_existing_mr_with_same_diff",
+            return_value=None,
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "commit_and_create_mr",
+            return_value=('{"merge_request":"u"}\n', "Success", 0),
+        ),
+    ):
+        process_file_updates.run_file_updates(
+            upstream_repo=e2e_repo,
+            repo=e2e_repo,
+            revision="main",
+            paths_json="[]",
+            component_group="g",
+            temp_dir=tmp_path,
+            secrets=secrets,
+        )
+        create_mr = process_file_updates.process_file_updates.commit_and_create_mr
+    assert create_mr.call_args.kwargs["close_after"] is True
+
+
+def test_run_file_updates_env_keeps_e2e_mr_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``CLOSE_MERGE_REQUEST=false`` leaves even an e2e MR open."""
+    monkeypatch.setenv("CLOSE_MERGE_REQUEST", "false")
+    secrets = {
+        "gitlab_host": "h",
+        "gitlab_access_token": "t",
+        "git_author_name": "n",
+        "git_author_email": "e@x.com",
+    }
+    path_state = process_file_updates.PathProcessingState(replacements_performed=2)
+    e2e_repo = "https://gitlab.cee.redhat.com/hacbs-release-tests/app-interface"
+
+    with (
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "configure_git_environment",
+            return_value="t",
+        ),
+        mock.patch.object(process_file_updates.process_file_updates, "git_functions_init"),
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "write_paths_manifest",
+            return_value=(tmp_path / "p.json", []),
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "prepare_repository",
+            return_value=tmp_path / "repo",
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "process_all_paths",
+            return_value=(path_state, None),
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "get_cached_diff",
+            return_value="diff\n",
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "find_existing_mr_with_same_diff",
+            return_value=None,
+        ),
+        mock.patch.object(
+            process_file_updates.process_file_updates,
+            "commit_and_create_mr",
+            return_value=('{"merge_request":"u"}\n', "Success", 0),
+        ),
+    ):
+        process_file_updates.run_file_updates(
+            upstream_repo=e2e_repo,
+            repo=e2e_repo,
+            revision="main",
+            paths_json="[]",
+            component_group="g",
+            temp_dir=tmp_path,
+            secrets=secrets,
+        )
+        create_mr = process_file_updates.process_file_updates.commit_and_create_mr
+    assert create_mr.call_args.kwargs["close_after"] is False
 
 
 def test_run_file_updates_no_cached_diff(tmp_path: Path) -> None:
