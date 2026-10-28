@@ -412,12 +412,14 @@ def test_run_default_cleanup_warning(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("script_base", ["/opt", None])
 def test_run_custom_signing_skips_component_without_has_mac(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    script_base: str | None,
 ) -> None:
-    """Component without has_mac is skipped in run_custom_signing."""
+    """Skip components without Mac content even when no script base is configured."""
     monkeypatch.setenv(
         "SNAPSHOT_JSON",
         json.dumps({"components": [{"name": "prod"}]}),
@@ -436,10 +438,223 @@ def test_run_custom_signing_skips_component_without_has_mac(
         sign_mac.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="/opt/sign.sh",
+            signing_script_base=script_base,
         )
 
     assert "skipping Mac signing" in caplog.text
+
+
+def test_run_custom_signing_selects_script_identity_and_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Route package and app components to their wrappers with matching options."""
+    components = [
+        {
+            "name": "package-component",
+            "signingOptions": {"artifactType": "pkg", "notarize": True},
+        },
+        {
+            "name": "bar",
+            "signingOptions": {
+                "artifactType": "app",
+                "buildDmg": True,
+                "notarize": True,
+            },
+        },
+    ]
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps({"components": components}))
+    monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+    (sign_mac.DEST_QUAY_SECRET_MOUNT / "username").write_text("dest-user")
+    (sign_mac.DEST_QUAY_SECRET_MOUNT / "password").write_text("dest-pass")
+    for component in components:
+        component_dir = tmp_path / component["name"]
+        component_dir.mkdir()
+        (component_dir / "has_mac").touch()
+        (component_dir / "unsigned_mac_digest.txt").write_text("sha256:unsigned")
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch.object(sign_mac, "_run_custom_script") as run_script,
+    ):
+        sign_mac.run_custom_signing(
+            "quay.io/org", "uid-123", signing_script_base="/opt/mac-signing"
+        )
+
+    pkg, app = (call.kwargs for call in run_script.call_args_list)
+    assert pkg["signing_script"] == "/opt/mac-signing/sign_pkg_wrapper.sh"
+    assert pkg["signing_identity"] == "Developer ID Installer: My Identity"
+    assert pkg["build_dmg"] is False
+    assert pkg["notarize"] is True
+    assert app["signing_script"] == "/opt/mac-signing/sign_mac_wrapper.sh"
+    assert app["signing_identity"] == "Developer ID Application: My Identity"
+    assert app["build_dmg"] is True
+    assert app["notarize"] is True
+    for kwargs in (pkg, app):
+        assert kwargs["apple_id"] == "dev@example.com"
+        assert kwargs["team_id"] == "TEAMID123"
+        assert kwargs["app_specific_password"] == "app-pwd"
+
+
+@pytest.mark.parametrize(
+    ("options", "error"),
+    [
+        ([], "signingOptions.*must be an object"),
+        ({"artifactType": "unknown"}, "Unsupported Mac artifactType"),
+        ({"artifactType": "app", "buildDmg": "false"}, "buildDmg.*must be a boolean"),
+        ({"artifactType": "app", "notarize": True}, "requires buildDmg"),
+        ({"artifactType": "pkg", "buildDmg": True}, "buildDmg requires"),
+    ],
+)
+def test_run_custom_signing_rejects_invalid_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, options: object, error: str
+) -> None:
+    """Reject unsupported signing requests before invoking a remote script."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps({"components": [{"name": "prod", "signingOptions": options}]}),
+    )
+    monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+    component_dir = tmp_path / "prod"
+    component_dir.mkdir()
+    (component_dir / "has_mac").touch()
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch.object(sign_mac, "_run_custom_script") as run_script,
+        pytest.raises(ValueError, match=error),
+    ):
+        sign_mac.run_custom_signing(
+            "quay.io/org", "uid-123", signing_script_base="/opt/mac-signing"
+        )
+    run_script.assert_not_called()
+
+
+def test_run_custom_signing_validates_all_mac_components_before_signing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject later invalid Mac options before signing and ignore Windows options."""
+    components = [
+        {"name": "windows", "signingOptions": {"artifactType": "binary"}},
+        {"name": "first", "signingOptions": {"artifactType": "app"}},
+        {"name": "later", "signingOptions": {"artifactType": "pkg", "buildDmg": True}},
+    ]
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps({"components": components}))
+    monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
+    for name in ("first", "later"):
+        component_dir = tmp_path / name
+        component_dir.mkdir()
+        (component_dir / "has_mac").touch()
+
+    with (
+        mock.patch.object(sign_mac, "_run_custom_script") as run_script,
+        pytest.raises(
+            ValueError, match="buildDmg requires artifactType app for component later"
+        ),
+    ):
+        sign_mac.run_custom_signing(
+            "quay.io/org", "uid-123", signing_script_base="/opt/mac-signing"
+        )
+    run_script.assert_not_called()
+
+
+def test_run_custom_signing_requires_notarization_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject enabled notarization when a mounted Apple credential is empty."""
+    monkeypatch.setenv(
+        "SNAPSHOT_JSON",
+        json.dumps(
+            {
+                "components": [
+                    {
+                        "name": "prod",
+                        "signingOptions": {"artifactType": "pkg", "notarize": True},
+                    }
+                ]
+            }
+        ),
+    )
+    monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+    (sign_mac.MAC_SIGNING_CREDS_MOUNT / "apple_id").write_text("")
+    component_dir = tmp_path / "prod"
+    component_dir.mkdir()
+    (component_dir / "has_mac").touch()
+
+    with (
+        mock.patch("shutil.copy2"),
+        mock.patch.object(sign_mac, "_run_custom_script") as run_script,
+        pytest.raises(ValueError, match="Missing Apple notarization credentials"),
+    ):
+        sign_mac.run_custom_signing(
+            "quay.io/org", "uid-123", signing_script_base="/opt/mac-signing"
+        )
+    run_script.assert_not_called()
+
+
+def test_run_custom_signing_requires_script_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail clearly when a Mac component has no configured script directory."""
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps({"components": [{"name": "prod"}]}))
+    monkeypatch.setattr(sign_mac, "CONTENT_DIR", tmp_path)
+    _setup_mounts(tmp_path, monkeypatch)
+    _patch_ssh_setup(monkeypatch)
+    component_dir = tmp_path / "prod"
+    component_dir.mkdir()
+    (component_dir / "has_mac").touch()
+
+    with (
+        mock.patch("shutil.copy2"),
+        pytest.raises(ValueError, match="Mac signing script base must be configured"),
+    ):
+        sign_mac.run_custom_signing("quay.io/org", "uid-123", signing_script_base=None)
+
+
+def test_run_custom_script_exports_notarization_options(tmp_path: Path) -> None:
+    """Export true flags and Apple credentials to the selected Mac wrapper."""
+    with mock.patch.object(
+        sign_mac.subprocess, "run", return_value=mock.Mock(returncode=0)
+    ) as run_command:
+        sign_mac._run_custom_script(
+            signing_script="/opt/mac-signing/sign_pkg_wrapper.sh",
+            signing_args=[],
+            ssh_opts=[],
+            mac_user="macuser",
+            mac_host="host.example.com",
+            name="prod",
+            origin="tenant",
+            commit_sha="abc123",
+            component_dir=tmp_path,
+            quay_url="quay.io/source",
+            dest_quay_url="quay.io/dest",
+            quay_user="user",
+            quay_pass="password",
+            dest_quay_user="dest-user",
+            dest_quay_pass="dest-password",
+            unsigned_digest="sha256:unsigned",
+            pipeline_run_uid="uid-123",
+            keychain_password="keychain-password",
+            signing_identity="Developer ID Installer: My Identity",
+            notarize=True,
+            apple_id="dev@example.com",
+            team_id="TEAMID123",
+            app_specific_password="app-password",
+        )
+
+    script = run_command.call_args_list[0].kwargs["input"]
+    assert "export CSC_NAME='Developer ID Installer: My Identity'" in script
+    assert "export BUILD_DMG=false" in script
+    assert "export NOTARIZE=true" in script
+    assert "export APPLE_ID=dev@example.com" in script
+    assert "export APPLE_TEAM_ID=TEAMID123" in script
+    assert "export APPLE_APP_SPECIFIC_PASSWORD=app-password" in script
+    assert "exec bash /opt/mac-signing/sign_pkg_wrapper.sh" in script
 
 
 def test_run_custom_script_with_entitlements_ref(
@@ -487,7 +702,7 @@ def test_run_custom_script_with_entitlements_ref(
         sign_mac.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="/opt/sign.sh",
+            signing_script_base="/opt",
             origin="my-tenant",
         )
 
@@ -529,7 +744,7 @@ def test_run_custom_script_happy_path(tmp_path: Path, monkeypatch: pytest.Monkey
         sign_mac.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="/opt/sign.sh",
+            signing_script_base="/opt",
             signing_args=["--profile", "internal"],
         )
 
@@ -544,11 +759,13 @@ def test_run_custom_script_happy_path(tmp_path: Path, monkeypatch: pytest.Monkey
     assert "export QUAY_USER=" in stdin_script
     assert "export QUAY_PASS=" in stdin_script
     assert "export CSC_KEY_PASSWORD=" in stdin_script
-    assert "export CSC_NAME=" in stdin_script
+    assert "export CSC_NAME='Developer ID Application: My Identity'" in stdin_script
+    assert "export BUILD_DMG=false" in stdin_script
+    assert "export NOTARIZE=false" in stdin_script
     assert "export UNSIGNED_REF=" in stdin_script
     assert "export SIGNED_REF=" in stdin_script
     assert "export OUTPUT_DIGEST=" in stdin_script
-    assert "/opt/sign.sh" in stdin_script
+    assert "/opt/sign_mac_wrapper.sh" in stdin_script
     assert "--profile" in stdin_script
     assert "internal" in stdin_script
 
@@ -590,7 +807,7 @@ def test_run_custom_script_ssh_failure(
             sign_mac.run_custom_signing(
                 "quay.io/org",
                 "uid-123",
-                signing_script="/opt/sign.sh",
+                signing_script_base="/opt",
             )
 
 
@@ -634,7 +851,7 @@ def test_run_custom_script_with_dest_quay(
         sign_mac.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="/opt/sign.sh",
+            signing_script_base="/opt",
             dest_quay_url="quay.io/internal",
             origin="my-tenant",
         )
@@ -681,7 +898,7 @@ def test_run_custom_script_requires_component_dest_quay_credentials(
         sign_mac.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="/opt/sign.sh",
+            signing_script_base="/opt",
             dest_quay_url="quay.io/internal",
             origin="my-tenant",
         )
@@ -714,7 +931,7 @@ def test_run_custom_script_falls_back_to_generic_dest_quay_credentials(
         sign_mac.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="/opt/sign.sh",
+            signing_script_base="/opt",
             origin="my-tenant",
         )
 
@@ -754,7 +971,7 @@ def test_run_custom_script_does_not_scp_script(
         sign_mac.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="/opt/sign.sh",
+            signing_script_base="/opt",
         )
 
     check_call_mock.assert_not_called()
@@ -795,7 +1012,7 @@ def test_run_custom_script_scp_failure_raises(
         sign_mac.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="/opt/sign.sh",
+            signing_script_base="/opt",
             origin="my-tenant",
         )
 
@@ -835,7 +1052,7 @@ def test_run_custom_script_cleanup_warning(
         sign_mac.run_custom_signing(
             "quay.io/org",
             "uid-123",
-            signing_script="/opt/sign.sh",
+            signing_script_base="/opt",
             origin="my-tenant",
         )
 
