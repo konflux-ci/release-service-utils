@@ -109,7 +109,12 @@ def patch_krb5_config(source: str) -> str:
 
 
 def kinit_with_retry(
-    princ: str, keytab: Path, extra_env: dict[str, str], *, max_attempts: int = 5
+    princ: str,
+    keytab: Path,
+    extra_env: dict[str, str],
+    *,
+    max_attempts: int = 5,
+    max_sleep_seconds: int | None = None,
 ) -> None:
     """Run ``kinit`` with a keytab, retrying a few times on non-zero exit.
 
@@ -120,6 +125,7 @@ def kinit_with_retry(
     ``KRB5_TRACE=/dev/stderr`` in the process environment (or in **extra_env**)
     on the parent before calling. **max_attempts** is how many times to run
     ``kinit`` before giving up, with exponential backoff (5s, 10s, 20s...).
+    When **max_sleep_seconds** is set, each wait is capped at that many seconds.
     """
 
     def _run_once() -> None:
@@ -140,6 +146,7 @@ def kinit_with_retry(
         max_attempts=max_attempts,
         retry_on=subprocess.CalledProcessError,
         base_sleep_seconds=5,
+        max_sleep_seconds=max_sleep_seconds,
     )
 
 
