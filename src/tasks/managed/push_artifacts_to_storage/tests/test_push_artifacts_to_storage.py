@@ -54,10 +54,10 @@ def _setup_files(
     data: dict[str, Any] | None = None,
     create_cli_toml: bool = False,
 ) -> tuple[Path, Path, Path, Path]:
-    """Create data_dir, rok_access_path, results_dir and write fixture files."""
+    """Create data_dir, rok_access_path, download_parent and write fixture files."""
     data_dir = tmp_path / "release"
     rok_access_path = tmp_path / "rok-access"
-    results_dir = tmp_path / "results"
+    download_parent = tmp_path / "temp"
     rok_access_path.mkdir(parents=True)
 
     if snapshot is not None:
@@ -67,7 +67,7 @@ def _setup_files(
     if create_cli_toml:
         (rok_access_path / "cli.toml").write_text("[config]", encoding="utf-8")
 
-    return data_dir, rok_access_path, results_dir, data_dir
+    return data_dir, rok_access_path, download_parent, data_dir
 
 
 @patch(f"{TASK}.run_cmd")
@@ -75,7 +75,7 @@ def _setup_files(
 def test_happy_path(
     mock_oras_pull: MagicMock, mock_run_cmd: MagicMock, tmp_path: Path
 ) -> None:
-    """Pull all components, push to storage when cli.toml exists and draft is true."""
+    """Pull each component to its own temp dir and upload when draft is true."""
     snapshot = _make_snapshot(
         [
             {"containerImage": "quay.io/app1@sha256:aaa"},
@@ -83,7 +83,7 @@ def test_happy_path(
         ]
     )
     data = _make_data(True)
-    data_dir, rok_access_path, results_dir, _ = _setup_files(
+    data_dir, rok_access_path, download_parent, _ = _setup_files(
         tmp_path, snapshot=snapshot, data=data, create_cli_toml=True
     )
 
@@ -101,26 +101,33 @@ def test_happy_path(
         snapshot_build_id="build-123",
         snapshot_namespace="test-ns",
         rok_access_path=rok_access_path,
-        results_dir=results_dir,
+        download_parent=download_parent,
     )
 
     assert mock_oras_pull.call_count == 2
-    mock_oras_pull.assert_any_call("quay.io/app1@sha256:aaa", results_dir)
-    mock_oras_pull.assert_any_call("quay.io/app2@sha256:bbb", results_dir)
-    mock_run_cmd.assert_called_once_with(
-        [
-            "pulp-tool",
-            "--config",
-            str(rok_access_path / "cli.toml"),
-            "--build-id",
-            "build-123",
-            "--namespace",
-            "test-ns",
-            "upload",
-            "--rpm-path",
-            str(results_dir),
-        ]
-    )
+    pull_dirs_by_image = {call.args[0]: call.args[1] for call in mock_oras_pull.call_args_list}
+    assert set(pull_dirs_by_image) == {
+        "quay.io/app1@sha256:aaa",
+        "quay.io/app2@sha256:bbb",
+    }
+    pull_dirs = list(pull_dirs_by_image.values())
+    assert pull_dirs[0] != pull_dirs[1]
+    assert pull_dirs[0].is_relative_to(download_parent)
+    assert pull_dirs[1].is_relative_to(download_parent)
+    assert mock_run_cmd.call_count == 2
+    expected_upload_cmd = [
+        "pulp-tool",
+        "--config",
+        str(rok_access_path / "cli.toml"),
+        "--build-id",
+        "build-123",
+        "--namespace",
+        "test-ns",
+        "upload",
+        "--rpm-path",
+    ]
+    for pull_dir in pull_dirs:
+        mock_run_cmd.assert_any_call(expected_upload_cmd + [str(pull_dir)])
 
 
 @patch(f"{TASK}.run_cmd")
@@ -138,7 +145,7 @@ def test_missing_cli_toml_skips_push(
         ]
     )
     data = _make_data(True)
-    data_dir, rok_access_path, results_dir, _ = _setup_files(
+    data_dir, rok_access_path, download_parent, _ = _setup_files(
         tmp_path, snapshot=snapshot, data=data, create_cli_toml=False
     )
 
@@ -156,7 +163,7 @@ def test_missing_cli_toml_skips_push(
             snapshot_build_id="build-123",
             snapshot_namespace="test-ns",
             rok_access_path=rok_access_path,
-            results_dir=results_dir,
+            download_parent=download_parent,
         )
 
     mock_oras_pull.assert_called_once()
@@ -176,7 +183,7 @@ def test_koji_import_draft_false_skips_push(
         ]
     )
     data = _make_data(False)
-    data_dir, rok_access_path, results_dir, _ = _setup_files(
+    data_dir, rok_access_path, download_parent, _ = _setup_files(
         tmp_path, snapshot=snapshot, data=data, create_cli_toml=True
     )
 
@@ -193,7 +200,7 @@ def test_koji_import_draft_false_skips_push(
         snapshot_build_id="build-123",
         snapshot_namespace="test-ns",
         rok_access_path=rok_access_path,
-        results_dir=results_dir,
+        download_parent=download_parent,
     )
 
     mock_run_cmd.assert_not_called()
@@ -211,7 +218,7 @@ def test_koji_import_draft_missing_skips_push(
         ]
     )
     data: dict[str, Any] = {}
-    data_dir, rok_access_path, results_dir, _ = _setup_files(
+    data_dir, rok_access_path, download_parent, _ = _setup_files(
         tmp_path, snapshot=snapshot, data=data, create_cli_toml=True
     )
 
@@ -228,7 +235,7 @@ def test_koji_import_draft_missing_skips_push(
         snapshot_build_id="build-123",
         snapshot_namespace="test-ns",
         rok_access_path=rok_access_path,
-        results_dir=results_dir,
+        download_parent=download_parent,
     )
 
     mock_run_cmd.assert_not_called()
