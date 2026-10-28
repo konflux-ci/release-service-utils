@@ -2802,7 +2802,7 @@ requires-dist = [
     { name = "check-jsonschema", specifier = "<=0.38.0" },
     { name = "confluent-kafka" },
     { name = "diffused-lib", specifier = "==0.6.0" },
-    { name = "gitpython", specifier = ">=3.1.59" },
+    { name = "gitpython", specifier = ">=3.1.60" },
     { name = "jinja2" },
     { name = "jinja2-ansible-filters" },
     { name = "jq" },
