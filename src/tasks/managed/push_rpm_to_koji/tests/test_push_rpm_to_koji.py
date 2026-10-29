@@ -164,8 +164,9 @@ class TestRunKojiCmd:
             mock_run.return_value = MagicMock(stdout='{"result": true}', returncode=0)
             result = task.run_koji_cmd("myprofile", "hello")
             mock_run.assert_called_once()
-            assert "--profile=myprofile" in mock_run.call_args[0][0]
-            assert "hello" in mock_run.call_args[0][0]
+            cmd = mock_run.call_args[0][0]
+            assert cmd[:3] == ["koji", "--profile=myprofile", "--plugin-paths="]
+            assert "hello" in cmd
             assert result.stdout == '{"result": true}'
 
     def test_runs_with_noauth(self) -> None:
@@ -1321,6 +1322,34 @@ class TestRun:
             task.run(config)
         mock_process.assert_called_once()
 
+    def test_installs_koji_config_before_loading_files(self, tmp_path: Path) -> None:
+        """Install tenant Koji profiles before the task reads the snapshot."""
+        snapshot = tmp_path / "snap.json"
+        snapshot.write_text(json.dumps(_snapshot()), encoding="utf-8")
+        data = tmp_path / "data.json"
+        data.write_text(json.dumps(_data()), encoding="utf-8")
+        source = tmp_path / "koji-client-config"
+        source.mkdir()
+        config = _config(tmp_path, snapshot=snapshot, data=data)
+        config = task.KojiConfig(
+            snapshot_path=config.snapshot_path,
+            data_path=config.data_path,
+            secret_mount=config.secret_mount,
+            data_dir=config.data_dir,
+            rpm_download_dir=config.rpm_download_dir,
+            kinit_retries=config.kinit_retries,
+            koji_config_source=source,
+        )
+
+        with (
+            patch(f"{TASK}.install_koji_client_config") as mock_install,
+            patch(f"{TASK}.kinit", return_value=str(tmp_path / "ccache")),
+            patch(f"{TASK}.test_koji_connection"),
+        ):
+            task.run(config)
+
+        mock_install.assert_called_once_with(source)
+
     def test_cleans_up_keytab_on_success(self, tmp_path: Path) -> None:
         """Keytab file is removed after successful run."""
         snapshot = tmp_path / "snap.json"
@@ -1470,6 +1499,53 @@ class TestRun:
         assert "KRB5CCNAME" not in os.environ
 
 
+class TestInstallKojiClientConfig:
+    """Test installing Koji profiles copied from the tenant image."""
+
+    def test_copies_profile_files_into_user_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Place staged /etc/koji.conf and conf.d files where koji --profile looks."""
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        source = tmp_path / "koji-client-config"
+        (source / "config.d").mkdir(parents=True)
+        (source / "config").write_text(
+            "[koji]\nserver = https://koji.example/kojihub\n", encoding="utf-8"
+        )
+        (source / "config.d" / "brew.conf").write_text(
+            "[brew]\nserver = https://brew.example/kojihub\n", encoding="utf-8"
+        )
+
+        task.install_koji_client_config(source)
+
+        user_config = home / ".koji"
+        assert (user_config / "config").read_text(encoding="utf-8").startswith("[koji]")
+        assert "[brew]" in (user_config / "config.d" / "brew.conf").read_text(encoding="utf-8")
+
+    def test_missing_source_raises(self, tmp_path: Path) -> None:
+        """Raise ValueError when the staged config directory is missing."""
+        with pytest.raises(ValueError, match="does not exist"):
+            task.install_koji_client_config(tmp_path / "missing")
+
+    def test_copies_main_config_when_config_d_is_absent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Install the main config when the staged directory has no config.d."""
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        source = tmp_path / "koji-client-config"
+        source.mkdir()
+        (source / "config").write_text("[koji]\n", encoding="utf-8")
+
+        task.install_koji_client_config(source)
+
+        assert (home / ".koji" / "config").read_text(encoding="utf-8") == "[koji]\n"
+        assert not any((home / ".koji" / "config.d").iterdir())
+
+
 class TestMain:
     """Test main entry point."""
 
@@ -1484,6 +1560,7 @@ class TestMain:
         monkeypatch.setenv("DATA_FILE", str(data))
         monkeypatch.setenv("SECRET_MOUNT", str(tmp_path / "secret"))
         monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.delenv("KOJI_CONFIG_SOURCE", raising=False)
 
         with patch(f"{TASK}.run") as mock_run:
             assert task.main() == 0
@@ -1491,6 +1568,26 @@ class TestMain:
         cfg = mock_run.call_args[0][0]
         assert cfg.snapshot_path == snapshot
         assert cfg.data_path == data
+        assert cfg.koji_config_source is None
+
+    def test_reads_koji_config_source(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """main() passes KOJI_CONFIG_SOURCE through to run()."""
+        snapshot = tmp_path / "snap.json"
+        snapshot.write_text(json.dumps(_snapshot()), encoding="utf-8")
+        data = tmp_path / "data.json"
+        data.write_text(json.dumps(_data()), encoding="utf-8")
+        koji_config = tmp_path / "koji-client-config"
+
+        monkeypatch.setenv("SNAPSHOT_SPEC_FILE", str(snapshot))
+        monkeypatch.setenv("DATA_FILE", str(data))
+        monkeypatch.setenv("KOJI_CONFIG_SOURCE", str(koji_config))
+
+        with patch(f"{TASK}.run") as mock_run:
+            assert task.main() == 0
+        cfg = mock_run.call_args[0][0]
+        assert cfg.koji_config_source == koji_config
 
     def test_raises_on_missing_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Raise CheckStepError when SNAPSHOT_SPEC_FILE is missing."""
