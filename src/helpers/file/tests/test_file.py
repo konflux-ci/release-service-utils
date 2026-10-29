@@ -110,6 +110,19 @@ def test_resolve_path_under_base_rejects_blank(tmp_path: Path) -> None:
         file.resolve_path_under_base(tmp_path, "   ")
 
 
+@pytest.mark.parametrize("value", ["odf-x86_64-files", "repo.name", "..."])
+def test_require_single_path_component_accepts(value: str) -> None:
+    """A repository name with no slash is unchanged."""
+    assert file.require_single_path_component(value) == value
+
+
+@pytest.mark.parametrize("value", ["", "   ", ".", "..", "repo/sub", "/repo", "a/../b"])
+def test_require_single_path_component_rejects(value: str) -> None:
+    """Blank, dot, and multi-component destinations are rejected."""
+    with pytest.raises(ValueError, match="single component"):
+        file.require_single_path_component(value)
+
+
 def test_contained_regular_files_returns_nested_matches(tmp_path: Path) -> None:
     """Return regular files under *root* that match *pattern*."""
     nested = tmp_path / "nested"

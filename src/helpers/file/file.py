@@ -75,6 +75,18 @@ def path_from_env_variable(
     return default if isinstance(default, Path) else Path(default)
 
 
+def require_single_path_component(value: str) -> str:
+    """Return *value* when it is exactly one non-empty path component.
+
+    Reject a blank value, ``.``, ``..``, and any value that contains ``/``.
+    Pulp repository names must be one directory directly under the staging
+    root, which is the only layout ``pubtools-pulp-wrapper`` pushes.
+    """
+    if not value.strip() or value in {".", ".."} or "/" in value:
+        raise ValueError(f"path must be a single component: {value!r}")
+    return value
+
+
 def resolve_path_under_base(base: Path, relative: str | Path) -> Path:
     """Resolve *relative* under *base* and ensure the result stays inside *base*.
 

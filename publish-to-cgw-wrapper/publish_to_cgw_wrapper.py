@@ -27,9 +27,11 @@ import argparse
 import json
 import hashlib
 import logging
+
 import requests
 from requests.auth import HTTPBasicAuth
 from release_service_utils.helpers.content_gateway import cgw_idempotency
+from release_service_utils.helpers.content_gateway import content_gateway
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -72,7 +74,8 @@ def validate_components(data):
     Skip components without a ``contentGateway`` key and raise ``ValueError``
     if required fields are missing in ``contentGateway`` or any listed file.
 
-    Note: filename is always derived from the ``source`` field using basename.
+    Note: ``source`` is the local file that is hashed. ``filename``, when set,
+    is the name Pulp publishes and the one used in short and download URLs.
     """
     required_cg_keys = ["productCode", "productName", "productVersionName", "contentDir"]
     errors = []
@@ -123,18 +126,22 @@ def validate_components(data):
     return valid_components
 
 
-def generate_download_url(content_dir, file_name):
-    """Generate a CDN download URL for *file_name* inside *content_dir*.
+def generate_download_url(content_dir, file_name, published_name=None):
+    """Generate a CDN download URL for a file inside *content_dir*.
 
-    URL format: ``/content/origin/files/sha256/{checksum[:2]}/{checksum}/{file_name}``.
+    Hash the bytes of *file_name*. The URL suffix is *published_name* when the
+    staged filename differs from that local source, otherwise *file_name*.
+
+    URL format: ``/content/origin/files/sha256/{checksum[:2]}/{checksum}/{name}``.
     """
+    url_name = published_name or file_name
     prefix = "/content/origin/files/sha256"
     sha256_hash = hashlib.sha256()
     with open(content_dir + "/" + file_name, "rb") as f:
         for byte_block in iter(lambda: f.read(4096), b""):
             sha256_hash.update(byte_block)
     checksum = sha256_hash.hexdigest()
-    return f"{prefix}/{checksum[:2]}/{checksum}/{file_name}"
+    return f"{prefix}/{checksum[:2]}/{checksum}/{url_name}"
 
 
 def generate_metadata(
@@ -151,7 +158,12 @@ def generate_metadata(
     """Generate CGW file-metadata records for a component's content directory.
 
     Includes metadata for checksum files (sha256sum.txt, .gpg, .sig) and for
-    every file in ``files`` that is present on disk.
+    every file in ``files`` that is present on disk. ``source`` is the local
+    file that is hashed. ``filename``, when set, is the published name used for
+    the short URL, the label, and the download URL suffix. A file may set
+    ``shortUrlSegment``; that repository name is inserted before a published
+    filename shared by more than one Pulp destination. Identical short URLs
+    are emitted once.
 
     Ordering scheme:
 
@@ -179,12 +191,24 @@ def generate_metadata(
         ("sha256sum.txt.sig", "Checksum - Signature", 3),
     ]
 
-    # Regular files get order = component_index * 1000 + position
-    rpa_files = [
-        (os.path.basename(f["source"]), os.path.basename(f["source"]))
-        for f in files
-        if os.path.basename(f["source"]) in dir_contents
-    ]
+    # Regular files get order = component_index * 1000 + position.
+    # Keep one entry per published filename and short URL segment so two Pulp
+    # destinations for the same published name do not create duplicate records.
+    rpa_files = []
+    seen_short_urls = set()
+    for file_entry in files:
+        local_name = os.path.basename(file_entry.get("source") or "")
+        if local_name not in dir_contents:
+            continue
+        published_name = os.path.basename(file_entry.get("filename") or "") or local_name
+        segment = content_gateway.validated_short_url_segment(
+            file_entry.get("shortUrlSegment") or ""
+        )
+        short_url_key = (published_name, segment)
+        if short_url_key in seen_short_urls:
+            continue
+        seen_short_urls.add(short_url_key)
+        rpa_files.append((local_name, published_name, segment))
 
     metadata = []
     for name, label, order in checksum_files:
@@ -202,16 +226,24 @@ def generate_metadata(
             }
         )
 
-    for i, (file_name, label) in enumerate(rpa_files):
+    for i, (local_name, published_name, segment) in enumerate(rpa_files):
         order = component_index * 1000 + i
-        logging.info(f"Processing file: {file_name} (order={order}, label={label})")
+        logging.info(
+            f"Processing file: {published_name} (order={order}, label={published_name})"
+        )
+        if segment:
+            short_url = (
+                f"{shortURL_base}/{product_code}/{version_name}/{segment}/{published_name}"
+            )
+        else:
+            short_url = f"{shortURL_base}/{product_code}/{version_name}/{published_name}"
         metadata.append(
             {
                 **default_values_per_component,
-                "shortURL": f"{shortURL_base}/{product_code}/{version_name}/{file_name}",
+                "shortURL": short_url,
                 "productVersionId": version_id,
-                "downloadURL": generate_download_url(content_dir, file_name),
-                "label": label,
+                "downloadURL": generate_download_url(content_dir, local_name, published_name),
+                "label": published_name,
                 "order": order,
             }
         )

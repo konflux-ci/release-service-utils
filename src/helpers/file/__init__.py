@@ -12,6 +12,7 @@ from .file import (  # noqa: F401
     make_tempfile_path,
     path_from_env_variable,
     read_bounded,
+    require_single_path_component,
     require_zip_member_size,
     resolve_path_under_base,
     sha256,

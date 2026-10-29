@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from release_service_utils.helpers.content_gateway import content_gateway
 
 
@@ -244,3 +246,44 @@ def test_resolved_filename_rejects_empty_filename_without_falling_back_to_source
 def test_resolved_filename_empty_when_no_filename_or_source() -> None:
     """Return "" when neither filename nor source is usable."""
     assert content_gateway.resolved_filename({}) == ""
+
+
+def test_validated_short_url_segment_encodes_delimiters() -> None:
+    """A repository name with ? or # is one encoded path segment."""
+    assert content_gateway.validated_short_url_segment("odf?#aarch64-isos") == (
+        "odf%3F%23aarch64-isos"
+    )
+
+
+def test_validated_short_url_segment_rejects_unsafe_paths() -> None:
+    """An absolute segment or a .. part is rejected."""
+    for segment in ("/odf-isos", "../odf-isos", "repo/../other"):
+        with pytest.raises(ValueError, match="short URL segment"):
+            content_gateway.validated_short_url_segment(segment)
+
+
+def test_segments_for_shared_names_keeps_plain_url_on_default() -> None:
+    """The default repository keeps the plain URL when a filename is shared."""
+    entries = [
+        {"filename": "disk.qcow2", "destination": "diskimage-amd64"},
+        {"filename": "disk.qcow2", "destination": "diskimage-arm64"},
+        {"filename": "install.iso.gz", "destination": "diskimage-amd64"},
+    ]
+    assert content_gateway.segments_for_shared_names(
+        entries,
+        lambda entry: str(entry["filename"]),
+        "diskimage-amd64",
+    ) == ["", "diskimage-arm64", ""]
+
+
+def test_segments_for_shared_names_segments_every_repo_without_default() -> None:
+    """Every repository gets a segment when the default is not one of them."""
+    entries = [
+        {"name": "disk.qcow2", "destination": "repo-a"},
+        {"name": "disk.qcow2", "destination": "repo-b"},
+    ]
+    assert content_gateway.segments_for_shared_names(
+        entries,
+        lambda entry: str(entry["name"]),
+        "diskimage-amd64",
+    ) == ["repo-a", "repo-b"]

@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from release_service_utils.helpers import authentication
+from release_service_utils.helpers import content_gateway
 from release_service_utils.helpers import file
 from release_service_utils.helpers import oras_utils
 from release_service_utils.helpers import push_artifacts
@@ -114,6 +115,56 @@ def require_staged_files_field(entry: dict[str, Any], field: str) -> Any:
     return entry[field]
 
 
+def reject_duplicate_staging_targets(
+    components: list[Any],
+    disk_image_dir: Path,
+) -> None:
+    """Reject staged files that publish the same repository path.
+
+    Compare every component before concurrent workers start. Repository and
+    filename values are normalized the same way staging writes them, so
+    aliases such as a leading slash share one target.
+    """
+    seen: set[Path] = set()
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        default_destination = str(require_json_field(component, "staged", "destination"))
+        staged_files = component.get("staged", {}).get("files") or []
+        if not isinstance(staged_files, list):
+            continue
+        for entry in staged_files:
+            if not isinstance(entry, dict):
+                continue
+            filename = entry.get("filename")
+            if filename in (None, ""):
+                continue
+            destination_name = file.require_single_path_component(
+                str(entry.get("destination") or default_destination)
+            )
+            target = (
+                file.resolve_path_under_base(disk_image_dir, destination_name)
+                / "FILES"
+                / oras_utils.safe_relative_path(str(filename))
+            ).resolve()
+            if target in seen:
+                raise ValueError(
+                    "Multiple files use the same destination value: "
+                    f"{target.parent} and filename value: {target.name}. Failing..."
+                )
+            seen.add(target)
+
+
+def _staged_source_key(source: str) -> str:
+    """Return one relative path for equivalent staged ``source`` strings.
+
+    ``safe_relative_path`` rejects ``..`` and strips a leading slash.
+    ``Path.as_posix`` then drops ``./`` and repeated slashes, so
+    ``disk.qcow2`` and ``./disk.qcow2`` share one use counter.
+    """
+    return Path(oras_utils.safe_relative_path(source)).as_posix()
+
+
 def process_component(
     component: dict[str, Any],
     disk_image_dir: Path,
@@ -123,9 +174,10 @@ def process_component(
 ) -> None:
     """Pull one OCI artifact and stage mapped files for Pulp upload."""
     pull_spec = require_json_field(component, "containerImage")
-    destination_name = require_json_field(component, "staged", "destination")
-    destination = disk_image_dir / str(destination_name) / "FILES"
-    destination.mkdir(parents=True, exist_ok=True)
+    destination_name = file.require_single_path_component(
+        str(require_json_field(component, "staged", "destination"))
+    )
+    (disk_image_dir / destination_name / "FILES").mkdir(parents=True, exist_ok=True)
 
     staged_files = component.get("staged", {}).get("files", [])
     if not isinstance(staged_files, list):
@@ -144,7 +196,7 @@ def process_component(
         ]
 
         def _is_staged(src: str) -> bool:
-            path = download / oras_utils.safe_relative_path(str(src))
+            path = download / _staged_source_key(str(src))
             # A file may be gzip-compressed on disk; that's resolved later, but it
             # still counts as "found" here.
             return path.is_file() or Path(str(path) + ".gz").is_file()
@@ -178,10 +230,25 @@ def process_component(
             )
             logger.info("skopeo extraction finished for %s", label)
 
+        uses_left: dict[str, int] = {}
         for entry in staged_files:
+            raw_source = entry.get("source")
+            if raw_source not in (None, ""):
+                source_key = _staged_source_key(str(raw_source))
+                uses_left[source_key] = uses_left.get(source_key, 0) + 1
+
+        for entry in staged_files:
+            file_destination_name = file.require_single_path_component(
+                str(entry.get("destination") or destination_name)
+            )
+            destination = (
+                file.resolve_path_under_base(disk_image_dir, file_destination_name) / "FILES"
+            )
+            destination.mkdir(parents=True, exist_ok=True)
             source = require_staged_files_field(entry, "source")
             filename = require_staged_files_field(entry, "filename")
-            source_path = download / oras_utils.safe_relative_path(str(source))
+            source_key = _staged_source_key(str(source))
+            source_path = download / source_key
             gz_path = Path(str(source_path) + ".gz")
             if gz_path.is_file():
                 logger.info("Decompressing %s for %s", gz_path.name, label)
@@ -192,12 +259,74 @@ def process_component(
                     "Multiple files use the same destination value: "
                     f"{destination} and filename value: {filename}. Failing..."
                 )
+            uses_left[source_key] -= 1
             if source_path.is_file():
-                shutil.move(str(source_path), dest_file)
+                if uses_left[source_key] > 0:
+                    shutil.copy2(str(source_path), dest_file)
+                else:
+                    shutil.move(str(source_path), dest_file)
                 logger.info("Staged %s -> %s", source, dest_file)
             else:
                 logger.warning("didn't find mapped file: %s", source)
         logger.info("Finished staging %s", label)
+
+
+def portal_filenames_for_destination(
+    component: dict[str, Any],
+    default_destination: str,
+    destination_name: str,
+) -> list[str]:
+    """Return published filenames this component staged in *destination_name*."""
+    names: list[str] = []
+    for entry in component.get("staged", {}).get("files") or []:
+        if not isinstance(entry, dict):
+            continue
+        filename = entry.get("filename")
+        if filename in (None, ""):
+            continue
+        dest = str(entry.get("destination") or default_destination)
+        if dest != destination_name:
+            continue
+        safe_name = oras_utils.safe_relative_path(str(filename))
+        if safe_name not in names:
+            names.append(safe_name)
+    return names
+
+
+def portal_filename_segments(
+    component: dict[str, Any], default_destination: str
+) -> dict[str, set[str]]:
+    """Map each destination to filenames that need a distinct portal short URL.
+
+    A filename used once keeps ``/cgw/<code>/<version>/<file>``. A shared
+    filename keeps that URL on ``default_destination`` when that repository
+    has the file. Every other repository inserts its name into the short URL.
+    """
+    prepared: list[dict[str, str]] = []
+    for entry in component.get("staged", {}).get("files") or []:
+        if not isinstance(entry, dict):
+            continue
+        filename = entry.get("filename")
+        if filename in (None, ""):
+            continue
+        prepared.append(
+            {
+                "filename": oras_utils.safe_relative_path(str(filename)),
+                "destination": str(entry.get("destination") or default_destination),
+            }
+        )
+    assigned = content_gateway.segments_for_shared_names(
+        prepared,
+        lambda item: item["filename"],
+        default_destination,
+    )
+    segments: dict[str, set[str]] = {}
+    for item, segment in zip(prepared, assigned):
+        destination_name = item["destination"]
+        segments.setdefault(destination_name, set())
+        if segment:
+            segments[destination_name].add(item["filename"])
+    return segments
 
 
 def process_component_for_developer_portal(
@@ -208,6 +337,9 @@ def process_component_for_developer_portal(
     env: Mapping[str, str] | None = None,
     stderr_path: Path,
     run_cmd: RunCmd = subprocess_cmd.run_cmd,
+    publish_filenames: list[str] | None = None,
+    short_url_segment: str = "",
+    segment_filenames: set[str] | None = None,
 ) -> None:
     """Upload staged files for one component via developer_portal_wrapper."""
     product_name = require_json_field(component, "contentGateway", "productName")
@@ -230,23 +362,31 @@ def process_component_for_developer_portal(
         product_name,
         file_prefix,
     )
+    cmd = [
+        "developer_portal_wrapper",
+        "--debug",
+        "--product-name",
+        str(product_name),
+        "--product-code",
+        str(product_code),
+        "--product-version-name",
+        str(product_version_name),
+        "--cgw-hostname",
+        cgw_hostname,
+        "--content-directory",
+        str(content_directory),
+        "--file-prefix",
+        str(file_prefix),
+    ]
+    if publish_filenames is not None:
+        for name in publish_filenames:
+            cmd.extend(["--publish-filename", name])
+    if short_url_segment and segment_filenames:
+        cmd.extend(["--short-url-segment", short_url_segment])
+        for filename in sorted(segment_filenames):
+            cmd.extend(["--segment-filename", filename])
     run_cmd(
-        [
-            "developer_portal_wrapper",
-            "--debug",
-            "--product-name",
-            str(product_name),
-            "--product-code",
-            str(product_code),
-            "--product-version-name",
-            str(product_version_name),
-            "--cgw-hostname",
-            cgw_hostname,
-            "--content-directory",
-            str(content_directory),
-            "--file-prefix",
-            str(file_prefix),
-        ],
+        cmd,
         env=cmd_env,
         stderr_path=stderr_path,
         check=True,
@@ -350,6 +490,10 @@ def run_push(
             component_count,
             concurrent_limit,
         )
+        reject_duplicate_staging_targets(
+            [component for component in components if isinstance(component, dict)],
+            disk_image_dir,
+        )
 
         def _run_one(component: dict[str, Any]) -> None:
             process_component(
@@ -411,16 +555,44 @@ def run_push(
         for component in components:
             if not isinstance(component, dict):
                 continue
-            destination_name = require_json_field(component, "staged", "destination")
-            content_directory = disk_image_dir / str(destination_name) / "FILES"
-            process_component_for_developer_portal(
-                component,
-                content_directory,
-                cgw_hostname,
-                env=env,
-                stderr_path=stderr_path,
-                run_cmd=run_cmd,
-            )
+            default_destination = str(require_json_field(component, "staged", "destination"))
+            filename_segments = portal_filename_segments(component, default_destination)
+            staged_files = component.get("staged", {}).get("files") or []
+            destination_names: list[str] = []
+            for entry in staged_files:
+                if not isinstance(entry, dict):
+                    continue
+                name = file.require_single_path_component(
+                    str(entry.get("destination") or default_destination)
+                )
+                if name not in destination_names:
+                    destination_names.append(name)
+            for name in destination_names or [
+                file.require_single_path_component(default_destination)
+            ]:
+                publish_filenames: list[str] | None
+                if staged_files:
+                    publish_filenames = portal_filenames_for_destination(
+                        component, default_destination, name
+                    )
+                    if not publish_filenames:
+                        continue
+                else:
+                    publish_filenames = None
+                content_directory = (
+                    file.resolve_path_under_base(disk_image_dir, name) / "FILES"
+                )
+                process_component_for_developer_portal(
+                    component,
+                    content_directory,
+                    cgw_hostname,
+                    env=env,
+                    stderr_path=stderr_path,
+                    run_cmd=run_cmd,
+                    publish_filenames=publish_filenames,
+                    short_url_segment=name,
+                    segment_filenames=filename_segments.get(name) or set(),
+                )
 
 
 def main() -> int:
