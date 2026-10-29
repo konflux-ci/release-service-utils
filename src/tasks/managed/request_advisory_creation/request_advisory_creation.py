@@ -221,7 +221,8 @@ def _write_task_results(
     logger.info("** internalRequestPipelineRunName: %s", pipeline_run_name)
     logger.info("** internalRequestTaskRunName: %s", task_run_name)
 
-    if results.get("result") != "Success":
+    result = str(results.get("result") or "").strip()
+    if result != "Success":
         logger.info("Advisory creation failed")
         print(json.dumps(results))
         msg = "advisory creation failed"
