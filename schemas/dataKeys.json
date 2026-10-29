@@ -635,7 +635,7 @@
                 "properties": {
                   "destination": {
                     "type": "string",
-                    "description": "repo in pulp where staged files should be placed"
+                    "description": "repo in pulp where staged files should be placed when a file does not set its own destination"
                   },
                   "version": {
                     "type": "string",
@@ -653,6 +653,10 @@
                         "source": {
                           "type": "string",
                           "description": "name of file within image"
+                        },
+                        "destination": {
+                          "type": "string",
+                          "description": "repo in pulp for this file; falls back to staged.destination when omitted"
                         }
                       }
                     }

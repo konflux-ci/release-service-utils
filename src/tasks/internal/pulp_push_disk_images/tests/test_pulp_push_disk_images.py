@@ -6,6 +6,7 @@ import json
 import subprocess
 import tarfile
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -298,6 +299,200 @@ def test_run_push_developer_portal_uses_staged_destination(
     assert len(portal_dirs) == 2
     assert any(d.endswith("/x86_64-isos/FILES") for d in portal_dirs)
     assert any(d.endswith("/aarch64-isos/FILES") for d in portal_dirs)
+
+
+def test_run_push_developer_portal_publishes_each_file_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """File destinations are registered once each; an omitted one uses staged.destination."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _patch_cert_checks(monkeypatch)
+    exodus, pulp, udc, workloads, cgw = _setup_mount_secrets(tmp_path)
+    portal_dirs: list[str] = []
+
+    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if cmd[0] == "select-oci-auth":
+            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+        if cmd[0] == "oras":
+            cwd = kwargs.get("cwd")
+            assert cwd is not None
+            for name in (
+                "disk-amd64.qcow2",
+                "disk-amd64-extra.qcow2",
+                "disk-arm64.qcow2",
+                "disk-s390x.qcow2",
+                "disk-ppc64le.qcow2",
+            ):
+                Path(cwd, name).write_text(name, encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd[0] == "yq":
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="payload:\n  files: []\n", stderr=""
+            )
+        if cmd[0] == "developer_portal_wrapper":
+            idx = cmd.index("--content-directory")
+            portal_dirs.append(str(cmd[idx + 1]))
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess_cmd, "run_cmd", fake_run_cmd)
+
+    snapshot = {
+        "components": [
+            {
+                "name": "odf-cli",
+                "containerImage": "quay.io/org/image@sha256:abc",
+                "contentGateway": {
+                    "productName": "ODF",
+                    "productCode": "ODF",
+                    "productVersionName": "4.21.0",
+                    "filePrefix": "odf",
+                },
+                "staged": {
+                    "destination": "odf-default-isos",
+                    "version": "4.21.0",
+                    "files": [
+                        {
+                            "source": "disk-amd64.qcow2",
+                            "filename": "odf-amd64.qcow2",
+                            "destination": "odf-x86_64-isos",
+                        },
+                        {
+                            "source": "disk-amd64-extra.qcow2",
+                            "filename": "odf-amd64-extra.qcow2",
+                            "destination": "odf-x86_64-isos",
+                        },
+                        {
+                            "source": "disk-arm64.qcow2",
+                            "filename": "odf-arm64.qcow2",
+                            "destination": "odf-aarch64-isos",
+                        },
+                    ],
+                },
+            },
+            {
+                "name": "odf-cli-fallback",
+                "containerImage": "quay.io/org/image-fallback@sha256:abc",
+                "contentGateway": {
+                    "productName": "ODF",
+                    "productCode": "ODF",
+                    "productVersionName": "4.21.0",
+                    "filePrefix": "odf",
+                },
+                "staged": {
+                    "destination": "odf-default-isos",
+                    "version": "4.21.0",
+                    "files": [
+                        {
+                            "source": "disk-s390x.qcow2",
+                            "filename": "odf-s390x.qcow2",
+                        },
+                        {
+                            "source": "disk-ppc64le.qcow2",
+                            "filename": "odf-ppc64le.qcow2",
+                            "destination": "",
+                        },
+                    ],
+                },
+            },
+        ]
+    }
+
+    pulp_push_disk_images.pulp_push_disk_images.run_push(
+        snapshot,
+        concurrent_limit=1,
+        exodus_gw_env="pre",
+        cgw_hostname="https://content-gateway.com",
+        cert_warn_days=7,
+        pulp_task_timeout=7200,
+        exodus_mount=exodus,
+        pulp_mount=pulp,
+        udcache_mount=udc,
+        workloads_mount=workloads,
+        cgw_mount=cgw,
+        run_cmd=fake_run_cmd,
+    )
+
+    assert sorted(Path(path).parent.name for path in portal_dirs) == [
+        "odf-aarch64-isos",
+        "odf-default-isos",
+        "odf-x86_64-isos",
+    ]
+
+
+@pytest.mark.parametrize("kind", ["absolute", "parent", "nested-parent"])
+def test_run_push_rejects_unsafe_file_destination_before_developer_portal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """Developer Portal registration rejects a destination outside the staging directory."""
+    destination = {
+        "absolute": str(tmp_path / "absolute-repo"),
+        "parent": "../outside",
+        "nested-parent": "nested/../../outside",
+    }[kind]
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _patch_cert_checks(monkeypatch)
+    exodus, pulp, udc, workloads, cgw = _setup_mount_secrets(tmp_path)
+    commands: list[str] = []
+
+    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        commands.append(cmd[0])
+        if cmd[0] == "yq":
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="payload:\n  files: []\n", stderr=""
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    def skip_staging(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        pulp_push_disk_images.pulp_push_disk_images, "process_component", skip_staging
+    )
+    monkeypatch.setattr(subprocess_cmd, "run_cmd", fake_run_cmd)
+
+    snapshot = {
+        "components": [
+            {
+                "containerImage": "quay.io/org/image@sha256:abc",
+                "contentGateway": {
+                    "productName": "ODF",
+                    "productCode": "ODF",
+                    "productVersionName": "4.21.0",
+                    "filePrefix": "odf",
+                },
+                "staged": {
+                    "destination": "odf-default-isos",
+                    "version": "4.21.0",
+                    "files": [
+                        {
+                            "source": "disk.qcow2",
+                            "filename": "odf.qcow2",
+                            "destination": destination,
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="path must"):
+        pulp_push_disk_images.pulp_push_disk_images.run_push(
+            snapshot,
+            concurrent_limit=1,
+            exodus_gw_env="pre",
+            cgw_hostname="https://content-gateway.com",
+            cert_warn_days=7,
+            pulp_task_timeout=7200,
+            exodus_mount=exodus,
+            pulp_mount=pulp,
+            udcache_mount=udc,
+            workloads_mount=workloads,
+            cgw_mount=cgw,
+            run_cmd=fake_run_cmd,
+        )
+
+    assert "developer_portal_wrapper" not in commands
+    assert not (tmp_path / "absolute-repo").exists()
 
 
 def test_main_writes_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -628,6 +823,171 @@ def test_require_staged_files_field_source_missing() -> None:
         pulp_push_disk_images.pulp_push_disk_images.require_staged_files_field(
             {"filename": "amd.qcow2"}, "source"
         )
+
+
+def test_process_component_routes_files_to_multiple_destinations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """File destinations override staged.destination; omitted files use the component repo."""
+
+    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if cmd[0] == "select-oci-auth":
+            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+        if cmd[0] == "oras":
+            cwd = kwargs.get("cwd")
+            assert cwd is not None
+            Path(cwd, "odf-amd64").write_text("amd64", encoding="utf-8")
+            Path(cwd, "odf-arm64").write_text("arm64", encoding="utf-8")
+            Path(cwd, "odf-ppc64le").write_text("ppc64le", encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess_cmd, "run_cmd", fake_run_cmd)
+
+    component = _valid_component()
+    staged = component["staged"]
+    assert isinstance(staged, dict)
+    staged["destination"] = "odf-default-isos"
+    staged["files"] = [
+        {
+            "source": "odf-amd64",
+            "filename": "odf.iso",
+            "destination": "odf-x86_64-isos",
+        },
+        {"source": "odf-arm64", "filename": "odf.iso"},
+        {"source": "odf-ppc64le", "filename": "odf-ppc64le.iso", "destination": ""},
+    ]
+
+    disk_dir = tmp_path / "disk"
+    staging = pulp_push_disk_images.pulp_push_disk_images.shutil
+    with (
+        mock.patch.object(staging, "copy2", wraps=staging.copy2) as copy2,
+        mock.patch.object(staging, "move", wraps=staging.move) as move,
+    ):
+        pulp_push_disk_images.pulp_push_disk_images.process_component(
+            component,
+            disk_dir,
+            stderr_path=tmp_path / "stderr.txt",
+            run_cmd=fake_run_cmd,
+        )
+
+    assert copy2.call_count == 0
+    assert move.call_count == 3
+
+    assert (disk_dir / "odf-x86_64-isos" / "FILES" / "odf.iso").read_text(
+        encoding="utf-8"
+    ) == "amd64"
+    assert (disk_dir / "odf-default-isos" / "FILES" / "odf.iso").read_text(
+        encoding="utf-8"
+    ) == "arm64"
+    assert (disk_dir / "odf-default-isos" / "FILES" / "odf-ppc64le.iso").read_text(
+        encoding="utf-8"
+    ) == "ppc64le"
+
+
+def test_process_component_copies_one_source_to_two_repositories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One extracted source is copied for an earlier repository and moved for the last one."""
+
+    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if cmd[0] == "select-oci-auth":
+            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+        if cmd[0] == "oras":
+            cwd = kwargs.get("cwd")
+            assert cwd is not None
+            Path(cwd, "disk.qcow2").write_text("same-bytes", encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess_cmd, "run_cmd", fake_run_cmd)
+    component = _valid_component()
+    staged = component["staged"]
+    assert isinstance(staged, dict)
+    staged["files"] = [
+        {
+            "source": "disk.qcow2",
+            "filename": "disk.qcow2",
+            "destination": "odf-x86_64-isos",
+        },
+        {
+            "source": "disk.qcow2",
+            "filename": "disk.qcow2",
+            "destination": "odf-aarch64-isos",
+        },
+    ]
+    disk_dir = tmp_path / "disk"
+    staging = pulp_push_disk_images.pulp_push_disk_images.shutil
+    with (
+        mock.patch.object(staging, "copy2", wraps=staging.copy2) as copy2,
+        mock.patch.object(staging, "move", wraps=staging.move) as move,
+    ):
+        pulp_push_disk_images.pulp_push_disk_images.process_component(
+            component,
+            disk_dir,
+            stderr_path=tmp_path / "stderr.txt",
+            run_cmd=fake_run_cmd,
+        )
+
+    assert copy2.call_count == 1
+    assert move.call_count == 1
+
+    payload = pulp_push_disk_images.pulp_push_disk_images.build_staged_payload(disk_dir, "1.3")
+    files = payload["payload"]["files"]
+    assert [item["relative_path"] for item in files] == [
+        "odf-aarch64-isos/FILES/disk.qcow2",
+        "odf-x86_64-isos/FILES/disk.qcow2",
+    ]
+    assert {item["version"] for item in files} == {"1.3"}
+    assert (disk_dir / "odf-x86_64-isos" / "FILES" / "disk.qcow2").read_text(
+        encoding="utf-8"
+    ) == "same-bytes"
+    assert (disk_dir / "odf-aarch64-isos" / "FILES" / "disk.qcow2").read_text(
+        encoding="utf-8"
+    ) == "same-bytes"
+
+
+@pytest.mark.parametrize("kind", ["absolute", "parent", "nested-parent"])
+def test_process_component_rejects_unsafe_file_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """A per-file destination cannot be absolute or climb out of the disk-image directory."""
+    destination = {
+        "absolute": str(tmp_path / "absolute-repo"),
+        "parent": "../outside",
+        "nested-parent": "nested/../../outside",
+    }[kind]
+
+    def fake_run_cmd(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if cmd[0] == "select-oci-auth":
+            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+        if cmd[0] == "oras":
+            cwd = kwargs.get("cwd")
+            assert cwd is not None
+            Path(cwd, "odf-amd64").write_text("amd64", encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess_cmd, "run_cmd", fake_run_cmd)
+    component = _valid_component()
+    staged = component["staged"]
+    assert isinstance(staged, dict)
+    staged["destination"] = "odf-default-isos"
+    staged["files"] = [
+        {"source": "odf-amd64", "filename": "odf.iso", "destination": destination}
+    ]
+    disk_dir = tmp_path / "disk"
+
+    with pytest.raises(ValueError, match="path must"):
+        pulp_push_disk_images.pulp_push_disk_images.process_component(
+            component,
+            disk_dir,
+            stderr_path=tmp_path / "stderr.txt",
+            run_cmd=fake_run_cmd,
+        )
+
+    assert not (tmp_path / "outside").exists()
+    assert not (tmp_path / "absolute-repo").exists()
 
 
 def test_process_component_duplicate_filename(
