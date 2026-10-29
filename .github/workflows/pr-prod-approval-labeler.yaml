@@ -13,6 +13,7 @@ jobs:
   label-pr:
     if: github.event.workflow_run.event == 'pull_request_review'
     permissions:
+      contents: read
       pull-requests: write
     concurrency:
       group: pr-prod-approval-label-${{ github.event.workflow_run.display_title }}
@@ -34,7 +35,7 @@ jobs:
           echo "pr-number=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
       - name: Label PR using shared action
         # main
-        uses: konflux-ci/release-service-automations/pr-prod-approval-labeler@7497459da52221f1321546ef9a36f114bf7ef6c3
+        uses: konflux-ci/release-service-automations/pr-prod-approval-labeler@d0208b9cc14390cde9a2fc132f72566a20e59aca
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           pr-number: ${{ steps.review.outputs.pr-number }}
