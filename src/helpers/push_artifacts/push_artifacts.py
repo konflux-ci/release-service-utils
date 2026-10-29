@@ -50,6 +50,7 @@ import yaml  # type: ignore
 
 from release_service_utils.helpers import disk_image_utils
 from release_service_utils.helpers import content_gateway
+from release_service_utils.helpers import file as file_helper
 
 import publish_to_cgw_wrapper
 import pulp_push_wrapper
@@ -173,10 +174,7 @@ def _push_component_to_pulp(
     component_dir = CONTENT_DIR / component_name / "ready_for_distribution"
     staging_dir = Path(tempfile.mkdtemp())
     try:
-        dest_files_dir = staging_dir / staged_destination / "FILES"
-        dest_files_dir.mkdir(parents=True)
-
-        staged_files = (component.get("staged") or {}).get("files") or []
+        staged_files = staged.get("files") or []
         if not staged_files:
             logger.warning(
                 "No staged.files specified in RPA for Customer Portal push for %s",
@@ -189,6 +187,11 @@ def _push_component_to_pulp(
             dest_filename = sf.get("filename", "")
             if not source_path:
                 continue
+
+            file_destination = sf.get("destination") or staged_destination
+            repo_dir = file_helper.resolve_path_under_base(staging_dir, str(file_destination))
+            dest_files_dir = repo_dir / "FILES"
+            dest_files_dir.mkdir(parents=True, exist_ok=True)
 
             source_filename = Path(source_path).name
             # Windows sources are declared as .tar.gz, but this pipeline repackages
