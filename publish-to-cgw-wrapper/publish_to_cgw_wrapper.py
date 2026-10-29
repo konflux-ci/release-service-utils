@@ -27,6 +27,8 @@ import argparse
 import json
 import hashlib
 import logging
+from urllib.parse import quote
+
 import requests
 from requests.auth import HTTPBasicAuth
 from release_service_utils.helpers.content_gateway import cgw_idempotency
@@ -123,6 +125,18 @@ def validate_components(data):
     return valid_components
 
 
+def _validated_short_url_segment(segment):
+    """Return *segment* as one percent-encoded CGW short URL path segment.
+
+    Reject an absolute segment or any ``..`` path part.
+    """
+    if segment.startswith("/") or ".." in segment.split("/"):
+        raise ValueError(
+            f"short URL segment must be a relative path without '..': {segment!r}"
+        )
+    return quote(segment, safe="")
+
+
 def generate_download_url(content_dir, file_name):
     """Generate a CDN download URL for *file_name* inside *content_dir*.
 
@@ -151,7 +165,10 @@ def generate_metadata(
     """Generate CGW file-metadata records for a component's content directory.
 
     Includes metadata for checksum files (sha256sum.txt, .gpg, .sig) and for
-    every file in ``files`` that is present on disk.
+    every file in ``files`` that is present on disk. A file may set
+    ``shortUrlSegment``; that repository name is inserted before a basename
+    shared by more than one Pulp destination. Identical short URLs are emitted
+    once.
 
     Ordering scheme:
 
@@ -179,12 +196,21 @@ def generate_metadata(
         ("sha256sum.txt.sig", "Checksum - Signature", 3),
     ]
 
-    # Regular files get order = component_index * 1000 + position
-    rpa_files = [
-        (os.path.basename(f["source"]), os.path.basename(f["source"]))
-        for f in files
-        if os.path.basename(f["source"]) in dir_contents
-    ]
+    # Regular files get order = component_index * 1000 + position.
+    # Keep one entry per basename and short URL segment so two Pulp
+    # destinations for the same source do not create duplicate CGW records.
+    rpa_files = []
+    seen_short_urls = set()
+    for file_entry in files:
+        file_name = os.path.basename(file_entry.get("source") or "")
+        if file_name not in dir_contents:
+            continue
+        segment = _validated_short_url_segment(file_entry.get("shortUrlSegment") or "")
+        short_url_key = (file_name, segment)
+        if short_url_key in seen_short_urls:
+            continue
+        seen_short_urls.add(short_url_key)
+        rpa_files.append((file_name, file_name, segment))
 
     metadata = []
     for name, label, order in checksum_files:
@@ -202,13 +228,17 @@ def generate_metadata(
             }
         )
 
-    for i, (file_name, label) in enumerate(rpa_files):
+    for i, (file_name, label, segment) in enumerate(rpa_files):
         order = component_index * 1000 + i
         logging.info(f"Processing file: {file_name} (order={order}, label={label})")
+        if segment:
+            short_url = f"{shortURL_base}/{product_code}/{version_name}/{segment}/{file_name}"
+        else:
+            short_url = f"{shortURL_base}/{product_code}/{version_name}/{file_name}"
         metadata.append(
             {
                 **default_values_per_component,
-                "shortURL": f"{shortURL_base}/{product_code}/{version_name}/{file_name}",
+                "shortURL": short_url,
                 "productVersionId": version_id,
                 "downloadURL": generate_download_url(content_dir, file_name),
                 "label": label,

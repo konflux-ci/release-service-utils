@@ -1,3 +1,5 @@
+"""Tests for publish_to_cgw_wrapper."""
+
 import hashlib
 import pytest
 import requests
@@ -8,11 +10,13 @@ import publish_to_cgw_wrapper as cgw_wrapper
 
 @pytest.fixture
 def session():
+    """Return a requests session for Content Gateway calls."""
     return requests.Session()
 
 
 @pytest.fixture
 def cosign_content_dir(tmpdir):
+    """Create a content directory of cosign files."""
     content_dir = tmpdir.mkdir("content_dir_1")
     files = [
         "cosign",
@@ -31,6 +35,7 @@ def cosign_content_dir(tmpdir):
 
 @pytest.fixture
 def gitsign_content_dir(tmpdir):
+    """Create a content directory of gitsign files."""
     content_dir = tmpdir.mkdir("content_dir_2")
     files = [
         "gitsign",
@@ -48,6 +53,7 @@ def gitsign_content_dir(tmpdir):
 
 @pytest.fixture
 def data_json(cosign_content_dir, gitsign_content_dir):
+    """Return a snapshot with two Content Gateway components."""
     return {
         "application": "test-app",
         "artifacts": {},
@@ -173,7 +179,7 @@ def test_load_data_invalid():
 
 
 def test_validate_components_success(data_json):
-    """Test validate_components with valid components"""
+    """Test validate_components with valid components."""
     valid_components = cgw_wrapper.validate_components(data_json)
     assert len(valid_components) == 2
 
@@ -191,8 +197,7 @@ def test_validate_components_skips_missing_contentGateway():
 
 
 def test_validate_components_missing_fields():
-    """Test validate_components raises error for missing required fields
-    in contentGateway and files."""
+    """Test that missing contentGateway and file fields fail validation."""
     invalid_data = {
         "components": [
             {
@@ -268,7 +273,7 @@ def test_parse_args_missing_required():
 
 @patch("requests.Session.request")
 def test_call_cgw_api_success(mock_request, session):
-    """Test successful API call"""
+    """Test successful API call."""
     mock_response = MagicMock()
     mock_response.ok = True
     mock_response.json.return_value = {"result": "success"}
@@ -434,6 +439,61 @@ def test_generate_metadata(data_json, metadata):
         assert expected_file in output_metadata
 
 
+def test_generate_metadata_shared_source_gets_unique_short_urls(tmpdir):
+    """One source published to two repositories gets two short URLs."""
+    content_dir = tmpdir.mkdir("shared-source")
+    content_dir.join("disk.qcow2").write(b"disk-bytes")
+    files = [
+        {"source": "/releases/disk.qcow2", "shortUrlSegment": ""},
+        {"source": "/releases/disk.qcow2", "shortUrlSegment": "diskimage-arm64"},
+    ]
+
+    output_metadata = cgw_wrapper.generate_metadata(
+        content_dir=str(content_dir),
+        component_name="diskimage-product",
+        files=files,
+        product_code="DiskProduct",
+        version_id=1,
+        version_name="1.0",
+        mirror_openshift_Push=False,
+        component_index=1,
+    )
+
+    short_urls = [entry["shortURL"] for entry in output_metadata]
+    assert short_urls == [
+        "/DiskProduct/1.0/disk.qcow2",
+        "/DiskProduct/1.0/diskimage-arm64/disk.qcow2",
+    ]
+    assert len(short_urls) == len(set(short_urls))
+
+
+def test_generate_metadata_encodes_destination_delimiters(tmpdir):
+    """A repository name with ? or # is one short URL path segment."""
+    content_dir = tmpdir.mkdir("delimited-destination")
+    content_dir.join("disk.qcow2").write(b"disk-bytes")
+    files = [
+        {"source": "/releases/disk.qcow2"},
+        {"source": "/releases/disk.qcow2", "shortUrlSegment": "odf?#aarch64-isos"},
+    ]
+
+    output_metadata = cgw_wrapper.generate_metadata(
+        content_dir=str(content_dir),
+        component_name="diskimage-product",
+        files=files,
+        product_code="DiskProduct",
+        version_id=1,
+        version_name="1.0",
+        mirror_openshift_Push=False,
+        component_index=1,
+    )
+
+    short_urls = [entry["shortURL"] for entry in output_metadata]
+    assert short_urls == [
+        "/DiskProduct/1.0/disk.qcow2",
+        "/DiskProduct/1.0/odf%3F%23aarch64-isos/disk.qcow2",
+    ]
+
+
 def test_generate_metadata_no_mirror(data_json):
     """Test that shortURLs have no /cgw prefix when mirrorOpenshiftPush is False."""
     content_dir = data_json["components"][0]["contentGateway"]["contentDir"]
@@ -532,6 +592,7 @@ def test_file_does_not_exist(metadata):
 
 
 def test_find_existing_file_matches_timestamped_shorturl():
+    """Match an existing file when only the short URL timestamp differs."""
     existing_files = [
         {
             "id": 111,
@@ -789,6 +850,7 @@ def test_create_files_exception(mock_call, metadata):
 
 @patch("publish_to_cgw_wrapper.cgw_idempotency.call_cgw_api")
 def test_create_files_removes_duplicate_timestamped_entries_and_updates(mock_call):
+    """Delete timestamped duplicates and update the remaining Content Gateway file."""
     existing_files = [
         {
             "id": 1001,
