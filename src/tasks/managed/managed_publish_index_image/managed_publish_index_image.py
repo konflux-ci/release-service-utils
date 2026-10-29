@@ -234,7 +234,10 @@ def main() -> int:
             failed = True
             results = _fetch_results(ir_name)
             request_message = results.get("requestMessage", "")
-            log.error(f"ERROR: InternalRequest {ir_name} timed out or failed", exc_info=e)
+            log.error(
+                f"ERROR: InternalRequest {ir_name} for {pi} timed out or failed: {e}",
+                exc_info=e,
+            )
             log.error(f"requestMessage: {request_message}")
             continue
         except Exception as e:
