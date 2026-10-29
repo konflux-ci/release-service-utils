@@ -12,7 +12,7 @@ import pytest
 from release_service_utils.tasks.managed.rh_sign_image_cosign import (
     SignItem,
     SigningSecrets,
-    check_existing_cosign_signature,
+    check_missing_cosign_signatures,
     collect_component_sign_items,
     get_manifest_digests,
     load_signing_secrets,
@@ -193,11 +193,13 @@ def test_get_manifest_digests_skopeo_failure_raises(mock_skopeo: MagicMock) -> N
 def test_collect_component_single_manifest_rh_registry(mock_digests: MagicMock) -> None:
     """Single-manifest component produces one item per tag for rh-registry-repo."""
     items = collect_component_sign_items(
-        COMPONENT_RH_REGISTRY, sign_registry_access_repos=set(), sign_external_registries=False
+        COMPONENT_RH_REGISTRY,
+        sign_registry_access_repos=set(),
+        sign_external_registries=False,
     )
 
     assert len(items) == 2
-    identities = {i.identity for i in items}
+    identities = {identity for item in items for identity in item.identities}
     assert "registry.redhat.io/myproduct/myrepo:v1.0" in identities
     assert "registry.redhat.io/myproduct/myrepo:latest" in identities
     for item in items:
@@ -211,7 +213,9 @@ def test_collect_component_manifest_list_produces_nested_items(
 ) -> None:
     """Manifest-list components produce items for nested digests plus the index."""
     items = collect_component_sign_items(
-        COMPONENT_RH_REGISTRY, sign_registry_access_repos=set(), sign_external_registries=False
+        COMPONENT_RH_REGISTRY,
+        sign_registry_access_repos=set(),
+        sign_external_registries=False,
     )
 
     digests_seen = {i.digest for i in items}
@@ -225,7 +229,9 @@ def test_collect_component_external_registry_skipped_by_default(
 ) -> None:
     """External-registry-only components are skipped when sign_external_registries is False."""
     items = collect_component_sign_items(
-        COMPONENT_EXTERNAL, sign_registry_access_repos=set(), sign_external_registries=False
+        COMPONENT_EXTERNAL,
+        sign_registry_access_repos=set(),
+        sign_external_registries=False,
     )
     assert items == []
 
@@ -236,11 +242,13 @@ def test_collect_component_external_registry_signed_when_enabled(
 ) -> None:
     """External-registry components are signed when sign_external_registries=True."""
     items = collect_component_sign_items(
-        COMPONENT_EXTERNAL, sign_registry_access_repos=set(), sign_external_registries=True
+        COMPONENT_EXTERNAL,
+        sign_registry_access_repos=set(),
+        sign_external_registries=True,
     )
 
     assert len(items) == 1
-    assert items[0].identity == "quay.io/ext/repo:v2.0"
+    assert items[0].identities == ("quay.io/ext/repo:v2.0",)
     assert items[0].source == "quay.io/ext/repo"
 
 
@@ -255,8 +263,10 @@ def test_collect_component_registry_access_added_when_in_file(
         sign_external_registries=False,
     )
 
-    identities = {i.identity for i in items}
+    identities = {identity for item in items for identity in item.identities}
     assert any("registry.access.redhat.com" in id_ for id_ in identities)
+    assert len(items) == 2
+    assert all(len(item.identities) == 2 for item in items)
 
 
 @patch(f"{TASK}.get_manifest_digests", return_value=(False, ["sha256:top"]))
@@ -283,7 +293,11 @@ def test_collect_component_no_tags_skipped(mock_digests: MagicMock) -> None:
         pytest.param(
             SECRETS,
             Path("rekor.pub"),
-            ["-y", "--rekor-url=https://rekor.example.com"],
+            [
+                "-y",
+                "--rekor-url=https://rekor.example.com",
+                "--use-signing-config=false",
+            ],
             ["--rekor-url=https://rekor.example.com"],
             id="rekor-configured",
         ),
@@ -377,7 +391,9 @@ def test_run_cosign_with_retry_does_not_retry_non_retryable_error(
 ) -> None:
     """Deterministic errors requested by the caller are raised immediately."""
     error = subprocess.CalledProcessError(
-        12, "cosign", stderr="Error: no matching signatures: crypto/rsa: verification error"
+        12,
+        "cosign",
+        stderr="Error: no matching signatures: crypto/rsa: verification error",
     )
     mock_run.side_effect = error
 
@@ -392,12 +408,12 @@ def test_run_cosign_with_retry_does_not_retry_non_retryable_error(
     mock_sleep.assert_not_called()
 
 
-# --- check_existing_cosign_signature ---
+# --- check_missing_cosign_signatures ---
 
 
 @patch(f"{TASK}.run_cosign_with_retry")
-def test_check_existing_signature_found(mock_cosign: MagicMock, tmp_path: Path) -> None:
-    """Returns True when a matching signature record is found in cosign verify output."""
+def test_check_missing_signatures_none_missing(mock_cosign: MagicMock, tmp_path: Path) -> None:
+    """Returns no identities when every expected signature is present."""
     sig_output = json.dumps(
         [
             {
@@ -413,8 +429,8 @@ def test_check_existing_signature_found(mock_cosign: MagicMock, tmp_path: Path) 
     pub_key = tmp_path / "pub.key"
     pub_key.write_text("key")
 
-    found = check_existing_cosign_signature(
-        "registry.redhat.io/myrepo:v1.0",
+    missing = check_missing_cosign_signatures(
+        ("registry.redhat.io/myrepo:v1.0",),
         "quay.io/internal/myrepo",
         "sha256:abc",
         SECRETS_NO_REKOR,
@@ -423,19 +439,26 @@ def test_check_existing_signature_found(mock_cosign: MagicMock, tmp_path: Path) 
         retries=3,
         aws_env={},
     )
-    assert found is True
+    assert missing == ()
+    verify_args = mock_cosign.call_args.args[0]
+    assert verify_args[0] == "cosign3"
+    assert "--new-bundle-format=false" in verify_args
 
 
 @patch(f"{TASK}.run_cosign_with_retry")
-def test_check_existing_signature_not_found(mock_cosign: MagicMock, tmp_path: Path) -> None:
-    """Returns False when verify output contains no matching signature."""
+def test_check_missing_signatures_all_missing(mock_cosign: MagicMock, tmp_path: Path) -> None:
+    """Returns every identity when verify output contains no signatures."""
     mock_cosign.return_value = MagicMock(stdout="[]")
 
     pub_key = tmp_path / "pub.key"
     pub_key.write_text("key")
 
-    found = check_existing_cosign_signature(
+    identities = (
         "registry.redhat.io/myrepo:v1.0",
+        "registry.access.redhat.com/myrepo:v1.0",
+    )
+    missing = check_missing_cosign_signatures(
+        identities,
         "quay.io/internal/myrepo",
         "sha256:abc",
         SECRETS_NO_REKOR,
@@ -444,25 +467,35 @@ def test_check_existing_signature_not_found(mock_cosign: MagicMock, tmp_path: Pa
         retries=3,
         aws_env={},
     )
-    assert found is False
+    assert missing == identities
 
 
 @patch(f"{TASK}.run_cosign_with_retry")
-def test_check_existing_signature_key_mismatch_is_not_found(
+def test_check_missing_signatures_returns_only_unsigned_identity(
     mock_cosign: MagicMock, tmp_path: Path
 ) -> None:
-    """A signature made by another key does not prevent adding the configured signature."""
-    mock_cosign.side_effect = subprocess.CalledProcessError(
-        12,
-        "cosign",
-        stderr="Error: no matching signatures: crypto/rsa: verification error",
+    """Only identities absent from verify output need to be signed."""
+    mock_cosign.return_value = MagicMock(
+        stdout=json.dumps(
+            [
+                {
+                    "critical": {
+                        "image": {"docker-manifest-digest": "sha256:abc"},
+                        "identity": {"docker-reference": "registry.redhat.io/myrepo:v1.0"},
+                    }
+                }
+            ]
+        )
     )
 
     pub_key = tmp_path / "pub.key"
     pub_key.write_text("key")
 
-    found = check_existing_cosign_signature(
-        "registry.redhat.io/myrepo:v1.0",
+    missing = check_missing_cosign_signatures(
+        (
+            "registry.redhat.io/myrepo:v1.0",
+            "registry.access.redhat.com/myrepo:v1.0",
+        ),
         "quay.io/internal/myrepo",
         "sha256:abc",
         SECRETS_NO_REKOR,
@@ -472,96 +505,82 @@ def test_check_existing_signature_key_mismatch_is_not_found(
         aws_env={},
     )
 
-    assert found is False
+    assert missing == ("registry.access.redhat.com/myrepo:v1.0",)
+
+
+@patch(f"{TASK}.run_cosign_with_retry")
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "Error: no signatures found",
+        "Error: no matching signatures: crypto/rsa: verification error",
+    ],
+)
+def test_check_missing_signatures_unsigned_error_is_not_retried(
+    mock_cosign: MagicMock, tmp_path: Path, stderr: str
+) -> None:
+    """Known unsigned responses return all identities without retrying."""
+    mock_cosign.side_effect = subprocess.CalledProcessError(1, "cosign", stderr=stderr)
+
+    pub_key = tmp_path / "pub.key"
+    pub_key.write_text("key")
+
+    missing = check_missing_cosign_signatures(
+        ("registry.redhat.io/myrepo:v1.0",),
+        "quay.io/internal/myrepo",
+        "sha256:abc",
+        SECRETS_NO_REKOR,
+        public_key_path=pub_key,
+        rekor_key_path=None,
+        retries=3,
+        aws_env={},
+    )
+
+    assert missing == ("registry.redhat.io/myrepo:v1.0",)
     assert mock_cosign.call_args.kwargs["non_retryable_errors"] == (
         "no signatures found",
-        "crypto/rsa: verification error",
+        "no matching signatures",
     )
 
 
 @patch(f"{TASK}.run_cosign_with_retry")
-def test_check_existing_signature_unsigned_image_is_not_found(
-    mock_cosign: MagicMock, tmp_path: Path
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "Error: no matching signatures: signature not found in transparency log",
+        "Error: cosign service unavailable",
+        "Error: authentication required",
+    ],
+)
+def test_check_missing_signatures_operational_failure_raises(
+    mock_cosign: MagicMock,
+    tmp_path: Path,
+    stderr: str,
 ) -> None:
-    """An image with no attached signatures is eligible for signing."""
-    mock_cosign.side_effect = subprocess.CalledProcessError(
-        1, "cosign", stderr="Error: no signatures found"
-    )
-
+    """Operational verification failures are logged and propagated."""
+    mock_cosign.side_effect = subprocess.CalledProcessError(1, "cosign", stderr=stderr)
     pub_key = tmp_path / "pub.key"
     pub_key.write_text("key")
 
-    found = check_existing_cosign_signature(
-        "registry.redhat.io/myrepo:v1.0",
-        "quay.io/internal/myrepo",
-        "sha256:abc",
-        SECRETS_NO_REKOR,
-        public_key_path=pub_key,
-        rekor_key_path=None,
-        retries=3,
-        aws_env={},
-    )
+    with patch(f"{TASK}.logger") as mock_logger:
+        with pytest.raises(subprocess.CalledProcessError):
+            check_missing_cosign_signatures(
+                ("registry.redhat.io/myrepo:v1.0",),
+                "quay.io/internal/myrepo",
+                "sha256:abc",
+                SECRETS_NO_REKOR,
+                public_key_path=pub_key,
+                rekor_key_path=None,
+                retries=3,
+                aws_env={},
+            )
 
-    assert found is False
-
-
-@patch(f"{TASK}.run_cosign_with_retry")
-def test_check_existing_signature_rekor_failure_raises(
-    mock_cosign: MagicMock, tmp_path: Path
-) -> None:
-    """A matching-signature error caused by Rekor is not treated as unsigned."""
-    mock_cosign.side_effect = subprocess.CalledProcessError(
-        1,
-        "cosign",
-        stderr="Error: no matching signatures: signature not found in transparency log",
-    )
-
-    pub_key = tmp_path / "pub.key"
-    pub_key.write_text("key")
-
-    with pytest.raises(subprocess.CalledProcessError):
-        check_existing_cosign_signature(
-            "registry.redhat.io/myrepo:v1.0",
-            "quay.io/internal/myrepo",
-            "sha256:abc",
-            SECRETS_NO_REKOR,
-            public_key_path=pub_key,
-            rekor_key_path=None,
-            retries=3,
-            aws_env={},
-        )
+    mock_logger.warning.assert_called_once()
+    assert mock_logger.warning.call_args.args[-1] == stderr
 
 
 @patch(f"{TASK}.run_cosign_with_retry")
-def test_check_existing_signature_verify_failure_raises(
-    mock_cosign: MagicMock, tmp_path: Path
-) -> None:
-    """Propagates the error (does not return False) when cosign verify fails.
-
-    A verification failure must not be treated as "no signature found": doing
-    so would let the task add a duplicate signature instead of failing loudly,
-    matching the original bash task's ``set -e`` behavior.
-    """
-    mock_cosign.side_effect = subprocess.CalledProcessError(1, "cosign", stderr="no sig")
-
-    pub_key = tmp_path / "pub.key"
-    pub_key.write_text("key")
-
-    with pytest.raises(subprocess.CalledProcessError):
-        check_existing_cosign_signature(
-            "registry.redhat.io/myrepo:v1.0",
-            "quay.io/internal/myrepo",
-            "sha256:abc",
-            SECRETS_NO_REKOR,
-            public_key_path=pub_key,
-            rekor_key_path=None,
-            retries=3,
-            aws_env={},
-        )
-
-
-@patch(f"{TASK}.run_cosign_with_retry")
-def test_check_existing_signature_invalid_json_raises(
+def test_check_missing_signatures_invalid_json_raises(
     mock_cosign: MagicMock, tmp_path: Path
 ) -> None:
     """Raises ValueError when cosign verify exits 0 but prints invalid JSON.
@@ -575,8 +594,30 @@ def test_check_existing_signature_invalid_json_raises(
     pub_key.write_text("key")
 
     with pytest.raises(ValueError, match="not valid JSON"):
-        check_existing_cosign_signature(
-            "registry.redhat.io/myrepo:v1.0",
+        check_missing_cosign_signatures(
+            ("registry.redhat.io/myrepo:v1.0",),
+            "quay.io/internal/myrepo",
+            "sha256:abc",
+            SECRETS_NO_REKOR,
+            public_key_path=pub_key,
+            rekor_key_path=None,
+            retries=3,
+            aws_env={},
+        )
+
+
+@patch(f"{TASK}.run_cosign_with_retry")
+def test_check_missing_signatures_non_array_json_raises(
+    mock_cosign: MagicMock, tmp_path: Path
+) -> None:
+    """Raises ValueError when cosign verify output is not a JSON array."""
+    mock_cosign.return_value = MagicMock(stdout='{"signatures": []}')
+    pub_key = tmp_path / "pub.key"
+    pub_key.write_text("key")
+
+    with pytest.raises(ValueError, match="not valid JSON"):
+        check_missing_cosign_signatures(
+            ("registry.redhat.io/myrepo:v1.0",),
             "quay.io/internal/myrepo",
             "sha256:abc",
             SECRETS_NO_REKOR,
@@ -591,7 +632,7 @@ def test_check_existing_signature_invalid_json_raises(
 
 
 @patch(f"{TASK}.run_cosign_with_retry")
-@patch(f"{TASK}.check_existing_cosign_signature", return_value=True)
+@patch(f"{TASK}.check_missing_cosign_signatures", return_value=())
 @patch("release_service_utils.helpers.oci_auth.oci_auth.auth_json", return_value="{}")
 def test_sign_item_skips_when_already_signed(
     mock_auth: MagicMock,
@@ -604,7 +645,7 @@ def test_sign_item_skips_when_already_signed(
     pub_key.write_text("key")
 
     sign_item(
-        SignItem("reg/repo:v1", "quay.io/repo", "sha256:abc"),
+        SignItem(("reg/repo:v1",), "quay.io/repo", "sha256:abc"),
         SECRETS_NO_REKOR,
         public_key_path=pub_key,
         rekor_key_path=None,
@@ -617,7 +658,39 @@ def test_sign_item_skips_when_already_signed(
 
 
 @patch(f"{TASK}.run_cosign_with_retry")
-@patch(f"{TASK}.check_existing_cosign_signature", return_value=False)
+@patch(f"{TASK}.check_missing_cosign_signatures")
+@patch("release_service_utils.helpers.oci_auth.oci_auth.auth_json", return_value="{}")
+def test_sign_item_does_not_sign_after_verify_service_failure(
+    mock_auth: MagicMock,
+    mock_check: MagicMock,
+    mock_cosign: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """A verification service failure is propagated without signing."""
+    mock_check.side_effect = subprocess.CalledProcessError(
+        1, "cosign3 verify", stderr="service unavailable"
+    )
+    pub_key = tmp_path / "pub.key"
+    pub_key.write_text("key")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        sign_item(
+            SignItem(("reg/repo:v1",), "quay.io/repo", "sha256:abc"),
+            SECRETS_NO_REKOR,
+            public_key_path=pub_key,
+            rekor_key_path=None,
+            retries=3,
+            aws_env={},
+        )
+
+    mock_cosign.assert_not_called()
+
+
+@patch(f"{TASK}.run_cosign_with_retry")
+@patch(
+    f"{TASK}.check_missing_cosign_signatures",
+    return_value=("reg/repo:v1",),
+)
 @patch("release_service_utils.helpers.oci_auth.oci_auth.auth_json", return_value="{}")
 def test_sign_item_calls_cosign_when_not_signed(
     mock_auth: MagicMock,
@@ -631,7 +704,7 @@ def test_sign_item_calls_cosign_when_not_signed(
     pub_key.write_text("key")
 
     sign_item(
-        SignItem("reg/repo:v1", "quay.io/repo", "sha256:abc"),
+        SignItem(("reg/repo:v1",), "quay.io/repo", "sha256:abc"),
         SECRETS_NO_REKOR,
         public_key_path=pub_key,
         rekor_key_path=None,
@@ -641,14 +714,19 @@ def test_sign_item_calls_cosign_when_not_signed(
 
     mock_cosign.assert_called_once()
     sign_args = mock_cosign.call_args[0][0]
+    assert sign_args[0] == "cosign3"
     assert "sign" in sign_args
+    assert "--new-bundle-format=false" in sign_args
     assert "--sign-container-identity" in sign_args
     assert "reg/repo:v1" in sign_args
     assert "quay.io/repo@sha256:abc" in sign_args
 
 
 @patch(f"{TASK}.run_cosign_with_retry")
-@patch(f"{TASK}.check_existing_cosign_signature", return_value=False)
+@patch(
+    f"{TASK}.check_missing_cosign_signatures",
+    return_value=("reg/repo:v1",),
+)
 @patch("release_service_utils.helpers.oci_auth.oci_auth.auth_json", return_value="{}")
 def test_sign_item_passes_docker_config_to_verify(
     mock_auth: MagicMock,
@@ -667,7 +745,7 @@ def test_sign_item_passes_docker_config_to_verify(
     pub_key.write_text("key")
 
     sign_item(
-        SignItem("reg/repo:v1", "quay.io/repo", "sha256:abc"),
+        SignItem(("reg/repo:v1",), "quay.io/repo", "sha256:abc"),
         SECRETS_NO_REKOR,
         public_key_path=pub_key,
         rekor_key_path=None,
@@ -682,7 +760,10 @@ def test_sign_item_passes_docker_config_to_verify(
 
 
 @patch(f"{TASK}.run_cosign_with_retry")
-@patch(f"{TASK}.check_existing_cosign_signature", return_value=False)
+@patch(
+    f"{TASK}.check_missing_cosign_signatures",
+    return_value=("reg/repo:v1",),
+)
 @patch("release_service_utils.helpers.oci_auth.oci_auth.auth_json", return_value="{}")
 def test_sign_item_with_rekor(
     mock_auth: MagicMock,
@@ -698,7 +779,7 @@ def test_sign_item_with_rekor(
     rekor_key.write_text("rekorkey")
 
     sign_item(
-        SignItem("reg/repo:v1", "quay.io/repo", "sha256:abc"),
+        SignItem(("reg/repo:v1",), "quay.io/repo", "sha256:abc"),
         SECRETS,
         public_key_path=pub_key,
         rekor_key_path=rekor_key,
@@ -711,6 +792,44 @@ def test_sign_item_with_rekor(
     assert "SIGSTORE_REKOR_PUBLIC_KEY" in env
     sign_args = mock_cosign.call_args[0][0]
     assert f"--rekor-url={SECRETS.rekor_url}" in sign_args
+    assert "--use-signing-config=false" in sign_args
+
+
+@patch(f"{TASK}.run_cosign_with_retry")
+@patch(
+    f"{TASK}.check_missing_cosign_signatures",
+    return_value=("registry.redhat.io/repo:v1", "registry.access.redhat.com/repo:v1"),
+)
+@patch("release_service_utils.helpers.oci_auth.oci_auth.auth_json", return_value="{}")
+def test_sign_item_signs_multiple_identities_in_one_call(
+    mock_auth: MagicMock,
+    mock_check: MagicMock,
+    mock_cosign: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """All missing aliases are passed to a single cosign invocation."""
+    pub_key = tmp_path / "pub.key"
+    pub_key.write_text("key")
+
+    sign_item(
+        SignItem(
+            ("registry.redhat.io/repo:v1", "registry.access.redhat.com/repo:v1"),
+            "quay.io/repo",
+            "sha256:abc",
+        ),
+        SECRETS_NO_REKOR,
+        public_key_path=pub_key,
+        rekor_key_path=None,
+        retries=3,
+        aws_env={},
+    )
+
+    sign_args = mock_cosign.call_args.args[0]
+    identity_index = sign_args.index("--sign-container-identity") + 1
+    assert sign_args[identity_index] == (
+        "registry.redhat.io/repo:v1,registry.access.redhat.com/repo:v1"
+    )
+    mock_cosign.assert_called_once()
 
 
 # --- sign_all ---
@@ -723,8 +842,8 @@ def test_sign_all_calls_sign_item_for_each(
 ) -> None:
     """sign_item is called once for each signing candidate."""
     items = [
-        SignItem("reg/repo:v1.0", "quay.io/src", "sha256:a"),
-        SignItem("reg/repo:latest", "quay.io/src", "sha256:a"),
+        SignItem(("reg/repo:v1.0",), "quay.io/src", "sha256:a"),
+        SignItem(("reg/repo:latest",), "quay.io/src", "sha256:a"),
     ]
     pub_key = tmp_path / "pub.key"
     pub_key.write_text("key")
@@ -754,7 +873,7 @@ def test_sign_all_raises_on_failure(
 
     with pytest.raises(RuntimeError, match="signing job"):
         sign_all(
-            [SignItem("reg/repo:v1", "quay.io/src", "sha256:a")],
+            [SignItem(("reg/repo:v1",), "quay.io/src", "sha256:a")],
             SECRETS_NO_REKOR,
             public_key_path=pub_key,
             rekor_key_path=None,
@@ -771,9 +890,9 @@ def test_sign_all_groups_same_source_digest(
 ) -> None:
     """Items with identical source+digest are placed in the same digest group."""
     items = [
-        SignItem("reg/repo:v1.0", "quay.io/src", "sha256:a"),
-        SignItem("reg/repo:latest", "quay.io/src", "sha256:a"),
-        SignItem("reg/other:v1.0", "quay.io/src2", "sha256:b"),
+        SignItem(("reg/repo:v1.0",), "quay.io/src", "sha256:a"),
+        SignItem(("reg/repo:latest",), "quay.io/src", "sha256:a"),
+        SignItem(("reg/other:v1.0",), "quay.io/src2", "sha256:b"),
     ]
     pub_key = tmp_path / "pub.key"
     pub_key.write_text("key")
