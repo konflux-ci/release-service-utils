@@ -411,13 +411,15 @@ def wait_for_completion(
         )
 
         done_count = 0
-        all_succeeded = True
+        failures: list[str] = []
         for item in internal_requests:
             ir_name = item.get("metadata", {}).get("name", "")
             conditions = item.get("status", {}).get("conditions") or []
             reason = ""
+            message = ""
             if conditions and isinstance(conditions[0], dict):
                 reason = str(conditions[0].get("reason") or "")
+                message = str(conditions[0].get("message") or "")
             pipeline_run = item.get("status", {}).get("pipelineRun") or ""
 
             if not reason:
@@ -431,21 +433,21 @@ def wait_for_completion(
                     written_outputs.add(ir_name)
                 done_count += 1
             else:
-                logger.info("  %s: %s", ir_name, reason)
+                logger.error("  %s: %s - %s", ir_name, reason, message)
                 if ir_name and ir_name not in written_outputs:
                     _append_ir_output(ir_name, pipeline_run)
                     written_outputs.add(ir_name)
                 done_count += 1
-                all_succeeded = False
+                failures.append(f"{ir_name} ({reason}): {message}")
 
         if internal_requests and done_count == len(internal_requests):
-            if all_succeeded:
+            if not failures:
                 _print_conditions(internal_requests)
                 logger.info("Result: success")
                 return
             _print_conditions(internal_requests)
             raise InternalRequestWaitError(
-                "At least one InternalRequest failed",
+                "At least one InternalRequest failed: " + "; ".join(failures),
                 EXIT_FAILED,
             )
 
