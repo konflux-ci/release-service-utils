@@ -506,3 +506,153 @@ def test_apply_template_second_pass_allows_dict_update(
 
     finally:
         os.remove(filename)
+
+
+def test_numeric_strings_preserved_through_json_parsing() -> None:
+    """Numeric-looking strings are preserved when using json.loads (not yaml.safe_load).
+
+    Regression test for: https://github.com/konflux-ci/release-service-catalog/issues/2691
+
+    The bug was at line 279 in apply_template.py:
+        data = yaml.safe_load(content)  # BUG: can convert strings to numbers
+
+    The fix:
+        data = json.loads(content)      # CORRECT: content is always JSON
+
+    This test verifies that numeric strings with leading zeros are preserved.
+    The bug may only manifest in certain PyYAML versions or pipeline environments.
+    """
+    from release_service_utils.helpers.apply_template import render_template_to_json_file
+
+    _, template_path = tempfile.mkstemp()
+    _, output_path = tempfile.mkstemp()
+
+    try:
+        # Template with numeric-looking strings (as JSON from apply_mapping)
+        template_content = json.dumps(
+            {
+                "accounts": ["041287970199", "0428492", "0001", "007"],
+                "version": "9.9",
+                "buildId": "1.0.1",
+            },
+            indent=2,
+        )
+
+        with open(template_path, "w") as f:
+            f.write(template_content)
+
+        # Render with apply_template
+        render_template_to_json_file(
+            output_path=output_path,
+            template_path=template_path,
+            template_data={},
+        )
+
+        # Load result
+        with open(output_path, "r") as f:
+            result = json.load(f)
+
+        # Verify strings are preserved (not converted to numbers)
+        assert result["accounts"] == [
+            "041287970199",
+            "0428492",
+            "0001",
+            "007",
+        ], f"Account IDs corrupted: {result['accounts']}"
+        assert result["version"] == "9.9", f"Version corrupted: {result['version']}"
+        assert result["buildId"] == "1.0.1"
+
+        # Verify types are strings
+        for i, acc in enumerate(result["accounts"]):
+            assert isinstance(acc, str), (
+                f"accounts[{i}] = {acc!r} is {type(acc).__name__}, should be str. "
+                f"This indicates apply_template is using yaml.safe_load instead of json.loads!"
+            )
+
+        assert isinstance(
+            result["version"], str
+        ), f"version is {type(result['version']).__name__}, should be str"
+
+    finally:
+        os.remove(template_path)
+        os.remove(output_path)
+
+
+def test_aws_account_ids_preserved() -> None:
+    """AWS account IDs with leading zeros must be preserved as strings.
+
+    Real-world regression test for the exact data pattern that triggered the bug.
+
+    User reported: sharing_accounts ["041287970199", "418272754616", ...]
+    became [41287970199, "418272754616", ...] after apply_mapping.
+
+    This happens when apply_template.py line 279 uses yaml.safe_load() instead
+    of json.loads() to parse JSON content.
+    """
+    from release_service_utils.helpers.apply_template import render_template_to_json_file
+
+    _, template_path = tempfile.mkstemp()
+    _, output_path = tempfile.mkstemp()
+
+    try:
+        # Real-world data from the bug report
+        component_data = {
+            "name": "test-component",
+            "starmap": [
+                {
+                    "cloud": "aws",
+                    "meta": {
+                        "sharing_accounts": [
+                            "041287970199",
+                            "418272754616",
+                            "599476212575",
+                            "855246887846",
+                        ]
+                    },
+                }
+            ],
+        }
+
+        # This is what apply_mapping does at line 610
+        template_content = json.dumps(component_data, indent=2, sort_keys=True)
+
+        with open(template_path, "w") as f:
+            f.write(template_content)
+
+        # This calls render_template_to_json_file which hits the bug at line 279
+        render_template_to_json_file(
+            output_path=output_path,
+            template_path=template_path,
+            template_data={},
+        )
+
+        # Load result
+        with open(output_path, "r") as f:
+            result = json.load(f)
+
+        accounts = result["starmap"][0]["meta"]["sharing_accounts"]
+
+        # The CRITICAL assertion: first account has leading zero
+        assert accounts[0] == "041287970199", (
+            f"BUG REPRODUCED: accounts[0] = {accounts[0]!r} "
+            f"(type={type(accounts[0]).__name__}), "
+            f"expected '041287970199' (type=str). "
+            f"Leading zero was lost! This is the exact bug from the user report."
+        )
+
+        # Verify it's a string, not a number
+        assert isinstance(accounts[0], str), (
+            f"BUG: accounts[0] = {accounts[0]!r} is "
+            f"{type(accounts[0]).__name__}, should be str. "
+            f"yaml.safe_load() at line 279 converted the string to a number!"
+        )
+
+        # All accounts should be strings
+        for i, acc in enumerate(accounts):
+            assert isinstance(
+                acc, str
+            ), f"accounts[{i}] = {acc!r} ({type(acc).__name__}) should be str"
+
+    finally:
+        os.remove(template_path)
+        os.remove(output_path)

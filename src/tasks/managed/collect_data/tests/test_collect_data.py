@@ -914,6 +914,79 @@ class TestRun:
         snapshot = json.loads((data_dir / "uid123" / "snapshot_spec.json").read_text())
         assert len(snapshot["components"]) == component_count
 
+    @patch("release_service_utils.tasks.managed.collect_data.collect_data.get_resource_dict")
+    def test_numeric_strings_in_unknown_fields_preserved(
+        self, mock_get: MagicMock, tmp_path: Path
+    ) -> None:
+        """Numeric-looking strings in unknown fields are preserved when writing data.json.
+
+        Regression test for:
+        https://github.com/konflux-ci/release-service-catalog/issues/2691
+
+        RPA spec.data has x-kubernetes-preserve-unknown-fields, so any
+        structure can be stored. This test verifies that numeric-looking
+        strings (like AWS account IDs with leading zeros) are preserved
+        as strings when written to data.json, not converted to numbers.
+        """
+
+        def side_effect_with_numeric_strings(
+            resource_type: str, namespace: str, name: str
+        ) -> dict:
+            if resource_type == "releaseplanadmission":
+                # Simulate what Kubernetes returns when RPA is created with
+                # properly quoted strings in YAML. The user confirmed that
+                # `kubectl get rpa -o json` shows correct strings.
+                return {
+                    "metadata": {"name": "my-rpa"},
+                    "spec": {
+                        "data": {
+                            # K8s preserved these as strings (from JSON)
+                            "cloudAccounts": ["03839", "0428492", "0001"],
+                            "apiVersion": "9.9",
+                            "buildNumber": "1.0.1",
+                            "config": {
+                                "accountId": "007",
+                                "version": "2.0",
+                            },
+                        },
+                        "pipeline": {"pipelineRef": {"resolver": "cluster"}},
+                    },
+                }
+            return _resource_side_effect(resource_type, namespace, name)
+
+        mock_get.side_effect = side_effect_with_numeric_strings
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        result_paths = self._make_result_paths(tmp_path)
+
+        run(
+            release="default/my-release",
+            release_plan="default/my-rp",
+            release_plan_admission="default/my-rpa",
+            release_service_config="default/my-rsc",
+            snapshot="default/my-snap",
+            subdirectory="",
+            data_dir=data_dir,
+            result_paths=result_paths,
+        )
+
+        # Read the written data.json
+        data = json.loads((data_dir / "data.json").read_text())
+
+        # Verify numeric-looking strings are preserved
+        assert data["cloudAccounts"] == ["03839", "0428492", "0001"]
+        assert data["apiVersion"] == "9.9"
+        assert data["buildNumber"] == "1.0.1"
+        assert data["config"]["accountId"] == "007"
+        assert data["config"]["version"] == "2.0"
+
+        # Verify they are strings, not numbers
+        assert all(isinstance(x, str) for x in data["cloudAccounts"])
+        assert isinstance(data["apiVersion"], str)
+        assert isinstance(data["buildNumber"], str)
+        assert isinstance(data["config"]["accountId"], str)
+        assert isinstance(data["config"]["version"], str)
+
 
 class TestMain:
     """Tests for the main() entrypoint."""

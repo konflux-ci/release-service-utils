@@ -2252,3 +2252,112 @@ def test_get_image_architectures_failure_includes_stderr() -> None:
     ):
         with pytest.raises(RuntimeError, match="boom: auth failed"):
             apply_mapping._get_image_architectures("img:v1")
+
+
+def test_numeric_strings_in_unknown_fields_preserved(tmp_path: Path) -> None:
+    """Numeric-looking strings in unknown component fields are preserved through apply_mapping.
+
+    Regression test for:
+    https://github.com/konflux-ci/release-service-catalog/issues/2691
+
+    apply_mapping calls apply_template.render_template_to_json_file() to
+    process components with Jinja2 substitution. This test verifies that
+    numeric-looking strings in unknown fields (which can be any arbitrary
+    data) are preserved as strings, not converted to numbers.
+    """
+    snapshot_path = tmp_path / "snapshot.json"
+    data_path = tmp_path / "data.json"
+
+    # Snapshot with component containing unknown fields with numeric strings
+    snapshot = {
+        "application": "test-app",
+        "components": [
+            {
+                "name": "test-component",
+                "containerImage": (
+                    "quay.io/test/img@sha256:"
+                    "1234567890abcdef1234567890abcdef"
+                    "1234567890abcdef1234567890abcdef"
+                ),
+                # Unknown fields that might contain numeric-looking strings
+                "cloudConfig": {
+                    "accountIds": ["03839", "0428492", "0001"],
+                    "apiVersion": "9.9",
+                    "buildId": "1.0.1",
+                },
+                "metadata": {
+                    "customField": "007",
+                },
+            }
+        ],
+    }
+
+    # Mapping that will cause apply_template to be called
+    data = {
+        "mapping": {
+            "components": [
+                {
+                    "name": "test-component",
+                    "repository": "registry.io/repo",
+                }
+            ]
+        }
+    }
+
+    _write_json(snapshot_path, snapshot)
+    _write_json(data_path, data)
+
+    # Mock the inspect call to avoid actual registry lookups
+    inspect_fn = _fake_inspect(
+        raw_response={
+            "config": {"Labels": {}},
+            "Digest": (
+                "sha256:1234567890abcdef1234567890abcdef" "1234567890abcdef1234567890abcdef"
+            ),
+        },
+        standard_response={},
+    )
+
+    # Run apply_mapping
+    apply_mapping.apply_mapping(
+        snapshot_path=snapshot_path,
+        data_path=data_path,
+        inspect_fn=inspect_fn,
+        list_tags_fn=lambda repo: [],
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+        current_timestamp_fn=lambda: "20260101000000",
+    )
+
+    # Read the modified snapshot
+    result = json.loads(snapshot_path.read_text())
+    component = result["components"][0]
+
+    # Verify numeric-looking strings are preserved
+    # This test may pass locally but fail in pipeline with different PyYAML versions
+    # The bug: yaml.safe_load() in apply_template.py can convert strings to numbers
+    assert component["cloudConfig"]["accountIds"] == [
+        "03839",
+        "0428492",
+        "0001",
+    ], f"Account IDs were corrupted: {component['cloudConfig']['accountIds']}"
+    assert (
+        component["cloudConfig"]["apiVersion"] == "9.9"
+    ), f"API version was corrupted: {component['cloudConfig']['apiVersion']}"
+    assert component["cloudConfig"]["buildId"] == "1.0.1"
+    assert (
+        component["metadata"]["customField"] == "007"
+    ), f"Custom field was corrupted: {component['metadata']['customField']}"
+
+    # Verify they are strings, not numbers
+    for i, acc_id in enumerate(component["cloudConfig"]["accountIds"]):
+        assert isinstance(
+            acc_id, str
+        ), f"accountIds[{i}] = {acc_id!r} is {type(acc_id).__name__}, expected str"
+    assert isinstance(
+        component["cloudConfig"]["apiVersion"], str
+    ), f"apiVersion is {type(component['cloudConfig']['apiVersion']).__name__}, expected str"
+    assert isinstance(component["cloudConfig"]["buildId"], str)
+    assert isinstance(
+        component["metadata"]["customField"], str
+    ), f"customField is {type(component['metadata']['customField']).__name__}, expected str"
