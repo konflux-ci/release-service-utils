@@ -8,7 +8,6 @@ import runpy
 from pathlib import Path
 
 import pytest
-
 from release_service_utils.tasks.managed.check_labels import check_labels
 
 
@@ -43,6 +42,7 @@ def _make_component(
     labels: list[dict] | None = None,
     repositories: list[dict] | None = None,
     canonical_name: str | None = None,
+    container_image: str | None = None,
 ) -> dict:
     """Build a component dict for snapshot JSON."""
     comp: dict = {"name": name, "metadata": {"media_type": media_type}}
@@ -52,6 +52,8 @@ def _make_component(
         comp["repositories"] = repositories
     if canonical_name is not None:
         comp["canonicalName"] = canonical_name
+    if container_image is not None:
+        comp["containerImage"] = container_image
     return comp
 
 
@@ -134,6 +136,222 @@ def test_single_repo_matching_labels(tmp_path: Path) -> None:
     )
     _write_data(data)
     check_labels._check_labels(snap, data, enforce=True)
+
+
+def test_labels_json_matches_image_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pass when labels.json matches image labels at both supported paths."""
+    snap = tmp_path / "snapshot.json"
+    data = tmp_path / "data.json"
+    labels = [
+        _name_label("openshift-gitops-1/gitops-rhel8-operator"),
+        _cpe_label("cpe:/a:example:openstack:el8"),
+    ]
+    _write_snapshot(
+        snap,
+        [
+            _make_component(
+                labels=labels,
+                container_image="registry.redhat.io/example/image@sha256:abc",
+                repositories=[
+                    {
+                        "rh-registry-repo": "registry.redhat.io/openshift-gitops-1"
+                        "/gitops-rhel8-operator"
+                    }
+                ],
+            )
+        ],
+    )
+    snap_data = json.loads(snap.read_text(encoding="utf-8"))
+    snap_data["components"][0]["metadata"][
+        "image_ref"
+    ] = "registry.redhat.io/example/image@sha256:selected"
+    snap.write_text(json.dumps(snap_data), encoding="utf-8")
+    _write_data(data)
+
+    def extract_files(image: str, _sources: list[str], destination: Path) -> None:
+        """Extract matching label files into the destination."""
+        assert image == "registry.redhat.io/example/image@sha256:selected"
+        for path in ("usr/share/buildinfo/labels.json", "root/buildinfo/labels.json"):
+            target = destination / path
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                json.dumps(
+                    {
+                        "name": " openshift-gitops-1/gitops-rhel8-operator ",
+                        "cpe": " cpe:/a:example:openstack:el8 ",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(check_labels.oras_utils, "extract_disk_image_files", extract_files)
+    check_labels._check_labels(snap, data, enforce=True)
+
+
+def test_labels_json_mismatch_enforce(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail when labels.json disagrees with the image config labels."""
+    snap = tmp_path / "snapshot.json"
+    data = tmp_path / "data.json"
+    _write_snapshot(
+        snap,
+        [
+            _make_component(
+                labels=[
+                    _name_label("openshift-gitops-1/gitops-rhel8-operator"),
+                    _cpe_label("cpe:/a:example:openstack:el8"),
+                ],
+                container_image="registry.redhat.io/example/image@sha256:abc",
+                repositories=[
+                    {
+                        "rh-registry-repo": "registry.redhat.io/openshift-gitops-1"
+                        "/gitops-rhel8-operator"
+                    }
+                ],
+            )
+        ],
+    )
+    _write_data(data)
+
+    def extract_files(_image: str, _sources: list[str], destination: Path) -> None:
+        """Extract matching label files into the destination."""
+        for path, name in (
+            ("usr/share/buildinfo/labels.json", "openshift-gitops-1/gitops-rhel8-operator"),
+            ("root/buildinfo/labels.json", "wrong/name"),
+        ):
+            target = destination / path
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                json.dumps({"name": name, "cpe": "cpe:/a:example:openstack:el8"}),
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(check_labels.oras_utils, "extract_disk_image_files", extract_files)
+    with pytest.raises(check_labels.LabelValidationError, match="labels.json"):
+        check_labels._check_labels(snap, data, enforce=True)
+
+
+def test_missing_labels_json_uses_existing_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep the existing image-config checks when labels.json is absent."""
+    snap = tmp_path / "snapshot.json"
+    data = tmp_path / "data.json"
+    _write_snapshot(
+        snap,
+        [
+            _make_component(
+                labels=[
+                    _name_label("openshift-gitops-1/gitops-rhel8-operator"),
+                    _cpe_label("cpe:/a:example:openstack:el8"),
+                ],
+                container_image="registry.redhat.io/example/image@sha256:abc",
+                repositories=[
+                    {
+                        "rh-registry-repo": "registry.redhat.io/openshift-gitops-1"
+                        "/gitops-rhel8-operator"
+                    }
+                ],
+            )
+        ],
+    )
+    _write_data(data)
+    monkeypatch.setattr(
+        check_labels.oras_utils,
+        "extract_disk_image_files",
+        lambda _image, _sources, _destination: None,
+    )
+    check_labels._check_labels(snap, data, enforce=True)
+
+
+@pytest.mark.parametrize("enforce", [True, False])
+def test_invalid_labels_json_handling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enforce: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Raise or warn when labels.json is malformed according to enforce."""
+    snap = tmp_path / "snapshot.json"
+    data = tmp_path / "data.json"
+    _write_snapshot(
+        snap,
+        [
+            _make_component(
+                labels=[_name_label("openshift-gitops-1/gitops-rhel8-operator")],
+                container_image="registry.redhat.io/example/image@sha256:abc",
+                repositories=[
+                    {
+                        "rh-registry-repo": "registry.redhat.io/openshift-gitops-1"
+                        "/gitops-rhel8-operator"
+                    }
+                ],
+            )
+        ],
+    )
+    _write_data(data)
+
+    def extract_files(_image: str, _sources: list[str], destination: Path) -> None:
+        """Extract malformed label data into the destination."""
+        target = destination / "usr/share/buildinfo/labels.json"
+        target.parent.mkdir(parents=True)
+        target.write_text("not-json", encoding="utf-8")
+
+    monkeypatch.setattr(check_labels.oras_utils, "extract_disk_image_files", extract_files)
+    if enforce:
+        with pytest.raises(
+            check_labels.LabelValidationError, match="Unable to parse labels.json"
+        ):
+            check_labels._check_labels(snap, data, enforce=True)
+    else:
+        with caplog.at_level(logging.WARNING, logger="release"):
+            check_labels._check_labels(snap, data, enforce=False)
+        assert "Unable to parse labels.json" in caplog.text
+
+
+@pytest.mark.parametrize("enforce", [True, False])
+def test_labels_json_extraction_failure_handling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enforce: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Raise or warn when image extraction fails according to enforce."""
+    snap = tmp_path / "snapshot.json"
+    data = tmp_path / "data.json"
+    _write_snapshot(
+        snap,
+        [
+            _make_component(
+                labels=[_name_label("openshift-gitops-1/gitops-rhel8-operator")],
+                container_image="registry.redhat.io/example/image@sha256:abc",
+                repositories=[
+                    {
+                        "rh-registry-repo": "registry.redhat.io/openshift-gitops-1"
+                        "/gitops-rhel8-operator"
+                    }
+                ],
+            )
+        ],
+    )
+    _write_data(data)
+    monkeypatch.setattr(
+        check_labels.oras_utils,
+        "extract_disk_image_files",
+        lambda _image, _sources, _destination: (_ for _ in ()).throw(
+            RuntimeError("registry down")
+        ),
+    )
+    if enforce:
+        with pytest.raises(
+            check_labels.LabelValidationError, match="Unable to read labels.json"
+        ):
+            check_labels._check_labels(snap, data, enforce=True)
+    else:
+        with caplog.at_level(logging.WARNING, logger="release"):
+            check_labels._check_labels(snap, data, enforce=False)
+        assert "Unable to read labels.json" in caplog.text
 
 
 def test_non_image_artifact_skipped(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
