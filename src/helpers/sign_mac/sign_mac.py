@@ -49,6 +49,14 @@ MAC_SIGNING_CREDS_MOUNT = Path(
 QUAY_SECRET_MOUNT = Path(os.environ.get("QUAY_SECRET_MOUNT", "/mnt/quaySecret"))
 DEST_QUAY_SECRET_MOUNT = Path(os.environ.get("DEST_QUAY_SECRET_MOUNT", "/mnt/destQuaySecret"))
 CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
+ARTIFACT_SCRIPT_MAPPING = {
+    "app": "sign_mac_wrapper.sh",
+    "pkg": "sign_pkg_wrapper.sh",
+}
+IDENTITY_PREFIX = {
+    "app": "Developer ID Application",
+    "pkg": "Developer ID Installer",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +235,11 @@ def _run_custom_script(
     pipeline_run_uid: str,
     keychain_password: str,
     signing_identity: str,
+    build_dmg: bool = False,
+    notarize: bool = False,
+    apple_id: str = "",
+    team_id: str = "",
+    app_specific_password: str = "",
     entitlements_ref: str = "",
 ) -> None:
     """Run a custom signing script already present on the remote Mac host."""
@@ -240,12 +253,18 @@ def _run_custom_script(
         "QUAY_DEST_PASS": dest_quay_pass,
         "CSC_KEY_PASSWORD": keychain_password,
         "CSC_NAME": signing_identity,
+        "BUILD_DMG": str(build_dmg).lower(),
+        "NOTARIZE": str(notarize).lower(),
         "UNSIGNED_REF": f"{quay_url}/unsigned/{name}@{unsigned_digest}",
         "SIGNED_REF": f"{dest_quay_url}/{origin}/{name}:{tag}",
         "OUTPUT_DIGEST": digest_file,
     }
     if entitlements_ref:
         env_vars["ENTITLEMENTS_REF"] = entitlements_ref
+    if notarize:
+        env_vars["APPLE_ID"] = apple_id
+        env_vars["APPLE_TEAM_ID"] = team_id
+        env_vars["APPLE_APP_SPECIFIC_PASSWORD"] = app_specific_password
     args_str = " ".join(shlex.quote(a) for a in signing_args)
     stdin_script = "#!/bin/bash\nset -eu\n"
     stdin_script += "set +x\n"
@@ -295,6 +314,33 @@ def _run_custom_script(
         raise RuntimeError(
             f"Mac {failed_op} failed for component: {name} (exit code: {ssh_exit})"
         )
+
+
+def _validate_mac_signing_options(components: list[dict]) -> None:
+    """Validate signing options for all macOS components before signing."""
+    for component in components:
+        name = component.get("name", "")
+        options = component.get("signingOptions")
+        if options is None:
+            options = {}
+        if not isinstance(options, dict):
+            raise ValueError(f"signingOptions for component {name} must be an object")
+        artifact_type = options.get("artifactType", "app")
+        if not isinstance(artifact_type, str) or artifact_type not in ARTIFACT_SCRIPT_MAPPING:
+            raise ValueError(
+                f"Unsupported Mac artifactType {artifact_type!r} for component {name}"
+            )
+        for key in ("buildDmg", "notarize"):
+            if not isinstance(options.get(key, False), bool):
+                raise ValueError(
+                    f"signingOptions.{key} for component {name} must be a boolean"
+                )
+        build_dmg = options.get("buildDmg", False)
+        notarize = options.get("notarize", False)
+        if build_dmg and artifact_type != "app":
+            raise ValueError(f"buildDmg requires artifactType app for component {name}")
+        if notarize and artifact_type == "app" and not build_dmg:
+            raise ValueError(f"notarizing an app requires buildDmg for component {name}")
 
 
 def run(quay_url: str, pipeline_run_uid: str) -> None:
@@ -427,7 +473,7 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
 def run_custom_signing(
     quay_url: str,
     pipeline_run_uid: str,
-    signing_script: str,
+    signing_script_base: str | None,
     signing_args: list[str] | None = None,
     dest_quay_url: str | None = None,
     origin: str = "",
@@ -435,11 +481,20 @@ def run_custom_signing(
     """Sign macOS binaries using custom signing scripts on the remote Mac host.
 
     This function is specific to the sign-and-push-to-internal-oci workflow.
-    It supports custom signing scripts, destination Quay URLs, entitlements artifacts,
-    and origin-based tagging.
+    Select a remote script and signing identity for each component's artifact type.
+    Support destination Quay URLs, entitlements artifacts, and origin-based tagging.
     """
     snapshot = json.loads(os.environ["SNAPSHOT_JSON"])
     quay_url = quay_url.rstrip("/")
+    components = snapshot.get("components", [])
+    mac_components = [
+        component
+        for component in components
+        if (CONTENT_DIR / component.get("name", "") / "has_mac").exists()
+    ]
+    _validate_mac_signing_options(mac_components)
+    if mac_components and not signing_script_base:
+        raise ValueError("Mac signing script base must be configured")
 
     mac_user = (MAC_HOST_CREDS_MOUNT / "username").read_text().strip()
     mac_host = (MAC_HOST_CREDS_MOUNT / "host").read_text().strip()
@@ -447,6 +502,16 @@ def run_custom_signing(
     signing_identity = (MAC_SIGNING_CREDS_MOUNT / "signing_identity").read_text().strip()
     quay_user = (QUAY_SECRET_MOUNT / "username").read_text().strip()
     quay_pass = (QUAY_SECRET_MOUNT / "password").read_text().strip()
+    apple_id = (MAC_SIGNING_CREDS_MOUNT / "apple_id").read_text().strip()
+    team_id = (MAC_SIGNING_CREDS_MOUNT / "team_id").read_text().strip()
+    app_specific_password = (
+        (MAC_SIGNING_CREDS_MOUNT / "app_specific_password").read_text().strip()
+    )
+    if any(
+        (component.get("signingOptions") or {}).get("notarize", False)
+        for component in mac_components
+    ) and not all((apple_id, team_id, app_specific_password)):
+        raise ValueError("Missing Apple notarization credentials for notarized components")
 
     ssh_dir = Path("/tmp/.ssh")
     ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -470,16 +535,26 @@ def run_custom_signing(
         quay_pass=quay_pass,
         pipeline_run_uid=pipeline_run_uid,
         keychain_password=keychain_password,
-        signing_identity=signing_identity,
     )
 
-    for component in snapshot.get("components", []):
+    for component in components:
         name = component.get("name", "")
         component_dir = CONTENT_DIR / name
 
         if not (component_dir / "has_mac").exists():
             logger.info("No macOS content for component %s, skipping Mac signing...", name)
             continue
+
+        options = component.get("signingOptions")
+        if options is None:
+            options = {}
+        artifact_type = options.get("artifactType", "app")
+        build_dmg = options.get("buildDmg", False)
+        notarize = options.get("notarize", False)
+        signing_script = str(
+            Path(signing_script_base) / ARTIFACT_SCRIPT_MAPPING[artifact_type]
+        )
+        component_identity = f"{IDENTITY_PREFIX[artifact_type]}: {signing_identity}"
 
         dest_quay_user, dest_quay_pass = read_destination_quay_credentials(
             DEST_QUAY_SECRET_MOUNT, origin, name
@@ -510,6 +585,12 @@ def run_custom_signing(
             dest_quay_user=dest_quay_user,
             dest_quay_pass=dest_quay_pass,
             entitlements_ref=entitlements_ref,
+            signing_identity=component_identity,
+            build_dmg=build_dmg,
+            notarize=notarize,
+            apple_id=apple_id,
+            team_id=team_id,
+            app_specific_password=app_specific_password,
             **common_kwargs,
         )
 

@@ -55,14 +55,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Unique ID for this pipeline run",
     )
     p.add_argument(
-        "--mac-signing-script",
+        "--mac-signing-script-base",
         default=None,
-        help="Path to custom Mac signing script on the remote host",
+        help="Directory containing Mac signing scripts on the remote host",
     )
     p.add_argument(
-        "--windows-signing-script",
+        "--windows-signing-script-base",
         default=None,
-        help="Path to custom Windows signing script on the remote host",
+        help="Directory containing Windows signing scripts on the remote host",
     )
     p.add_argument(
         "--dest-quay-url",
@@ -124,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
             sign_mac.run_custom_signing,
             args.quay_url,
             args.pipeline_run_uid,
-            signing_script=args.mac_signing_script,
+            signing_script_base=args.mac_signing_script_base,
             dest_quay_url=args.dest_quay_url,
             origin=args.origin,
         )
@@ -133,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
             sign_windows.run_custom_signing,
             args.quay_url,
             args.pipeline_run_uid,
-            signing_script=args.windows_signing_script,
+            signing_script_base=args.windows_signing_script_base,
             dest_quay_url=args.dest_quay_url,
             origin=args.origin,
         )
