@@ -298,6 +298,45 @@ def test_run_check_data_keys_malformed_cve_key(
         )
 
 
+def test_schema_accepts_per_file_pulp_destination(
+    tmp_path: Path,
+    schema_path: Path,
+) -> None:
+    """A file destination is valid, and a file without one still matches the schema."""
+    data_dir = tmp_path / "data"
+    data_file = data_dir / "data.json"
+    _write_data(
+        data_file,
+        {
+            "mapping": {
+                "components": [
+                    {
+                        "name": "odf-cli",
+                        "staged": {
+                            "destination": "odf-x86_64-files",
+                            "version": "4.21.0",
+                            "files": [
+                                {
+                                    "filename": "odf-linux-amd64",
+                                    "source": "odf",
+                                    "destination": "odf-x86_64-files",
+                                },
+                                {"filename": "odf-linux-s390x", "source": "odf"},
+                            ],
+                        },
+                    }
+                ]
+            }
+        },
+    )
+    check_data_keys.run_check_data_keys(
+        data_dir=data_dir,
+        data_path=Path("data.json"),
+        schema_path=schema_path,
+        systems_json="[]",
+    )
+
+
 def test_main_failure_propagates_exception(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
