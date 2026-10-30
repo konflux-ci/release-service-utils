@@ -269,3 +269,8 @@ def test_arch_directories_empty(tmp_path: Path) -> None:
     (tmp_path / "note.txt").write_text("skip", encoding="utf-8")
     with pytest.raises(RuntimeError, match="No architecture directories"):
         oot_kmods.arch_directories(tmp_path)
+
+
+def test_checksum_filename() -> None:
+    """The checksum filename includes the architecture name."""
+    assert oot_kmods.checksum_filename("x86_64") == "signed_kmods_checksums_x86_64.txt"
