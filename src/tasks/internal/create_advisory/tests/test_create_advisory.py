@@ -2988,7 +2988,7 @@ def test_recover_after_merge_request_wait_timeout_without_branch(
     }
     with (
         mock.patch(
-            f"{TASK}.create_advisory.git.remote_branch_exists",
+            f"{TASK}.create_advisory.git._instance.remote_branch_exists",
             return_value=False,
         ),
         mock.patch(

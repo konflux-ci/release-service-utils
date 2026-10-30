@@ -14,3 +14,6 @@
 """
 
 from . import create_advisory  # noqa: F401
+from .create_advisory import CreateAdvisoryTask  # noqa: F401
+
+__all__ = ["create_advisory", "CreateAdvisoryTask"]

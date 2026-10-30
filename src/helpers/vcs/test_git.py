@@ -236,7 +236,7 @@ def test_remote_branch_sha_returns_none_for_slash_qualified_leaf_only(
             "_run_git_cmd",
             return_value=mock.MagicMock(stdout="abc123\trefs/heads/other/feat\n"),
         ) as run_cmd,
-        mock.patch.object(git, "rev_parse") as rev_parse,
+        mock.patch.object(git._instance, "rev_parse") as rev_parse,
     ):
         out = git.remote_branch_sha(tmp_path, "feat", stderr_path=None)
     assert out is None
@@ -255,7 +255,7 @@ def test_remote_branch_sha_returns_none_for_slash_qualified_leaf_only(
 def test_checkout_existing_branch(tmp_path: Path) -> None:
     """Check out a branch that already exists locally."""
     with (
-        mock.patch.object(git, "_local_branch_exists", return_value=True),
+        mock.patch.object(git._instance, "_local_branch_exists", return_value=True),
         mock.patch.object(git, "_run_git_cmd") as run_cmd,
     ):
         git.checkout(tmp_path, "my-app")
@@ -269,7 +269,7 @@ def test_checkout_existing_branch(tmp_path: Path) -> None:
 def test_checkout_creates_when_missing(tmp_path: Path) -> None:
     """Create and check out a branch when it is not present locally."""
     with (
-        mock.patch.object(git, "_local_branch_exists", return_value=False),
+        mock.patch.object(git._instance, "_local_branch_exists", return_value=False),
         mock.patch.object(git, "_run_git_cmd") as run_cmd,
     ):
         git.checkout(tmp_path, "my-app", start_point="origin/main")
@@ -300,7 +300,7 @@ def test_checkout_reset(tmp_path: Path) -> None:
 def test_sync_to_origin_main(tmp_path: Path) -> None:
     """Fetch and hard-reset to the remote default branch."""
     with (
-        mock.patch.object(git, "fetch") as fetch,
+        mock.patch.object(git._instance, "fetch") as fetch,
         mock.patch.object(git, "_run_git_cmd") as run_cmd,
     ):
         git.sync_to_origin_main(tmp_path)
@@ -318,7 +318,7 @@ def test_sync_to_origin_main_retries_transient_fetch(tmp_path: Path, status_code
         stderr=f"error: RPC failed; HTTP {status_code} curl 22",
     )
     with (
-        mock.patch.object(git, "fetch", side_effect=[failure, None]) as fetch,
+        mock.patch.object(git._instance, "fetch", side_effect=[failure, None]) as fetch,
         mock.patch.object(git.time, "sleep") as sleep,
         mock.patch.object(git, "_run_git_cmd") as run_cmd,
     ):
@@ -340,7 +340,7 @@ def test_sync_to_origin_main_does_not_retry_permanent_fetch_failure(
         stderr="error: HTTP 403 Forbidden",
     )
     with (
-        mock.patch.object(git, "fetch", side_effect=failure) as fetch,
+        mock.patch.object(git._instance, "fetch", side_effect=failure) as fetch,
         mock.patch.object(git.time, "sleep") as sleep,
         mock.patch.object(git, "_run_git_cmd") as run_cmd,
         pytest.raises(subprocess.CalledProcessError) as caught,
@@ -361,7 +361,7 @@ def test_sync_to_origin_main_stops_after_transient_fetch_retries(tmp_path: Path)
         stderr="error: RPC failed; HTTP 504 curl 22",
     )
     with (
-        mock.patch.object(git, "fetch", side_effect=failure) as fetch,
+        mock.patch.object(git._instance, "fetch", side_effect=failure) as fetch,
         mock.patch.object(git.time, "sleep") as sleep,
         mock.patch.object(git, "_run_git_cmd") as run_cmd,
         pytest.raises(subprocess.CalledProcessError) as caught,
@@ -438,7 +438,7 @@ def test_is_ancestor_unexpected_exit_raises(tmp_path: Path) -> None:
 
 def test_remote_branch_sha_returns_none_when_missing(tmp_path: Path) -> None:
     """Return None when the remote branch does not exist."""
-    with mock.patch.object(git, "remote_branch_exists", return_value=False):
+    with mock.patch.object(git._instance, "remote_branch_exists", return_value=False):
         out = git.remote_branch_sha(tmp_path, "missing", stderr_path=None)
     assert out is None
 
@@ -743,8 +743,8 @@ def test_rebase_onto_remote_skips_existing_remote(tmp_path: Path) -> None:
 
 def test_commit_and_push(tmp_path: Path) -> None:
     """Stage, commit, and push via the git CLI."""
-    with mock.patch.object(git, "index_add_commit") as add:
-        with mock.patch.object(git, "push") as push:
+    with mock.patch.object(git._instance, "index_add_commit") as add:
+        with mock.patch.object(git._instance, "push") as push:
             git.commit_and_push(
                 tmp_path,
                 ["a.yaml"],

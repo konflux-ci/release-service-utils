@@ -15,11 +15,14 @@ from pathlib import Path
 from typing import Any
 
 from release_service_utils.helpers import advisory_data
+from release_service_utils.helpers.advisory_data import AdvisoryData
 from release_service_utils.helpers import file
 from release_service_utils.helpers import internal_request
 from release_service_utils.helpers import release_notes_purl
 from release_service_utils.helpers import tekton
 from release_service_utils.helpers.logger import logger
+from release_service_utils.framework import ManagedTask
+from release_service_utils.tasks.internal.create_advisory import CreateAdvisoryTask
 
 # params.environment accepts either spelling for non-production image/rpm releases.
 _STAGE_ENV_RE = re.compile(r"^(stage|staging)$")
@@ -343,10 +346,29 @@ def _params_from_env() -> TaskParams:
     )
 
 
+class RequestAdvisoryCreationTask(ManagedTask):
+    """Request advisory creation - managed task implementation."""
+
+    helpers = {
+        "advisory": AdvisoryData,
+    }
+
+    # This managed task spawns create_advisory internal task
+    internal_tasks = [CreateAdvisoryTask]
+
+    def run(self) -> None:
+        """Execute request-advisory-creation workflow.
+
+        Raises on failure - managed tasks propagate exceptions.
+        """
+        params = _params_from_env()
+        run_request_advisory_creation(params)
+
+
 def main() -> int:
     """Entry point: load params from the environment and run the workflow."""
-    run_request_advisory_creation(_params_from_env())
-    return 0
+    task = RequestAdvisoryCreationTask()
+    return task.execute()
 
 
 if __name__ == "__main__":  # pragma: no cover
