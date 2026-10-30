@@ -292,3 +292,40 @@ def test_docker_config_shared_across_downloads(tmp_path: Path) -> None:
             cosign.download("attestation", _IMAGE, att, docker_config_dir=config_dir)
 
     assert commands == ["select-oci-auth", "cosign", "cosign"]
+
+
+def test_verify_attestation_uses_key_and_returns_stdout() -> None:
+    """Run verify-attestation with the key and return its output."""
+    with patch(_RUN_CMD) as run:
+        run.side_effect = [
+            _completed([], stdout='{"auths": {}}'),
+            _completed([], stdout="envelope\n"),
+        ]
+        out = cosign.verify_attestation(_IMAGE, key="k8s://ns/key", max_attempts=1)
+
+    assert out == "envelope\n"
+    assert run.call_args.args[0] == [
+        "cosign",
+        "verify-attestation",
+        "--type",
+        "spdxjson",
+        "--key",
+        "k8s://ns/key",
+        "--insecure-ignore-tlog=true",
+        _IMAGE,
+    ]
+    assert "DOCKER_CONFIG" in run.call_args.kwargs["env"]
+
+
+@patch(_SLEEP)
+def test_verify_attestation_retries_exhausted(mock_sleep: MagicMock) -> None:
+    """Raise RuntimeError after the last failed verification attempt."""
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if cmd[0] == "select-oci-auth":
+            return _completed(cmd, stdout="{}")
+        raise _called_process_error(cmd, stderr="no matching signatures")
+
+    with patch(_RUN_CMD, side_effect=fake_run):
+        with pytest.raises(RuntimeError, match="after 2 attempts"):
+            cosign.verify_attestation(_IMAGE, key="k", max_attempts=2)
