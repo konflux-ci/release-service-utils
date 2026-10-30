@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import argparse
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
+from release_service_utils.helpers import oras_utils
 from release_service_utils.helpers.file import load_json_dict
 from release_service_utils.helpers.labels import get_label_value
 from release_service_utils.helpers.logger import logger
@@ -28,6 +30,11 @@ IMAGE_MEDIA_TYPES = frozenset(
         "application/vnd.docker.container.image.v1+json",
     }
 )
+LABELS_JSON_PATHS = (
+    "/usr/share/buildinfo/labels.json",
+    "/root/buildinfo/labels.json",
+)
+LABELS_JSON_KEYS = ("name", "cpe")
 
 
 class LabelValidationError(Exception):
@@ -140,6 +147,65 @@ def _check_cpe_label(component: dict[str, Any], cpe_data: str, enforce: bool) ->
     logger.info("Component '%s' 'cpe' label matches the data file value.", comp_name)
 
 
+def _check_labels_json(component: dict[str, Any], enforce: bool) -> None:
+    """Validate image-config labels against labels.json when present.
+
+    Prefer the architecture-specific reference written by ``apply-mapping``;
+    snapshots that bypass that task use their digest-qualified ``containerImage``.
+    """
+    image_ref = (component.get("metadata") or {}).get("image_ref") or component.get(
+        "containerImage"
+    )
+    if not image_ref:
+        return
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        destination = Path(temp_dir)
+        try:
+            oras_utils.extract_disk_image_files(
+                image_ref, list(LABELS_JSON_PATHS), destination
+            )
+        except Exception as exc:
+            msg = f"Unable to read labels.json from component '{component['name']}': {exc}"
+            if enforce:
+                raise LabelValidationError(msg) from exc
+            logger.warning(msg)
+            return
+
+        for labels_path in LABELS_JSON_PATHS:
+            labels_file = destination / labels_path.lstrip("/")
+            if not labels_file.is_file():
+                continue
+
+            try:
+                labels_json = load_json_dict(labels_file)
+            except Exception as exc:
+                msg = (
+                    f"Unable to parse labels.json at {labels_path} for component "
+                    f"'{component['name']}': {exc}"
+                )
+                if enforce:
+                    raise LabelValidationError(msg) from exc
+                logger.warning(msg)
+                continue
+            for label_name in LABELS_JSON_KEYS:
+                image_value = get_label_value(component, label_name)
+                labels_value = labels_json.get(label_name)
+                if isinstance(labels_value, str):
+                    labels_value = labels_value.strip()
+                if image_value == labels_value:
+                    continue
+
+                msg = (
+                    f"Component '{component['name']}' label '{label_name}' in "
+                    f"{labels_path} ('{labels_value}') does not match the image "
+                    f"config label ('{image_value}')"
+                )
+                if enforce:
+                    raise LabelValidationError(msg)
+                logger.warning(msg)
+
+
 def _check_labels(snapshot_path: Path, data_path: Path, enforce: bool) -> None:
     """Validate name and CPE labels for all image components.
 
@@ -174,6 +240,7 @@ def _check_labels(snapshot_path: Path, data_path: Path, enforce: bool) -> None:
 
         _check_name_label(component, enforce)
         _check_cpe_label(component, cpe_data, enforce)
+        _check_labels_json(component, enforce)
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:

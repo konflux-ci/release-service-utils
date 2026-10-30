@@ -853,6 +853,7 @@ def test_process_component_standard_image_metadata() -> None:
         "value": "1.0.0+build",
     } in metadata["annotations"]
     assert metadata["media_type"] == "application/vnd.oci.image.config.v1+json"
+    assert metadata["image_ref"] == "registry.io/repo@sha256:aaa"
 
 
 def test_process_component_oci_version_plus_replaced_with_underscore() -> None:
@@ -1000,8 +1001,8 @@ def test_process_component_helm_chart_annotation_tags() -> None:
     ]
 
 
-def test_process_component_no_metadata_added_when_nothing_present() -> None:
-    """No metadata key is created if there's nothing to add."""
+def test_process_component_adds_image_ref_when_nothing_else_present() -> None:
+    """The selected image reference is retained even without other metadata."""
     component = _base_component()
     apply_mapping.process_component(
         component,
@@ -1015,7 +1016,7 @@ def test_process_component_no_metadata_added_when_nothing_present() -> None:
         get_arch_fn=_fake_get_arch(),
         format_date_fn=_fake_format_date,
     )
-    assert "metadata" not in component
+    assert component["metadata"] == {"image_ref": "registry.io/repo@sha256:aaa"}
 
 
 def test_process_component_timestamp_empty_when_no_build_date() -> None:
