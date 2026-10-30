@@ -42,6 +42,7 @@ class KojiConfig:
     data_dir: Path
     rpm_download_dir: Path
     kinit_retries: int
+    koji_config_source: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -140,6 +141,34 @@ def _redact_cmd(cmd: list[str]) -> list[str]:
     return redacted
 
 
+def install_koji_client_config(source: Path) -> None:
+    """Install Koji client profiles from the tenant image into ``~/.koji``.
+
+    ``koji --profile`` reads ``/etc/koji.conf``, ``/etc/koji.conf.d``,
+    ``~/.koji/config``, and ``~/.koji/config.d``. The release-service-utils
+    image provides the koji CLI and does not ship tenant profiles. The task
+    copies ``/etc/koji.conf`` and ``/etc/koji.conf.d`` from ``pipelineImage``
+    into ``source`` as ``config`` and ``config.d``.
+    """
+    if not source.is_dir():
+        raise ValueError(f"Koji client config directory does not exist: {source}")
+
+    destination = Path(os.path.expanduser("~")) / ".koji"
+    config_dir = destination / "config.d"
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    staged_config = source / "config"
+    if staged_config.is_file():
+        shutil.copy2(staged_config, destination / "config")
+
+    staged_dir = source / "config.d"
+    if not staged_dir.is_dir():
+        return
+    for entry in sorted(staged_dir.iterdir()):
+        if entry.is_file():
+            shutil.copy2(entry, config_dir / entry.name)
+
+
 def run_koji_cmd(
     profile: str,
     *args: str,
@@ -155,8 +184,12 @@ def run_koji_cmd(
     are redacted. The raised ``CalledProcessError`` keeps that redacted
     stderr, and its ``cmd`` is redacted so a traceback cannot reprint the
     token.
+
+    ``--plugin-paths`` is empty so a profile copied from the tenant image
+    cannot name extra plugin directories. The CLI loads ``~/.koji/plugins``
+    on its own, and this task does not put files there.
     """
-    cmd = ["koji", f"--profile={profile}"]
+    cmd = ["koji", f"--profile={profile}", "--plugin-paths="]
     if noauth:
         cmd.append("--noauth")
     cmd.extend(args)
@@ -632,6 +665,9 @@ def process_component(
 
 def run(config: KojiConfig) -> None:
     """Push RPMs to Koji."""
+    if config.koji_config_source is not None:
+        install_koji_client_config(config.koji_config_source)
+
     # Load configuration files
     snapshot = file_helper.load_json_dict(config.snapshot_path)
     data = file_helper.load_json_dict(config.data_path)
@@ -705,6 +741,11 @@ def main() -> int:
             "RPM_DOWNLOAD_DIR", DEFAULT_RPM_DOWNLOAD_DIR
         ),
         kinit_retries=int(os.environ.get("KINIT_RETRIES", str(DEFAULT_KINIT_RETRIES))),
+        koji_config_source=(
+            Path(os.environ["KOJI_CONFIG_SOURCE"])
+            if os.environ.get("KOJI_CONFIG_SOURCE")
+            else None
+        ),
     )
 
     run(config)
