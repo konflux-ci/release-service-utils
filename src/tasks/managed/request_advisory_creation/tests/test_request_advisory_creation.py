@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -437,6 +438,26 @@ def test_write_task_results_raises_on_failure(tmp_path: Path) -> None:
     assert params.advisory_internal_url_result.read_text(encoding="utf-8") == ""
 
 
+def test_write_task_results_accepts_success_result_with_trailing_newline(
+    tmp_path: Path,
+) -> None:
+    """Accept a newline-terminated success result from an InternalRequest."""
+    params = _task_params(tmp_path)
+    results = {
+        "result": "Success\n",
+        "advisory_url": "https://access.redhat.com/errata/RHBA-2026:166733",
+        "advisory_internal_url": "https://gitlab.example/advisory.yaml",
+    }
+
+    request_advisory_creation.request_advisory_creation._write_task_results(params, results)
+
+    assert params.advisory_url_result.read_text(encoding="utf-8") == results["advisory_url"]
+    assert (
+        params.advisory_internal_url_result.read_text(encoding="utf-8")
+        == results["advisory_internal_url"]
+    )
+
+
 def test_ir_wait_timeout_covers_pipeline_budget() -> None:
     """Script wait timeout must cover pipeline budget plus spawn overhead."""
     pipeline_seconds = internal_request.duration_to_seconds(
@@ -494,3 +515,18 @@ def test_params_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     assert params.synchronously == "false"
     assert params.dockerconfig_path == tmp_path / "dockerconfig"
     assert params.advisory_url_result == tmp_path / "advisory_url"
+
+
+def test_package_entry_point_delegates_to_task_main() -> None:
+    """Execute the package entry point and delegate to the task's ``main``."""
+    module_name = "release_service_utils.tasks.managed.request_advisory_creation.__main__"
+    with mock.patch.object(
+        request_advisory_creation.request_advisory_creation,
+        "main",
+        return_value=0,
+    ) as main:
+        with pytest.raises(SystemExit) as exc_info:
+            runpy.run_module(module_name, run_name="__main__")
+
+    assert exc_info.value.code == 0
+    main.assert_called_once_with()
