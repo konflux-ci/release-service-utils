@@ -276,7 +276,13 @@ def render_template_to_json_file(
     # Convert to JSON for safer parsing. Jinja works cleaner with YAML syntax
     # but YAML type conversion can corrupt data e.g. "33158e1" to 331580 JSON
     # output prevents this.
-    data = yaml.safe_load(content)
+    # Try JSON first (for apply_mapping component substitution) to avoid YAML
+    # type coercion issues (e.g., "041287970199" -> 41287970199). Fall back
+    # to YAML for templates that render as YAML (e.g., advisory templates).
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        data = yaml.safe_load(content)
     out = Path(output_path)
     with open(out, mode="w", encoding="utf-8") as data_file:
         json.dump(data, data_file, indent=2)
