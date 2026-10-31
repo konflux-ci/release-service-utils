@@ -98,4 +98,4 @@ omit = [
 show_missing = true
 
 [tool.uv.sources]
-ud2 = { git = "https://github.com/release-engineering/ud2.git", rev = "6abfa820d5fa4a72edb860b72e7a2798665ac650" }
+ud2 = { git = "https://github.com/release-engineering/ud2.git", rev = "4c648f23d77c4fac5c6195d8ec3fb8d759141da4" }
