@@ -257,6 +257,117 @@ def test_write_starmap_file_skips_non_mapping_components(tmp_path: Path) -> None
     assert loaded == [{"cloud": "aws", "name": "test-product-amd"}]
 
 
+def test_write_starmap_file_converts_numeric_sharing_accounts_to_strings(
+    tmp_path: Path,
+) -> None:
+    """Numeric sharing_accounts are converted to strings to prevent float conversion.
+
+    Kubernetes CRD has no schema for ReleasePlanAdmission.spec.data, so numeric
+    strings like '041287970199' get stored as integers. When written to YAML and
+    later consumed by pubtools-marketplacesvm/boto3, these integers can become
+    floats, breaking the AWS API call. This test ensures the fix in
+    write_starmap_file converts all sharing_accounts to strings.
+
+    Regression test for: https://github.com/konflux-ci/release-service-catalog/issues/2691
+    """
+    snapshot_file = tmp_path / "mapped" / "snapshot.json"
+    # Simulate data from Kubernetes where sharing_accounts are integers
+    component = {
+        **_valid_component(name="eks-disk"),
+        "starmap": [
+            {
+                "cloud": "aws",
+                "name": "test-product",
+                "meta": {
+                    "sharing_accounts": [
+                        41287970199,  # Integer, will be converted to string
+                        418272754616,
+                        11111111111,
+                        2222222222,
+                    ],
+                },
+            }
+        ],
+    }
+    snapshot = _valid_snapshot([component])
+    _write_json(snapshot_file, snapshot)
+
+    out = m.write_starmap_file(snapshot, snapshot_file)
+    loaded = yaml.safe_load(out.read_text(encoding="utf-8"))
+
+    # All sharing_accounts should be strings after conversion
+    accounts = loaded[0]["meta"]["sharing_accounts"]
+    assert all(isinstance(acc, str) for acc in accounts), (
+        f"Expected all sharing_accounts to be strings, got types: "
+        f"{[type(acc).__name__ for acc in accounts]}"
+    )
+    # Verify exact values are preserved
+    assert accounts == [
+        "41287970199",
+        "418272754616",
+        "11111111111",
+        "2222222222",
+    ]
+
+
+# --- _ensure_string_lists ---
+
+
+def test_ensure_string_lists_converts_sharing_accounts() -> None:
+    """sharing_accounts list items are converted to strings."""
+    data = {
+        "cloud": "aws",
+        "meta": {"sharing_accounts": [41287970199, 418272754616]},
+    }
+    result = m._ensure_string_lists(data)
+    assert result["meta"]["sharing_accounts"] == ["41287970199", "418272754616"]
+    assert all(isinstance(x, str) for x in result["meta"]["sharing_accounts"])
+
+
+def test_ensure_string_lists_preserves_strings() -> None:
+    """Already-string sharing_accounts are preserved (including leading zeros)."""
+    data = {
+        "meta": {"sharing_accounts": ["041287970199", "418272754616"]},
+    }
+    result = m._ensure_string_lists(data)
+    assert result["meta"]["sharing_accounts"] == ["041287970199", "418272754616"]
+    assert result["meta"]["sharing_accounts"][0].startswith("0")
+
+
+def test_ensure_string_lists_recursive() -> None:
+    """Conversion works recursively through nested structures."""
+    data = [
+        {
+            "cloud": "aws",
+            "mappings": {
+                "region-1": {
+                    "meta": {"sharing_accounts": [123, 456]},
+                }
+            },
+        }
+    ]
+    result = m._ensure_string_lists(data)
+    accounts = result[0]["mappings"]["region-1"]["meta"]["sharing_accounts"]
+    assert accounts == ["123", "456"]
+
+
+def test_ensure_string_lists_leaves_other_fields_unchanged() -> None:
+    """Other fields are not modified."""
+    data = {
+        "meta": {
+            "sharing_accounts": [123],
+            "other_list": [1, 2, 3],
+            "string_field": "value",
+            "number_field": 42,
+        }
+    }
+    result = m._ensure_string_lists(data)
+    assert result["meta"]["sharing_accounts"] == ["123"]
+    assert result["meta"]["other_list"] == [1, 2, 3]
+    assert result["meta"]["string_field"] == "value"
+    assert result["meta"]["number_field"] == 42
+
+
 # --- filename / metadata parsers ---
 
 

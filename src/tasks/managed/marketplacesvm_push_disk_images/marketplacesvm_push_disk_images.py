@@ -142,6 +142,35 @@ def set_cloud_credentials(credential_files: Sequence[Path]) -> str:
     return value
 
 
+def _ensure_string_lists(data: Any) -> Any:
+    """Recursively convert numeric values in specific list fields to strings.
+
+    AWS boto3 expects sharing_accounts to be a list of strings, but the
+    Kubernetes CRD has no schema for the ReleasePlanAdmission data field
+    (x-kubernetes-preserve-unknown-fields: true), so numeric strings like
+    '041287970199' get stored as integers. When these flow through
+    collect-data and apply-mapping as JSON, they remain integers. If written
+    to YAML without quotes and later converted to floats by downstream
+    consumers, the AWS API call fails with a type error.
+
+    This walks the data structure and converts all values in known numeric-ID
+    list fields to strings, preventing type coercion issues downstream.
+    """
+    if isinstance(data, dict):
+        result = {}
+        for key, value in data.items():
+            if key == "sharing_accounts" and isinstance(value, list):
+                # Force all sharing_accounts entries to be strings
+                result[key] = [str(item) for item in value]
+            else:
+                result[key] = _ensure_string_lists(value)
+        return result
+    elif isinstance(data, list):
+        return [_ensure_string_lists(item) for item in data]
+    else:
+        return data
+
+
 def write_starmap_file(snapshot: Mapping[str, Any], snapshot_file: Path) -> Path:
     """Flatten component starmap entries and write ``starmap.yaml`` beside snapshot."""
     components = snapshot.get("components") or []
@@ -152,6 +181,10 @@ def write_starmap_file(snapshot: Mapping[str, Any], snapshot_file: Path) -> Path
         starmap = component.get("starmap") or []
         if isinstance(starmap, list):
             mapping.extend(starmap)
+
+    # Ensure numeric ID fields are strings to prevent float conversion
+    # See: https://github.com/konflux-ci/release-service-catalog/issues/2691
+    mapping = _ensure_string_lists(mapping)
 
     starmap_file = snapshot_file.parent / "starmap.yaml"
     starmap_file.write_text(
