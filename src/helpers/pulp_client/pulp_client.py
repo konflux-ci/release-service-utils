@@ -413,9 +413,7 @@ class PulpClient:
             base_sleep_seconds=UPLOAD_BASE_SLEEP_SECONDS,
         )
 
-    def set_rpm_label(
-        self, sha256: str, key: str, value: str, config_file: Path
-    ) -> None:
+    def set_rpm_label(self, sha256: str, key: str, value: str, config_file: Path) -> None:
         """Set a label on an RPM content unit identified by its digest."""
         result = subprocess_cmd.run_cmd(
             [
