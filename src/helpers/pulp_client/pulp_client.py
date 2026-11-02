@@ -413,6 +413,37 @@ class PulpClient:
             base_sleep_seconds=UPLOAD_BASE_SLEEP_SECONDS,
         )
 
+    def set_rpm_label(
+        self, sha256: str, key: str, value: str, config_file: Path
+    ) -> None:
+        """Set a label on an RPM content unit identified by its digest."""
+        result = subprocess_cmd.run_cmd(
+            [
+                "pulp",
+                "--config",
+                str(config_file),
+                "--domain",
+                self._domain,
+                "rpm",
+                "content",
+                "label",
+                "set",
+                "--sha256",
+                sha256,
+                "--key",
+                key,
+                "--value",
+                value,
+            ],
+            check=False,
+        )
+        if result.returncode != 0:
+            suffix = _cli_error_text(result)
+            raise RuntimeError(
+                f"Failed to set RPM label {key} on {sha256} "
+                f"(rc={result.returncode}){f': {suffix}' if suffix else ''}"
+            )
+
     def check_digest(
         self,
         repo_name: str,
