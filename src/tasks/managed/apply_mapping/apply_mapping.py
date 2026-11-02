@@ -37,10 +37,11 @@ import argparse
 import json
 import re
 import shutil
+import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-import tempfile
-from typing import Any, Callable
+from typing import Any
 
 from release_service_utils.helpers import (
     apply_template,
@@ -525,6 +526,9 @@ def process_component(
     os_name = platform.get("os", "linux")
     first_digest = arch_infos[0]["digest"]
     image_with_digest = f"{container_image.rsplit('@', 1)[0]}@{first_digest}"
+    # Keep the selected child digest for downstream checks without changing the
+    # original multi-architecture containerImage used by later release steps.
+    _set_metadata_field(component, "image_ref", image_with_digest)
 
     manifest_info = _extract_manifest_info(
         inspect_fn, container_image, image_with_digest, arch, os_name
