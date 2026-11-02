@@ -581,7 +581,7 @@ class TestRun:
         client.add_content.assert_called_once_with("source", ["/href/src"], 30)
 
     def test_digest_match_skips_upload(self, tmp_path: Path) -> None:
-        """Matching digests skip upload and still populate artifacts.json."""
+        """Matching digests skip upload and preserve release outputs."""
         snap = tmp_path / "snap.json"
         _write_snapshot(snap, [{"containerImage": "quay.io/a"}])
         cfg = _config(tmp_path, snapshot=snap)
@@ -608,6 +608,14 @@ class TestRun:
         assert "hello-2.12.1-6.fc44.x86_64.rpm" in artifacts["artifacts"]
         assert "hello-docs-2.12.1-6.fc44.noarch.rpm" in artifacts["artifacts"]
         assert "hello-2.12.1-6.fc44.src.rpm" in artifacts["artifacts"]
+        results = json.loads(
+            (cfg.data_dir / "results" / "push-rpms-to-pulp-results.json").read_text()
+        )
+        assert {rpmfile["rpm"] for rpmfile in results["rpmfiles"]} == {
+            "hello-2.12.1-6.fc44.x86_64.rpm",
+            "hello-docs-2.12.1-6.fc44.noarch.rpm",
+            "hello-2.12.1-6.fc44.src.rpm",
+        }
         client.add_content.assert_not_called()
 
     def test_digest_mismatch_raises(self, tmp_path: Path) -> None:
@@ -697,6 +705,7 @@ class TestRun:
             (cfg.data_dir / "results" / "push-rpms-to-pulp-results.json").read_text()
         )
         assert {row["pulprepo"] for row in results["rpmfiles"]} == {
+            "mydomain/x86_64",
             "mydomain/aarch64",
             "mydomain/s390x",
             "mydomain/ppc64le",
