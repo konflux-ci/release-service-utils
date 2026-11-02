@@ -41,6 +41,7 @@ class PushConfig:
 
     snapshot_path: Path | None
     signed_rpms_oci_artifact: str
+    signed_by: str
     pulp_domain: str
     pulp_config_file: Path
     default_excludes: list[str]
@@ -416,6 +417,9 @@ def run(config: PushConfig) -> None:
 
 def _run(config: PushConfig) -> None:
     """Run the push using *config.pulp_config_file* as the Pulp CLI config."""
+    if config.signed_rpms_oci_artifact and not config.signed_by.strip():
+        raise ValueError("SIGNED_BY is required for signed RPM uploads")
+
     pulp_cfg = parse_pulp_config(config.pulp_config_file)
     client = PulpClient.from_config(pulp_cfg, config.pulp_domain)
     logger.info("Auth method detected for Pulp API calls: %s", client.auth_method)
@@ -456,13 +460,30 @@ def _run(config: PushConfig) -> None:
     )
 
     hrefs_by_repo: dict[str, list[str]] = {}
+    placed_rpms: list[LocalRpm] = []
     for rpm in rpms:
         placements = target_placements(rpm, repo_order, rpm_repo_map)
+        if placements:
+            placed_rpms.append(rpm)
         added = process_local_rpm(rpm, placements, ctx)
         for repo, hrefs in added.items():
             hrefs_by_repo.setdefault(repo, []).extend(hrefs)
 
     add_content_by_repo(ctx, hrefs_by_repo, repo_order)
+
+    if config.signed_rpms_oci_artifact:
+        # The signer searches this label to skip RPMs already signed with the
+        # requested key. Label only after every repository add has succeeded.
+        signed_by = (
+            config.signed_by.strip()
+            .replace(",", ":")
+            .replace("(", "[")
+            .replace(")", "]")
+        )
+        for rpm in placed_rpms:
+            client.set_rpm_label(
+                rpm.sha256, "signed_by", signed_by, config.pulp_config_file
+            )
 
     for dist_arch in arches:
         docs.add_distribution(
@@ -491,6 +512,7 @@ def main() -> int:
     config = PushConfig(
         snapshot_path=Path(snapshot_raw) if snapshot_raw else None,
         signed_rpms_oci_artifact=os.environ.get("SIGNED_RPMS_OCI_ARTIFACT", "").strip(),
+        signed_by=os.environ.get("SIGNED_BY", "").strip(),
         pulp_domain=tekton.require_env("PULP_DOMAIN"),
         pulp_config_file=file_helper.path_from_env_variable(
             "PULP_CONFIG_FILE", DEFAULT_PULP_SECRET
