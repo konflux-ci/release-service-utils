@@ -477,9 +477,7 @@ class TestRun:
         client = MagicMock()
         client.check_digest.return_value = PulpDigestStatus.MATCH
 
-        def fake_fetch(
-            _ref: str, dest: Path, *_args: object, **_kwargs: object
-        ) -> None:
+        def fake_fetch(_ref: str, dest: Path, *_args: object, **_kwargs: object) -> None:
             dest.parent.mkdir(parents=True, exist_ok=True)
             rpm = dest.parent / "hello-2.12.1-6.fc44.x86_64.rpm"
             rpm.write_bytes(b"signed")
@@ -499,9 +497,7 @@ class TestRun:
 
     def test_signed_upload_requires_alias(self, tmp_path: Path) -> None:
         """Fail before Pulp changes if a signed upload has no key alias."""
-        cfg = replace(
-            _config(tmp_path, signed="oci:quay.io/signed@sha256:abc"), signed_by=""
-        )
+        cfg = replace(_config(tmp_path, signed="oci:quay.io/signed@sha256:abc"), signed_by="")
         with (
             patch(f"{TASK}.PulpClient.from_config") as mock_client,
             pytest.raises(ValueError, match="SIGNED_BY is required"),

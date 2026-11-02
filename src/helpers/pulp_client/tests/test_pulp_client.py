@@ -946,9 +946,7 @@ class TestUploadRpm:
     """Test pulp CLI upload with retries."""
 
     _SLEEP = "release_service_utils.helpers.retry.retry.time.sleep"
-    _RUN_CMD = (
-        "release_service_utils.helpers.pulp_client.pulp_client.subprocess_cmd.run_cmd"
-    )
+    _RUN_CMD = "release_service_utils.helpers.pulp_client.pulp_client.subprocess_cmd.run_cmd"
 
     def _client(self) -> pulp_client.PulpClient:
         """Build a client with no REST session traffic."""
@@ -1087,9 +1085,7 @@ class TestUploadRpm:
 class TestSetRpmLabel:
     """Test the label needed for signed RPM retry detection."""
 
-    _RUN_CMD = (
-        "release_service_utils.helpers.pulp_client.pulp_client.subprocess_cmd.run_cmd"
-    )
+    _RUN_CMD = "release_service_utils.helpers.pulp_client.pulp_client.subprocess_cmd.run_cmd"
 
     def test_cli_argv(self, tmp_path: Path) -> None:
         """Set the label on the exact content digest in the selected domain."""
@@ -1102,9 +1098,21 @@ class TestSetRpmLabel:
             client.set_rpm_label("abc", "signed_by", "release4:release2:ima", config)
         mock_run.assert_called_once_with(
             [
-                "pulp", "--config", str(config), "--domain", "mydomain",
-                "rpm", "content", "label", "set", "--sha256", "abc",
-                "--key", "signed_by", "--value", "release4:release2:ima",
+                "pulp",
+                "--config",
+                str(config),
+                "--domain",
+                "mydomain",
+                "rpm",
+                "content",
+                "label",
+                "set",
+                "--sha256",
+                "abc",
+                "--key",
+                "signed_by",
+                "--value",
+                "release4:release2:ima",
             ],
             check=False,
         )
@@ -1115,9 +1123,7 @@ class TestSetRpmLabel:
         with (
             patch(
                 self._RUN_CMD,
-                return_value=subprocess.CompletedProcess(
-                    ["pulp"], 1, "", "label rejected"
-                ),
+                return_value=subprocess.CompletedProcess(["pulp"], 1, "", "label rejected"),
             ),
             pytest.raises(RuntimeError, match="label rejected"),
         ):

@@ -475,15 +475,10 @@ def _run(config: PushConfig) -> None:
         # The signer searches this label to skip RPMs already signed with the
         # requested key. Label only after every repository add has succeeded.
         signed_by = (
-            config.signed_by.strip()
-            .replace(",", ":")
-            .replace("(", "[")
-            .replace(")", "]")
+            config.signed_by.strip().replace(",", ":").replace("(", "[").replace(")", "]")
         )
         for rpm in placed_rpms:
-            client.set_rpm_label(
-                rpm.sha256, "signed_by", signed_by, config.pulp_config_file
-            )
+            client.set_rpm_label(rpm.sha256, "signed_by", signed_by, config.pulp_config_file)
 
     for dist_arch in arches:
         docs.add_distribution(
