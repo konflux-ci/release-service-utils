@@ -33,7 +33,22 @@ jobs:
             exit 1
           fi
           echo "pr-number=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+      - name: Check for existing production approval
+        id: prod-approval
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.review.outputs.pr-number }}
+        run: |
+          labels="$(gh api \
+            "/repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" \
+            --jq '.[].name')"
+          if grep -Fxq 'prod/approved' <<< "$labels"; then
+            echo 'already-approved=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'already-approved=false' >> "$GITHUB_OUTPUT"
+          fi
       - name: Label PR using shared action
+        if: steps.prod-approval.outputs.already-approved != 'true'
         # main
         uses: konflux-ci/release-service-automations/pr-prod-approval-labeler@d0208b9cc14390cde9a2fc132f72566a20e59aca
         with:
