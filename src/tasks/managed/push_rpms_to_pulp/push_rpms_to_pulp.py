@@ -358,6 +358,7 @@ def process_local_rpm(
                 rpm.filename,
                 placement.repo,
             )
+            ctx.docs.append_rpmfile(rpm, placement, ctx.domain)
             if not artifact_recorded:
                 _record_artifact(ctx, rpm, placement)
                 artifact_recorded = True
