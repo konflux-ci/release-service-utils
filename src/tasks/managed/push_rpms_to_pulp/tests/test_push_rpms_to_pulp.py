@@ -420,7 +420,7 @@ class TestRun:
             "x86_64",
             "source",
         ]
-        assert client.check_digest.call_args.kwargs["fallback_to_latest"] is False
+        assert client.check_digest.call_args.kwargs["fallback_to_latest"] is True
         client.ensure_domain_exists.assert_called_once()
         client.ensure_repos_exist.assert_called_once_with(
             ["aarch64", "ppc64le", "s390x", "x86_64", "source"]
@@ -600,6 +600,10 @@ class TestRun:
             task.run(cfg)
 
         client.upload_rpm.assert_not_called()
+        assert all(
+            call.kwargs["fallback_to_latest"] is True
+            for call in client.check_digest.call_args_list
+        )
         artifacts = json.loads((cfg.data_dir / "artifacts" / "artifacts.json").read_text())
         assert "hello-2.12.1-6.fc44.x86_64.rpm" in artifacts["artifacts"]
         assert "hello-docs-2.12.1-6.fc44.noarch.rpm" in artifacts["artifacts"]

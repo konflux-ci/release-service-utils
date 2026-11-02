@@ -337,6 +337,7 @@ def process_local_rpm(
     to_add: list[RpmPlacement] = []
     artifact_recorded = False
     for placement in placements:
+        # Retries must reuse matching RPMs in the repository before publication.
         status = ctx.client.check_digest(
             placement.repo,
             rpm.nevra.name,
@@ -345,7 +346,7 @@ def process_local_rpm(
             rpm.nevra.release,
             rpm.nevra.arch,
             rpm.sha256,
-            fallback_to_latest=False,
+            fallback_to_latest=True,
         )
         if status is PulpDigestStatus.MISMATCH:
             raise RuntimeError(
