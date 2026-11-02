@@ -946,7 +946,9 @@ class TestUploadRpm:
     """Test pulp CLI upload with retries."""
 
     _SLEEP = "release_service_utils.helpers.retry.retry.time.sleep"
-    _RUN_CMD = "release_service_utils.helpers.pulp_client.pulp_client.subprocess_cmd.run_cmd"
+    _RUN_CMD = (
+        "release_service_utils.helpers.pulp_client.pulp_client.subprocess_cmd.run_cmd"
+    )
 
     def _client(self) -> pulp_client.PulpClient:
         """Build a client with no REST session traffic."""
@@ -1080,6 +1082,48 @@ class TestUploadRpm:
         with patch(self._RUN_CMD, return_value=self._completed("")):
             with pytest.raises(RuntimeError, match="href missing"):
                 client.upload_rpm(rpm, "100MB", tmp_path / "cli.toml")
+
+
+class TestSetRpmLabel:
+    """Test the label needed for signed RPM retry detection."""
+
+    _RUN_CMD = (
+        "release_service_utils.helpers.pulp_client.pulp_client.subprocess_cmd.run_cmd"
+    )
+
+    def test_cli_argv(self, tmp_path: Path) -> None:
+        """Set the label on the exact content digest in the selected domain."""
+        client = pulp_client.PulpClient(MagicMock(), "https://pulp.test", "mydomain")
+        config = tmp_path / "cli.toml"
+        with patch(
+            self._RUN_CMD,
+            return_value=subprocess.CompletedProcess(["pulp"], 0, "", ""),
+        ) as mock_run:
+            client.set_rpm_label("abc", "signed_by", "release4:release2:ima", config)
+        mock_run.assert_called_once_with(
+            [
+                "pulp", "--config", str(config), "--domain", "mydomain",
+                "rpm", "content", "label", "set", "--sha256", "abc",
+                "--key", "signed_by", "--value", "release4:release2:ima",
+            ],
+            check=False,
+        )
+
+    def test_error_raises(self, tmp_path: Path) -> None:
+        """A failed label update fails the push so a retry can repair it."""
+        client = pulp_client.PulpClient(MagicMock(), "https://pulp.test", "mydomain")
+        with (
+            patch(
+                self._RUN_CMD,
+                return_value=subprocess.CompletedProcess(
+                    ["pulp"], 1, "", "label rejected"
+                ),
+            ),
+            pytest.raises(RuntimeError, match="label rejected"),
+        ):
+            client.set_rpm_label(
+                "abc", "signed_by", "release4:release2:ima", tmp_path / "cli.toml"
+            )
 
 
 class TestFileRepositoryCli:
