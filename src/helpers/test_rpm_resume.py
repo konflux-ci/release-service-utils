@@ -324,3 +324,159 @@ def test_record_rejects_conflicting_checkpoint() -> None:
             "quay.io/storage", INPUTS, "release4", "signing-1", REF, "7d"
         )
     run.assert_not_called()
+
+
+def test_cli_fingerprint_uses_artifact_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Print the fingerprint used to label the signing InternalRequest."""
+    artifact_json = tmp_path / "artifacts.json"
+    artifact_json.write_text(
+        json.dumps({"artifacts": {name: {"sha256": sha} for name, sha in INPUTS.items()}})
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "rpm_resume",
+            "fingerprint",
+            "--artifact-json",
+            str(artifact_json),
+            "--signing-alias",
+            "release4",
+        ],
+    )
+
+    assert rpm_resume.main() == 0
+    assert capsys.readouterr().out == rpm_resume.fingerprint(INPUTS, "release4") + "\n"
+
+
+def test_cli_find_prints_matching_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Return the prior signed reference to the signing Task."""
+    artifact_json = tmp_path / "artifacts.json"
+    artifact_json.write_text(
+        json.dumps({"artifacts": {name: {"sha256": sha} for name, sha in INPUTS.items()}})
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "rpm_resume",
+            "find",
+            "--artifact-json",
+            str(artifact_json),
+            "--signing-alias",
+            "release4",
+            "--oci-storage",
+            "quay.io/storage",
+        ],
+    )
+    with patch.object(rpm_resume, "find_resume_checkpoint", return_value=REF) as find:
+        assert rpm_resume.main() == 0
+    find.assert_called_once_with("quay.io/storage", INPUTS, "release4", "")
+    assert capsys.readouterr().out == REF + "\n"
+
+
+def test_cli_record_writes_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pass the successful signing request through to checkpoint storage."""
+    artifact_json = tmp_path / "artifacts.json"
+    artifact_json.write_text(
+        json.dumps({"artifacts": {name: {"sha256": sha} for name, sha in INPUTS.items()}})
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "rpm_resume",
+            "record",
+            "--artifact-json",
+            str(artifact_json),
+            "--signing-alias",
+            "release4",
+            "--oci-storage",
+            "quay.io/storage",
+            "--internal-request",
+            "signing-1",
+            "--signed-artifact",
+            REF,
+        ],
+    )
+    with patch.object(rpm_resume, "record_checkpoint") as record:
+        assert rpm_resume.main() == 0
+    record.assert_called_once_with(
+        "quay.io/storage", INPUTS, "release4", "signing-1", REF, "7d"
+    )
+
+
+def test_cli_validate_backfills_and_returns_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Validate a recent signing result and retain its reference for retries."""
+    artifact_json = tmp_path / "artifacts.json"
+    artifact_json.write_text(
+        json.dumps({"artifacts": {name: {"sha256": sha} for name, sha in INPUTS.items()}})
+    )
+    result = tmp_path / "signed-artifact-result"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "rpm_resume",
+            "validate",
+            "--artifact-json",
+            str(artifact_json),
+            "--signing-alias",
+            "release4",
+            "--oci-storage",
+            "quay.io/storage",
+            "--signed-artifact",
+            REF,
+            "--result-file",
+            str(result),
+        ],
+    )
+    with (
+        patch.object(rpm_resume, "find_resume_checkpoint", return_value=REF),
+        patch.object(rpm_resume, "validate_signed_artifact") as validate,
+        patch.object(rpm_resume, "read_checkpoint", return_value=None),
+        patch.object(rpm_resume, "find_resume_request", return_value=("signing-1", REF)),
+        patch.object(rpm_resume, "record_checkpoint") as record,
+    ):
+        assert rpm_resume.main() == 0
+    validate.assert_called_once_with(REF, INPUTS)
+    record.assert_called_once_with(
+        "quay.io/storage", INPUTS, "release4", "signing-1", REF, "7d"
+    )
+    assert result.read_text() == REF
+
+
+def test_cli_validate_rejects_changed_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Do not write a Tekton result for an artifact that changed during retry."""
+    artifact_json = tmp_path / "artifacts.json"
+    artifact_json.write_text(
+        json.dumps({"artifacts": {name: {"sha256": sha} for name, sha in INPUTS.items()}})
+    )
+    result = tmp_path / "signed-artifact-result"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "rpm_resume",
+            "validate",
+            "--artifact-json",
+            str(artifact_json),
+            "--signing-alias",
+            "release4",
+            "--oci-storage",
+            "quay.io/storage",
+            "--signed-artifact",
+            "oci:quay.io/other@sha256:" + "b" * 64,
+            "--result-file",
+            str(result),
+        ],
+    )
+    with (
+        patch.object(rpm_resume, "find_resume_checkpoint", return_value=REF),
+        pytest.raises(RuntimeError, match="missing or changed"),
+    ):
+        rpm_resume.main()
+    assert not result.exists()
