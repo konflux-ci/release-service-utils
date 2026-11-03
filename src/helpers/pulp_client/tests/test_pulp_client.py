@@ -640,6 +640,7 @@ class TestPulpClient:
                         }
                     ]
                 },
+                {"results": [{"pulp_href": "/repo/1/"}]},
                 {"latest_version_href": "/rv/latest/"},
                 {"count": 1, "results": [{"pulp_href": "/pkg/1/"}]},
                 {"artifact": "/art/1/"},
@@ -658,6 +659,87 @@ class TestPulpClient:
                 fallback_to_latest=True,
             )
             == pulp_client.PulpDigestStatus.MATCH
+        )
+
+    def test_digest_checks_latest_after_stale_publication(self) -> None:
+        """Find a signed RPM added after the currently published version."""
+        client = self._client(
+            [
+                {"results": [{"repository_version": "/rv/published/"}]},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 0, "results": []},
+                {"count": 1, "results": [{"pulp_href": "/pkg/1/"}]},
+                {"artifact": "/art/1/"},
+                {"sha256": "abc123"},
+            ]
+        )
+        assert (
+            client.check_digest(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                fallback_to_latest=True,
+            )
+            == pulp_client.PulpDigestStatus.MATCH
+        )
+
+    def test_digest_latest_missing_even_when_published_matches(self) -> None:
+        """Re-add an RPM removed from the latest unpublished version."""
+        client = self._client(
+            [
+                {"results": [{"repository_version": "/rv/published/"}]},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 1, "results": [{"pulp_href": "/pkg/1/"}]},
+                {"artifact": "/art/1/"},
+                {"sha256": "abc123"},
+                {"count": 0, "results": []},
+            ]
+        )
+        assert (
+            client.check_digest(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                fallback_to_latest=True,
+            )
+            == pulp_client.PulpDigestStatus.NOT_FOUND
+        )
+
+    def test_digest_rejects_conflict_in_latest(self) -> None:
+        """Reject a different signed byte sequence in the unpublished version."""
+        client = self._client(
+            [
+                {"results": [{"repository_version": "/rv/published/"}]},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 0, "results": []},
+                {"count": 1, "results": [{"pulp_href": "/pkg/1/"}]},
+                {"artifact": "/art/1/"},
+                {"sha256": "other"},
+            ]
+        )
+        assert (
+            client.check_digest(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                fallback_to_latest=True,
+            )
+            == pulp_client.PulpDigestStatus.MISMATCH
         )
 
     def test_get_repo_href(self) -> None:

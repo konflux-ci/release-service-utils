@@ -466,52 +466,73 @@ class PulpClient:
 
         Raise ``requests.RequestException`` on API failures.
         """
-        rv_href = self.get_published_version_href(
-            repo_name, fallback_to_latest=fallback_to_latest
-        )
+        published = self.get_published_version_href(repo_name)
+        versions = [published]
+        latest = ""
+        if fallback_to_latest:
+            repo_href = self.get_repo_href(repo_name)
+            latest = self.get_json(f"{self._base_url}{repo_href}").get("latest_version_href")
+            if latest and latest not in versions:
+                versions.append(str(latest))
 
-        if not rv_href:
+        versions = [version for version in versions if version]
+        if not versions:
             logger.info(
-                "  -> No published version for %s. RPM not accessible to users.",
+                "  -> No repository version for %s contains RPMs.",
                 repo_name,
             )
             return PulpDigestStatus.NOT_FOUND
 
-        query_url = (
-            f"{self._base_url}/api/pulp/{self._domain}"
-            f"/api/v3/content/rpm/packages/"
-            f"?repository_version={quote(rv_href, safe='')}"
-            f"&name={quote(name, safe='')}"
-            f"&epoch={quote(epoch, safe='')}"
-            f"&version={quote(version, safe='')}"
-            f"&release={quote(release, safe='')}"
-            f"&arch={quote(arch, safe='')}"
-        )
-
-        resp = self._session.get(query_url, timeout=60)
-        resp.raise_for_status()
-
-        data = resp.json()
-        if data.get("count", 0) == 0:
-            return PulpDigestStatus.NOT_FOUND
-
-        for result in data.get("results", []):
-            chref = result.get("pulp_href")
-            if not chref:
-                continue
-            content_data = self.get_json(f"{self._base_url}{chref}")
-
-            artifact_href = content_data.get("artifact") or (
-                (content_data.get("artifacts") or [None])[0]
+        status_by_version: dict[str, PulpDigestStatus] = {}
+        for rv_href in versions:
+            query_url = (
+                f"{self._base_url}/api/pulp/{self._domain}"
+                f"/api/v3/content/rpm/packages/"
+                f"?repository_version={quote(rv_href, safe='')}"
+                f"&name={quote(name, safe='')}"
+                f"&epoch={quote(epoch, safe='')}"
+                f"&version={quote(version, safe='')}"
+                f"&release={quote(release, safe='')}"
+                f"&arch={quote(arch, safe='')}"
             )
-            if not artifact_href:
+
+            resp = self._session.get(query_url, timeout=60)
+            resp.raise_for_status()
+
+            data = resp.json()
+            if data.get("count", 0) == 0:
+                status_by_version[rv_href] = PulpDigestStatus.NOT_FOUND
                 continue
 
-            server_sha = self.get_json(f"{self._base_url}{artifact_href}").get("sha256", "")
-            if server_sha and server_sha == expected_sha:
-                return PulpDigestStatus.MATCH
+            version_matched = False
+            for result in data.get("results", []):
+                chref = result.get("pulp_href")
+                if not chref:
+                    continue
+                content_data = self.get_json(f"{self._base_url}{chref}")
 
-        return PulpDigestStatus.MISMATCH
+                artifact_href = content_data.get("artifact") or (
+                    (content_data.get("artifacts") or [None])[0]
+                )
+                if not artifact_href:
+                    continue
+
+                server_sha = self.get_json(f"{self._base_url}{artifact_href}").get(
+                    "sha256", ""
+                )
+                if server_sha == expected_sha:
+                    version_matched = True
+                    break
+            if not version_matched:
+                return PulpDigestStatus.MISMATCH
+            status_by_version[rv_href] = PulpDigestStatus.MATCH
+
+        # The latest version is the target for the next repository add. A
+        # matching published version does not make a missing latest entry safe
+        # to skip, since the next publication would omit that RPM.
+        return status_by_version.get(
+            str(latest) if latest else published, PulpDigestStatus.NOT_FOUND
+        )
 
 
 def _pulp_file_cmd(config_file: Path, domain: str, *args: str) -> list[str]:
