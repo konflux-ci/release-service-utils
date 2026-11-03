@@ -495,6 +495,41 @@ class TestRun:
         client.add_content.assert_not_called()
         client.set_rpm_label.assert_called_once()
 
+    def test_signed_retry_uploads_only_missing_fourth_rpm(self, tmp_path: Path) -> None:
+        """Resume a partial signed upload from the original four-RPM artifact."""
+        cfg = _config(tmp_path, signed="oci:quay.io/signed@sha256:abc")
+        client = MagicMock()
+        client.check_digest.side_effect = lambda _repo, name, *_args, **_kwargs: (
+            PulpDigestStatus.NOT_FOUND if name == "hello4" else PulpDigestStatus.MATCH
+        )
+        client.upload_rpm.return_value = "/href/4"
+
+        def fake_fetch(_ref: str, dest: Path, *_args: object, **_kwargs: object) -> None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(dest, "w:gz") as archive:
+                for index in range(1, 5):
+                    rpm = dest.parent / f"hello{index}-1.0-1.x86_64.rpm"
+                    rpm.write_bytes(f"signed{index}".encode())
+                    archive.add(rpm, arcname=rpm.name)
+                    rpm.unlink()
+
+        with (
+            patch(f"{TASK}.PulpClient.from_config", return_value=client),
+            patch(f"{TASK}.oras_utils.oras_blob_fetch", side_effect=fake_fetch),
+        ):
+            task.run(cfg)
+
+        client.upload_rpm.assert_called_once()
+        assert client.upload_rpm.call_args.args[0].name == "hello4-1.0-1.x86_64.rpm"
+        client.add_content.assert_called_once_with("x86_64", ["/href/4"], 30)
+        assert client.set_rpm_label.call_count == 4
+        results = json.loads(
+            (cfg.data_dir / "results" / "push-rpms-to-pulp-results.json").read_text()
+        )
+        assert {row["rpm"] for row in results["rpmfiles"]} == {
+            f"hello{index}-1.0-1.x86_64.rpm" for index in range(1, 5)
+        }
+
     def test_signed_upload_without_alias_keeps_legacy_behavior(self, tmp_path: Path) -> None:
         """Upload signed RPMs without a label for an older catalog task."""
         cfg = replace(_config(tmp_path, signed="oci:quay.io/signed@sha256:abc"), signed_by="")
