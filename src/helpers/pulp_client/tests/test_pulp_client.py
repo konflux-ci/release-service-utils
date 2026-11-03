@@ -749,6 +749,33 @@ class TestPulpClient:
             is pulp_client.PulpDigestStatus.MATCH
         )
 
+    def test_latest_missing_even_when_published_matches(self) -> None:
+        """Re-add an RPM removed from the latest unpublished version."""
+        client = self._client(
+            [
+                {"results": [{"repository_version": "/rv/published/"}]},
+                {"count": 1, "results": [{"pulp_href": "/pkg/1/"}]},
+                {"artifact": "/art/1/"},
+                {"sha256": "abc123"},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 0, "results": []},
+            ]
+        )
+        assert (
+            client.check_digest(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                fallback_to_latest=True,
+            )
+            is pulp_client.PulpDigestStatus.NOT_FOUND
+        )
+
     def test_stale_publication_allows_only_unpublished_rebuild(self) -> None:
         """Permit a rebuild when only the latest version has a conflict."""
         client = self._client(
