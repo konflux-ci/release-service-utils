@@ -34,7 +34,8 @@
               "intention",
               "atlas",
               "pulp",
-              "cloudMarketplaces"
+              "cloudMarketplaces",
+              "rhsa"
             ]
           },
           "dynamic": {
@@ -1096,6 +1097,72 @@
     "skipFilter": {
       "type": "boolean",
       "description": "If true, skip filtering of already-released images and process all components in the snapshot. Default: false."
+    },
+    "rhsa": {
+      "type": "object",
+      "description": "Container grading summary written by the cve collector; consumed by Conforma.",
+      "properties": {
+        "CRITICAL": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "advisory": {
+                "type": "string",
+                "description": "The RHSA advisory id, e.g. RHSA-2026:58936."
+              },
+              "released_on": {
+                "type": "string",
+                "description": "The advisory release timestamp from the Red Hat Security Data API."
+              },
+              "cves": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The gating CVE ids fixed by the advisory, deduped and sorted."
+              },
+              "components": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The Konflux components affected by the advisory, deduped and sorted."
+              }
+            }
+          }
+        },
+        "IMPORTANT": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "advisory": {
+                "type": "string",
+                "description": "The RHSA advisory id, e.g. RHSA-2026:55440."
+              },
+              "released_on": {
+                "type": "string",
+                "description": "The advisory release timestamp from the Red Hat Security Data API."
+              },
+              "cves": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The gating CVE ids fixed by the advisory, deduped and sorted."
+              },
+              "components": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The Konflux components affected by the advisory, deduped and sorted."
+              }
+            }
+          }
+        }
+      }
     }
   },
   "allOf": [
@@ -2244,6 +2311,102 @@
               "domain",
               "secretName"
             ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "systems": {
+            "contains": {
+              "type": "object",
+              "properties": {
+                "systemName": {
+                  "const": "rhsa"
+                },
+                "dynamic": {
+                  "not": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "rhsa"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "rhsa"
+        ],
+        "properties": {
+          "systems": {
+            "contains": {
+              "type": "object",
+              "properties": {
+                "systemName": {
+                  "const": "rhsa"
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "rhsa": {
+            "additionalProperties": false,
+            "required": [
+              "CRITICAL",
+              "IMPORTANT"
+            ],
+            "properties": {
+              "CRITICAL": {
+                "items": {
+                  "required": [
+                    "advisory",
+                    "released_on",
+                    "cves",
+                    "components"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "advisory": {},
+                    "released_on": {
+                      "minLength": 1
+                    },
+                    "cves": {},
+                    "components": {}
+                  }
+                }
+              },
+              "IMPORTANT": {
+                "items": {
+                  "required": [
+                    "advisory",
+                    "released_on",
+                    "cves",
+                    "components"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "advisory": {},
+                    "released_on": {
+                      "minLength": 1
+                    },
+                    "cves": {},
+                    "components": {}
+                  }
+                }
+              }
+            }
           }
         }
       }
