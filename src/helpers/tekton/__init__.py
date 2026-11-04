@@ -2,6 +2,7 @@
 
 from .tekton import (  # noqa: F401
     CheckStepError,
+    jq_raw_value,
     missing_blank_option_values,
     require_env,
     result_paths_from_env,

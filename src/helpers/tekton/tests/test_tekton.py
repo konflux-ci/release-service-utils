@@ -220,3 +220,21 @@ def test_write_failure_result_redacts_command_log(tmp_path: Path) -> None:
     text = result.read_text(encoding="utf-8")
     assert "leaked" not in text
     assert "oauth2:[REDACTED]@" in text
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, "null"),
+        (True, "true"),
+        (False, "false"),
+        (4, "4"),
+        ("artifact", "artifact"),
+        ("true", "true"),
+        ({"a": 1}, '{"a":1}'),
+        ([1, 2], "[1,2]"),
+    ],
+)
+def test_jq_raw_value_matches_jq_raw_output(value: object, expected: str) -> None:
+    """Scalar and compound values use jq-compatible raw serialization."""
+    assert tekton.jq_raw_value(value) == expected
