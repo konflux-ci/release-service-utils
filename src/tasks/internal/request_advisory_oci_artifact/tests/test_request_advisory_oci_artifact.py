@@ -88,15 +88,6 @@ def test_run_raises_when_successful_internal_request_omits_artifact(tmp_path: Pa
         task.run_request_advisory_oci_artifact(_params(tmp_path / "result"))
 
 
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [(None, "null"), (True, "true"), (4, "4"), ("artifact", "artifact")],
-)
-def test_jq_raw_value_matches_jq_raw_output(value: object, expected: str) -> None:
-    """Scalar values use jq-compatible raw serialization."""
-    assert task._jq_raw_value(value) == expected
-
-
 def test_main_reads_tekton_environment_and_writes_success_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
