@@ -14,13 +14,6 @@ _DEFAULT_ARTIFACT_STORAGE_SECRET = "signing-artifact-storage-preprod"
 _DEFAULT_SERVICE_ACCOUNT = "release-service-account"
 
 
-def _tekton_bool_str(value: Any) -> str:
-    """Render *value* the way Tekton string params and ``jq -r`` render booleans."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value)
-
-
 def build_sign_request_params(
     data: dict[str, Any],
     artifacts_json: dict[str, Any],
@@ -50,7 +43,9 @@ def build_sign_request_params(
         ),
         "destination_artifact_storage_domain": destination_artifact_storage_domain,
         "use_target_arch_repo": use_target_arch_repo,
-        "skip_upload_to_pulp": _tekton_bool_str(sign_options.get("skipUploadToPulp", False)),
+        "skip_upload_to_pulp": tekton.jq_raw_value(
+            sign_options.get("skipUploadToPulp", False)
+        ),
         "create_oci_artifact": create_oci_artifact,
         "oci_artifact_expires_after": oci_artifact_expires_after,
         "requester": requester,

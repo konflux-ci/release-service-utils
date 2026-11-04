@@ -3,10 +3,8 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from release_service_utils.helpers import internal_request
 from release_service_utils.helpers import tekton
@@ -26,13 +24,6 @@ class TaskParams:
     task_git_url: str
     task_git_revision: str
     advisory_oci_artifact_result: Path
-
-
-def _jq_raw_value(value: Any) -> str:
-    """Return *value* using the scalar representation emitted by ``jq -r``."""
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, separators=(",", ":"))
 
 
 def run_request_advisory_oci_artifact(params: TaskParams) -> None:
@@ -59,7 +50,7 @@ def run_request_advisory_oci_artifact(params: TaskParams) -> None:
 
     if results.get("result") != "Success":
         logger.error("The InternalRequest to find the ADVISORY_OCI_ARTIFACT was unsuccessful")
-        logger.error("%s", _jq_raw_value(results.get("result")))
+        logger.error("%s", tekton.jq_raw_value(results.get("result")))
         msg = "The InternalRequest to find the ADVISORY_OCI_ARTIFACT was unsuccessful"
         raise RuntimeError(msg)
 
