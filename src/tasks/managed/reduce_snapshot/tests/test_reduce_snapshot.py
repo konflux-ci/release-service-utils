@@ -207,6 +207,73 @@ def test_run_reduces_snapshot(tmp_path: Path) -> None:
     assert result["components"][0]["name"] == "tom"
 
 
+def test_run_passes_through_single_component_override_without_component_label(
+    tmp_path: Path,
+) -> None:
+    """Keep the only override entry without relying on a component label."""
+    src = tmp_path / "snapshot.json"
+    dst = tmp_path / "output.json"
+    snapshot = {
+        "application": "myapp",
+        "components": [
+            {
+                "name": "syft-main",
+                "containerImage": "repo@sha256:abc",
+                "source": {"git": {"revision": "b"}},
+            }
+        ],
+    }
+    src.write_text(json.dumps(snapshot), encoding="utf-8")
+    labels = {"test.appstudio.openshift.io/type": "override"}
+
+    with mock.patch(f"{TASK}.get_resource", return_value=json.dumps(labels)):
+        reduce_snapshot_module.run(
+            single_component="true",
+            custom_resource="snapshot/promotion",
+            custom_resource_namespace="ns",
+            snapshot_path=src,
+            snapshot_output_path=dst,
+        )
+
+    assert json.loads(dst.read_text(encoding="utf-8")) == snapshot
+
+
+@pytest.mark.parametrize(
+    "components",
+    [
+        [],
+        [{"name": "syft-main"}, {"name": "other"}],
+        [{"containerImage": "repo@sha256:abc"}],
+        [{"name": ""}],
+        "not a list",
+    ],
+)
+def test_run_rejects_override_without_one_named_component(
+    tmp_path: Path, components: object
+) -> None:
+    """Reject overrides that cannot select exactly one Component."""
+    src = tmp_path / "snapshot.json"
+    dst = tmp_path / "output.json"
+    src.write_text(
+        json.dumps({"application": "myapp", "components": components}), encoding="utf-8"
+    )
+    labels = {"test.appstudio.openshift.io/type": "override"}
+
+    with (
+        mock.patch(f"{TASK}.get_resource", return_value=json.dumps(labels)),
+        pytest.raises(ValueError, match="exactly one named Component"),
+    ):
+        reduce_snapshot_module.run(
+            single_component="true",
+            custom_resource="snapshot/promotion",
+            custom_resource_namespace="ns",
+            snapshot_path=src,
+            snapshot_output_path=dst,
+        )
+
+    assert not dst.exists()
+
+
 def test_run_invalid_labels_raises(tmp_path: Path) -> None:
     """Raise ValueError when CR labels are invalid."""
     src = tmp_path / "snapshot.json"

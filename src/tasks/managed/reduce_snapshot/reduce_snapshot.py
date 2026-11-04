@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Reduce a Snapshot to a single component based on CR labels.
+"""Reduce a Snapshot to the built component for single-component releases.
 
-When single-component mode is enabled, fetch the custom resource's labels
-to determine which component was built, then filter the Snapshot JSON to
-retain only that component. If the mode is disabled, copy the Snapshot
-through unchanged.
+Component Snapshots use the custom resource's component label to select the
+built entry. Override Snapshots with one component pass through unchanged.
+When single-component mode is disabled, copy the Snapshot unchanged.
 """
 
 from __future__ import annotations
@@ -122,11 +121,24 @@ def run(
         namespace = resolve_namespace(custom_resource_namespace)
 
         labels = get_cr_labels(resource_type, namespace, resource_name)
-        component_name = validate_labels(labels)
-
-        logger.info("Single Component mode is true and Snapshot type is component")
-
-        snapshot = reduce_snapshot(snapshot, component_name)
+        if labels.get(_LABEL_TYPE) == "override":
+            components = snapshot.get("components")
+            if not (
+                isinstance(components, list)
+                and len(components) == 1
+                and isinstance(components[0], dict)
+                and isinstance(components[0].get("name"), str)
+                and components[0]["name"]
+            ):
+                raise ValueError(
+                    "Single component mode requires an override Snapshot "
+                    "with exactly one named Component"
+                )
+            logger.info("Single Component mode is true and Snapshot type is override")
+        else:
+            component_name = validate_labels(labels)
+            logger.info("Single Component mode is true and Snapshot type is component")
+            snapshot = reduce_snapshot(snapshot, component_name)
 
     snapshot_output_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
     logger.info("Wrote snapshot to %s", snapshot_output_path)
