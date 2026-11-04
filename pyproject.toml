@@ -28,6 +28,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pulp-tool==1.2.0",
     "jq",
+    "koji>=1.34",
     "kubernetes>=28.0",
     "RestrictedPython>=7.0",
     "boto3",
