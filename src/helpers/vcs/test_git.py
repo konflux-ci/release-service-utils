@@ -146,6 +146,9 @@ def test_clone_shallow_sparse(tmp_path: Path) -> None:
         )
     assert out == repo_dir
     assert run_cmd.call_count == 3
+    clone_argv = run_cmd.call_args_list[0].args[0]
+    assert "--filter=blob:none" not in clone_argv
+    assert "--depth" in clone_argv
 
 
 def test_clone_shallow_requires_revision(tmp_path: Path) -> None:

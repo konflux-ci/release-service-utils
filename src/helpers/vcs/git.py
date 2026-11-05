@@ -101,8 +101,13 @@ def clone(
 ) -> Path:
     """Clone *clone_url* into *parent_dir*.
 
-    When *shallow* is true, perform a blob-filtered shallow clone and optional
+    When *shallow* is true, perform a depth-1 shallow clone and optional
     sparse checkout of *sparse_dirs* at *revision*.
+
+    Does not pass `--filter=blob:none`: combined with `--depth 1`, that filter
+    disables server-side bitmap reachability indexes and forces the server
+    into a heavy dynamic tree traversal per clone, which can overload the
+    Git server's storage backend under concurrent load (RELEASE-2929).
 
     Creates *parent_dir* when it does not exist yet.
     """
@@ -123,7 +128,6 @@ def clone(
             [
                 "git",
                 "clone",
-                "--filter=blob:none",
                 "--no-checkout",
                 "--depth",
                 "1",
