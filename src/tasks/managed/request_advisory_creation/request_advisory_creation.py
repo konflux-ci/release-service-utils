@@ -24,8 +24,8 @@ from release_service_utils.helpers.logger import logger
 # params.environment accepts either spelling for non-production image/rpm releases.
 _STAGE_ENV_RE = re.compile(r"^(stage|staging)$")
 # InternalRequest wait and PipelineRun timeouts.
-_IR_PIPELINE_TIMEOUT = "01h05m00s"
-_IR_TASK_TIMEOUT = "01h00m00s"
+_IR_PIPELINE_TIMEOUT = "02h05m00s"
+_IR_TASK_TIMEOUT = "02h00m00s"
 _IR_FINALLY_TIMEOUT = "0h5m0s"
 _IR_WAIT_TIMEOUT_SECONDS = (
     internal_request.duration_to_seconds(_IR_PIPELINE_TIMEOUT)

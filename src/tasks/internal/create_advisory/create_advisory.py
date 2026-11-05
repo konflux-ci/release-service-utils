@@ -55,7 +55,7 @@ from release_service_utils.helpers.vcs import gitlab
 PROG = "create_advisory.py"
 ADVISORY_TEMPLATE_PATH = Path("/home/templates/advisory.yaml.jinja")
 # Shared wait budget for every MR open/merge poll in one task run. Must stay
-# below the create-advisory InternalRequest task timeout (01h00m00s).
+# below the create-advisory InternalRequest task timeout (02h00m00s).
 _ADVISORY_MR_MERGE_TIMEOUT_SECONDS = 3300
 _ADVISORY_APPROVAL_ACTION = "approving the advisory merge request"
 # Subprocess/git failures append here; on error the tail is copied into RESULT_RESULT.
