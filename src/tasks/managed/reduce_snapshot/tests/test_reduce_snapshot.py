@@ -207,10 +207,10 @@ def test_run_reduces_snapshot(tmp_path: Path) -> None:
     assert result["components"][0]["name"] == "tom"
 
 
-def test_run_passes_through_single_component_override_without_component_label(
+def test_run_passes_through_single_component_without_label_lookup(
     tmp_path: Path,
 ) -> None:
-    """Keep the only override entry without relying on a component label."""
+    """Keep one named entry without reading the Snapshot's labels."""
     src = tmp_path / "snapshot.json"
     dst = tmp_path / "output.json"
     snapshot = {
@@ -224,9 +224,9 @@ def test_run_passes_through_single_component_override_without_component_label(
         ],
     }
     src.write_text(json.dumps(snapshot), encoding="utf-8")
-    labels = {"test.appstudio.openshift.io/type": "override"}
-
-    with mock.patch(f"{TASK}.get_resource", return_value=json.dumps(labels)):
+    with mock.patch(
+        f"{TASK}.get_resource", side_effect=AssertionError("unexpected label lookup")
+    ):
         reduce_snapshot_module.run(
             single_component="true",
             custom_resource="snapshot/promotion",
@@ -248,20 +248,18 @@ def test_run_passes_through_single_component_override_without_component_label(
         "not a list",
     ],
 )
-def test_run_rejects_override_without_one_named_component(
+def test_run_requires_labels_when_snapshot_cannot_pass_through(
     tmp_path: Path, components: object
 ) -> None:
-    """Reject overrides that cannot select exactly one Component."""
+    """Use normal label validation when the Snapshot needs selection."""
     src = tmp_path / "snapshot.json"
     dst = tmp_path / "output.json"
     src.write_text(
         json.dumps({"application": "myapp", "components": components}), encoding="utf-8"
     )
-    labels = {"test.appstudio.openshift.io/type": "override"}
-
     with (
-        mock.patch(f"{TASK}.get_resource", return_value=json.dumps(labels)),
-        pytest.raises(ValueError, match="exactly one named Component"),
+        mock.patch(f"{TASK}.get_resource", return_value="{}"),
+        pytest.raises(ValueError, match="missing the required labels"),
     ):
         reduce_snapshot_module.run(
             single_component="true",
@@ -277,7 +275,7 @@ def test_run_rejects_override_without_one_named_component(
 def test_run_invalid_labels_raises(tmp_path: Path) -> None:
     """Raise ValueError when CR labels are invalid."""
     src = tmp_path / "snapshot.json"
-    _write_snapshot(src, [{"name": "a", "containerImage": "i1"}])
+    _write_snapshot(src, [{"name": "a", "containerImage": "i1"}, {"name": "b"}])
 
     with mock.patch(f"{TASK}.get_resource", return_value="{}"):
         with pytest.raises(ValueError, match="missing the required labels"):
@@ -325,7 +323,7 @@ def test_run_empty_namespace_reads_sa(tmp_path: Path) -> None:
     """Read namespace from service-account file when env var is empty."""
     src = tmp_path / "snapshot.json"
     dst = tmp_path / "output.json"
-    _write_snapshot(src, [{"name": "tom", "containerImage": "img"}])
+    _write_snapshot(src, [{"name": "tom", "containerImage": "img"}, {"name": "other"}])
 
     ns_file = tmp_path / "namespace"
     ns_file.write_text("inferred-ns", encoding="utf-8")
@@ -356,7 +354,7 @@ def test_run_empty_namespace_reads_sa(tmp_path: Path) -> None:
 def test_run_invalid_custom_resource_format(tmp_path: Path) -> None:
     """Raise ValueError when CUSTOM_RESOURCE has no slash."""
     src = tmp_path / "snapshot.json"
-    _write_snapshot(src, [{"name": "a", "containerImage": "i1"}])
+    _write_snapshot(src, [{"name": "a", "containerImage": "i1"}, {"name": "b"}])
 
     with pytest.raises(ValueError, match="type/name"):
         reduce_snapshot_module.run(

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Reduce a Snapshot to the built component for single-component releases.
 
-Component Snapshots use the custom resource's component label to select the
-built entry. Override Snapshots with one component pass through unchanged.
-When single-component mode is disabled, copy the Snapshot unchanged.
+Snapshots with one named component need no reduction. For larger Snapshots,
+use the custom resource's labels to select the built component. When
+single-component mode is disabled, copy the Snapshot unchanged.
 """
 
 from __future__ import annotations
@@ -108,9 +108,18 @@ def run(
 ) -> None:
     """Execute the reduce-snapshot workflow."""
     snapshot = file.load_json_dict(snapshot_path)
+    components = snapshot.get("components")
 
     if single_component != "true":
         logger.info("Single component mode is not enabled, skipping reduction")
+    elif (
+        isinstance(components, list)
+        and len(components) == 1
+        and isinstance(components[0], dict)
+        and isinstance(components[0].get("name"), str)
+        and components[0]["name"]
+    ):
+        logger.info("Snapshot already has one named component, skipping reduction")
     else:
         resource_type, _, resource_name = custom_resource.partition("/")
         if not resource_type or not resource_name:
@@ -121,24 +130,11 @@ def run(
         namespace = resolve_namespace(custom_resource_namespace)
 
         labels = get_cr_labels(resource_type, namespace, resource_name)
-        if labels.get(_LABEL_TYPE) == "override":
-            components = snapshot.get("components")
-            if not (
-                isinstance(components, list)
-                and len(components) == 1
-                and isinstance(components[0], dict)
-                and isinstance(components[0].get("name"), str)
-                and components[0]["name"]
-            ):
-                raise ValueError(
-                    "Single component mode requires an override Snapshot "
-                    "with exactly one named Component"
-                )
-            logger.info("Single Component mode is true and Snapshot type is override")
-        else:
-            component_name = validate_labels(labels)
-            logger.info("Single Component mode is true and Snapshot type is component")
-            snapshot = reduce_snapshot(snapshot, component_name)
+        component_name = validate_labels(labels)
+
+        logger.info("Single Component mode is true and Snapshot type is component")
+
+        snapshot = reduce_snapshot(snapshot, component_name)
 
     snapshot_output_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
     logger.info("Wrote snapshot to %s", snapshot_output_path)
