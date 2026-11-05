@@ -381,6 +381,44 @@ def test_oras_push_raises_on_missing_digest(tmp_path: Path) -> None:
             oras_utils.oras_push("quay.io/org/repo:tag", tmp_path, "macos", "mycomp")
 
 
+def test_oras_push_raises_runtime_error_with_output(tmp_path: Path) -> None:
+    """A failed oras push is raised as RuntimeError containing the command output."""
+    error = subprocess.CalledProcessError(
+        1, ["oras", "push"], output="unauthorized: access denied\n"
+    )
+    with (
+        patch("subprocess.check_output", side_effect=error),
+        pytest.raises(RuntimeError, match="unauthorized: access denied"),
+    ):
+        oras_utils.oras_push("quay.io/org/repo:tag", tmp_path, "macos", "mycomp")
+
+
+def test_oras_push_raises_runtime_error_without_output(tmp_path: Path) -> None:
+    """A failed push with empty output reports the process exit code."""
+    error = subprocess.CalledProcessError(1, ["oras", "push"])
+    with (
+        patch("subprocess.check_output", side_effect=error),
+        pytest.raises(RuntimeError, match="oras push exited 1"),
+    ):
+        oras_utils.oras_push("quay.io/org/repo:tag", tmp_path, "macos", "mycomp")
+
+
+def test_oras_push_passes_extra_args(tmp_path: Path) -> None:
+    """extra_args are inserted after ``push`` and before the annotation flag."""
+    with patch("subprocess.check_output", return_value="Digest: sha256:abc123\n") as mock_out:
+        digest = oras_utils.oras_push(
+            "quay.io/org/repo:tag",
+            tmp_path,
+            "macos",
+            "mycomp",
+            extra_args=["--registry-config", "/tmp/auth.json"],
+        )
+    assert digest == "sha256:abc123"
+    cmd = mock_out.call_args[0][0]
+    assert cmd[:4] == ["oras", "push", "--registry-config", "/tmp/auth.json"]
+    assert "--annotation=quay.expires-after=1d" in cmd
+
+
 def _fake_skopeo_copy(
     manifest: dict, blobs: dict[str, bytes], *, calls: list[dict[str, object]] | None = None
 ):  # type: ignore[no-untyped-def]

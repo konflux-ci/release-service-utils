@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import posixpath
 import re
 import shutil
@@ -14,7 +15,10 @@ from pathlib import Path
 from release_service_utils.helpers import file
 from release_service_utils.helpers import oci_auth
 from release_service_utils.helpers import subprocess_cmd
+from release_service_utils.helpers.redact import redact_secrets
 from release_service_utils.helpers.subprocess_cmd import run_cmd
+
+logger = logging.getLogger(__name__)
 
 FLAT_ARTIFACT_CONFIG_MEDIA_TYPE = "application/vnd.oci.empty.v1+json"
 
@@ -399,6 +403,9 @@ def oras_push(
     *extra_args*, when provided, are inserted after ``push`` and before the
     annotation flag (e.g. ``["--registry-config", "/path/to/auth.json"]``).
 
+    Combined stdout/stderr is logged. A failed push is re-raised as
+    ``RuntimeError`` whose message is the oras output.
+
     Raises ``RuntimeError`` if the digest cannot be extracted from the oras output,
     which typically indicates a failed or incomplete push.
     """
@@ -406,12 +413,20 @@ def oras_push(
     if extra_args:
         cmd.extend(extra_args)
     cmd.extend(["--annotation=quay.expires-after=1d", tag, subdirectory])
-    result = subprocess.check_output(
-        cmd,
-        cwd=str(directory),
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+    try:
+        result = subprocess.check_output(
+            cmd,
+            cwd=str(directory),
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        output = (exc.output or "").strip()
+        if output:
+            logger.error("%s", redact_secrets(output))
+        raise RuntimeError(output or f"oras push exited {exc.returncode}") from exc
+    if result.strip():
+        logger.info("%s", redact_secrets(result.rstrip()))
     match = re.search(r"Digest:\s+(\S+)", result)
     if not match:
         raise RuntimeError(
