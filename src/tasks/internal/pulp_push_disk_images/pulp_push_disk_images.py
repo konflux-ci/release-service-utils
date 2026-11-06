@@ -124,8 +124,7 @@ def process_component(
     """Pull one OCI artifact and stage mapped files for Pulp upload."""
     pull_spec = require_json_field(component, "containerImage")
     destination_name = require_json_field(component, "staged", "destination")
-    destination = disk_image_dir / str(destination_name) / "FILES"
-    destination.mkdir(parents=True, exist_ok=True)
+    (disk_image_dir / str(destination_name) / "FILES").mkdir(parents=True, exist_ok=True)
 
     staged_files = component.get("staged", {}).get("files", [])
     if not isinstance(staged_files, list):
@@ -178,7 +177,20 @@ def process_component(
             )
             logger.info("skopeo extraction finished for %s", label)
 
+        uses_left: dict[str, int] = {}
         for entry in staged_files:
+            raw_source = entry.get("source")
+            if raw_source not in (None, ""):
+                source_key = str(raw_source)
+                uses_left[source_key] = uses_left.get(source_key, 0) + 1
+
+        for entry in staged_files:
+            file_destination_name = entry.get("destination") or destination_name
+            destination = (
+                file.resolve_path_under_base(disk_image_dir, str(file_destination_name))
+                / "FILES"
+            )
+            destination.mkdir(parents=True, exist_ok=True)
             source = require_staged_files_field(entry, "source")
             filename = require_staged_files_field(entry, "filename")
             source_path = download / oras_utils.safe_relative_path(str(source))
@@ -192,8 +204,13 @@ def process_component(
                     "Multiple files use the same destination value: "
                     f"{destination} and filename value: {filename}. Failing..."
                 )
+            source_key = str(source)
+            uses_left[source_key] -= 1
             if source_path.is_file():
-                shutil.move(str(source_path), dest_file)
+                if uses_left[source_key] > 0:
+                    shutil.copy2(str(source_path), dest_file)
+                else:
+                    shutil.move(str(source_path), dest_file)
                 logger.info("Staged %s -> %s", source, dest_file)
             else:
                 logger.warning("didn't find mapped file: %s", source)
@@ -411,16 +428,24 @@ def run_push(
         for component in components:
             if not isinstance(component, dict):
                 continue
-            destination_name = require_json_field(component, "staged", "destination")
-            content_directory = disk_image_dir / str(destination_name) / "FILES"
-            process_component_for_developer_portal(
-                component,
-                content_directory,
-                cgw_hostname,
-                env=env,
-                stderr_path=stderr_path,
-                run_cmd=run_cmd,
-            )
+            default_destination = str(require_json_field(component, "staged", "destination"))
+            destination_names: list[str] = []
+            for entry in component["staged"].get("files") or []:
+                name = str(entry.get("destination") or default_destination)
+                if name not in destination_names:
+                    destination_names.append(name)
+            for name in destination_names or [default_destination]:
+                content_directory = (
+                    file.resolve_path_under_base(disk_image_dir, name) / "FILES"
+                )
+                process_component_for_developer_portal(
+                    component,
+                    content_directory,
+                    cgw_hostname,
+                    env=env,
+                    stderr_path=stderr_path,
+                    run_cmd=run_cmd,
+                )
 
 
 def main() -> int:
