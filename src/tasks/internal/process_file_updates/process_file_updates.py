@@ -50,6 +50,14 @@ from release_service_utils.helpers.vcs import gitlab as vcs_gitlab
 PROG = "process_file_updates.py"
 FILE_UPDATES_SECRET_MOUNT_ENV = "FILE_UPDATES_SECRET_MOUNT"
 _REPLACEMENT_EXPRESSION = re.compile(r"^\|([^|\n]*)\|([^|\n]*)\|$")
+# Catalog e2e GitLab projects. Production fileUpdates targets are different
+# paths (real app-interface / managed-tenants), so they are left open.
+_E2E_FILE_UPDATES_PROJECTS = frozenset(
+    {
+        "rhtap-release/managed-tenants-stage",
+        "hacbs-release-tests/app-interface",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -180,6 +188,67 @@ def git_functions_init(author_name: str, author_email: str, token: str) -> None:
     vcs_git.configure_git_global_user(author_name, author_email)
 
 
+def parse_close_merge_request_override(raw: str | None) -> bool | None:
+    """Parse ``CLOSE_MERGE_REQUEST``: true/false, or ``None`` to use the e2e-repo default."""
+    if raw is None:
+        return None
+    value = raw.strip().lower()
+    if not value:
+        return None
+    if value in {"1", "true", "yes"}:
+        return True
+    if value in {"0", "false", "no"}:
+        return False
+    logger.warning("Ignoring invalid CLOSE_MERGE_REQUEST=%r; using repo default", raw)
+    return None
+
+
+def is_e2e_file_updates_repo(repository: str) -> bool:
+    """Return True when *repository* is a catalog e2e GitLab project."""
+    return vcs_gitlab.gitlab_project_path(repository) in _E2E_FILE_UPDATES_PROJECTS
+
+
+def should_close_file_updates_mr(
+    *,
+    upstream_repo: str,
+    repo: str,
+    close_requested: bool | None = None,
+) -> bool:
+    """Return True when the file-updates MR should be closed after the URL is recorded.
+
+    Production RPAs omit ``CLOSE_MERGE_REQUEST`` and do not target e2e GitLab
+    projects, so MRs stay open for human review. Catalog e2e repos close by
+    default so branches do not accumulate. ``CLOSE_MERGE_REQUEST=false`` keeps
+    even an e2e MR open.
+    """
+    if close_requested is True:
+        return True
+    if close_requested is False:
+        return False
+    return is_e2e_file_updates_repo(upstream_repo) or is_e2e_file_updates_repo(repo)
+
+
+def _close_file_updates_mr(
+    gitlab_client: Gitlab,
+    repository: str,
+    merge_request: Any,
+    source_branch: str,
+) -> None:
+    """Close *merge_request* and delete *source_branch* after recording its URL."""
+    url = getattr(merge_request, "web_url", None) or str(getattr(merge_request, "iid", "?"))
+    logger.info(
+        "Closing e2e file-updates merge request %s and deleting branch %s",
+        url,
+        source_branch,
+    )
+    vcs_gitlab.cleanup_merge_request_branch(
+        gitlab_client,
+        repository,
+        merge_request,
+        source_branch,
+    )
+
+
 def gitlab_create_mr(
     *,
     head: str,
@@ -188,8 +257,14 @@ def gitlab_create_mr(
     description: str,
     upstream_repo: str,
     gitlab_client: Gitlab,
+    close_after: bool = False,
 ) -> str:
-    """Create a merge request; return JSON ``{"merge_request": url}`` for Tekton results."""
+    """Create a merge request; return JSON ``{"merge_request": url}`` for Tekton results.
+
+    When *close_after* is true, close the MR and delete the source branch after
+    the URL is captured. Used for catalog e2e so GitLab is not filled with
+    leftover branches. Production leaves the MR open.
+    """
     try:
         merge_request = vcs_gitlab.create_merge_request(
             gitlab_client,
@@ -201,7 +276,10 @@ def gitlab_create_mr(
         )
     except (GitlabError, ValueError) as e:
         raise tekton.CheckStepError("creating GitLab merge request", e) from e
-    return json.dumps({"merge_request": merge_request.web_url})
+    result = json.dumps({"merge_request": merge_request.web_url})
+    if close_after:
+        _close_file_updates_mr(gitlab_client, upstream_repo, merge_request, head)
+    return result
 
 
 def iter_konflux_open_mrs(
@@ -628,6 +706,8 @@ def find_existing_mr_with_same_diff(
     temp_dir: Path,
     gitlab_client: Gitlab,
     component_group: str,
+    *,
+    close_after: bool = False,
 ) -> str | None:
     """Return result info when an open MR already has the same staged diff.
 
@@ -643,6 +723,9 @@ def find_existing_mr_with_same_diff(
             mr_url = (
                 getattr(mr, "web_url", None) or f"{upstream_repo}/-/merge_requests/{mr_num}"
             )
+            if close_after:
+                source_branch = str(getattr(mr, "source_branch", "") or "")
+                _close_file_updates_mr(gitlab_client, upstream_repo, mr, source_branch)
             return (
                 "There is an existing MR with the same updates in the repo\n"
                 + json.dumps({"merge_request": mr_url})
@@ -658,6 +741,7 @@ def commit_and_create_mr(
     upstream_repo: str,
     repo_cwd: Path,
     gitlab_client: Gitlab,
+    close_after: bool = False,
 ) -> tuple[str, str, int]:
     """Commit staged changes, push a branch, and open a new GitLab merge request."""
     working_branch = uuid.uuid4().hex[:8]
@@ -674,6 +758,7 @@ def commit_and_create_mr(
         description=mr_msg,
         upstream_repo=upstream_repo,
         gitlab_client=gitlab_client,
+        close_after=close_after,
     )
     return mr_json + "\n", "Success", 0
 
@@ -688,11 +773,15 @@ def run_file_updates(
     temp_dir: Path,
     secrets: dict[str, str],
     gitlab_client: Gitlab | None = None,
+    close_merge_request: bool | None = None,
 ) -> tuple[str, str, int]:
     """Run clone, path updates, and MR dedup or create.
 
     Returns ``(info_body, state_or_error, exit_code)`` for ``main`` to map to
     Tekton results. Builds a GitLab client when *gitlab_client* is omitted.
+
+    Catalog e2e GitLab repos close the MR after the URL is recorded unless
+    ``CLOSE_MERGE_REQUEST=false``. Production repos keep the MR open.
     """
     logger.info("Temp Dir: %s", temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -701,6 +790,16 @@ def run_file_updates(
     if gitlab_client is None:
         gitlab_client = vcs_gitlab.client(secrets["gitlab_host"], token)
     git_functions_init(secrets["git_author_name"], secrets["git_author_email"], token)
+
+    if close_merge_request is None:
+        close_merge_request = parse_close_merge_request_override(
+            os.environ.get("CLOSE_MERGE_REQUEST")
+        )
+    close_after = should_close_file_updates_mr(
+        upstream_repo=upstream_repo,
+        repo=repo,
+        close_requested=close_merge_request,
+    )
 
     update_paths_file, paths_data = write_paths_manifest(paths_json, temp_dir)
     repo_cwd = prepare_repository(repo, revision, upstream_repo, temp_dir, paths_data)
@@ -717,7 +816,12 @@ def run_file_updates(
         return "nothing needs change\n", "Success", 0
 
     existing_mr = find_existing_mr_with_same_diff(
-        upstream_repo, repo_cwd, temp_dir, gitlab_client, component_group
+        upstream_repo,
+        repo_cwd,
+        temp_dir,
+        gitlab_client,
+        component_group,
+        close_after=close_after,
     )
     if existing_mr is not None:
         return existing_mr, "Success", 0
@@ -728,6 +832,7 @@ def run_file_updates(
         upstream_repo=upstream_repo,
         repo_cwd=repo_cwd,
         gitlab_client=gitlab_client,
+        close_after=close_after,
     )
 
 
