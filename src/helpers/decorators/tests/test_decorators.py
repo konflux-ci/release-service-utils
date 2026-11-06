@@ -5,14 +5,14 @@ from __future__ import annotations
 import unittest.mock as mock
 from concurrent.futures import Future, ThreadPoolExecutor
 
-from release_service_utils.helpers.decorators import async_in_executor
+from release_service_utils.helpers.decorators import ExecutorWrapper, async_in_executor
 
 
 def test_async_in_executor_returns_future() -> None:
     """Decorated function returns Future when called."""
     executor = ThreadPoolExecutor(max_workers=1)
 
-    @async_in_executor(executor)
+    @async_in_executor(ExecutorWrapper(executor))
     def sample_func(x: int) -> int:
         return x * 2
 
@@ -29,7 +29,7 @@ def test_async_in_executor_submits_to_executor() -> None:
     mock_future = mock.Mock(spec=Future)
     mock_executor.submit.return_value = mock_future
 
-    @async_in_executor(mock_executor)
+    @async_in_executor(ExecutorWrapper(mock_executor))
     def sample_func(x: int, y: int) -> int:
         return x + y
 
@@ -42,11 +42,28 @@ def test_async_in_executor_submits_to_executor() -> None:
     assert result is mock_future
 
 
+def test_async_in_executor_resolves_wrapper_on_call() -> None:
+    """Resolve the executor from its wrapper when the decorated function is called."""
+    mock_executor = mock.Mock(spec=ThreadPoolExecutor)
+    mock_future = mock.Mock(spec=Future)
+    mock_executor.submit.return_value = mock_future
+    executor_wrapper = mock.Mock(spec=ExecutorWrapper)
+    executor_wrapper.get_executor.return_value = mock_executor
+
+    @async_in_executor(executor_wrapper)
+    def sample_func() -> None:
+        pass
+
+    executor_wrapper.get_executor.assert_not_called()
+    assert sample_func() is mock_future
+    executor_wrapper.get_executor.assert_called_once_with()
+
+
 def test_async_in_executor_passes_args_and_kwargs() -> None:
     """Decorated function passes positional and keyword arguments correctly."""
     executor = ThreadPoolExecutor(max_workers=1)
 
-    @async_in_executor(executor)
+    @async_in_executor(ExecutorWrapper(executor))
     def sample_func(a: int, b: int, c: int = 10) -> int:
         return a + b + c
 
@@ -59,7 +76,7 @@ def test_async_in_executor_passes_args_and_kwargs() -> None:
 def test_async_in_executor_preserves_function_metadata() -> None:
     """Decorator preserves original function name and docstring via wraps."""
 
-    @async_in_executor(ThreadPoolExecutor(max_workers=1))
+    @async_in_executor(ExecutorWrapper(ThreadPoolExecutor(max_workers=1)))
     def documented_func() -> str:
         """Sample docstring for testing."""
         return "test"
@@ -72,7 +89,7 @@ def test_async_in_executor_handles_exceptions() -> None:
     """Exceptions raised in decorated function are propagated via Future."""
     executor = ThreadPoolExecutor(max_workers=1)
 
-    @async_in_executor(executor)
+    @async_in_executor(ExecutorWrapper(executor))
     def failing_func() -> None:
         raise ValueError("Test error")
 
@@ -91,7 +108,7 @@ def test_async_in_executor_with_no_args() -> None:
     """Decorated function works with no arguments."""
     executor = ThreadPoolExecutor(max_workers=1)
 
-    @async_in_executor(executor)
+    @async_in_executor(ExecutorWrapper(executor))
     def no_args_func() -> str:
         return "success"
 

@@ -34,6 +34,7 @@ Supported tag template variables:
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import Executor, ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 import json
 import re
 import shutil
@@ -52,6 +53,7 @@ from release_service_utils.helpers import (
     tekton,
 )
 from release_service_utils.helpers.authentication import setup_ca_cert
+from release_service_utils.helpers.decorators import ExecutorWrapper, async_in_executor
 from release_service_utils.helpers.logger import logger
 from release_service_utils.helpers.subprocess_cmd import run_cmd
 
@@ -88,6 +90,8 @@ InspectFn = Callable[..., Any]
 GetArchFn = Callable[[str], list[dict]]
 FormatDateFn = Callable[[str, str], str]
 CurrentTimestampFn = Callable[[], str]
+
+_COMPONENT_EXECUTOR_WRAPPER = ExecutorWrapper()
 
 
 def _skopeo_list_repo_tags(repo: str) -> list[str]:
@@ -196,6 +200,20 @@ def _git_revision_str(component: dict) -> str:
 def _digest_sha(container_image: str) -> str:
     """Return the hex digest portion of a ``...@sha256:<hex>`` image reference."""
     return container_image.rsplit(":", 1)[-1]
+
+
+def _validated_container_image(component: dict) -> str:
+    """Return a digest-qualified component image or raise ``ValueError``."""
+    name = component.get("name")
+    container_image = component.get("containerImage") or ""
+    try:
+        image_ref.split_digest_qualified_ref(container_image)
+    except ValueError as exc:
+        raise ValueError(
+            f"Component {name} contains an invalid containerImage value. "
+            f"sha reference is required: {container_image}"
+        ) from exc
+    return container_image
 
 
 def _set_metadata_field(component: dict, key: str, value: Any) -> None:
@@ -493,17 +511,10 @@ def process_component(
     list_tags_fn: ListTagsFn = _skopeo_list_repo_tags,
     get_arch_fn: GetArchFn = _get_image_architectures,
     format_date_fn: FormatDateFn = date_format.format_date,
-) -> None:
-    """Mutate ``component`` in place: attach metadata, expand tags, translate registry URLs."""
+) -> dict:
+    """Process and return ``component`` after attaching metadata and expanding tags."""
     name = component.get("name")
-    container_image = component.get("containerImage") or ""
-    try:
-        image_ref.split_digest_qualified_ref(container_image)
-    except ValueError as exc:
-        raise ValueError(
-            f"Component {name} contains an invalid containerImage value. "
-            f"sha reference is required: {container_image}"
-        ) from exc
+    container_image = _validated_container_image(component)
 
     git_sha = _git_revision_str(component)
     build_sha = _digest_sha(container_image)
@@ -649,6 +660,10 @@ def process_component(
         udpated_component = json.load(open(temp_file.name + ".rendered.json"))
         for k, v in udpated_component.items():
             component[k] = v
+    return component
+
+
+async_process_component = async_in_executor(_COMPONENT_EXECUTOR_WRAPPER)(process_component)
 
 
 def process_components(
@@ -661,27 +676,56 @@ def process_components(
     get_arch_fn: GetArchFn = _get_image_architectures,
     format_date_fn: FormatDateFn = date_format.format_date,
     current_timestamp_fn: CurrentTimestampFn = date_format.current_timestamp,
+    executor: Executor | None = None,
 ) -> None:
-    """Process every component in ``snapshot``, applying mapping defaults from ``mapping``."""
+    """Process components concurrently with ``executor``, applying mapping defaults."""
     defaults = mapping.get("defaults") or {}
     default_tags = defaults.get("tags") or []
     default_timestamp_format = defaults.get("timestampFormat") or "%s"
     default_cgw_settings = defaults.get("contentGateway") or {}
     current_timestamp = current_timestamp_fn()
 
-    for component in snapshot.get("components") or []:
-        process_component(
-            component,
-            default_tags=default_tags,
-            default_timestamp_format=default_timestamp_format,
-            current_timestamp=current_timestamp,
-            default_cgw_settings=default_cgw_settings,
-            add_implicit_timestamp_tag=add_implicit_timestamp_tag,
-            inspect_fn=inspect_fn,
-            list_tags_fn=list_tags_fn,
-            get_arch_fn=get_arch_fn,
-            format_date_fn=format_date_fn,
-        )
+    component_executor = executor if executor is not None else ThreadPoolExecutor()
+    try:
+        with _COMPONENT_EXECUTOR_WRAPPER.use(component_executor):
+            components = snapshot.get("components") or []
+            futures = {}
+            for index, component in enumerate(components):
+                future = async_process_component(
+                    component,
+                    default_tags=default_tags,
+                    default_timestamp_format=default_timestamp_format,
+                    current_timestamp=current_timestamp,
+                    default_cgw_settings=default_cgw_settings,
+                    add_implicit_timestamp_tag=add_implicit_timestamp_tag,
+                    inspect_fn=inspect_fn,
+                    list_tags_fn=list_tags_fn,
+                    get_arch_fn=get_arch_fn,
+                    format_date_fn=format_date_fn,
+                )
+                futures[future] = (index, component.get("name", f"index {index}"))
+
+            failures: list[tuple[int, str, Exception]] = []
+            for future in as_completed(futures):
+                index, component_name = futures[future]
+                try:
+                    components[index] = future.result()
+                except Exception as exc:
+                    logger.error("Failed to process component '%s': %s", component_name, exc)
+                    failures.append((index, component_name, exc))
+
+            if failures:
+                failures.sort(key=lambda failure: failure[0])
+                messages = "\n".join(
+                    f"Component '{component_name}': {exc}"
+                    for _, component_name, exc in failures
+                )
+                raise RuntimeError(
+                    f"Failed to process component(s):\n{messages}"
+                ) from failures[0][2]
+    finally:
+        if executor is None:
+            component_executor.shutdown(wait=True)
 
 
 def apply_mapping(
@@ -695,6 +739,7 @@ def apply_mapping(
     get_arch_fn: GetArchFn = _get_image_architectures,
     format_date_fn: FormatDateFn = date_format.format_date,
     current_timestamp_fn: CurrentTimestampFn = date_format.current_timestamp,
+    executor: Executor | None = None,
 ) -> bool:
     """Apply a ReleasePlanAdmission mapping to a Snapshot spec file, in place.
 
@@ -748,6 +793,7 @@ def apply_mapping(
         get_arch_fn=get_arch_fn,
         format_date_fn=format_date_fn,
         current_timestamp_fn=current_timestamp_fn,
+        executor=executor,
     )
 
     snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
@@ -792,12 +838,14 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     (result_mapped_path,) = tekton.result_paths_from_env("RESULT_MAPPED")
 
-    mapped = apply_mapping(
-        Path(args.snapshot_file),
-        Path(args.data_file),
-        fail_on_empty_result=args.fail_on_empty_result,
-        add_implicit_timestamp_tag=args.add_implicit_timestamp_tag,
-    )
+    with ProcessPoolExecutor() as executor:
+        mapped = apply_mapping(
+            Path(args.snapshot_file),
+            Path(args.data_file),
+            fail_on_empty_result=args.fail_on_empty_result,
+            add_implicit_timestamp_tag=args.add_implicit_timestamp_tag,
+            executor=executor,
+        )
     result_mapped_path.write_text("true" if mapped else "false", encoding="utf-8")
     return 0
 
