@@ -21,6 +21,7 @@ __all__ = [
     "image_ref",
     "internal_request",
     "jira",
+    "koji",
     "kubectl",
     "labels",
     "logger",
