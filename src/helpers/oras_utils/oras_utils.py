@@ -166,6 +166,7 @@ def oras_pull(
     download_dir: Path,
     *,
     stderr_path: Path | None = None,
+    stream_stdout: bool = True,
 ) -> None:
     """Pull an OCI artifact into *download_dir* using select-oci-auth and oras."""
     with oci_auth.auth_file(str(pull_spec), stderr_path=stderr_path) as auth_path:
@@ -180,7 +181,7 @@ def oras_pull(
             cwd=download_dir,
             stderr_path=stderr_path,
             check=True,
-            stream_stdout=True,
+            stream_stdout=stream_stdout,
         )
 
 

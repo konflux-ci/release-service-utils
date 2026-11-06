@@ -205,7 +205,8 @@ def test_reads_checkpoint_after_internal_request_is_gone() -> None:
     """Recover the signed reference from a retained OCI index after IR cleanup."""
     expected_ref = REF
 
-    def pull(_tag: str, dest: Path) -> None:
+    def pull(_tag: str, dest: Path, *, stream_stdout: bool) -> None:
+        assert stream_stdout is False
         (dest / rpm_resume.CHECKPOINT_FILE).write_text(
             json.dumps(
                 {
@@ -232,7 +233,8 @@ def test_reads_checkpoint_after_internal_request_is_gone() -> None:
 def test_checkpoint_rejects_wrong_input_set() -> None:
     """A registry tag with altered metadata cannot authorize a retry."""
 
-    def pull(_tag: str, dest: Path) -> None:
+    def pull(_tag: str, dest: Path, *, stream_stdout: bool) -> None:
+        assert stream_stdout is False
         (dest / rpm_resume.CHECKPOINT_FILE).write_text(
             json.dumps(
                 {
