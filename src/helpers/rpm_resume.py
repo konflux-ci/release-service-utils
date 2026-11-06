@@ -181,7 +181,9 @@ def read_checkpoint(
         return None
     with tempfile.TemporaryDirectory(prefix="rpm-checkpoint-") as temp_dir:
         root = Path(temp_dir)
-        oras_utils.oras_pull(tag, root)
+        # The CLI prints the resolved reference to stdout. Keep oras progress
+        # out of command substitutions that consume that machine-readable value.
+        oras_utils.oras_pull(tag, root, stream_stdout=False)
         record = json.loads((root / CHECKPOINT_FILE).read_text(encoding="utf-8"))
     if (
         record.get("version") != 1
