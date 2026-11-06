@@ -13,7 +13,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from release_service_utils.helpers import rpm_resume
 
 INPUTS = {"one-1-1.x86_64.rpm": "sha-one", "two-1-1.x86_64.rpm": "sha-two"}
@@ -132,15 +131,21 @@ def test_explicit_request_must_match() -> None:
 
 
 def test_validate_signed_artifact_file_set() -> None:
-    """Accept an accessible artifact containing every expected signed RPM."""
+    """Accept the signed RPM archive format produced by the signing service."""
 
     def fetch(_ref: str, archive: Path) -> None:
         with tarfile.open(archive, "w:gz") as output:
-            for name in INPUTS:
-                content = b"signed RPM"
-                info = tarfile.TarInfo(name)
+            for name in ("digests", "digests.signed"):
+                content = b"signed manifest"
+                info = tarfile.TarInfo(f"./{name}")
                 info.size = len(content)
                 output.addfile(info, io.BytesIO(content))
+            for name in INPUTS:
+                for member_name in (name, f"{name}.hdr"):
+                    content = b"signed RPM"
+                    info = tarfile.TarInfo(f"./{member_name}")
+                    info.size = len(content)
+                    output.addfile(info, io.BytesIO(content))
 
     with patch.object(rpm_resume.oras_utils, "oras_blob_fetch", side_effect=fetch):
         rpm_resume.validate_signed_artifact(REF, INPUTS)
@@ -158,6 +163,27 @@ def test_validate_signed_artifact_rejects_missing_rpm() -> None:
     with (
         patch.object(rpm_resume.oras_utils, "oras_blob_fetch", side_effect=fetch),
         pytest.raises(RuntimeError, match="missing"),
+    ):
+        rpm_resume.validate_signed_artifact(REF, INPUTS)
+
+
+def test_validate_signed_artifact_rejects_orphan_header() -> None:
+    """A header sidecar cannot stand in for a signed RPM."""
+
+    def fetch(_ref: str, archive: Path) -> None:
+        with tarfile.open(archive, "w:gz") as output:
+            for name in INPUTS:
+                content = b"signed RPM"
+                info = tarfile.TarInfo(name)
+                info.size = len(content)
+                output.addfile(info, io.BytesIO(content))
+            header = tarfile.TarInfo("unknown-1-1.x86_64.rpm.hdr")
+            header.size = 1
+            output.addfile(header, io.BytesIO(b"x"))
+
+    with (
+        patch.object(rpm_resume.oras_utils, "oras_blob_fetch", side_effect=fetch),
+        pytest.raises(RuntimeError, match="orphan headers"),
     ):
         rpm_resume.validate_signed_artifact(REF, INPUTS)
 
