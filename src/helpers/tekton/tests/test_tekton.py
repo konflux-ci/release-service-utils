@@ -7,6 +7,13 @@ from pathlib import Path
 
 import pytest
 from release_service_utils.helpers import tekton
+from release_service_utils.helpers.tekton import TektonHelper
+
+
+def test_tekton_helper_class() -> None:
+    """TektonHelper class can be instantiated and used."""
+    helper = TektonHelper()
+    assert helper.missing_blank_option_values(("--a", None)) == ["--a"]
 
 
 def test_tekton_argument_parser_suppresses_default_help() -> None:

@@ -134,6 +134,55 @@ This project follows specific Python coding standards:
   `src/tasks/aux/`
 - **Utilities**: General utilities go in `utils/`
 - **Templates**: Jinja2 templates go in `templates/`
+- **Framework**: Base classes in `src/framework/` (Helper, BinaryHelper, Task, InternalTask, ManagedTask)
+
+### Framework Architecture
+
+This repository uses a class-based framework for tasks and helpers to enable dependency tracking and smart test selection. See [AGENTS.md](AGENTS.md#framework-architecture) for complete documentation.
+
+**When to use the framework:**
+- **Always** for new helpers — inherit from `Helper` or `BinaryHelper`
+- **Always** for new tasks — inherit from `InternalTask` or `ManagedTask`
+- **Preferred** when modifying existing helpers/tasks — convert to framework during changes
+- **Maintain backward compatibility** — export methods as module-level functions
+
+**Quick reference:**
+
+Helper pattern:
+```python
+from release_service_utils.framework import Helper
+
+class MyHelper(Helper):
+    def my_method(self, arg: str) -> str:
+        """Do something useful."""
+        return result
+
+# Singleton + exports for backward compatibility
+_helper = MyHelper()
+my_method = _helper.my_method
+```
+
+Task pattern:
+```python
+from release_service_utils.framework import InternalTask
+from release_service_utils.helpers.file import FileHelper
+
+class MyTask(InternalTask):
+    helpers = {"file": FileHelper}
+    results = ["RESULT_OUTPUT"]
+    
+    def run(self):
+        data = self.helpers.file.load_json_dict(path)
+        self.results.RESULT_OUTPUT.write_text(str(data))
+```
+
+**Key benefits:**
+- Dependency tracking for smart test selection
+- Type safety and IDE autocomplete
+- Framework validation (internal task spawning, result access)
+- Binary tracking for Dockerfile change impact analysis
+
+See [MIGRATION-PLAN.md](MIGRATION-PLAN.md) for migration strategy and [AGENTS.md](AGENTS.md#converting-to-framework) for conversion instructions.
 
 ### Data Keys Schema
 
