@@ -270,20 +270,36 @@ def validate_signed_artifact(ref: str, inputs: dict[str, str]) -> None:
         archive = Path(temp_dir) / "signed-rpms.tar.gz"
         oras_utils.oras_blob_fetch(ref.removeprefix("oci:"), archive)
         found: set[str] = set()
+        headers: set[str] = set()
+        metadata: set[str] = set()
         with tarfile.open(archive, "r:gz") as signed:
             for member in signed:
                 if member.isdir():
                     continue
                 name = member.name.removeprefix("./")
+                if name in {"digests", "digests.signed"}:
+                    if not member.isfile() or member.size == 0 or name in metadata:
+                        raise RuntimeError(
+                            f"Invalid signed RPM artifact member: {member.name}"
+                        )
+                    metadata.add(name)
+                    continue
+                is_header = name.endswith(".rpm.hdr")
+                rpm_name = name.removesuffix(".hdr") if is_header else name
+                members = headers if is_header else found
                 if (
                     not member.isfile()
                     or "/" in name
-                    or not name.endswith(".rpm")
+                    or not rpm_name.endswith(".rpm")
                     or member.size == 0
-                    or name in found
+                    or rpm_name in members
                 ):
                     raise RuntimeError(f"Invalid signed RPM artifact member: {member.name}")
-                found.add(name)
+                members.add(rpm_name)
+        if headers - found:
+            raise RuntimeError(
+                f"Signed RPM artifact has orphan headers: {sorted(headers - found)}"
+            )
         if found != set(inputs):
             missing = sorted(set(inputs) - found)
             unexpected = sorted(found - set(inputs))
