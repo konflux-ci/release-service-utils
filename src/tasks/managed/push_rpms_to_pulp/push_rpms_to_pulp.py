@@ -417,9 +417,6 @@ def run(config: PushConfig) -> None:
 
 def _run(config: PushConfig) -> None:
     """Run the push using *config.pulp_config_file* as the Pulp CLI config."""
-    if config.signed_rpms_oci_artifact and not config.signed_by.strip():
-        raise ValueError("SIGNED_BY is required for signed RPM uploads")
-
     pulp_cfg = parse_pulp_config(config.pulp_config_file)
     client = PulpClient.from_config(pulp_cfg, config.pulp_domain)
     logger.info("Auth method detected for Pulp API calls: %s", client.auth_method)
@@ -471,9 +468,11 @@ def _run(config: PushConfig) -> None:
 
     add_content_by_repo(ctx, hrefs_by_repo, repo_order)
 
-    if config.signed_rpms_oci_artifact:
+    if config.signed_rpms_oci_artifact and config.signed_by.strip():
         # The signer searches this label to skip RPMs already signed with the
-        # requested key. Label only after every repository add has succeeded.
+        # requested key. Older catalog tasks do not pass SIGNED_BY, so leave
+        # their signed uploads unlabeled until the catalog is updated.
+        # Label only after every repository add has succeeded.
         signed_by = (
             config.signed_by.strip().replace(",", ":").replace("(", "[").replace(")", "]")
         )

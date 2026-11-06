@@ -495,15 +495,29 @@ class TestRun:
         client.add_content.assert_not_called()
         client.set_rpm_label.assert_called_once()
 
-    def test_signed_upload_requires_alias(self, tmp_path: Path) -> None:
-        """Fail before Pulp changes if a signed upload has no key alias."""
+    def test_signed_upload_without_alias_keeps_legacy_behavior(self, tmp_path: Path) -> None:
+        """Upload signed RPMs without a label for an older catalog task."""
         cfg = replace(_config(tmp_path, signed="oci:quay.io/signed@sha256:abc"), signed_by="")
+        client = MagicMock()
+        client.check_digest.return_value = PulpDigestStatus.NOT_FOUND
+        client.upload_rpm.return_value = "/href/1"
+
+        def fake_fetch(_ref: str, dest: Path, *_args: object, **_kwargs: object) -> None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            rpm = dest.parent / "hello-2.12.1-6.fc44.x86_64.rpm"
+            rpm.write_bytes(b"signed")
+            with tarfile.open(dest, "w:gz") as archive:
+                archive.add(rpm, arcname=rpm.name)
+            rpm.unlink()
+
         with (
-            patch(f"{TASK}.PulpClient.from_config") as mock_client,
-            pytest.raises(ValueError, match="SIGNED_BY is required"),
+            patch(f"{TASK}.PulpClient.from_config", return_value=client),
+            patch(f"{TASK}.oras_utils.oras_blob_fetch", side_effect=fake_fetch),
         ):
             task.run(cfg)
-        mock_client.assert_not_called()
+
+        client.upload_rpm.assert_called_once()
+        client.set_rpm_label.assert_not_called()
 
     def test_copies_pulp_config_to_writable_temp(self, tmp_path: Path) -> None:
         """Copy cli.toml to a temp file for the pulp CLI, then delete it."""
