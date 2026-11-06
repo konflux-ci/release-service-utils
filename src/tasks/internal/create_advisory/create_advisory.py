@@ -39,7 +39,7 @@ import requests
 from requests_kerberos import OPTIONAL, HTTPKerberosAuth
 import yaml
 
-from release_service_utils.helpers.logger import logger
+from release_service_utils.helpers.logger.logger import logger
 from release_service_utils.helpers import advisory_data
 from release_service_utils.helpers.apply_template import render_template_to_json_file
 from release_service_utils.helpers import authentication
