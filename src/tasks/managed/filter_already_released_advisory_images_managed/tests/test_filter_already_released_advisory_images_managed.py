@@ -439,6 +439,11 @@ class TestDecodeUnreleasedComponents:
         with pytest.raises(RuntimeError, match="No unreleased components"):
             task.decode_unreleased_components("")
 
+    def test_rejects_non_array(self) -> None:
+        """A gzip+base64 JSON object is rejected."""
+        with pytest.raises(ValueError, match="must be a JSON array"):
+            task.decode_unreleased_components(_gzip_b64({"c1": True}))
+
 
 class TestFilterSnapshot:
     """Test filter_snapshot component retention."""
