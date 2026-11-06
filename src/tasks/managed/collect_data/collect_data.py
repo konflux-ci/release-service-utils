@@ -23,6 +23,18 @@ from release_service_utils.helpers.vcs.github import owner_repo_from_url
 from release_service_utils.helpers import tekton
 from release_service_utils.helpers.logger import logger
 
+# Identity key(s) for array of object fields, keyed by field name. A field
+# not listed here is never identity merged. Instead it's just concatenated
+# and deduplicated.
+_DATA_MERGE_KEYS: dict[str, list[str]] = {
+    "components": ["name"],
+    "repositories": ["url"],
+    "starmap": ["name"],
+    "cves": ["key", "component"],
+    "fixed": ["source", "id"],
+    "rpm-repositories": ["name", "arch"],
+}
+
 _DISALLOWED_RELEASE_NOTE_KEYS: tuple[str, ...] = (
     "releaseNotes.product_id",
     "releaseNotes.product_name",
@@ -249,26 +261,23 @@ def collect(
 
     logger.info("Generating collectors data")
     collectors_status = release_json.get("status", {}).get("collectors", {})
-    logger.info(
-        "collectors status: %s",
-        json.dumps(collectors_status, indent=2),
-    )
+    _log_json("Collectors status", collectors_status)
     collectors_result = flatten_collectors(collectors_status)
-    logger.info(
-        "collectors merged: %s",
-        json.dumps(collectors_result, indent=2),
-    )
+    _log_json("Collectors merged", collectors_result)
 
     logger.info("Fetching merged data json")
     release_data = release_json.get("spec", {}).get("data", {})
     release_plan_data = release_plan_json.get("spec", {}).get("data", {})
     rpa_data = rpa_json.get("spec", {}).get("data", {})
 
-    merged = json_merge.merge_deep_union_arrays(collectors_result, release_data)
-    merged = json_merge.merge_deep_union_arrays(merged, release_plan_data)
-    merged = json_merge.merge_deep_union_arrays(merged, rpa_data)
-
-    _log_json("Merged data", merged)
+    merged = json_merge.merge_deep_union_arrays(
+        collectors_result, release_data, _DATA_MERGE_KEYS
+    )
+    _log_json("Merged data after collectors and Release", merged)
+    merged = json_merge.merge_deep_union_arrays(merged, release_plan_data, _DATA_MERGE_KEYS)
+    _log_json("Merged data after ReleasePlan", merged)
+    merged = json_merge.merge_deep_union_arrays(merged, rpa_data, _DATA_MERGE_KEYS)
+    _log_json("Merged data after ReleasePlanAdmission", merged)
 
     pipeline_metadata = resolve_pipeline_ref(rpa_json)
     logger.info("Release Pipeline Ref Info:")
