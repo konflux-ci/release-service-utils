@@ -453,9 +453,16 @@ def _extract_manifest_info(
     annotations = raw_manifest.get("annotations") or {}
     config_media_type = (raw_manifest.get("config") or {}).get("mediaType") or ""
 
-    if config_media_type in (_OCI_IMAGE_CONFIG_MEDIA_TYPE, _DOCKER_IMAGE_CONFIG_MEDIA_TYPE):
+    if config_media_type in (
+        _OCI_IMAGE_CONFIG_MEDIA_TYPE,
+        _DOCKER_IMAGE_CONFIG_MEDIA_TYPE,
+    ):
         image_metadata = _inspect_json(
-            inspect_fn, container_image, no_tags=True, override_os=os_name, override_arch=arch
+            inspect_fn,
+            container_image,
+            no_tags=True,
+            override_os=os_name,
+            override_arch=arch,
         )
         labels = image_metadata.get("Labels") or {}
         build_date = labels.get("build-date") or image_metadata.get("Created") or ""
@@ -601,6 +608,7 @@ def process_component(
 
     for repository in component.get("repositories") or []:
         url = repository.get("url") or ""
+        logger.info("Processing component: %s, repository: %s", name, url)
         repo_tags = repository.get("tags") or []
         tags_pre_substitution = json_merge.unique_sorted(
             list(default_component_tags) + list(repo_tags)
@@ -749,6 +757,8 @@ def apply_mapping(
         format_date_fn=format_date_fn,
         current_timestamp_fn=current_timestamp_fn,
     )
+    logger.info("Mapped snapshot:")
+    logger.info("%s", json.dumps(snapshot, indent=2))
 
     snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
     return True
