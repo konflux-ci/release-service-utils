@@ -7,6 +7,7 @@ import time
 import base64
 import gzip
 import json
+import logging
 import os
 import subprocess
 from contextlib import ExitStack
@@ -133,6 +134,41 @@ def test_reserve_errata_live_id_krb5_read_error(tmp_path: Path) -> None:
             krb5_template=missing,
             kinit_fn=lambda *_a, **_k: None,
         )
+
+
+def test_reserve_errata_live_id_logs_kinit_failure(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Wrap and log a failed Kerberos login before reserving an Errata ID."""
+    mount = tmp_path / "errata"
+    _write_errata_mount(mount)
+    krb5 = tmp_path / "k5.conf"
+    krb5.write_text("[libdefaults]\n", encoding="utf-8")
+
+    def _kinit_failure(*_args: object, **_kwargs: object) -> None:
+        raise subprocess.CalledProcessError(
+            1,
+            "kinit",
+            output="kinit stdout output",
+            stderr="kinit stderr output",
+        )
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(
+            tekton.CheckStepError, match="logging in with Kerberos"
+        ) as exc_info:
+            create_advisory.create_advisory._reserve_errata_live_id(
+                "https://errata/api/v1",
+                mount,
+                stderr_path=None,
+                krb5_template=krb5,
+                kinit_fn=_kinit_failure,
+            )
+
+    assert isinstance(exc_info.value.__cause__, subprocess.CalledProcessError)
+    assert "kinit failed with exit code 1" in caplog.text
+    assert "kinit stdout output" in caplog.text
+    assert "kinit stderr output" in caplog.text
 
 
 def test_reserve_errata_live_id_request_failure_logs_stderr(tmp_path: Path) -> None:
