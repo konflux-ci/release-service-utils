@@ -269,3 +269,29 @@ def test_arch_directories_empty(tmp_path: Path) -> None:
     (tmp_path / "note.txt").write_text("skip", encoding="utf-8")
     with pytest.raises(RuntimeError, match="No architecture directories"):
         oot_kmods.arch_directories(tmp_path)
+
+
+def test_ko_files_returns_sorted_regular_files(tmp_path: Path) -> None:
+    """Return .ko files sorted by path, ignoring non-.ko files."""
+    (tmp_path / "b.ko").write_text("b", encoding="utf-8")
+    nested = tmp_path / "driver"
+    nested.mkdir()
+    (nested / "c.ko").write_text("c", encoding="utf-8")
+    (tmp_path / "envfile").write_text("skip", encoding="utf-8")
+
+    files = oot_kmods.ko_files(tmp_path)
+
+    assert files == sorted(files)
+    assert {f.name for f in files} == {"b.ko", "c.ko"}
+
+
+def test_ko_files_raises_when_none_found(tmp_path: Path) -> None:
+    """Raise FileNotFoundError when the directory has no .ko files."""
+    (tmp_path / "envfile").write_text("skip", encoding="utf-8")
+    with pytest.raises(FileNotFoundError, match="No .ko files found for architecture"):
+        oot_kmods.ko_files(tmp_path)
+
+
+def test_checksum_filename() -> None:
+    """The checksum filename includes the architecture name."""
+    assert oot_kmods.checksum_filename("x86_64") == "signed_kmods_checksums_x86_64.txt"
