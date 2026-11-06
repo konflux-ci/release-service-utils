@@ -72,7 +72,11 @@ def test_jq_multiply_nested_objects_merge_recursively() -> None:
     """Nested objects present on both sides are merged recursively."""
     a = {"a": 1, "b": {"c": 1, "d": 1}}
     b = {"b": {"c": 2, "e": 1}, "f": 3}
-    assert json_merge.jq_multiply(a, b) == {"a": 1, "b": {"c": 2, "d": 1, "e": 1}, "f": 3}
+    assert json_merge.jq_multiply(a, b) == {
+        "a": 1,
+        "b": {"c": 2, "d": 1, "e": 1},
+        "f": 3,
+    }
 
 
 def test_jq_multiply_arrays_are_overwritten_not_merged() -> None:
@@ -125,16 +129,12 @@ def test_jq_multiply_does_not_mutate_inputs() -> None:
 # ---------------------------------------------------------------------------
 
 
+# -- plain scalars, objects, and arrays --
+
+
 def test_merge_deep_union_arrays_disjoint_keys() -> None:
     """Keys unique to either side are kept."""
     assert json_merge.merge_deep_union_arrays({"a": 1}, {"b": 2}) == {"a": 1, "b": 2}
-
-
-def test_merge_deep_union_arrays_concatenates_and_dedupes() -> None:
-    """Array values are concatenated, deduplicated, and sorted."""
-    a = {"tags": ["v1", "v2"]}
-    b = {"tags": ["v2", "v3"]}
-    assert json_merge.merge_deep_union_arrays(a, b) == {"tags": ["v1", "v2", "v3"]}
 
 
 def test_merge_deep_union_arrays_nested_objects_merge_recursively() -> None:
@@ -180,6 +180,11 @@ def test_merge_deep_union_arrays_type_mismatch_array_vs_scalar() -> None:
     assert json_merge.merge_deep_union_arrays({"a": [1, 2]}, {"a": "x"}) == {"a": "x"}
 
 
+def test_merge_deep_union_arrays_type_mismatch_object_vs_array() -> None:
+    """A type mismatch (object vs array) also falls through to ``b`` wins."""
+    assert json_merge.merge_deep_union_arrays({"a": {"x": 1}}, {"a": [1]}) == {"a": [1]}
+
+
 def test_merge_deep_union_arrays_does_not_mutate_inputs() -> None:
     """Neither input dict is mutated."""
     a = {"tags": ["v1"]}
@@ -189,230 +194,250 @@ def test_merge_deep_union_arrays_does_not_mutate_inputs() -> None:
     assert b == {"tags": ["v2"]}
 
 
-def test_merge_deep_union_arrays_named_objects_merged_by_name() -> None:
-    """Array elements with the same ``name`` are merged rather than duplicated."""
+def test_merge_deep_union_arrays_concatenates_and_dedupes() -> None:
+    """A plain array is concatenated and deduplicated."""
+    a = {"tags": ["v1", "v2"]}
+    b = {"tags": ["v2", "v3"]}
+    assert json_merge.merge_deep_union_arrays(a, b) == {"tags": ["v1", "v2", "v3"]}
+
+
+def test_merge_deep_union_arrays_without_merge_keys_objects_not_matched() -> None:
+    """With no merge_keys entry for the field, objects are never matched by identity."""
     a = {"components": [{"name": "foo", "x": 1}]}
     b = {"components": [{"name": "foo", "y": 2}]}
-    assert json_merge.merge_deep_union_arrays(a, b) == {
-        "components": [{"name": "foo", "x": 1, "y": 2}]
-    }
+    result = json_merge.merge_deep_union_arrays(a, b)
+    assert result["components"] == [{"name": "foo", "x": 1}, {"name": "foo", "y": 2}]
 
 
-def test_merge_deep_union_arrays_duplicate_named_entries_in_a_combined() -> None:
-    """Duplicate named entries in ``a`` are combined before merging with ``b``."""
+# -- merge_keys set, but no entries carry the identity field --
+
+
+def test_merge_deep_union_arrays_merge_keys_field_not_array_merges_as_scalar() -> None:
+    """A field listed in merge_keys that isn't actually an array just follows scalar rules."""
+    merge_keys = {"components": ["name"]}
+    result = json_merge.merge_deep_union_arrays(
+        {"components": "a"}, {"components": "b"}, merge_keys
+    )
+    assert result == {"components": "b"}
+
+
+def test_merge_deep_union_arrays_merge_keys_no_matchable_entries_falls_back() -> None:
+    """If neither side's entries carry the identity field, it's merged like a plain array."""
+    merge_keys = {"components": ["name"]}
+    a = {"components": [{"role": "sidecar"}]}
+    b = {"components": [{"role": "init"}]}
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert result["components"] == [{"role": "init"}, {"role": "sidecar"}]
+
+
+# -- identity merge --
+
+
+def test_merge_deep_union_arrays_merged_by_identity() -> None:
+    """Entries sharing an identity are merged into one instead of duplicated."""
+    merge_keys = {"components": ["name"]}
+    a = {"components": [{"name": "foo", "x": 1}]}
+    b = {"components": [{"name": "foo", "y": 2}]}
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert result["components"] == [{"name": "foo", "x": 1, "y": 2}]
+
+
+def test_merge_deep_union_arrays_duplicates_in_a_combined_before_b() -> None:
+    """Same identity duplicates within ``a`` are folded together before merging with ``b``."""
+    merge_keys = {"components": ["name"]}
     a = {"components": [{"name": "foo", "x": 1}, {"name": "foo", "y": 2}]}
     b = {"components": [{"name": "foo", "z": 3}]}
-    result = json_merge.merge_deep_union_arrays(a, b)
-    assert result == {"components": [{"name": "foo", "x": 1, "y": 2, "z": 3}]}
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert result["components"] == [{"name": "foo", "x": 1, "y": 2, "z": 3}]
 
 
-def test_merge_deep_union_arrays_named_object_scalar_b_wins() -> None:
-    """When same-named objects define the same scalar key, ``b``'s value wins."""
+def test_merge_deep_union_arrays_identity_match_scalar_b_wins() -> None:
+    """Within a matched entry, a scalar conflict is still won by ``b``."""
+    merge_keys = {"components": ["name"]}
     a = {"components": [{"name": "foo", "version": "1.0"}]}
     b = {"components": [{"name": "foo", "version": "2.0"}]}
-    assert json_merge.merge_deep_union_arrays(a, b) == {
-        "components": [{"name": "foo", "version": "2.0"}]
-    }
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert result["components"] == [{"name": "foo", "version": "2.0"}]
 
 
-def test_merge_deep_union_arrays_named_object_null_b_falls_back_to_a() -> None:
-    """A ``None`` value in ``b`` does not clobber ``a``'s value for a named object."""
+def test_merge_deep_union_arrays_identity_match_null_b_falls_back_to_a() -> None:
+    """Within a matched entry, a ``None`` in ``b`` still doesn't clobber ``a``'s value."""
+    merge_keys = {"components": ["name"]}
     a = {"components": [{"name": "foo", "version": "1.0"}]}
     b = {"components": [{"name": "foo", "version": None}]}
-    assert json_merge.merge_deep_union_arrays(a, b) == {
-        "components": [{"name": "foo", "version": "1.0"}]
-    }
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert result["components"] == [{"name": "foo", "version": "1.0"}]
 
 
-def test_merge_deep_union_arrays_named_objects_empty_a() -> None:
-    """Named entries from ``b`` are kept when ``a``'s array is empty."""
-    a = {"components": []}
-    b = {"components": [{"name": "foo", "x": 1}]}
-    assert json_merge.merge_deep_union_arrays(a, b) == {
-        "components": [{"name": "foo", "x": 1}]
-    }
+def test_merge_deep_union_arrays_identity_match_empty_a() -> None:
+    """Entries from ``b`` are kept when ``a``'s array is empty."""
+    merge_keys = {"components": ["name"]}
+    result = json_merge.merge_deep_union_arrays(
+        {"components": []}, {"components": [{"name": "foo", "x": 1}]}, merge_keys
+    )
+    assert result["components"] == [{"name": "foo", "x": 1}]
 
 
-def test_merge_deep_union_arrays_named_objects_empty_b() -> None:
-    """Named entries from ``a`` are kept when ``b``'s array is empty."""
-    a = {"components": [{"name": "foo", "x": 1}]}
-    b = {"components": []}
-    assert json_merge.merge_deep_union_arrays(a, b) == {
-        "components": [{"name": "foo", "x": 1}]
-    }
+def test_merge_deep_union_arrays_identity_match_empty_b() -> None:
+    """Entries from ``a`` are kept when ``b``'s array is empty."""
+    merge_keys = {"components": ["name"]}
+    result = json_merge.merge_deep_union_arrays(
+        {"components": [{"name": "foo", "x": 1}]}, {"components": []}, merge_keys
+    )
+    assert result["components"] == [{"name": "foo", "x": 1}]
 
 
-def test_merge_deep_union_arrays_named_objects_different_names_kept() -> None:
-    """Named objects with different names are both kept."""
+def test_merge_deep_union_arrays_identity_match_different_identities_both_kept() -> None:
+    """Entries with different identity values are both kept, not merged."""
+    merge_keys = {"components": ["name"]}
     a = {"components": [{"name": "foo", "x": 1}]}
     b = {"components": [{"name": "bar", "y": 2}]}
-    result = json_merge.merge_deep_union_arrays(a, b)
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
     assert len(result["components"]) == 2
     assert {"name": "foo", "x": 1} in result["components"]
     assert {"name": "bar", "y": 2} in result["components"]
 
 
-def test_merge_deep_union_arrays_unnamed_items_pass_through() -> None:
-    """Items without a ``name`` key are appended unchanged."""
+def test_merge_deep_union_arrays_entries_without_identity_both_kept() -> None:
+    """Different entries missing the identity field are kept from both sides, not merged."""
+    merge_keys = {"components": ["name"]}
     a = {"components": [{"name": "foo", "x": 1}, {"role": "sidecar"}]}
-    b = {"components": [{"name": "foo", "y": 2}]}
-    result = json_merge.merge_deep_union_arrays(a, b)
+    b = {"components": [{"name": "foo", "y": 2}, {"role": "init"}]}
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
     assert {"name": "foo", "x": 1, "y": 2} in result["components"]
     assert {"role": "sidecar"} in result["components"]
+    assert {"role": "init"} in result["components"]
 
 
-def test_merge_deep_union_arrays_named_object_nested_merge_recursively() -> None:
-    """Nested objects inside same-named entries are merged recursively."""
+def test_merge_deep_union_arrays_entries_without_identity_dedupe_if_identical() -> None:
+    """Identical entries missing the identity field still dedupe, same as a plain array."""
+    merge_keys = {"components": ["name"]}
+    a = {"components": [{"name": "foo", "x": 1}, {"role": "sidecar"}]}
+    b = {"components": [{"name": "foo", "y": 2}, {"role": "sidecar"}]}
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert {"name": "foo", "x": 1, "y": 2} in result["components"]
+    assert result["components"].count({"role": "sidecar"}) == 1
+
+
+def test_merge_deep_union_arrays_identity_match_nested_merge_recursively() -> None:
+    """Nested objects inside matched entries are merged recursively."""
+    merge_keys = {"components": ["name"]}
     a = {"components": [{"name": "foo", "staged": {"destination": "dest", "files": ["f1"]}}]}
     b = {"components": [{"name": "foo", "staged": {"version": "1.0"}}]}
-    result = json_merge.merge_deep_union_arrays(a, b)
-    assert result == {
-        "components": [
-            {
-                "name": "foo",
-                "staged": {"destination": "dest", "files": ["f1"], "version": "1.0"},
-            }
-        ]
-    }
-
-
-def test_merge_deep_union_arrays_named_object_disjoint_nested_keys_combined() -> None:
-    """Disjoint nested keys from same named entries are combined."""
-    a = {"mapping": {"components": [{"name": "main", "staged": {"version": "4.11.5"}}]}}
-    b = {
-        "mapping": {
-            "components": [
-                {
-                    "contentType": "binary",
-                    "name": "main",
-                    "staged": {"destination": "rhacs-files", "files": [{"arch": "amd64"}]},
-                }
-            ]
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert result["components"] == [
+        {
+            "name": "foo",
+            "staged": {"destination": "dest", "files": ["f1"], "version": "1.0"},
         }
+    ]
+
+
+def test_merge_deep_union_arrays_identity_match_only_in_b_added() -> None:
+    """A new entry only in ``b`` is added alongside one matched by identity."""
+    merge_keys = {"components": ["name"]}
+    a = {"components": [{"name": "foo", "x": 1}]}
+    b = {"components": [{"name": "foo", "y": 2}, {"name": "bar", "z": 3}]}
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    by_name = {c["name"]: c for c in result["components"]}
+    assert by_name == {
+        "foo": {"name": "foo", "x": 1, "y": 2},
+        "bar": {"name": "bar", "z": 3},
     }
-    result = json_merge.merge_deep_union_arrays(a, b)
-    components = result["mapping"]["components"]
-    assert len(components) == 1
-    assert components[0]["contentType"] == "binary"
-    assert components[0]["staged"]["version"] == "4.11.5"
-    assert components[0]["staged"]["destination"] == "rhacs-files"
 
 
-def test_merge_deep_union_arrays_named_component_scalar_b_wins() -> None:
-    """A scalar conflict inside a same named component is won by ``b``."""
+def test_merge_deep_union_arrays_composite_identity_matches_all_fields() -> None:
+    """A composite identity only merges entries that share every one of its fields."""
+    merge_keys = {"components": ["name", "arch"]}
+    a = {"components": [{"name": "foo", "arch": "x86_64", "x": 1}]}
+    b = {"components": [{"name": "foo", "arch": "x86_64", "y": 2}]}
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert result["components"] == [{"name": "foo", "arch": "x86_64", "x": 1, "y": 2}]
+
+
+def test_merge_deep_union_arrays_composite_identity_mismatch_kept_separate() -> None:
+    """Same name but a different value for the second field means a different identity."""
+    merge_keys = {"components": ["name", "arch"]}
+    a = {"components": [{"name": "foo", "arch": "x86_64"}]}
+    b = {"components": [{"name": "foo", "arch": "aarch64"}]}
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert len(result["components"]) == 2
+
+
+def test_merge_deep_union_arrays_composite_identity_missing_field_kept_separate() -> None:
+    """One side missing a composite key field is a different identity from one that has it."""
+    merge_keys = {"components": ["name", "arch"]}
+    a = {"components": [{"name": "foo"}]}
+    b = {"components": [{"name": "foo", "arch": "x86_64"}]}
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert len(result["components"]) == 2
+
+
+def test_merge_deep_union_arrays_entries_without_first_key_field_not_merged() -> None:
+    """Missing the first identity field means no match, even with a shared second field."""
+    merge_keys = {"items": ["primary", "secondary"]}
+    a = {"items": [{"secondary": "s1", "x": 1}]}
+    b = {"items": [{"secondary": "s1", "y": 2}]}
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert {"secondary": "s1", "x": 1} in result["items"]
+    assert {"secondary": "s1", "y": 2} in result["items"]
+
+
+def test_merge_deep_union_arrays_identity_match_works_when_nested() -> None:
+    """An array matched by merge_keys is found by field name no matter how deeply nested."""
+    merge_keys = {"repositories": ["name"]}
+    a = {"mapping": {"repositories": [{"name": "foo", "baseurl": "https://a.example.com"}]}}
+    b = {"mapping": {"repositories": [{"name": "foo", "gpgcheck": True}]}}
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert result["mapping"]["repositories"] == [
+        {"name": "foo", "baseurl": "https://a.example.com", "gpgcheck": True}
+    ]
+
+
+def test_merge_deep_union_arrays_multiple_merge_keys_fields_independent() -> None:
+    """Two merge_keys entries each apply by their own key, even nested one inside the other."""
+    merge_keys = {"components": ["name"], "repositories": ["url"]}
     a = {
         "mapping": {
-            "components": [
-                {"name": "main-4-11", "contentType": "source", "staged": {"version": "4.11.5"}}
-            ]
+            "components": [{"name": "foo", "repositories": [{"url": "y", "tags": ["a", "b"]}]}]
         }
     }
-    b = {"mapping": {"components": [{"name": "main-4-11", "contentType": "binary"}]}}
-    result = json_merge.merge_deep_union_arrays(a, b)
-    components = result["mapping"]["components"]
-    assert len(components) == 1
-    assert components[0]["contentType"] == "binary"
-    assert components[0]["staged"]["version"] == "4.11.5"
-
-
-def test_merge_deep_union_arrays_references_from_both_sides_combined() -> None:
-    """References from both sides are combined into one list."""
-    a = {"releaseNotes": {"references": ["https://access.redhat.com/downloads/content/837"]}}
-    b = {
-        "releaseNotes": {
-            "references": ["https://docs.redhat.com/en/documentation/rhacs/4.11/"]
-        }
-    }
-    result = json_merge.merge_deep_union_arrays(a, b)
-    refs = result["releaseNotes"]["references"]
-    assert "https://access.redhat.com/downloads/content/837" in refs
-    assert "https://docs.redhat.com/en/documentation/rhacs/4.11/" in refs
-    assert len(refs) == 2
-
-
-def test_merge_deep_union_arrays_named_component_only_in_b_is_added() -> None:
-    """A component present only in ``b`` is added alongside shared entries."""
-    a = {"mapping": {"components": [{"name": "main-4-11", "staged": {"version": "4.11.5"}}]}}
     b = {
         "mapping": {
-            "components": [
-                {
-                    "contentType": "binary",
-                    "name": "main-4-11",
-                    "staged": {"destination": "rhacs-4-for-rhel-9-x86_64-files"},
-                },
-                {
-                    "contentType": "binary",
-                    "name": "sidecar-4-11",
-                    "staged": {"destination": "rhacs-4-sidecar-files"},
-                },
-            ]
+            "components": [{"name": "foo", "repositories": [{"url": "y", "tags": ["b", "c"]}]}]
         }
     }
-    result = json_merge.merge_deep_union_arrays(a, b)
-    by_name = {c["name"]: c for c in result["mapping"]["components"]}
-    assert len(by_name) == 2
-    assert by_name["main-4-11"]["staged"]["version"] == "4.11.5"
-    assert by_name["main-4-11"]["staged"]["destination"] == "rhacs-4-for-rhel-9-x86_64-files"
-    assert by_name["sidecar-4-11"]["staged"]["destination"] == "rhacs-4-sidecar-files"
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert result["mapping"]["components"] == [
+        {"name": "foo", "repositories": [{"url": "y", "tags": ["a", "b", "c"]}]}
+    ]
 
 
-def test_merge_deep_union_arrays_rpm_repositories_merged_by_name() -> None:
-    """rpm-repositories entries with the same name are merged, not duplicated."""
-    a = {
-        "mapping": {
-            "rpm-repositories": [{"name": "rhel-9-baseos", "baseurl": "https://a.example.com"}]
-        }
-    }
-    b = {"mapping": {"rpm-repositories": [{"name": "rhel-9-baseos", "gpgcheck": True}]}}
-    result = json_merge.merge_deep_union_arrays(a, b)
-    repos = result["mapping"]["rpm-repositories"]
-    assert len(repos) == 1
-    assert repos[0]["name"] == "rhel-9-baseos"
-    assert repos[0]["baseurl"] == "https://a.example.com"
-    assert repos[0]["gpgcheck"] is True
+def test_merge_deep_union_arrays_identity_match_does_not_mutate_inputs() -> None:
+    """Entries still merge by identity, but neither input itself is mutated."""
+    merge_keys = {"components": ["name"]}
+    a = {"components": [{"name": "foo", "x": 1}]}
+    b = {"components": [{"name": "foo", "y": 2}]}
+    a_copy, b_copy = json.loads(json.dumps(a)), json.loads(json.dumps(b))
+    result = json_merge.merge_deep_union_arrays(a, b, merge_keys)
+    assert result["components"] == [{"name": "foo", "x": 1, "y": 2}]
+    assert a == a_copy
+    assert b == b_copy
 
 
-def test_merge_deep_union_arrays_named_objects_successive_calls() -> None:
-    """Named entries accumulate correctly across successive merge calls."""
-    release = {
-        "mapping": {"components": [{"name": "main-4-11", "staged": {"version": "4.11.5"}}]},
-        "releaseNotes": {"type": "RHBA", "synopsis": "RHACS 4.11.5 CLI update"},
+def test_merge_deep_union_arrays_identity_match_accumulates_across_calls() -> None:
+    """Entries keep merging by identity across repeated merge_deep_union_arrays calls."""
+    merge_keys = {"components": ["name"]}
+    first = {"components": [{"name": "foo", "x": 1}]}
+    second = {"other": "value"}
+    third = {"components": [{"name": "foo", "y": 2}, {"name": "bar", "z": 3}]}
+    merged = json_merge.merge_deep_union_arrays({}, first, merge_keys)
+    merged = json_merge.merge_deep_union_arrays(merged, second, merge_keys)
+    merged = json_merge.merge_deep_union_arrays(merged, third, merge_keys)
+    assert merged == {
+        "components": [{"name": "foo", "x": 1, "y": 2}, {"name": "bar", "z": 3}],
+        "other": "value",
     }
-    rp = {
-        "releaseNotes": {
-            "description": "Binary release of the roxctl CLI.",
-            "solution": "Download the roxctl binary for your platform.",
-        }
-    }
-    rpa = {
-        "cdn": {"env": "stage"},
-        "mapping": {
-            "components": [
-                {
-                    "contentType": "binary",
-                    "name": "main-4-11",
-                    "staged": {
-                        "destination": "rhacs-4-for-rhel-9-x86_64-files",
-                        "files": [
-                            {"arch": "amd64", "filename": "roxctl-linux", "os": "linux"}
-                        ],
-                    },
-                }
-            ]
-        },
-    }
-    merged = json_merge.merge_deep_union_arrays({}, release)
-    merged = json_merge.merge_deep_union_arrays(merged, rp)
-    merged = json_merge.merge_deep_union_arrays(merged, rpa)
-    components = merged["mapping"]["components"]
-    assert len(components) == 1
-    assert components[0]["contentType"] == "binary"
-    assert components[0]["staged"]["version"] == "4.11.5"
-    assert components[0]["staged"]["destination"] == "rhacs-4-for-rhel-9-x86_64-files"
-    assert merged["cdn"]["env"] == "stage"
-    assert merged["releaseNotes"]["type"] == "RHBA"
-    assert merged["releaseNotes"]["description"] == "Binary release of the roxctl CLI."
 
 
 # ---------------------------------------------------------------------------
