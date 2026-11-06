@@ -188,6 +188,42 @@ class TestGetImageArchitectures:
                 create_pyxis_image._get_image_architectures("bad-image")
 
 
+# ── _architecture_metadata_path ─────────────────────────────────────
+
+
+class TestArchitectureMetadataPath:
+    """Tests for architecture-specific Pyxis metadata."""
+
+    def test_reads_child_image_config(self) -> None:
+        """Read labels and environment from the architecture digest."""
+        image_metadata = {"Labels": {"base": "ubi-micro"}, "Env": ["A=B"]}
+        with patch(
+            f"{TASK}.skopeo.inspect",
+            return_value=_skopeo_result(json.dumps(image_metadata)),
+        ) as mock_inspect:
+            metadata_path = create_pyxis_image._architecture_metadata_path(
+                "quay.io/org/img", "sha256:ppc"
+            )
+
+        try:
+            assert json.loads(metadata_path.read_text()) == {
+                "labels": [{"name": "base", "value": "ubi-micro"}],
+                "env_variables": ["A=B"],
+            }
+        finally:
+            metadata_path.unlink()
+        mock_inspect.assert_called_once_with("quay.io/org/img@sha256:ppc", no_tags=True)
+
+    def test_inspect_failure_raises(self) -> None:
+        """Fail instead of publishing stale metadata when inspection fails."""
+        with patch(
+            f"{TASK}.skopeo.inspect",
+            return_value=_skopeo_result("", rc=1, stderr="access denied"),
+        ):
+            with pytest.raises(RuntimeError, match="sha256:ppc.*access denied"):
+                create_pyxis_image._architecture_metadata_path("quay.io/org/img", "sha256:ppc")
+
+
 # ── _try_pull_dockerfile ────────────────────────────────────────────
 
 
@@ -444,6 +480,78 @@ class TestProcessComponent:
         result = self._call(tmp_path)
         assert result is not None
         assert len(result["pyxisImages"]) == 2
+
+    def test_multi_arch_uses_each_child_metadata(self, tmp_path: Path) -> None:
+        """Publish each child's labels rather than the mapped first child's labels."""
+        repo_url = "quay.io/redhat-prod/product----image"
+        arch_details = [
+            {
+                "platform": {"architecture": "amd64", "os": "linux"},
+                "digest": "sha256:amd",
+                "multiarch": True,
+            },
+            {
+                "platform": {"architecture": "ppc64le", "os": "linux"},
+                "digest": "sha256:ppc",
+                "multiarch": True,
+            },
+        ]
+        child_manifest = json.dumps(
+            {
+                "config": {"mediaType": "application/vnd.oci.image.config.v1+json"},
+                "layers": [],
+            }
+        )
+        metadata_by_arch: dict[str, dict[str, Any]] = {}
+        metadata_paths: list[Path] = []
+
+        def capture_pyxis_metadata(args: Any) -> str:
+            metadata_path = Path(args.metadata)
+            metadata_paths.append(metadata_path)
+            metadata_by_arch[args.architecture] = json.loads(metadata_path.read_text())
+            return "image-id"
+
+        with (
+            patch(f"{TASK}._write_auth_file"),
+            patch(f"{TASK}._try_pull_dockerfile", return_value=None),
+            patch(f"{TASK}._get_image_architectures", return_value=arch_details),
+            patch(f"{TASK}.oras_utils.oras_manifest_fetch", return_value=child_manifest),
+            patch(f"{TASK}.create_or_update", side_effect=capture_pyxis_metadata),
+            patch(
+                f"{TASK}.skopeo.inspect",
+                side_effect=[
+                    _skopeo_result(_raw_manifest("application/vnd.oci.image.index.v1+json")),
+                    _skopeo_result(json.dumps({"Labels": {"base": "hummingbird"}})),
+                    _skopeo_result(json.dumps({"Labels": {"base": "ubi-micro"}})),
+                ],
+            ) as mock_inspect,
+        ):
+            result = self._call(
+                tmp_path,
+                snap=_snapshot(
+                    [
+                        _component(
+                            repositories=[_repo()],
+                            metadata={"labels": [{"name": "base", "value": "hummingbird"}]},
+                        )
+                    ]
+                ),
+            )
+
+        assert result is not None
+        assert len(result["pyxisImages"]) == 2
+        assert metadata_by_arch["amd64"]["labels"] == [
+            {"name": "base", "value": "hummingbird"}
+        ]
+        assert metadata_by_arch["ppc64le"]["labels"] == [
+            {"name": "base", "value": "ubi-micro"}
+        ]
+        assert all(not path.exists() for path in metadata_paths)
+        assert [call.args[0] for call in mock_inspect.call_args_list] == [
+            f"{repo_url}@sha256:abc123",
+            f"{repo_url}@sha256:amd",
+            f"{repo_url}@sha256:ppc",
+        ]
 
     @patch(f"{TASK}.cleanup_tags_with_retry")
     @patch(
