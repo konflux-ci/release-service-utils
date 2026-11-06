@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import string
 import subprocess
@@ -18,6 +20,7 @@ from release_service_utils.helpers import (
     authentication,
     cosign,
     file,
+    image_ref,
     memory_throttle,
     pyxis_api,
     subprocess_cmd,
@@ -26,6 +29,7 @@ from release_service_utils.helpers import (
 from release_service_utils.helpers.logger import logger
 
 MEMORY_THRESHOLD = 80
+SPDX_PREDICATE_TYPE = "https://spdx.dev/Document"
 BURST_SIZE = 5
 STABILIZATION_DELAY = 2.0
 SBOM_DIR = Path("/var/workdir/downloaded-sboms")
@@ -38,6 +42,7 @@ class ImageJob:
     image_id: str
     container_image: str
     platform: str | None
+    arch_digest: str
 
 
 def _image_job(component: dict[str, Any], image: dict[str, Any]) -> ImageJob:
@@ -65,7 +70,12 @@ def _image_job(component: dict[str, Any], image: dict[str, Any]) -> ImageJob:
             )
         platform = f"{os_name}/{architecture}"
 
-    return ImageJob(image_id=image_id, container_image=container_image, platform=platform)
+    return ImageJob(
+        image_id=image_id,
+        container_image=container_image,
+        platform=platform,
+        arch_digest=arch_digest,
+    )
 
 
 def collect_image_jobs(pyxis_data: dict[str, Any]) -> list[ImageJob]:
@@ -114,15 +124,70 @@ def _log_process_output(
         logger.info(result.stderr.rstrip())
 
 
-def download_sbom(job: ImageJob, retries: int) -> None:
-    """Download one image SBOM with registry authentication and retries."""
-    cosign.download(
-        "sbom",
-        job.container_image,
-        SBOM_DIR / f"{job.image_id}.json",
-        max_attempts=retries + 1,
-        platform=job.platform,
-    )
+def _ecp_public_key(policy_json: str) -> str:
+    """Return the ``publicKey`` of an EnterpriseContractPolicy resource or spec."""
+    policy = json.loads(policy_json)
+    if not policy:
+        raise ValueError(
+            "No EnterpriseContractPolicy provided; it is required to supply the public "
+            "key for the SPDX attestation fallback"
+        )
+    key = policy.get("spec", policy).get("publicKey")
+    if not isinstance(key, str) or not key:
+        raise ValueError(
+            "Provided EnterpriseContractPolicy has no publicKey to verify the SPDX "
+            "attestation signature against"
+        )
+    return key
+
+
+def _spdx_from_attestations(output: str, arch_digest: str) -> dict[str, Any]:
+    """Return the SPDX predicate whose subject matches *arch_digest*.
+
+    *output* is the JSON-lines DSSE output of ``cosign verify-attestation``.
+    """
+    algorithm, _, digest = arch_digest.partition(":")
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        statement = json.loads(base64.b64decode(json.loads(line)["payload"]))
+        if statement.get("predicateType") != SPDX_PREDICATE_TYPE:
+            continue
+        if any(
+            subject.get("digest", {}).get(algorithm) == digest
+            for subject in statement.get("subject", [])
+        ):
+            return statement["predicate"]
+    raise ValueError(f"No SPDX attestation found for {arch_digest}")
+
+
+def download_sbom(job: ImageJob, retries: int, enterprise_contract_policy: str = "{}") -> None:
+    """Download one image SBOM, falling back to a verified SPDX attestation."""
+    output_path = SBOM_DIR / f"{job.image_id}.json"
+    try:
+        cosign.download(
+            "sbom",
+            job.container_image,
+            output_path,
+            max_attempts=retries + 1,
+            platform=job.platform,
+        )
+    except RuntimeError as exc:
+        logger.info("No SBOM downloaded for image %s; trying SPDX attestation", job.image_id)
+        try:
+            reference = f"{image_ref.repository(job.container_image)}@{job.arch_digest}"
+            output = cosign.verify_attestation(
+                reference,
+                key=_ecp_public_key(enterprise_contract_policy),
+                max_attempts=retries + 1,
+            )
+            spdx = _spdx_from_attestations(output, job.arch_digest)
+        except (RuntimeError, ValueError, KeyError) as fallback_error:
+            raise RuntimeError(
+                f"SBOM download failed for image {job.image_id} and the SPDX "
+                f"attestation fallback failed: {fallback_error}"
+            ) from exc
+        output_path.write_text(json.dumps(spdx), encoding="utf-8")
 
 
 def upload_rpm_data(job: ImageJob) -> None:
@@ -189,7 +254,12 @@ def _run_phase(
         raise RuntimeError(f"One or more {phase_name} jobs failed:\n{details}")
 
 
-def run(pyxis_file: Path, concurrent_limit: int, retries: int) -> None:
+def run(
+    pyxis_file: Path,
+    concurrent_limit: int,
+    retries: int,
+    enterprise_contract_policy: str = "{}",
+) -> None:
     """Download unique SBOMs and upload RPM data for every listed Pyxis image.
 
     Raise ``RuntimeError`` when the Pyxis file contains no images.
@@ -213,7 +283,11 @@ def run(pyxis_file: Path, concurrent_limit: int, retries: int) -> None:
     memory_throttle.log_memory_throttle_status(MEMORY_THRESHOLD)
     _run_phase(
         download_jobs,
-        partial(download_sbom, retries=retries),
+        partial(
+            download_sbom,
+            retries=retries,
+            enterprise_contract_policy=enterprise_contract_policy,
+        ),
         concurrent_limit,
         "SBOM download",
     )
@@ -239,7 +313,12 @@ def main() -> int:
     os.environ["PYXIS_GRAPHQL_API"] = pyxis_api.pyxis_graphql_url_for_server(server)
     authentication.setup_ca_cert()
 
-    run(pyxis_file, concurrent_limit, retries)
+    run(
+        pyxis_file,
+        concurrent_limit,
+        retries,
+        enterprise_contract_policy=os.environ.get("ENTERPRISE_CONTRACT_POLICY", "{}"),
+    )
     return 0
 
 
