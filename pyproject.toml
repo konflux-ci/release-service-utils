@@ -30,6 +30,8 @@ dependencies = [
     "jq",
     "kubernetes>=28.0",
     "RestrictedPython>=7.0",
+    "azure-identity",
+    "azure-storage-blob",
     "boto3",
     "ud2",
     "ansible-core==2.21.6",
