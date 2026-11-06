@@ -33,7 +33,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from release_service_utils.helpers.sign_mac.sign_mac import read_destination_quay_credentials
 
@@ -44,6 +44,9 @@ WINDOWS_CREDS_MOUNT = Path(os.environ.get("WINDOWS_CREDS_MOUNT", "/mnt/windowsCr
 QUAY_SECRET_MOUNT = Path(os.environ.get("QUAY_SECRET_MOUNT", "/mnt/quaySecret"))
 DEST_QUAY_SECRET_MOUNT = Path(os.environ.get("DEST_QUAY_SECRET_MOUNT", "/mnt/destQuaySecret"))
 CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
+ARTIFACT_SCRIPT_MAPPING = {
+    "binary": "sign_windows_wrapper.ps1",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +169,7 @@ def _run_custom_script(
         escaped_v = v.replace("'", "''")
         stdin_script += f"$env:{k}='{escaped_v}'\n"
     stdin_script += "Set-PSDebug -Trace 0\n"
-    stdin_script += f"& '{signing_script}' {args_str}\n"
+    stdin_script += f"& '{signing_script.replace(chr(39), chr(39) * 2)}' {args_str}\n"
 
     ssh_exit = 0
     failed_op = ""
@@ -215,6 +218,22 @@ def _run_custom_script(
         raise RuntimeError(
             f"Windows {failed_op} failed for component: {name}" f" (exit code: {ssh_exit})"
         )
+
+
+def _validate_windows_signing_options(components: list[dict]) -> None:
+    """Validate signing options for all Windows components before signing."""
+    for component in components:
+        name = component.get("name", "")
+        options = component.get("signingOptions")
+        if options is None:
+            options = {}
+        if not isinstance(options, dict):
+            raise ValueError(f"signingOptions for component {name} must be an object")
+        artifact_type = options.get("artifactType", "binary")
+        if not isinstance(artifact_type, str) or artifact_type not in ARTIFACT_SCRIPT_MAPPING:
+            raise ValueError(
+                f"Unsupported Windows artifactType {artifact_type!r} for component {name}"
+            )
 
 
 def run(quay_url: str, pipeline_run_uid: str) -> None:
@@ -364,7 +383,7 @@ def run(quay_url: str, pipeline_run_uid: str) -> None:
 def run_custom_signing(
     quay_url: str,
     pipeline_run_uid: str,
-    signing_script: str,
+    signing_script_base: str | None,
     signing_args: list[str] | None = None,
     dest_quay_url: str | None = None,
     origin: str = "",
@@ -372,10 +391,20 @@ def run_custom_signing(
     """Sign Windows binaries using custom signing scripts on the remote Windows host.
 
     This function is specific to the sign-and-push-to-internal-oci workflow.
-    It supports custom signing scripts, destination Quay URLs, and origin-based tagging.
+    Select a remote script for each component's artifact type.
+    Support destination Quay URLs and origin-based tagging.
     """
     snapshot = json.loads(os.environ["SNAPSHOT_JSON"])
     quay_url = quay_url.rstrip("/")
+    components = snapshot.get("components", [])
+    windows_components = [
+        component
+        for component in components
+        if (CONTENT_DIR / component.get("name", "") / "has_windows").exists()
+    ]
+    _validate_windows_signing_options(windows_components)
+    if windows_components and not signing_script_base:
+        raise ValueError("Windows signing script base must be configured")
 
     windows_user = (WINDOWS_CREDS_MOUNT / "username").read_text().strip()
     windows_port = (WINDOWS_CREDS_MOUNT / "port").read_text().strip()
@@ -435,6 +464,14 @@ def run_custom_signing(
                 "No Windows content for component %s, skipping Windows signing...", name
             )
             continue
+
+        options = component.get("signingOptions")
+        if options is None:
+            options = {}
+        artifact_type = options.get("artifactType", "binary")
+        signing_script = str(
+            PureWindowsPath(signing_script_base) / ARTIFACT_SCRIPT_MAPPING[artifact_type]
+        )
 
         dest_quay_user, dest_quay_pass = read_destination_quay_credentials(
             DEST_QUAY_SECRET_MOUNT, origin, name
