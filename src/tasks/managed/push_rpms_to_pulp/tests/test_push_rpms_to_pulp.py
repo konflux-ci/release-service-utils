@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -52,6 +53,7 @@ def _config(
     return task.PushConfig(
         snapshot_path=snapshot,
         signed_rpms_oci_artifact=signed,
+        signed_by="release4,release2,ima" if signed else "",
         pulp_domain="mydomain",
         pulp_config_file=secret,
         default_excludes=["-debuginfo-", "-debugsource-"],
@@ -420,12 +422,13 @@ class TestRun:
             "x86_64",
             "source",
         ]
-        assert client.check_digest.call_args.kwargs["fallback_to_latest"] is False
+        assert client.check_digest.call_args.kwargs["fallback_to_latest"] is True
         client.ensure_domain_exists.assert_called_once()
         client.ensure_repos_exist.assert_called_once_with(
             ["aarch64", "ppc64le", "s390x", "x86_64", "source"]
         )
         assert all(call.args[1] == "100MB" for call in client.upload_rpm.call_args_list)
+        client.set_rpm_label.assert_not_called()
         copied_configs = [call.args[2] for call in client.upload_rpm.call_args_list]
         assert copied_configs
         assert len(set(copied_configs)) == 1
@@ -459,6 +462,97 @@ class TestRun:
         artifacts = json.loads((cfg.data_dir / "results" / "artifacts.json").read_text())
         assert "hello-2.12.1-6.fc44.x86_64.rpm" in artifacts["artifacts"]
         client.ensure_repos_exist.assert_called_once_with(["x86_64"])
+        client.set_rpm_label.assert_called_once_with(
+            task.file_helper.sha256(cfg.files_dir / "hello-2.12.1-6.fc44.x86_64.rpm"),
+            "signed_by",
+            "release4:release2:ima",
+            client.upload_rpm.call_args.args[2],
+        )
+        method_names = [entry[0] for entry in client.method_calls]
+        assert method_names.index("add_content") < method_names.index("set_rpm_label")
+
+    def test_signed_retry_labels_existing_content(self, tmp_path: Path) -> None:
+        """A signed RPM already in the repo still gets its missing label."""
+        cfg = _config(tmp_path, signed="oci:quay.io/signed@sha256:abc")
+        client = MagicMock()
+        client.check_digest.return_value = PulpDigestStatus.MATCH
+
+        def fake_fetch(_ref: str, dest: Path, *_args: object, **_kwargs: object) -> None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            rpm = dest.parent / "hello-2.12.1-6.fc44.x86_64.rpm"
+            rpm.write_bytes(b"signed")
+            with tarfile.open(dest, "w:gz") as tf:
+                tf.add(rpm, arcname=rpm.name)
+            rpm.unlink()
+
+        with (
+            patch(f"{TASK}.PulpClient.from_config", return_value=client),
+            patch(f"{TASK}.oras_utils.oras_blob_fetch", side_effect=fake_fetch),
+        ):
+            task.run(cfg)
+
+        client.upload_rpm.assert_not_called()
+        client.add_content.assert_not_called()
+        client.set_rpm_label.assert_called_once()
+
+    def test_signed_retry_uploads_only_missing_fourth_rpm(self, tmp_path: Path) -> None:
+        """Resume a partial signed upload from the original four-RPM artifact."""
+        cfg = _config(tmp_path, signed="oci:quay.io/signed@sha256:abc")
+        client = MagicMock()
+        client.check_digest.side_effect = lambda _repo, name, *_args, **_kwargs: (
+            PulpDigestStatus.NOT_FOUND if name == "hello4" else PulpDigestStatus.MATCH
+        )
+        client.upload_rpm.return_value = "/href/4"
+
+        def fake_fetch(_ref: str, dest: Path, *_args: object, **_kwargs: object) -> None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(dest, "w:gz") as archive:
+                for index in range(1, 5):
+                    rpm = dest.parent / f"hello{index}-1.0-1.x86_64.rpm"
+                    rpm.write_bytes(f"signed{index}".encode())
+                    archive.add(rpm, arcname=rpm.name)
+                    rpm.unlink()
+
+        with (
+            patch(f"{TASK}.PulpClient.from_config", return_value=client),
+            patch(f"{TASK}.oras_utils.oras_blob_fetch", side_effect=fake_fetch),
+        ):
+            task.run(cfg)
+
+        client.upload_rpm.assert_called_once()
+        assert client.upload_rpm.call_args.args[0].name == "hello4-1.0-1.x86_64.rpm"
+        client.add_content.assert_called_once_with("x86_64", ["/href/4"], 30)
+        assert client.set_rpm_label.call_count == 4
+        results = json.loads(
+            (cfg.data_dir / "results" / "push-rpms-to-pulp-results.json").read_text()
+        )
+        assert {row["rpm"] for row in results["rpmfiles"]} == {
+            f"hello{index}-1.0-1.x86_64.rpm" for index in range(1, 5)
+        }
+
+    def test_signed_upload_without_alias_keeps_legacy_behavior(self, tmp_path: Path) -> None:
+        """Upload signed RPMs without a label for an older catalog task."""
+        cfg = replace(_config(tmp_path, signed="oci:quay.io/signed@sha256:abc"), signed_by="")
+        client = MagicMock()
+        client.check_digest.return_value = PulpDigestStatus.NOT_FOUND
+        client.upload_rpm.return_value = "/href/1"
+
+        def fake_fetch(_ref: str, dest: Path, *_args: object, **_kwargs: object) -> None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            rpm = dest.parent / "hello-2.12.1-6.fc44.x86_64.rpm"
+            rpm.write_bytes(b"signed")
+            with tarfile.open(dest, "w:gz") as archive:
+                archive.add(rpm, arcname=rpm.name)
+            rpm.unlink()
+
+        with (
+            patch(f"{TASK}.PulpClient.from_config", return_value=client),
+            patch(f"{TASK}.oras_utils.oras_blob_fetch", side_effect=fake_fetch),
+        ):
+            task.run(cfg)
+
+        client.upload_rpm.assert_called_once()
+        client.set_rpm_label.assert_not_called()
 
     def test_copies_pulp_config_to_writable_temp(self, tmp_path: Path) -> None:
         """Copy cli.toml to a temp file for the pulp CLI, then delete it."""
@@ -581,7 +675,7 @@ class TestRun:
         client.add_content.assert_called_once_with("source", ["/href/src"], 30)
 
     def test_digest_match_skips_upload(self, tmp_path: Path) -> None:
-        """Matching digests skip upload and still populate artifacts.json."""
+        """Matching digests skip upload and preserve release outputs."""
         snap = tmp_path / "snap.json"
         _write_snapshot(snap, [{"containerImage": "quay.io/a"}])
         cfg = _config(tmp_path, snapshot=snap)
@@ -600,10 +694,22 @@ class TestRun:
             task.run(cfg)
 
         client.upload_rpm.assert_not_called()
+        assert all(
+            call.kwargs["fallback_to_latest"] is True
+            for call in client.check_digest.call_args_list
+        )
         artifacts = json.loads((cfg.data_dir / "artifacts" / "artifacts.json").read_text())
         assert "hello-2.12.1-6.fc44.x86_64.rpm" in artifacts["artifacts"]
         assert "hello-docs-2.12.1-6.fc44.noarch.rpm" in artifacts["artifacts"]
         assert "hello-2.12.1-6.fc44.src.rpm" in artifacts["artifacts"]
+        results = json.loads(
+            (cfg.data_dir / "results" / "push-rpms-to-pulp-results.json").read_text()
+        )
+        assert {rpmfile["rpm"] for rpmfile in results["rpmfiles"]} == {
+            "hello-2.12.1-6.fc44.x86_64.rpm",
+            "hello-docs-2.12.1-6.fc44.noarch.rpm",
+            "hello-2.12.1-6.fc44.src.rpm",
+        }
         client.add_content.assert_not_called()
 
     def test_digest_mismatch_raises(self, tmp_path: Path) -> None:
@@ -693,6 +799,7 @@ class TestRun:
             (cfg.data_dir / "results" / "push-rpms-to-pulp-results.json").read_text()
         )
         assert {row["pulprepo"] for row in results["rpmfiles"]} == {
+            "mydomain/x86_64",
             "mydomain/aarch64",
             "mydomain/s390x",
             "mydomain/ppc64le",
