@@ -191,6 +191,38 @@ class TestOrasDiscoverReferrers:
             )
         assert len(referrers) == 1
 
+    def test_returns_manifests_key_on_success(self, tmp_path: Path) -> None:
+        """Return referrers when oras reports them under the ``manifests`` key.
+
+        ``oras discover --format json`` emits an OCI image index whose referrer
+        descriptors live under ``manifests``; the wrapper must read that key,
+        not only the legacy ``referrers`` key.
+        """
+        auth_file = tmp_path / "auth.json"
+        auth_file.write_text("{}", encoding="utf-8")
+        discover_output = json.dumps({"manifests": [{"digest": "sha256:ref1"}]})
+        with patch(f"{TASK}.subprocess_cmd.run_cmd") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                [], 0, stdout=discover_output, stderr=""
+            )
+            referrers = push_snapshot.oras_discover_referrers(
+                "reg.io/img@sha256:abc", auth_file
+            )
+        assert referrers == [{"digest": "sha256:ref1"}]
+
+    def test_returns_empty_list_when_no_referrers(self, tmp_path: Path) -> None:
+        """Return an empty list when neither key is present."""
+        auth_file = tmp_path / "auth.json"
+        auth_file.write_text("{}", encoding="utf-8")
+        with patch(f"{TASK}.subprocess_cmd.run_cmd") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                [], 0, stdout=json.dumps({}), stderr=""
+            )
+            referrers = push_snapshot.oras_discover_referrers(
+                "reg.io/img@sha256:abc", auth_file
+            )
+        assert referrers == []
+
     def test_raises_on_failure(self, tmp_path: Path) -> None:
         """Raise ``RuntimeError`` when oras discover exits non-zero."""
         auth_file = tmp_path / "auth.json"
@@ -633,6 +665,75 @@ class TestPushImage:
             ]
         )
         assert mock_oras.call_count == 3
+        assert result["url"] == "prod.io/repo:v1.0"
+
+    def test_walks_per_arch_digests_for_artifacts(self, tmp_path: Path) -> None:
+        """Discover attached artifacts on each per-arch digest, not just the index.
+
+        Per-architecture scan reports (e.g. roxctl) are attached to the
+        per-arch manifests rather than the top-level image index, so discovery
+        must walk ``arch_digests``. Artifacts seen on more than one reference
+        are copied only once.
+        """
+        source_auth = tmp_path / "src_auth.json"
+        source_auth.write_text('{"auths":{}}', encoding="utf-8")
+
+        discover_by_ref = {
+            "reg.io/img@sha256:index": [
+                {"digest": "sha256:shared", "artifactType": "application/vnd.example.sbom"},
+            ],
+            "reg.io/img@sha256:amd64": [
+                {"digest": "sha256:shared", "artifactType": "application/vnd.example.sbom"},
+                {"digest": "sha256:roxamd64", "artifactType": "application/sarif+json"},
+            ],
+            "reg.io/img@sha256:arm64": [
+                {"digest": "sha256:roxarm64", "artifactType": "application/sarif+json"},
+            ],
+        }
+
+        with patch(f"{TASK}.create_dest_auth_file") as mock_dest_auth:
+            dest_file = tmp_path / "dest_auth.json"
+            dest_file.write_text('{"auths":{}}', encoding="utf-8")
+            mock_dest_auth.return_value = dest_file
+
+            with patch(f"{TASK}.oras_utils.oras_resolve", return_value=None):
+                with patch(f"{TASK}.create_combined_docker_config") as mock_config:
+                    config_dir = tmp_path / "docker"
+                    config_dir.mkdir()
+                    (config_dir / "config.json").write_text("{}")
+                    mock_config.return_value = config_dir
+
+                    with patch(
+                        f"{TASK}._discover_artifacts_with_retry",
+                        side_effect=lambda ref, _auth, _retries: discover_by_ref.get(ref, []),
+                    ):
+                        with patch(f"{TASK}.oras_utils.oras_cp") as mock_oras:
+                            result = push_snapshot.push_image(
+                                push_snapshot.PushJob(
+                                    origin_digest="sha256:index",
+                                    name="comp1",
+                                    container_image="reg.io/img@sha256:index",
+                                    repository_url="prod.io/repo",
+                                    tag="v1.0",
+                                    platform="linux/amd64",
+                                    source_auth_file=source_auth,
+                                    retries=0,
+                                    copy_bundle_migrations=True,
+                                    arch_digests=("sha256:amd64", "sha256:arm64"),
+                                )
+                            )
+
+        copied_digests = [
+            c.args[0].split("@", 1)[1]
+            for c in mock_oras.call_args_list
+            if "@" in c.args[0] and c.args[0] != "reg.io/img@sha256:index"
+        ]
+        # The shared artifact is copied once; each per-arch roxctl report once.
+        assert sorted(copied_digests) == [
+            "sha256:roxamd64",
+            "sha256:roxarm64",
+            "sha256:shared",
+        ]
         assert result["url"] == "prod.io/repo:v1.0"
 
     def test_retries_on_failure(self, tmp_path: Path) -> None:

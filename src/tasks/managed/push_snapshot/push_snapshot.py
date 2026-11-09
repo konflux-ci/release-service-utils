@@ -65,6 +65,10 @@ class PushJob:
     source_auth_file: Path
     retries: int
     copy_bundle_migrations: bool
+    # Per-architecture manifest digests of a multi-arch image. Attached scan
+    # reports (e.g. roxctl) hang off the per-arch manifests, not the top-level
+    # index, so artifact discovery must walk these as well as the image ref.
+    arch_digests: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -160,7 +164,7 @@ def get_image_architectures(container_image: str) -> list[dict[str, Any]]:
 
 
 def oras_discover_referrers(reference: str, auth_file: Path) -> list[dict[str, Any]]:
-    """Run ``oras discover`` and return the referrers list."""
+    """Run ``oras discover`` and return the list of attached referrers."""
     result = subprocess_cmd.run_cmd(
         [
             "oras",
@@ -177,7 +181,11 @@ def oras_discover_referrers(reference: str, auth_file: Path) -> list[dict[str, A
         stderr = result.stderr.strip()
         raise RuntimeError(f"oras discover failed (exit {result.returncode}): {stderr}")
     data = json.loads(result.stdout)
-    return data.get("referrers", [])
+    # ``oras discover --format json`` reports the attached referrer descriptors
+    # under ``manifests`` (the output is an OCI image index, whose entries live
+    # in ``manifests``). Some oras output shapes have instead used a top-level
+    # ``referrers`` key, so accept either to stay robust across oras versions.
+    return data.get("manifests") or data.get("referrers") or []
 
 
 def cosign_copy(
@@ -213,6 +221,40 @@ def _discover_artifacts_with_retry(
         return []
 
 
+def _collect_copyable_artifacts(
+    references: list[str],
+    source_auth_file: Path,
+    retries: int,
+) -> list[dict[str, Any]]:
+    """Discover attached artifacts across *references* and return the copyable set.
+
+    Cosign signatures are dropped (they are propagated separately) and the
+    result is de-duplicated by digest, so the same artifact discovered on both
+    the image index and a per-architecture manifest is only copied once.
+
+    *references* should include the snapshot image reference and each
+    per-architecture digest reference; roxctl and other scan reports are
+    attached to the per-architecture manifests rather than the top-level image
+    index, so discovering on the index alone misses them.
+    """
+    artifacts: list[dict[str, Any]] = []
+    seen_digests: set[str] = set()
+    for reference in references:
+        logger.info("Checking for attached artifacts on %s", reference)
+        for item in _discover_artifacts_with_retry(reference, source_auth_file, retries):
+            artifact_type = item.get("artifactType") or item.get("mediaType") or ""
+            if re.search(r"cosign.*signature|cosign/signature", artifact_type):
+                logger.info("Skipping attached artifact (cosign signature): %s", artifact_type)
+                continue
+            digest = item.get("digest")
+            if digest and digest in seen_digests:
+                continue
+            if digest:
+                seen_digests.add(digest)
+            artifacts.append(item)
+    return artifacts
+
+
 def push_image(job: PushJob) -> dict[str, str]:
     """Push a single image to a destination repository.
 
@@ -240,18 +282,16 @@ def push_image(job: PushJob) -> dict[str, str]:
         try:
             artifacts = []
             if job.copy_bundle_migrations:
-                logger.info("Checking for attached artifacts on %s", job.container_image)
-                raw_artifacts = _discover_artifacts_with_retry(
-                    job.container_image, job.source_auth_file, job.retries
+                image_base = job.container_image.split("@")[0]
+                references = [job.container_image]
+                references += [
+                    f"{image_base}@{arch_digest}"
+                    for arch_digest in job.arch_digests
+                    if arch_digest and arch_digest != job.origin_digest
+                ]
+                artifacts = _collect_copyable_artifacts(
+                    references, job.source_auth_file, job.retries
                 )
-                for item in raw_artifacts:
-                    artifact_type = item.get("artifactType") or item.get("mediaType") or ""
-                    if re.search(r"cosign.*signature|cosign/signature", artifact_type):
-                        logger.info(
-                            "Skipping attached artifact (cosign signature): %s", artifact_type
-                        )
-                    else:
-                        artifacts.append(item)
 
             def do_copy() -> None:
                 if job.copy_bundle_migrations and len(artifacts) > 0:
@@ -383,6 +423,7 @@ class _ResolvedComponent:
     container_image: str
     arches: list[str]
     oses: list[str]
+    arch_digests: list[str]
     origin_digest: str
     platform: str
     source_auth_file: Path
@@ -410,6 +451,7 @@ def _resolve_component(
     arch_entries = get_image_architectures(container_image)
     arches = [e["platform"]["architecture"] for e in arch_entries]
     oses = [e["platform"]["os"] for e in arch_entries]
+    arch_digests = [e["digest"] for e in arch_entries if e.get("digest")]
 
     inspect_result = skopeo.inspect(container_image, raw=True)
     if inspect_result.returncode != 0:
@@ -468,6 +510,7 @@ def _resolve_component(
         container_image=container_image,
         arches=arches,
         oses=oses,
+        arch_digests=arch_digests,
         origin_digest=origin_digest,
         platform=platform,
         source_auth_file=source_auth_file,
@@ -526,6 +569,7 @@ def _build_component_jobs(
                         source_auth_file=resolved.source_auth_file,
                         retries=retries,
                         copy_bundle_migrations=copy_bundle_migrations,
+                        arch_digests=tuple(resolved.arch_digests),
                     ),
                 )
             )
