@@ -681,6 +681,124 @@ class TestPulpClient:
         with pytest.raises(RuntimeError, match="Could not find repository href"):
             client.get_repo_href("blank")
 
+    def _latest_exists(
+        self,
+        client: pulp_client.PulpClient,
+        repo_name: str = "x86_64",
+    ) -> bool:
+        return client.package_exists_in_latest_version(
+            repo_name, "hello", "0", "1.0", "1.el9", "x86_64"
+        )
+
+    def test_package_exists_in_latest_version(self) -> None:
+        """Return True when the package count in the latest version is positive."""
+        client = self._client(
+            [
+                {
+                    "results": [
+                        {"name": "x86_64", "pulp_href": "/repo/x86_64/"},
+                    ]
+                },
+                {"latest_version_href": "/repo/x86_64/versions/2/"},
+                {"count": 1, "results": []},
+            ]
+        )
+        assert self._latest_exists(client) is True
+
+    def test_package_missing_from_latest_version(self) -> None:
+        """Return False when the latest version has no matching package."""
+        client = self._client(
+            [
+                {
+                    "results": [
+                        {"name": "x86_64", "pulp_href": "/repo/x86_64/"},
+                    ]
+                },
+                {"latest_version_href": "/repo/x86_64/versions/2/"},
+                {"count": 0, "results": []},
+            ]
+        )
+        assert self._latest_exists(client) is False
+
+    def test_package_exists_no_latest_version(self) -> None:
+        """Return False when the repository has no latest_version_href."""
+        client = self._client(
+            [
+                {
+                    "results": [
+                        {"name": "x86_64", "pulp_href": "/repo/x86_64/"},
+                    ]
+                },
+                {"latest_version_href": None},
+            ]
+        )
+        assert self._latest_exists(client) is False
+
+    def test_package_exists_missing_repository_raises(self) -> None:
+        """Raise when the repository list is empty."""
+        client = self._client([{"results": []}])
+        with pytest.raises(RuntimeError, match="Cannot identify Pulp repository"):
+            self._latest_exists(client)
+
+    def test_package_exists_multiple_repositories_raises(self) -> None:
+        """Raise when more than one repository matches the name query."""
+        client = self._client(
+            [
+                {
+                    "results": [
+                        {"name": "x86_64", "pulp_href": "/repo/a/"},
+                        {"name": "x86_64", "pulp_href": "/repo/b/"},
+                    ]
+                }
+            ]
+        )
+        with pytest.raises(RuntimeError, match="Cannot identify Pulp repository"):
+            self._latest_exists(client)
+
+    def test_package_exists_name_mismatch_raises(self) -> None:
+        """Raise when the sole result's name does not match the query."""
+        client = self._client(
+            [
+                {
+                    "results": [
+                        {"name": "other", "pulp_href": "/repo/other/"},
+                    ]
+                }
+            ]
+        )
+        with pytest.raises(RuntimeError, match="Cannot identify Pulp repository"):
+            self._latest_exists(client)
+
+    def test_package_exists_missing_href_raises(self) -> None:
+        """Raise when the uniquely identified repository has no pulp_href."""
+        client = self._client(
+            [
+                {
+                    "results": [
+                        {"name": "x86_64", "pulp_href": ""},
+                    ]
+                }
+            ]
+        )
+        with pytest.raises(RuntimeError, match="Missing Pulp href"):
+            self._latest_exists(client)
+
+    def test_package_exists_invalid_count_raises(self) -> None:
+        """Raise when the package list response has a non-integer count."""
+        client = self._client(
+            [
+                {
+                    "results": [
+                        {"name": "x86_64", "pulp_href": "/repo/x86_64/"},
+                    ]
+                },
+                {"latest_version_href": "/repo/x86_64/versions/2/"},
+                {"count": None, "results": []},
+            ]
+        )
+        with pytest.raises(RuntimeError, match="Invalid Pulp package response"):
+            self._latest_exists(client)
+
     def test_ensure_domain_exists(self) -> None:
         """Matching domain name is accepted via the default listing domain."""
         client = self._client([{"results": [{"name": "dom"}]}])
