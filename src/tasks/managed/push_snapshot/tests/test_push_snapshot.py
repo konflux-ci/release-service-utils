@@ -492,7 +492,6 @@ class TestPushImage:
                     from_auth=source_auth,
                     to_auth=dest_file,
                     recursive=False,
-                    platform="linux/amd64",
                 ),
                 call(
                     "reg.io/img@sha256:art1",
@@ -566,7 +565,6 @@ class TestPushImage:
                     from_auth=source_auth,
                     to_auth=dest_file,
                     recursive=False,
-                    platform="linux/amd64",
                 ),
                 call(
                     "reg.io/img@sha256:art1",
@@ -646,7 +644,6 @@ class TestPushImage:
                     from_auth=source_auth,
                     to_auth=dest_file,
                     recursive=False,
-                    platform="",
                 ),
                 call(
                     "reg.io/img@sha256:art1",
