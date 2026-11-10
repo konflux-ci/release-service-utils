@@ -6,6 +6,9 @@ into purls for advisory matching, trigger an InternalRequest to check
 advisories, validate Pulp digests for RPMs in advisories (rebuild detection),
 write RPMs still needing publishing under ``.components[].rpmsToPublish``,
 remove components with an empty list, and overwrite the snapshot file.
+
+When ``signed_pulp_domain`` is set, stop before signing if any retained RPM
+already exists in that signed Pulp domain.
 """
 
 from __future__ import annotations
@@ -73,6 +76,7 @@ class FilterConfig:
     rpa_file: Path
     pulp_config_file: Path
     pulp_domain: str
+    signed_pulp_domain: str
     default_excludes: list[str]
     default_architectures: list[str]
     pipeline_run_uid: str
@@ -510,6 +514,52 @@ def validate_pulp_digests(
             )
 
 
+def guard_signed_rpms(
+    snapshot: dict[str, Any],
+    pulp: PulpClient,
+    domain: str,
+) -> None:
+    """Stop if a retained RPM already exists in the signed Pulp domain.
+
+    Check the distribution's published version and the repository's
+    latest version so a stale publication cannot hide an RPM uploaded
+    by an earlier run. Signed RPMs have a different SHA from the
+    unsigned snapshot RPMs; any published match or latest-version
+    presence must stop a new signing run.
+    """
+    logger.info("Checking signed Pulp domain %s for already-uploaded RPMs", domain)
+    for component in snapshot["components"]:
+        for rpm in component.get("rpmsToPublish", []):
+            for repo in rpm["targetRepos"]:
+                repo_name = repo["repository_name"]
+                status = pulp.check_digest(
+                    repo_name,
+                    rpm["rpmname"],
+                    str(rpm["epoch"]),
+                    rpm["version"],
+                    rpm["release"],
+                    rpm["arch"],
+                    rpm["sha256"],
+                )
+                if (
+                    status != PulpDigestStatus.NOT_FOUND
+                    or pulp.package_exists_in_latest_version(
+                        repo_name,
+                        rpm["rpmname"],
+                        str(rpm["epoch"]),
+                        rpm["version"],
+                        rpm["release"],
+                        rpm["arch"],
+                    )
+                ):
+                    raise RuntimeError(
+                        f"{rpm['rpm']} is already in signed Pulp domain {domain}/{repo_name} "
+                        "while this release still needs an advisory. Stop before re-signing. "
+                        "Use the original signed RPMs to finish missing advisories; "
+                        "this pipeline cannot resume a partial release."
+                    )
+
+
 def filter_snapshot(
     snapshot: dict[str, Any],
     unreleased_rpms: list[dict[str, Any]],
@@ -693,6 +743,9 @@ def run(
         len(filtered.get("components", [])),
     )
     _write_results(results, config.snapshot_file, filtered, skip_release=False)
+    if config.signed_pulp_domain:
+        signed_pulp = PulpClient.from_config(ctx.pulp_config, config.signed_pulp_domain)
+        guard_signed_rpms(filtered, signed_pulp, config.signed_pulp_domain)
 
 
 def main() -> int:
@@ -715,6 +768,7 @@ def main() -> int:
         rpa_file=Path(tekton.require_env("RPA_FILE")),
         pulp_config_file=Path(tekton.require_env("PULP_CONFIG_FILE")),
         pulp_domain=tekton.require_env("PULP_DOMAIN"),
+        signed_pulp_domain=os.environ.get("SIGNED_PULP_DOMAIN", ""),
         default_excludes=parse_comma_list(
             os.environ.get("DEFAULT_EXCLUDES", "-debuginfo-, -debugsource-")
         ),

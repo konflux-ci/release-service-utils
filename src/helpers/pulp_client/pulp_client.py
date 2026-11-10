@@ -297,6 +297,59 @@ class PulpClient:
             raise RuntimeError(f"Could not find repository href for {repo_name}")
         return str(href)
 
+    def package_exists_in_latest_version(
+        self,
+        repo_name: str,
+        name: str,
+        epoch: str,
+        version: str,
+        release: str,
+        arch: str,
+    ) -> bool:
+        """Return True if an RPM with this NEVRA is in the repo's latest version.
+
+        Look up the repository by name (must uniquely match), read
+        ``latest_version_href``, and query package content. This is
+        independent of the distribution's published version, so a stale
+        publication cannot hide content already uploaded to the latest
+        unpublished version.
+
+        Raise ``RuntimeError`` if the repository cannot be uniquely
+        identified, the href is missing, or the package list response
+        is invalid.
+        """
+        url = (
+            f"{self._base_url}/api/pulp/{quote(self._domain, safe='')}"
+            f"/api/v3/repositories/rpm/rpm/?name={quote(repo_name, safe='')}"
+        )
+        repos = self.get_json(url).get("results") or []
+        if len(repos) != 1 or repos[0].get("name") != repo_name:
+            raise RuntimeError(f"Cannot identify Pulp repository {self._domain}/{repo_name}")
+        repo_href = repos[0].get("pulp_href")
+        if not repo_href:
+            raise RuntimeError(f"Missing Pulp href for repository {self._domain}/{repo_name}")
+        version_href = self.get_json(self._absolute_url(str(repo_href))).get(
+            "latest_version_href"
+        )
+        if not version_href:
+            return False
+        content_url = (
+            f"{self._base_url}/api/pulp/{quote(self._domain, safe='')}"
+            f"/api/v3/content/rpm/packages/"
+            f"?repository_version={quote(str(version_href), safe='')}"
+            f"&name={quote(name, safe='')}"
+            f"&epoch={quote(epoch, safe='')}"
+            f"&version={quote(version, safe='')}"
+            f"&release={quote(release, safe='')}"
+            f"&arch={quote(arch, safe='')}"
+        )
+        count = self.get_json(content_url).get("count")
+        if not isinstance(count, int):
+            raise RuntimeError(
+                f"Invalid Pulp package response for {name}-{version}-{release}.{arch}"
+            )
+        return count > 0
+
     def wait_for_task(
         self,
         task_url: str,
