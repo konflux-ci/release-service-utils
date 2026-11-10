@@ -295,13 +295,17 @@ def push_image(job: PushJob) -> dict[str, str]:
 
             def do_copy() -> None:
                 if job.copy_bundle_migrations and len(artifacts) > 0:
+                    # Copy the whole image, not a single platform. Passing a
+                    # platform filter here would flatten a multi-arch index to
+                    # one architecture and change its digest; the attachments
+                    # are per-arch, so the full index must be preserved (this
+                    # matches the ``skopeo.copy(..., all=True)`` path below).
                     oras_utils.oras_cp(
                         job.container_image,
                         dest_ref,
                         from_auth=job.source_auth_file,
                         to_auth=dest_auth_file,
                         recursive=False,
-                        platform=job.platform,
                     )
                     logger.info(
                         "Copying %d attached artifacts for %s to %s",
