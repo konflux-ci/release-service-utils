@@ -21,6 +21,7 @@ from release_service_utils.tasks.internal.create_advisory_oci_artifact.create_ad
     DOCKERCONFIG_ENV,
     PROG,
     STORE,
+    _raw_file_url_to_api_url,
     _write_gzip_tar,
     main,
     run,
@@ -31,7 +32,23 @@ TASK = (
     ".create_advisory_oci_artifact.create_advisory_oci_artifact"
 )
 ADVISORY_YAML = "---\nproduct: mock\n"
-ADVISORY_URL = "https://example.com/advisory.yaml"
+ADVISORY_URL = "https://gitlab.example.com/group/project/-/raw/main/path/to/advisory.yaml"
+ACCESS_TOKEN = "tok"
+API_URL = (
+    "https://gitlab.example.com/api/v4/projects/group%2Fproject"
+    "/repository/files/path%2Fto%2Fadvisory.yaml/raw?ref=main"
+)
+
+
+def _write_advisory_secret(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, token: str = ACCESS_TOKEN
+) -> Path:
+    """Write gitlab_access_token under a temp mount and point the env var at it."""
+    secret = tmp_path / "advisory_secret"
+    secret.mkdir(exist_ok=True)
+    (secret / "gitlab_access_token").write_text(token, encoding="utf-8")
+    monkeypatch.setenv("ADVISORY_SECRET_MOUNT", str(secret))
+    return secret
 
 
 def _result_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
@@ -47,7 +64,66 @@ def _result_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Pa
     monkeypatch.setenv("INTERNAL_REQUEST_PIPELINE_RUN_NAME", "pr-1")
     monkeypatch.setenv("INTERNAL_REQUEST_TASK_RUN_NAME", "tr-1")
     monkeypatch.setenv("PARAM_ADVISORY_URL", ADVISORY_URL)
+    _write_advisory_secret(tmp_path, monkeypatch)
     return paths
+
+
+@pytest.mark.parametrize(
+    ("raw_url", "expected"),
+    [
+        (
+            "https://gitlab.example.com/group/project/-/raw/main/path/to/advisory.yaml",
+            "https://gitlab.example.com/api/v4/projects/group%2Fproject"
+            "/repository/files/path%2Fto%2Fadvisory.yaml/raw?ref=main",
+        ),
+        (
+            "https://gitlab.example.com/group/sub/project/-/raw/main/file.yaml",
+            "https://gitlab.example.com/api/v4/projects/group%2Fsub%2Fproject"
+            "/repository/files/file.yaml/raw?ref=main",
+        ),
+        (
+            "https://gitlab.example.com/g/p/-/raw/main/advisory.yaml?download=1",
+            "https://gitlab.example.com/api/v4/projects/g%2Fp"
+            "/repository/files/advisory.yaml/raw?ref=main",
+        ),
+        (
+            "http://127.0.0.1:8080/group/project/-/raw/main/path/to/advisory.yaml",
+            "http://127.0.0.1:8080/api/v4/projects/group%2Fproject"
+            "/repository/files/path%2Fto%2Fadvisory.yaml/raw?ref=main",
+        ),
+    ],
+)
+def test_raw_file_url_to_api_url(raw_url: str, expected: str) -> None:
+    """Translate GitLab web raw URLs into the repository-files API endpoint."""
+    assert _raw_file_url_to_api_url(raw_url) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw_url", "error"),
+    [
+        (
+            "https://gitlab.example.com/group/project/advisory.yaml",
+            "not a GitLab raw-file URL",
+        ),
+        (
+            "https://gitlab.example.com/group/project/-/raw/main",
+            "missing project, git ref, or file path",
+        ),
+        (
+            "https://gitlab.example.com/-/raw/main/file.yaml",
+            "missing project, git ref, or file path",
+        ),
+        (
+            "ftp://gitlab.example.com/g/p/-/raw/main/file.yaml",
+            r"not an HTTP\(S\) URL",
+        ),
+        ("", r"not an HTTP\(S\) URL"),
+    ],
+)
+def test_raw_file_url_to_api_url_rejects_invalid(raw_url: str, error: str) -> None:
+    """Reject URLs that are not GitLab ``/-/raw/`` file URLs."""
+    with pytest.raises(ValueError, match=error):
+        _raw_file_url_to_api_url(raw_url)
 
 
 def test_write_gzip_tar_is_extractable(tmp_path: Path) -> None:
@@ -97,9 +173,9 @@ def test_run_returns_file_digest_uri(tmp_path: Path) -> None:
         patch(f"{TASK}.oci_auth.auth_file", fake_auth_file),
         patch(f"{TASK}.oras_push", side_effect=fake_push) as mock_push,
     ):
-        uri = run(ADVISORY_URL)
+        uri = run(ADVISORY_URL, ACCESS_TOKEN)
 
-    mock_get.assert_called_once_with(ADVISORY_URL)
+    mock_get.assert_called_once_with(API_URL, headers={"PRIVATE-TOKEN": ACCESS_TOKEN})
     mock_push.assert_called_once()
     assert captured["tag"] == STORE
     assert captured["subdirectory"] == ARCHIVE_NAME
@@ -116,8 +192,18 @@ def test_run_wraps_http_error() -> None:
         patch(f"{TASK}.http_client.get_text", side_effect=error),
         pytest.raises(tekton.CheckStepError, match="downloading the advisory YAML") as exc,
     ):
-        run(ADVISORY_URL)
+        run(ADVISORY_URL, ACCESS_TOKEN)
     assert exc.value.cause is error
+
+
+def test_run_rejects_non_raw_url() -> None:
+    """A URL that is not a GitLab raw-file URL raises ValueError before download."""
+    with (
+        patch(f"{TASK}.http_client.get_text") as mock_get,
+        pytest.raises(ValueError, match="not a GitLab raw-file URL"),
+    ):
+        run("https://example.com/advisory.yaml", ACCESS_TOKEN)
+    mock_get.assert_not_called()
 
 
 def test_run_wraps_oras_push_error(tmp_path: Path) -> None:
@@ -137,7 +223,7 @@ def test_run_wraps_oras_push_error(tmp_path: Path) -> None:
         patch(f"{TASK}.oras_push", side_effect=error),
         pytest.raises(tekton.CheckStepError, match="pushing the advisory archive") as exc,
     ):
-        run(ADVISORY_URL)
+        run(ADVISORY_URL, ACCESS_TOKEN)
     assert exc.value.cause is error
 
 
@@ -149,7 +235,7 @@ def test_run_wraps_select_oci_auth_error() -> None:
         patch(f"{TASK}.oci_auth.auth_file", side_effect=error),
         pytest.raises(tekton.CheckStepError, match="pushing the advisory archive") as exc,
     ):
-        run(ADVISORY_URL)
+        run(ADVISORY_URL, ACCESS_TOKEN)
     assert exc.value.cause is error
 
 
@@ -167,7 +253,7 @@ def test_main_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     mock_ca.assert_called_once_with()
     mock_docker.assert_called_once_with(Path(DEFAULT_DOCKERCONFIG), optional=True)
-    mock_run.assert_called_once_with(ADVISORY_URL)
+    mock_run.assert_called_once_with(ADVISORY_URL, ACCESS_TOKEN)
     assert paths["RESULT_RESULT"].read_text(encoding="utf-8") == "Success"
     assert paths["RESULT_ADVISORY_OCI_ARTIFACT"].read_text(encoding="utf-8") == uri
     assert (
@@ -290,6 +376,35 @@ def test_main_missing_or_empty_advisory_url(
         paths["RESULT_INTERNAL_REQUEST_PIPELINE_RUN_NAME"].read_text(encoding="utf-8")
         == "pr-1"
     )
+
+
+def test_main_missing_token_writes_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing gitlab_access_token file writes a failure result and still exits 0."""
+    paths = _result_env(tmp_path, monkeypatch)
+    secret = tmp_path / "advisory_secret"
+    (secret / "gitlab_access_token").unlink()
+
+    assert main() == 0
+    text = paths["RESULT_RESULT"].read_text(encoding="utf-8")
+    assert PROG in text
+    assert "gitlab_access_token" in text
+    assert paths["RESULT_ADVISORY_OCI_ARTIFACT"].read_text(encoding="utf-8") == ""
+
+
+def test_main_empty_token_writes_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blank gitlab_access_token writes a failure result and still exits 0."""
+    paths = _result_env(tmp_path, monkeypatch)
+    _write_advisory_secret(tmp_path, monkeypatch, token="  ")
+
+    assert main() == 0
+    text = paths["RESULT_RESULT"].read_text(encoding="utf-8")
+    assert PROG in text
+    assert "gitlab_access_token is empty" in text
+    assert paths["RESULT_ADVISORY_OCI_ARTIFACT"].read_text(encoding="utf-8") == ""
 
 
 def test_dunder_main_invokes_main() -> None:
