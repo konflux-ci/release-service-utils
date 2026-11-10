@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Create an OCI artifact from an advisory YAML URL.
 
-Downloads the advisory YAML, packs it as a gzip tar, and pushes the archive
-to the release-service trusted-artifacts store. The returned URI uses the
+Downloads the advisory YAML from GitLab's repository-files API using a
+mounted access token, packs it as a gzip tar, and pushes the archive to
+the release-service trusted-artifacts store. The returned URI uses the
 tar-file SHA-256 so callers can ``oras blob fetch`` the blob.
 
 After a valid invocation with Tekton result env vars, always exits ``0``;
@@ -16,6 +17,7 @@ import os
 import tarfile
 import tempfile
 from pathlib import Path
+from urllib.parse import quote, urlparse
 
 from release_service_utils.helpers import (
     authentication,
@@ -34,6 +36,40 @@ ARCHIVE_NAME = "advisory"
 ADVISORY_FILENAME = "advisory.yaml"
 DEFAULT_DOCKERCONFIG = "/mnt/trusted_artifacts_dockerconfig/.dockerconfigjson"
 DOCKERCONFIG_ENV = "TA_DOCKERCONFIG_PATH"
+ADVISORY_SECRET_MOUNT_ENV = "ADVISORY_SECRET_MOUNT"
+DEFAULT_ADVISORY_SECRET_MOUNT = Path("/mnt/advisory_secret")
+GITLAB_TOKEN_HEADER = "PRIVATE-TOKEN"
+_RAW_FILE_MARKER = "/-/raw/"
+
+
+def _raw_file_url_to_api_url(raw_url: str) -> str:
+    """Translate a GitLab ``/-/raw/`` URL into the REST raw-file API URL.
+
+    GitLab's web raw route does not honor ``PRIVATE-TOKEN`` for private
+    projects: it redirects to sign-in and returns HTML with HTTP 200. The
+    ``/repository/files/:path/raw`` API endpoint does honor the header.
+
+    The first path segment after ``/-/raw/`` is the git ref; the remainder
+    is the file path. Query strings on *raw_url* are ignored. Scheme and
+    host from *raw_url* are preserved.
+    """
+    parsed = urlparse(raw_url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"advisory_url is not an HTTP(S) URL: {raw_url}")
+    if _RAW_FILE_MARKER not in parsed.path:
+        raise ValueError(f"advisory_url is not a GitLab raw-file URL: {raw_url}")
+    project_path, rest = parsed.path.split(_RAW_FILE_MARKER, 1)
+    project_path = project_path.lstrip("/")
+    git_ref, _sep, file_path = rest.lstrip("/").partition("/")
+    if not project_path or not git_ref or not file_path:
+        raise ValueError(f"advisory_url is missing project, git ref, or file path: {raw_url}")
+    encoded_project = quote(project_path, safe="")
+    encoded_file = quote(file_path, safe="")
+    encoded_ref = quote(git_ref, safe="")
+    return (
+        f"{parsed.scheme}://{parsed.netloc}/api/v4/projects/{encoded_project}"
+        f"/repository/files/{encoded_file}/raw?ref={encoded_ref}"
+    )
 
 
 def _write_gzip_tar(source_dir: Path, archive: Path) -> None:
@@ -50,18 +86,21 @@ def _write_gzip_tar(source_dir: Path, archive: Path) -> None:
         tar.add(str(source_dir), arcname=".")
 
 
-def run(advisory_url: str) -> str:
+def run(advisory_url: str, access_token: str) -> str:
     """Download, pack, and push the advisory YAML; return the OCI artifact URI."""
+    api_url = _raw_file_url_to_api_url(advisory_url)
     with tempfile.TemporaryDirectory() as yaml_tmpdir:
         yaml_dir = Path(yaml_tmpdir)
         yaml_path = yaml_dir / ADVISORY_FILENAME
         try:
-            body = http_client.get_text(advisory_url)
+            body = http_client.get_text(
+                api_url,
+                headers={GITLAB_TOKEN_HEADER: access_token},
+            )
         except Exception as exc:
             raise tekton.CheckStepError("downloading the advisory YAML", exc) from exc
         yaml_path.write_text(body, encoding="utf-8")
-        logger.info("Downloaded advisory YAML from %s", advisory_url)
-        logger.info("%s", body)
+        logger.info("Downloaded advisory YAML (%s bytes)", len(body.encode("utf-8")))
 
         with tempfile.TemporaryDirectory() as archive_tmpdir:
             archive_dir = Path(archive_tmpdir)
@@ -112,14 +151,20 @@ def main() -> int:
     )
 
     dockerconfig = file.path_from_env_variable(DOCKERCONFIG_ENV, DEFAULT_DOCKERCONFIG)
+    advisory_secret = file.path_from_env_variable(
+        ADVISORY_SECRET_MOUNT_ENV, DEFAULT_ADVISORY_SECRET_MOUNT
+    )
 
     try:
         advisory_url = os.environ.get("PARAM_ADVISORY_URL", "").strip()
         if not advisory_url:
             raise ValueError("PARAM_ADVISORY_URL must be set")
+        access_token = authentication.read_mounted_text(advisory_secret, "gitlab_access_token")
+        if not access_token:
+            raise ValueError("gitlab_access_token is empty")
         authentication.setup_ca_cert()
         authentication.setup_docker_config(dockerconfig, optional=True)
-        uri = run(advisory_url)
+        uri = run(advisory_url, access_token)
         path_result.write_text("Success", encoding="utf-8")
         path_artifact.write_text(uri, encoding="utf-8")
     except Exception as exc:
