@@ -92,6 +92,21 @@ def test_conflicting_snapshot_digests_fail() -> None:
         )
 
 
+@pytest.mark.parametrize("name", ["../package.rpm", "package.txt", "package.rpm/"])
+def test_invalid_unsigned_rpm_names_fail(name: str) -> None:
+    """Reject names that cannot identify a flat RPM input."""
+    with pytest.raises(ValueError, match="Missing RPM name"):
+        rpm_resume.inputs_from_artifact_json({"artifacts": {name: {"sha256": "sha"}}})
+
+
+def test_empty_rpm_set_and_signing_alias_fail() -> None:
+    """Require both an RPM input and a signing identity for a checkpoint key."""
+    with pytest.raises(ValueError, match="No RPMs"):
+        rpm_resume.inputs_from_snapshot({"components": []})
+    with pytest.raises(ValueError, match="Signing alias"):
+        rpm_resume.fingerprint(INPUTS, "")
+
+
 def test_finds_matching_successful_request() -> None:
     """Find a previous signing result only when its input and alias match."""
     response = subprocess.CompletedProcess([], 0, json.dumps({"items": [_request()]}), "")
@@ -130,6 +145,25 @@ def test_explicit_request_must_match() -> None:
         rpm_resume.find_resume_request(INPUTS, "release4", "signing-1")
 
 
+@pytest.mark.parametrize("encoded", ["not-base64", base64.b64encode(b"[]").decode()])
+def test_request_with_invalid_artifact_json_is_ignored(encoded: str) -> None:
+    """Ignore a prior request when its recorded RPM set cannot be decoded."""
+    request = _request()
+    request["spec"]["params"]["artifact_json"] = encoded
+    response = subprocess.CompletedProcess([], 0, json.dumps({"items": [request]}), "")
+    with patch.object(rpm_resume.subprocess_cmd, "run_cmd", return_value=response):
+        assert rpm_resume.find_resume_request(INPUTS, "release4") is None
+
+
+def test_request_without_name_is_ignored() -> None:
+    """Require an InternalRequest name to identify the signing result."""
+    request = _request()
+    request["metadata"].pop("name")
+    response = subprocess.CompletedProcess([], 0, json.dumps({"items": [request]}), "")
+    with patch.object(rpm_resume.subprocess_cmd, "run_cmd", return_value=response):
+        assert rpm_resume.find_resume_request(INPUTS, "release4") is None
+
+
 def test_validate_signed_artifact_file_set() -> None:
     """Accept the signed RPM archive format produced by the signing service."""
 
@@ -146,6 +180,23 @@ def test_validate_signed_artifact_file_set() -> None:
                     info = tarfile.TarInfo(f"./{member_name}")
                     info.size = len(content)
                     output.addfile(info, io.BytesIO(content))
+
+    with patch.object(rpm_resume.oras_utils, "oras_blob_fetch", side_effect=fetch):
+        rpm_resume.validate_signed_artifact(REF, INPUTS)
+
+
+def test_validate_signed_artifact_ignores_directory_entry() -> None:
+    """Allow tar directory entries when all required RPM files are present."""
+
+    def fetch(_ref: str, archive: Path) -> None:
+        with tarfile.open(archive, "w:gz") as output:
+            directory = tarfile.TarInfo("./")
+            directory.type = tarfile.DIRTYPE
+            output.addfile(directory)
+            for name in INPUTS:
+                info = tarfile.TarInfo(name)
+                info.size = 1
+                output.addfile(info, io.BytesIO(b"x"))
 
     with patch.object(rpm_resume.oras_utils, "oras_blob_fetch", side_effect=fetch):
         rpm_resume.validate_signed_artifact(REF, INPUTS)
@@ -184,6 +235,51 @@ def test_validate_signed_artifact_rejects_orphan_header() -> None:
     with (
         patch.object(rpm_resume.oras_utils, "oras_blob_fetch", side_effect=fetch),
         pytest.raises(RuntimeError, match="orphan headers"),
+    ):
+        rpm_resume.validate_signed_artifact(REF, INPUTS)
+
+
+@pytest.mark.parametrize(
+    "member_name,content",
+    [
+        ("digests", b""),
+        ("digests.signed", b""),
+        ("other.txt", b"data"),
+        ("nested/one-1-1.x86_64.rpm", b"data"),
+        ("one-1-1.x86_64.rpm", b""),
+    ],
+)
+def test_validate_signed_artifact_rejects_invalid_members(
+    member_name: str, content: bytes
+) -> None:
+    """Reject empty metadata and files outside the expected flat RPM set."""
+
+    def fetch(_ref: str, archive: Path) -> None:
+        with tarfile.open(archive, "w:gz") as output:
+            info = tarfile.TarInfo(member_name)
+            info.size = len(content)
+            output.addfile(info, io.BytesIO(content))
+
+    with (
+        patch.object(rpm_resume.oras_utils, "oras_blob_fetch", side_effect=fetch),
+        pytest.raises(RuntimeError, match="Invalid signed RPM artifact member"),
+    ):
+        rpm_resume.validate_signed_artifact(REF, INPUTS)
+
+
+def test_validate_signed_artifact_rejects_unexpected_rpm() -> None:
+    """Reject an archive with an RPM that was absent from the unsigned input."""
+
+    def fetch(_ref: str, archive: Path) -> None:
+        with tarfile.open(archive, "w:gz") as output:
+            for name in (*INPUTS, "unexpected-1-1.x86_64.rpm"):
+                info = tarfile.TarInfo(name)
+                info.size = 1
+                output.addfile(info, io.BytesIO(b"x"))
+
+    with (
+        patch.object(rpm_resume.oras_utils, "oras_blob_fetch", side_effect=fetch),
+        pytest.raises(RuntimeError, match="unexpected=\\['unexpected-1-1.x86_64.rpm'\\]"),
     ):
         rpm_resume.validate_signed_artifact(REF, INPUTS)
 
@@ -254,6 +350,46 @@ def test_checkpoint_rejects_wrong_input_set() -> None:
         rpm_resume.read_checkpoint("quay.io/storage", INPUTS, "release4")
 
 
+@pytest.mark.parametrize("repository", ["", "empty", "quay.io/storage?bad"])
+def test_checkpoint_tag_requires_repository(repository: str) -> None:
+    """Reject unusable OCI storage values before attempting registry access."""
+    with pytest.raises(ValueError, match="writable OCI repository"):
+        rpm_resume.checkpoint_tag(repository, INPUTS, "release4")
+
+
+def test_read_checkpoint_without_resolved_tag_returns_none() -> None:
+    """Treat a tag with no resolved digest as an absent checkpoint."""
+    with (
+        patch.object(rpm_resume.oras_utils, "oras_resolve", return_value=None),
+        patch.object(rpm_resume.oras_utils, "oras_pull") as pull,
+    ):
+        assert rpm_resume.read_checkpoint("quay.io/storage", INPUTS, "release4") is None
+    pull.assert_not_called()
+
+
+def test_checkpoint_rejects_invalid_signed_reference() -> None:
+    """Reject a stored checkpoint whose artifact reference is not immutable."""
+
+    def pull(_tag: str, dest: Path, *, stream_stdout: bool) -> None:
+        (dest / rpm_resume.CHECKPOINT_FILE).write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "signing_alias": "release4",
+                    "unsigned_rpms": INPUTS,
+                    "signed_artifact": "oci:quay.io/signed:latest",
+                }
+            )
+        )
+
+    with (
+        patch.object(rpm_resume.oras_utils, "oras_resolve", return_value="sha256:index"),
+        patch.object(rpm_resume.oras_utils, "oras_pull", side_effect=pull),
+        pytest.raises(RuntimeError, match="no valid artifact reference"),
+    ):
+        rpm_resume.read_checkpoint("quay.io/storage", INPUTS, "release4")
+
+
 def test_falls_back_to_recent_internal_request() -> None:
     """A completed IR can resume a run before its OCI checkpoint is written."""
     with (
@@ -265,6 +401,26 @@ def test_falls_back_to_recent_internal_request() -> None:
         ),
     ):
         assert rpm_resume.find_resume_checkpoint("quay.io/storage", INPUTS, "release4") == REF
+
+
+@pytest.mark.parametrize("request_name,expected", [("signing-1", REF), (None, None)])
+def test_explicit_request_result_is_returned(
+    request_name: str | None, expected: str | None
+) -> None:
+    """Use only the named signing request when the caller supplied one."""
+    match = (request_name, REF) if request_name else None
+    with (
+        patch.object(rpm_resume, "find_resume_request", return_value=match) as find,
+        patch.object(rpm_resume, "read_checkpoint") as read,
+    ):
+        assert (
+            rpm_resume.find_resume_checkpoint(
+                "quay.io/storage", INPUTS, "release4", "signing-1"
+            )
+            == expected
+        )
+    find.assert_called_once_with(INPUTS, "release4", "signing-1")
+    read.assert_not_called()
 
 
 def test_explicit_request_cleanup_uses_retained_checkpoint() -> None:
@@ -283,6 +439,20 @@ def test_explicit_request_cleanup_uses_retained_checkpoint() -> None:
             )
             == REF
         )
+
+
+def test_explicit_request_cleanup_without_checkpoint_fails() -> None:
+    """Preserve the kubectl failure when neither request nor checkpoint exists."""
+    with (
+        patch.object(
+            rpm_resume,
+            "find_resume_request",
+            side_effect=subprocess.CalledProcessError(1, ["kubectl", "get"]),
+        ),
+        patch.object(rpm_resume, "read_checkpoint", return_value=None),
+        pytest.raises(subprocess.CalledProcessError),
+    ):
+        rpm_resume.find_resume_checkpoint("quay.io/storage", INPUTS, "release4", "signing-1")
 
 
 def test_missing_checkpoint_is_distinct_from_registry_failure() -> None:
@@ -354,6 +524,32 @@ def test_record_rejects_conflicting_checkpoint() -> None:
     run.assert_not_called()
 
 
+def test_record_rejects_changed_request_result() -> None:
+    """Do not retain an artifact that differs from the signing request result."""
+    with (
+        patch.object(rpm_resume, "find_resume_request", return_value=("signing-1", REF)),
+        patch.object(rpm_resume, "read_checkpoint") as read,
+        pytest.raises(RuntimeError, match="result changed"),
+    ):
+        rpm_resume.record_checkpoint(
+            "quay.io/storage", INPUTS, "release4", "signing-1", "oci:other", "7d"
+        )
+    read.assert_not_called()
+
+
+def test_record_matching_checkpoint_is_idempotent() -> None:
+    """Avoid pushing another checkpoint when the stored reference already matches."""
+    with (
+        patch.object(rpm_resume, "find_resume_request", return_value=("signing-1", REF)),
+        patch.object(rpm_resume, "read_checkpoint", return_value=REF),
+        patch.object(rpm_resume.subprocess_cmd, "run_cmd") as run,
+    ):
+        rpm_resume.record_checkpoint(
+            "quay.io/storage", INPUTS, "release4", "signing-1", REF, "7d"
+        )
+    run.assert_not_called()
+
+
 def test_cli_fingerprint_uses_artifact_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -403,6 +599,76 @@ def test_cli_find_prints_matching_artifact(
         assert rpm_resume.main() == 0
     find.assert_called_once_with("quay.io/storage", INPUTS, "release4", "")
     assert capsys.readouterr().out == REF + "\n"
+
+
+def test_cli_find_without_checkpoint_prints_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Return an empty result when no matching signing attempt exists."""
+    artifact_json = tmp_path / "artifacts.json"
+    artifact_json.write_text(
+        json.dumps({"artifacts": {name: {"sha256": sha} for name, sha in INPUTS.items()}})
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "rpm_resume",
+            "find",
+            "--artifact-json",
+            str(artifact_json),
+            "--signing-alias",
+            "release4",
+        ],
+    )
+    with patch.object(rpm_resume, "find_resume_checkpoint", return_value=None):
+        assert rpm_resume.main() == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_cli_record_requires_request_and_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject an incomplete record command before writing to OCI storage."""
+    artifact_json = tmp_path / "artifacts.json"
+    artifact_json.write_text(
+        json.dumps({"artifacts": {name: {"sha256": sha} for name, sha in INPUTS.items()}})
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "rpm_resume",
+            "record",
+            "--artifact-json",
+            str(artifact_json),
+            "--signing-alias",
+            "release4",
+        ],
+    )
+    with pytest.raises(SystemExit, match="2"):
+        rpm_resume.main()
+
+
+def test_cli_validate_requires_result_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject a validate command that has nowhere to write its verified result."""
+    artifact_json = tmp_path / "artifacts.json"
+    artifact_json.write_text(
+        json.dumps({"artifacts": {name: {"sha256": sha} for name, sha in INPUTS.items()}})
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "rpm_resume",
+            "validate",
+            "--artifact-json",
+            str(artifact_json),
+            "--signing-alias",
+            "release4",
+        ],
+    )
+    with pytest.raises(SystemExit, match="2"):
+        rpm_resume.main()
 
 
 def test_cli_record_writes_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
