@@ -733,6 +733,101 @@ class TestPushImage:
         ]
         assert result["url"] == "prod.io/repo:v1.0"
 
+    def test_reconciles_artifacts_when_image_already_present(self, tmp_path: Path) -> None:
+        """Backfill attachments when the image already exists at the destination.
+
+        The image transfer is skipped (the destination already holds the
+        origin digest), but attached artifacts are still discovered and copied
+        so scan reports can be backfilled onto an image released before copying
+        was enabled, or completed after a prior partial failure.
+        """
+        source_auth = tmp_path / "src_auth.json"
+        source_auth.write_text('{"auths":{}}', encoding="utf-8")
+
+        with patch(f"{TASK}.create_dest_auth_file") as mock_dest_auth:
+            dest_file = tmp_path / "dest_auth.json"
+            dest_file.write_text('{"auths":{}}', encoding="utf-8")
+            mock_dest_auth.return_value = dest_file
+
+            # Destination already holds the origin digest.
+            with patch(f"{TASK}.oras_utils.oras_resolve", return_value="sha256:abc"):
+                with patch(f"{TASK}.create_combined_docker_config") as mock_config:
+                    config_dir = tmp_path / "docker"
+                    config_dir.mkdir()
+                    (config_dir / "config.json").write_text("{}")
+                    mock_config.return_value = config_dir
+
+                    with patch(
+                        f"{TASK}._discover_artifacts_with_retry",
+                        return_value=[
+                            {
+                                "digest": "sha256:art1",
+                                "artifactType": "application/sarif+json",
+                            }
+                        ],
+                    ):
+                        with patch(f"{TASK}.skopeo.copy") as mock_skopeo:
+                            with patch(f"{TASK}.oras_utils.oras_cp") as mock_oras:
+                                result = push_snapshot.push_image(
+                                    push_snapshot.PushJob(
+                                        origin_digest="sha256:abc",
+                                        name="comp1",
+                                        container_image="reg.io/img@sha256:abc",
+                                        repository_url="prod.io/repo",
+                                        tag="v1.0",
+                                        platform="linux/amd64",
+                                        source_auth_file=source_auth,
+                                        retries=0,
+                                        copy_bundle_migrations=True,
+                                        arch_digests=("sha256:amd64",),
+                                    )
+                                )
+
+        # Image transfer is skipped: no skopeo copy, and no image-ref oras cp;
+        # only the attachment is copied.
+        mock_skopeo.assert_not_called()
+        mock_oras.assert_called_once_with(
+            "reg.io/img@sha256:art1",
+            "prod.io/repo@sha256:art1",
+            from_auth=source_auth,
+            to_auth=dest_file,
+            recursive=False,
+        )
+        assert result == {"name": "comp1", "url": "prod.io/repo:v1.0"}
+
+    def test_skips_entirely_when_present_and_copying_disabled(self, tmp_path: Path) -> None:
+        """Skip discovery and copy when the image is present and copying is off."""
+        source_auth = tmp_path / "src_auth.json"
+        source_auth.write_text('{"auths":{}}', encoding="utf-8")
+
+        with patch(f"{TASK}.create_dest_auth_file") as mock_dest_auth:
+            dest_file = tmp_path / "dest_auth.json"
+            dest_file.write_text('{"auths":{}}', encoding="utf-8")
+            mock_dest_auth.return_value = dest_file
+
+            with patch(f"{TASK}.oras_utils.oras_resolve", return_value="sha256:abc"):
+                with patch(f"{TASK}._discover_artifacts_with_retry") as mock_discover:
+                    with patch(f"{TASK}.skopeo.copy") as mock_skopeo:
+                        with patch(f"{TASK}.oras_utils.oras_cp") as mock_oras:
+                            result = push_snapshot.push_image(
+                                push_snapshot.PushJob(
+                                    origin_digest="sha256:abc",
+                                    name="comp1",
+                                    container_image="reg.io/img@sha256:abc",
+                                    repository_url="prod.io/repo",
+                                    tag="v1.0",
+                                    platform="",
+                                    source_auth_file=source_auth,
+                                    retries=0,
+                                    copy_bundle_migrations=False,
+                                )
+                            )
+
+        mock_discover.assert_not_called()
+        mock_skopeo.assert_not_called()
+        mock_oras.assert_not_called()
+        assert result == {"name": "comp1", "url": "prod.io/repo:v1.0"}
+
     def test_retries_on_failure(self, tmp_path: Path) -> None:
         """Retry a failed copy and succeed on the next attempt."""
         source_auth = tmp_path / "src_auth.json"

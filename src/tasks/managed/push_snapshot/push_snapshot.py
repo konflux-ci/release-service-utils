@@ -268,7 +268,17 @@ def push_image(job: PushJob) -> dict[str, str]:
             dest_ref, auth_file=dest_auth_file, check=False
         )
 
-        if destination_digest is not None and destination_digest == job.origin_digest:
+        image_exists = (
+            destination_digest is not None and destination_digest == job.origin_digest
+        )
+
+        # When the image is already at the destination we skip the image
+        # transfer, but still reconcile attachments if copying is enabled:
+        # this backfills scan reports onto images released before copying was
+        # turned on, and completes attachments left behind by a prior partial
+        # failure. With copying disabled there is nothing to reconcile, so the
+        # whole push is skipped as before.
+        if image_exists and not job.copy_bundle_migrations:
             logger.info(
                 "Component push skipped (source digest exists at destination): %s (%s)",
                 job.name,
@@ -276,7 +286,16 @@ def push_image(job: PushJob) -> dict[str, str]:
             )
             return {"name": job.name, "url": dest_ref}
 
-        logger.info("Pushing component: %s to %s:%s", job.name, job.repository_url, job.tag)
+        if image_exists:
+            logger.info(
+                "Image already at destination; reconciling attached artifacts only: %s (%s)",
+                job.name,
+                job.container_image,
+            )
+        else:
+            logger.info(
+                "Pushing component: %s to %s:%s", job.name, job.repository_url, job.tag
+            )
 
         docker_config_dir = create_combined_docker_config(job.source_auth_file, dest_auth_file)
         try:
@@ -293,7 +312,41 @@ def push_image(job: PushJob) -> dict[str, str]:
                     references, job.source_auth_file, job.retries
                 )
 
+            def copy_artifacts() -> None:
+                logger.info(
+                    "Copying %d attached artifacts for %s to %s",
+                    len(artifacts),
+                    job.container_image,
+                    job.repository_url,
+                )
+                for artifact in artifacts:
+                    artifact_digest = artifact.get("digest")
+                    if not artifact_digest:
+                        logger.warning("Skipping artifact with missing digest: %s", artifact)
+                        continue
+                    artifact_ref = f"{job.container_image.split('@')[0]}@{artifact_digest}"
+                    dest_artifact_ref = f"{job.repository_url}@{artifact_digest}"
+
+                    logger.info(
+                        "Copying attached artifact: %s to %s",
+                        artifact_ref,
+                        dest_artifact_ref,
+                    )
+                    oras_utils.oras_cp(
+                        artifact_ref,
+                        dest_artifact_ref,
+                        from_auth=job.source_auth_file,
+                        to_auth=dest_auth_file,
+                        recursive=False,
+                    )
+
             def do_copy() -> None:
+                if image_exists:
+                    # Image transfer skipped (already present); only reconcile
+                    # attachments.
+                    if job.copy_bundle_migrations and len(artifacts) > 0:
+                        copy_artifacts()
+                    return
                 if job.copy_bundle_migrations and len(artifacts) > 0:
                     # Copy the whole image, not a single platform. Passing a
                     # platform filter here would flatten a multi-arch index to
@@ -307,34 +360,7 @@ def push_image(job: PushJob) -> dict[str, str]:
                         to_auth=dest_auth_file,
                         recursive=False,
                     )
-                    logger.info(
-                        "Copying %d attached artifacts for %s to %s",
-                        len(artifacts),
-                        job.container_image,
-                        job.repository_url,
-                    )
-                    for artifact in artifacts:
-                        artifact_digest = artifact.get("digest")
-                        if not artifact_digest:
-                            logger.warning(
-                                "Skipping artifact with missing digest: %s", artifact
-                            )
-                            continue
-                        artifact_ref = f"{job.container_image.split('@')[0]}@{artifact_digest}"
-                        dest_artifact_ref = f"{job.repository_url}@{artifact_digest}"
-
-                        logger.info(
-                            "Copying attached artifact: %s to %s",
-                            artifact_ref,
-                            dest_artifact_ref,
-                        )
-                        oras_utils.oras_cp(
-                            artifact_ref,
-                            dest_artifact_ref,
-                            from_auth=job.source_auth_file,
-                            to_auth=dest_auth_file,
-                            recursive=False,
-                        )
+                    copy_artifacts()
                 else:
                     skopeo.copy(
                         f"docker://{job.container_image}",
