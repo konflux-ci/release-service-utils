@@ -32,7 +32,9 @@ def check_release_exists(
 ) -> str | None:
     """Check if a release with the given version tag exists.
 
-    Return the release URL if it exists, or None if it does not.
+    Return the release URL if it exists, or None if it does not. Raise
+    ``subprocess.CalledProcessError`` if the gh API call fails (for example
+    on an authentication error).
     """
     tag = f"v{release_version}"
     result = github.run_gh_command(
@@ -46,6 +48,14 @@ def check_release_exists(
         gh_token=gh_token,
         check=False,
     )
+    if result.returncode != 0:
+        logger.error("gh api failed while checking for release %s: %s", tag, result.stderr)
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
     if result.stdout.strip():
         logger.info("Release %s exists", tag)
         return f"{repository}/releases/tag/{tag}"

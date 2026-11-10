@@ -79,6 +79,18 @@ def _uploaded_names(cmd: list[str], tmp_path: Path) -> set[str]:
     return {Path(arg).name for arg in cmd if arg.startswith(str(tmp_path))}
 
 
+# On HTTP errors gh api skips the --jq filter, prints the raw error body to
+# stdout, prints "gh: <message>" to stderr, and exits non-zero.
+_GH_AUTH_ERROR_BODY = json.dumps(
+    {
+        "message": "Bad credentials",
+        "documentation_url": "https://docs.github.com/rest",
+        "status": "401",
+    }
+)
+_GH_AUTH_ERROR_STDERR = "gh: Bad credentials (HTTP 401)\n"
+
+
 class TestCheckReleaseExists:
     """Tests for check_release_exists."""
 
@@ -122,6 +134,41 @@ class TestCheckReleaseExists:
             "foo/bar", "1.2.3", "token", "https://github.com/foo/bar"
         )
         assert result is None
+
+    def test_auth_error_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Raise CalledProcessError when gh api fails with an auth error.
+
+        The error body on stdout must not be treated as an existing release.
+        """
+
+        def mock_gh(cmd, *, gh_token, check=True, cwd=None):
+            return _make_completed_process(
+                returncode=1,
+                stdout=_GH_AUTH_ERROR_BODY,
+                stderr=_GH_AUTH_ERROR_STDERR,
+            )
+
+        monkeypatch.setattr(github, "run_gh_command", mock_gh)
+        with mock.patch.object(cgr.logger, "error") as mock_error:
+            with pytest.raises(subprocess.CalledProcessError) as exc_info:
+                cgr.check_release_exists(
+                    "foo/bar", "1.2.3", "token", "https://github.com/foo/bar"
+                )
+
+        assert exc_info.value.returncode == 1
+        assert exc_info.value.stderr == _GH_AUTH_ERROR_STDERR
+        mock_error.assert_called_once()
+        assert _GH_AUTH_ERROR_STDERR in mock_error.call_args.args
+
+    def test_nonzero_exit_without_stdout_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Raise CalledProcessError on a non-zero gh exit even with empty stdout."""
+
+        def mock_gh(cmd, *, gh_token, check=True, cwd=None):
+            return _make_completed_process(returncode=1, stderr="gh: Not Found (HTTP 404)\n")
+
+        monkeypatch.setattr(github, "run_gh_command", mock_gh)
+        with pytest.raises(subprocess.CalledProcessError):
+            cgr.check_release_exists("foo/bar", "1.2.3", "token", "https://github.com/foo/bar")
 
 
 class TestCopyBinariesToTemp:
@@ -350,6 +397,46 @@ class TestRunCreateGithubRelease:
         assert gh_call_count == 1, f"gh was expected to be called 1 time, got {gh_call_count}"
         assert url == "https://github.com/foo/repo_with_release/releases/tag/v1.2.3"
         assert result_url_path.read_text(encoding="utf-8") == url
+
+    def test_release_check_auth_error_raises_without_results(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Raise before creating or reporting a release when the lookup fails."""
+        data_dir = tmp_path / "data"
+        snapshot_path = data_dir / "snapshot.json"
+        result_url_path = tmp_path / "result_url"
+        results_dir = data_dir / "results"
+        results_dir.mkdir(parents=True)
+        _write_snapshot(snapshot_path, [{"containerImage": "registry.io/image:tag"}])
+
+        gh_calls: list[list[str]] = []
+
+        def mock_gh(cmd, *, gh_token, check=True, cwd=None):
+            gh_calls.append(cmd)
+            return _make_completed_process(
+                returncode=1,
+                stdout=_GH_AUTH_ERROR_BODY,
+                stderr=_GH_AUTH_ERROR_STDERR,
+            )
+
+        monkeypatch.setattr(github, "run_gh_command", mock_gh)
+        with pytest.raises(subprocess.CalledProcessError):
+            cgr.run_create_github_release(
+                repository="https://github.com/foo/bar",
+                release_version="1.2.3",
+                content_directory="content",
+                snapshot_path=snapshot_path,
+                image_binaries_path="releases",
+                results_dir_path="results",
+                data_dir=data_dir,
+                gh_token="mytoken",
+                result_url_path=result_url_path,
+            )
+
+        assert len(gh_calls) == 1
+        assert gh_calls[0][:2] == ["gh", "api"]
+        assert not result_url_path.exists()
+        assert not (results_dir / "create-github-release-results.json").exists()
 
     def test_new_release_gh_called_twice(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
