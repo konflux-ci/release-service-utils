@@ -348,6 +348,18 @@ def test_resolve_secret_names_image_uses_staging_secrets() -> None:
     )
 
 
+def test_resolve_secret_names_image_uses_e2e_advisory_secret() -> None:
+    """Image releases can use the e2e advisory repo secret."""
+    assert request_advisory_creation.request_advisory_creation._resolve_secret_names(
+        "image",
+        environment="e2e",
+        data={},
+    ) == (
+        advisory_data.ADVISORY_SECRET_E2E,
+        advisory_data.ERRATA_SECRET_STAGE,
+    )
+
+
 def test_resolve_secret_names_image_uses_prod_secrets() -> None:
     """Image releases use production secrets for non-stage environments."""
     assert request_advisory_creation.request_advisory_creation._resolve_secret_names(
@@ -378,6 +390,18 @@ def test_resolve_secret_names_binary_uses_intention() -> None:
     )
     assert staging == (
         advisory_data.ADVISORY_SECRET_STAGE,
+        advisory_data.ERRATA_SECRET_STAGE,
+    )
+
+
+def test_resolve_secret_names_binary_uses_e2e_advisory_secret() -> None:
+    """Binary releases can use the e2e advisory repo secret."""
+    assert request_advisory_creation.request_advisory_creation._resolve_secret_names(
+        "binary",
+        environment="",
+        data={"intention": "e2e"},
+    ) == (
+        advisory_data.ADVISORY_SECRET_E2E,
         advisory_data.ERRATA_SECRET_STAGE,
     )
 

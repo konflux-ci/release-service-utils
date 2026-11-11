@@ -26,6 +26,11 @@ def test_advisory_secret_name_stage() -> None:
     assert advisory_data.advisory_secret_name("stage") == advisory_data.ADVISORY_SECRET_STAGE
 
 
+def test_advisory_secret_name_e2e() -> None:
+    """Return the e2e secret name for the 'e2e' environment."""
+    assert advisory_data.advisory_secret_name("e2e") == advisory_data.ADVISORY_SECRET_E2E
+
+
 def test_advisory_secret_name_production() -> None:
     """Return the prod secret name for the 'production' environment."""
     assert (

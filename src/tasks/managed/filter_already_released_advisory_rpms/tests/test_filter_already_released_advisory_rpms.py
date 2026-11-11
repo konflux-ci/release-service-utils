@@ -282,6 +282,10 @@ class TestDetermineEnvironment:
         """Intention 'staging' -> 'stage'."""
         assert filt.determine_environment({"intention": "staging"}) == "stage"
 
+    def test_e2e_intention(self) -> None:
+        """Intention 'e2e' -> 'e2e'."""
+        assert filt.determine_environment({"intention": "e2e"}) == "e2e"
+
     def test_production_intention(self) -> None:
         """Intention 'production' -> 'production'."""
         assert filt.determine_environment({"intention": "production"}) == "production"

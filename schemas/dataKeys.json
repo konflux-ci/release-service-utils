@@ -544,9 +544,10 @@
       "type": "string",
       "enum": [
         "production",
-        "staging"
+        "staging",
+        "e2e"
       ],
-      "description": "The intention of the release, e.g. production or staging."
+      "description": "The intention of the release, e.g. production, staging or e2e."
     },
     "singleComponentMode": {
       "type": "boolean",
