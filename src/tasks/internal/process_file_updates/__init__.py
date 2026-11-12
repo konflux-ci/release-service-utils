@@ -10,6 +10,7 @@ configuration repositories, creating an MR for human review.
   ``git_author_name``, ``git_author_email``.
 * Clones ``--repo`` at ``--ref``, rebases on ``--upstream-repo``, applies path
   seeds and YAML replacements (``yq`` for key lookup), then commits or reuses an MR.
+  Catalog e2e GitLab repos then close that MR so branches do not accumulate.
 * Reads task inputs from CLI flags, falling back to environment variables.
 * Writes ``RESULT_FILE_UPDATES_*`` and internal-request name results.
 * After a valid run with result env vars, almost always exits ``0``; failures use
@@ -51,6 +52,9 @@ from .process_file_updates import (  # noqa: F401
     get_cached_diff,
     find_existing_mr_with_same_diff,
     commit_and_create_mr,
+    parse_close_merge_request_override,
+    is_e2e_file_updates_repo,
+    should_close_file_updates_mr,
     run_file_updates,
     main,
 )
