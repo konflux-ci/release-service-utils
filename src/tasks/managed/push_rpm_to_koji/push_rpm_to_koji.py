@@ -3,13 +3,9 @@
 
 from __future__ import annotations
 
-import base64
-import errno
 import json
 import os
-import re
 import shutil
-import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,17 +15,21 @@ from release_service_utils.helpers import file as file_helper
 from release_service_utils.helpers import oci_auth
 from release_service_utils.helpers import oras_utils
 from release_service_utils.helpers import tekton
-from release_service_utils.helpers.authentication import kinit_with_retry
+from release_service_utils.helpers.koji import (
+    install_koji_client_config,
+    kinit,
+    prepare_keytab,
+    redact_koji_output,
+    run_koji_cmd,
+    test_koji_connection,
+)
 from release_service_utils.helpers.logger import logger
-from release_service_utils.helpers.redact import redact_secrets
 from release_service_utils.helpers.subprocess_cmd import run_cmd
 
 DEFAULT_DATA_DIR = Path("/var/workdir/release")
 DEFAULT_SECRET_MOUNT = Path("/etc/secret")
 DEFAULT_RPM_DOWNLOAD_DIR = Path("/var/workdir/rpm-extract")
 DEFAULT_KINIT_RETRIES = 10
-_KINIT_MAX_SLEEP_SECONDS = 2
-_TOKEN_ARG = re.compile(r"--token=\S+")
 
 
 @dataclass(frozen=True)
@@ -99,117 +99,6 @@ def parse_push_options(data: dict[str, Any]) -> PushOptions:
     )
 
 
-def _command_secrets(cmd: list[str]) -> list[str]:
-    """Return reservation-token values embedded in a Koji command."""
-    secrets: list[str] = []
-    for arg in cmd:
-        if arg.startswith("--token="):
-            secret = arg.removeprefix("--token=")
-        elif arg.startswith('"') and arg.endswith('"') and arg != '"konflux"':
-            secret = arg[1:-1]
-        else:
-            continue
-        if secret:
-            secrets.append(secret)
-    return secrets
-
-
-def _redact_koji_output(text: str, cmd: list[str]) -> str:
-    """Redact reservation tokens and other credentials from Koji output."""
-    redacted = redact_secrets(text)
-    for secret in _command_secrets(cmd):
-        redacted = redacted.replace(secret, "<REDACTED>")
-    return _TOKEN_ARG.sub("--token=<REDACTED>", redacted)
-
-
-def _redact_cmd(cmd: list[str]) -> list[str]:
-    """Return a copy of a Koji command with build tokens removed.
-
-    Pipeline logs are a public record. ``import-cg`` takes the token as
-    ``--token=``, and ``CGRefundBuild`` takes it as a quoted argument. The
-    content-generator name ``"konflux"`` is the only other quoted argument
-    this task sends, so every other quoted argument is treated as a token.
-    """
-    redacted: list[str] = []
-    for arg in cmd:
-        if arg.startswith("--token="):
-            redacted.append("--token=<REDACTED>")
-        elif arg.startswith('"') and arg.endswith('"') and arg != '"konflux"':
-            redacted.append('"<REDACTED>"')
-        else:
-            redacted.append(arg)
-    return redacted
-
-
-def install_koji_client_config(source: Path) -> None:
-    """Install Koji client profiles from the tenant image into ``~/.koji``.
-
-    ``koji --profile`` reads ``/etc/koji.conf``, ``/etc/koji.conf.d``,
-    ``~/.koji/config``, and ``~/.koji/config.d``. The release-service-utils
-    image provides the koji CLI and does not ship tenant profiles. The task
-    copies ``/etc/koji.conf`` and ``/etc/koji.conf.d`` from ``pipelineImage``
-    into ``source`` as ``config`` and ``config.d``.
-    """
-    if not source.is_dir():
-        raise ValueError(f"Koji client config directory does not exist: {source}")
-
-    destination = Path(os.path.expanduser("~")) / ".koji"
-    config_dir = destination / "config.d"
-    config_dir.mkdir(parents=True, exist_ok=True)
-
-    staged_config = source / "config"
-    if staged_config.is_file():
-        shutil.copy2(staged_config, destination / "config")
-
-    staged_dir = source / "config.d"
-    if not staged_dir.is_dir():
-        return
-    for entry in sorted(staged_dir.iterdir()):
-        if entry.is_file():
-            shutil.copy2(entry, config_dir / entry.name)
-
-
-def run_koji_cmd(
-    profile: str,
-    *args: str,
-    check: bool = True,
-    capture_output: bool = True,
-    noauth: bool = False,
-) -> subprocess.CompletedProcess[str]:
-    """Run a koji command with the specified profile.
-
-    Stdout and stderr are captured so Koji does not write them straight to
-    the pipeline log. The logged command has build tokens removed. On
-    failure, stderr is logged after reservation tokens and other credentials
-    are redacted. The raised ``CalledProcessError`` keeps that redacted
-    stderr, and its ``cmd`` is redacted so a traceback cannot reprint the
-    token.
-
-    ``--plugin-paths`` is empty so a profile copied from the tenant image
-    cannot name extra plugin directories. The CLI loads ``~/.koji/plugins``
-    on its own, and this task does not put files there.
-    """
-    cmd = ["koji", f"--profile={profile}", "--plugin-paths="]
-    if noauth:
-        cmd.append("--noauth")
-    cmd.extend(args)
-    logger.info("Running: %s", " ".join(_redact_cmd(cmd)))
-    try:
-        return subprocess.run(
-            cmd,
-            capture_output=capture_output,
-            text=True,
-            check=check,
-        )
-    except subprocess.CalledProcessError as exc:
-        if exc.stderr:
-            exc.stderr = _redact_koji_output(exc.stderr, cmd)
-            if exc.stderr.strip():
-                logger.error("Koji stderr: %s", exc.stderr.strip())
-        exc.cmd = _redact_cmd(cmd)
-        raise
-
-
 def get_tag_info(profile: str, tag: str) -> dict[str, Any]:
     """Get tag information from Koji."""
     result = run_koji_cmd(profile, "call", "--json-output", "getTag", tag, noauth=True)
@@ -255,131 +144,6 @@ def get_existing_build(profile: str, nvr: str) -> dict[str, Any] | None:
     if build_info == "null" or build_info is None:
         return None
     return build_info
-
-
-def _reject_escaped_keytab_path(base: Path, relative: str) -> Path:
-    """Return *relative* resolved under *base*, or reject an escaping path."""
-    try:
-        confined = file_helper.resolve_path_under_base(base, relative)
-    except ValueError as e:
-        raise ValueError(f"keytab path must stay under {base}: {relative!r}") from e
-    if confined == base.resolve():
-        raise ValueError(f"keytab path must name a file under {base}: {relative!r}")
-    return confined
-
-
-def _confined_keytab_path(base: Path, relative: str) -> Path:
-    """Return *relative* under *base* without following symlinks.
-
-    Absolute paths and ``..`` traversal are rejected. A symlink at any
-    component is rejected so a later write cannot truncate the link target.
-    """
-    confined = _reject_escaped_keytab_path(base, relative)
-    current = base.resolve()
-    for part in Path(str(relative).strip()).parts:
-        current = current / part
-        if current.is_symlink():
-            raise ValueError(f"keytab path must not be a symlink: {relative!r}")
-    return confined
-
-
-def _is_regular_file(path: Path) -> bool:
-    """Return whether *path* is a regular file, without following symlinks."""
-    try:
-        mode = path.lstat().st_mode
-    except FileNotFoundError:
-        return False
-    return stat.S_ISREG(mode)
-
-
-def _read_keytab_bytes(path: Path) -> bytes:
-    """Read *path* without following a symlink."""
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    except OSError as e:
-        if e.errno == errno.ELOOP:
-            raise ValueError(f"keytab path must not be a symlink: {path}") from e
-        raise
-    with os.fdopen(fd, "rb") as handle:
-        return handle.read()
-
-
-def _write_keytab_secure(keytab_path: Path, data: bytes) -> None:
-    """Write keytab data with mode 0600, without following symlinks.
-
-    ``O_CREAT`` applies the mode only when the file is created. An existing
-    destination is forced to 0600 before the keytab bytes are written.
-    """
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
-    try:
-        fd = os.open(keytab_path, flags, 0o600)
-    except OSError as e:
-        if e.errno == errno.ELOOP:
-            raise ValueError(f"keytab path must not be a symlink: {keytab_path}") from e
-        raise
-    try:
-        os.fchmod(fd, 0o600)
-        os.write(fd, data)
-    finally:
-        os.close(fd)
-
-
-def prepare_keytab(secret_mount: Path, keytab_file: str, working_dir: Path) -> Path:
-    """Copy the keytab into *working_dir*.
-
-    The destination is a regular file under *working_dir* and is never a
-    symlink. Source paths may be Secret-volume symlinks, including ``..data``
-    links, when they resolve to a regular file inside *secret_mount*. Absolute
-    paths, ``..`` traversal, and source links that leave the mount are rejected.
-    """
-    keytab_path = _confined_keytab_path(working_dir, keytab_file)
-    base64_keytab = _reject_escaped_keytab_path(secret_mount, "base64_keytab")
-    if _is_regular_file(base64_keytab):
-        logger.info("Reading base64-encoded keytab from secret")
-        encoded = _read_keytab_bytes(base64_keytab).decode("utf-8").strip()
-        _write_keytab_secure(keytab_path, base64.b64decode(encoded))
-    else:
-        source_keytab = _reject_escaped_keytab_path(secret_mount, keytab_file)
-        if not _is_regular_file(source_keytab):
-            raise FileNotFoundError(f"Keytab file not found: {source_keytab}")
-        logger.info("Copying keytab from secret mount")
-        _write_keytab_secure(keytab_path, _read_keytab_bytes(source_keytab))
-
-    return keytab_path
-
-
-def kinit(principal: str, keytab_path: Path, max_attempts: int = 10) -> str:
-    """Perform kinit with retries and return the ccache path.
-
-    Each retry wait is capped at ``_KINIT_MAX_SLEEP_SECONDS``. The helper's
-    uncapped backoff grows from 5 seconds, so ten attempts would otherwise
-    sleep for about 42 minutes.
-    """
-    ccache_path = file_helper.make_tempfile_path("ccache-")
-    authenticated = False
-    try:
-        kenv = {"KRB5CCNAME": str(ccache_path)}
-        kinit_with_retry(
-            principal,
-            keytab_path,
-            kenv,
-            max_attempts=max_attempts,
-            max_sleep_seconds=_KINIT_MAX_SLEEP_SECONDS,
-        )
-        authenticated = True
-        return str(ccache_path)
-    except subprocess.CalledProcessError as e:
-        raise tekton.CheckStepError("logging in with Kerberos (kinit)", e) from e
-    finally:
-        if not authenticated:
-            ccache_path.unlink(missing_ok=True)
-
-
-def test_koji_connection(profile: str) -> None:
-    """Test the Koji connection."""
-    logger.info("Testing Koji connection...")
-    run_koji_cmd(profile, "hello")
-    logger.info("Koji connection successful")
 
 
 def pull_component_image(container_image: str, download_dir: Path, auth_file: Path) -> None:
@@ -484,7 +248,7 @@ def import_cg_build(
         run_koji_cmd(profile, *cmd_args)
         logger.info("Successfully imported build %s", build_id)
     except subprocess.CalledProcessError as e:
-        stderr = _redact_koji_output(e.stderr or "", cmd_args).strip()
+        stderr = redact_koji_output(e.stderr or "", cmd_args).strip()
         if stderr:
             logger.error(
                 "Import failed (exit code %s), refunding build %s: %s",
@@ -509,7 +273,7 @@ def import_cg_build(
         try:
             run_koji_cmd(profile, *refund_args)
         except subprocess.CalledProcessError as refund_err:
-            detail = _redact_koji_output(refund_err.stderr or "", refund_args).strip()
+            detail = redact_koji_output(refund_err.stderr or "", refund_args).strip()
             if detail:
                 logger.error(
                     "Refund of build %s failed (exit code %s): %s",
