@@ -107,8 +107,10 @@ class FilteringResult:
 
 
 def determine_environment(data: dict[str, Any]) -> str:
-    """Return ``"stage"`` or ``"production"`` based on data file content."""
+    """Return advisory environment based on data file content."""
     intention = data.get("intention", "")
+    if intention == "e2e":
+        return "e2e"
     if intention == "staging":
         return "stage"
     if intention == "production":

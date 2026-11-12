@@ -133,16 +133,27 @@ def _resolve_secret_names(
 ) -> tuple[str, str]:
     """Select advisory and Errata secret names for the release content type.
 
-    All content types use the same prod/staging GitLab repos and secret names.
+    All content types use the same prod/staging/e2e GitLab repos and secret names.
     Which pair to use depends on how the release environment is determined:
 
-    - image/rpm: ``environment`` (stage/staging vs everything else)
-    - binary/generic/disk-image: ``data['intention']`` (production vs staging)
+    - image/rpm: ``environment`` (e2e, stage/staging, or production)
+    - binary/generic/disk-image: ``data['intention']`` (e2e, staging, or production)
     """
     if content_type in {"image", "rpm"}:
-        is_staging = bool(_STAGE_ENV_RE.match(environment.strip()))
+        environment_name = environment.strip()
+        if environment_name == "e2e":
+            return (
+                advisory_data.ADVISORY_SECRET_E2E,
+                advisory_data.ERRATA_SECRET_STAGE,
+            )
+        is_staging = bool(_STAGE_ENV_RE.match(environment_name))
     else:
         intention = str(data.get("intention", ""))
+        if intention == "e2e":
+            return (
+                advisory_data.ADVISORY_SECRET_E2E,
+                advisory_data.ERRATA_SECRET_STAGE,
+            )
         if intention == "production":
             is_staging = False
         elif intention == "staging":

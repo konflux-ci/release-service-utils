@@ -16,6 +16,7 @@ VALID_ADVISORY_TYPES = frozenset({"RHSA", "RHBA", "RHEA"})
 # "image" is the default content type and is intentionally omitted (uses .content.images).
 ARTIFACT_CONTENT_TYPES = frozenset({"binary", "generic", "disk-image", "rpm"})
 # Advisory GitLab instances (prod and staging) each have matching secrets.
+ADVISORY_SECRET_E2E = "create-advisory-e2e-secret"
 ADVISORY_SECRET_STAGE = "create-advisory-stage-secret"
 ADVISORY_SECRET_PROD = "create-advisory-prod-secret"
 ERRATA_SECRET_STAGE = "errata-stage-service-account"
@@ -23,8 +24,10 @@ ERRATA_SECRET_PROD = "errata-prod-service-account"
 
 
 def advisory_secret_name(environment: str) -> str:
-    """Return the advisory secret name for *environment* (``"stage"`` or ``"production"``)."""
-    if environment == "stage":
+    """Return the advisory secret name for *environment*."""
+    if environment == "e2e":
+        return ADVISORY_SECRET_E2E
+    if environment in {"stage", "staging"}:
         return ADVISORY_SECRET_STAGE
     return ADVISORY_SECRET_PROD
 

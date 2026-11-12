@@ -21,6 +21,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from release_service_utils.helpers import advisory_data
 from release_service_utils.helpers import internal_request, subprocess_cmd, tekton
 from release_service_utils.helpers.file import load_json_dict
 from release_service_utils.helpers.logger import logger
@@ -70,7 +71,9 @@ def _repo_url_category(url: str) -> str:
     return "orphan"
 
 
-def determine_environment(snapshot: dict[str, Any]) -> tuple[str, str]:
+def determine_environment(
+    snapshot: dict[str, Any], data: dict[str, Any] | None = None
+) -> tuple[str, str]:
     """Classify every mapped repository URL and pick the advisory environment.
 
     Return ``(environment, advisory_secret_name)``. Raise `ValueError` when
@@ -101,9 +104,11 @@ def determine_environment(snapshot: dict[str, Any]) -> tuple[str, str]:
             "you must publish to either redhat-pending or redhat-prod repositories"
         )
 
+    if found["pending"] and data and data.get("intention") == "e2e":
+        return "e2e", advisory_data.advisory_secret_name("e2e")
     if found["pending"]:
-        return "stage", "create-advisory-stage-secret"
-    return "production", "create-advisory-prod-secret"
+        return "stage", advisory_data.advisory_secret_name("stage")
+    return "production", advisory_data.advisory_secret_name("production")
 
 
 def _resolve_image_architectures(image: str) -> list[dict[str, Any]]:
@@ -232,6 +237,7 @@ def filter_snapshot(snapshot: dict[str, Any], unreleased_names: set[str]) -> dic
 def run(config: FilterConfig, results: ResultPaths) -> None:
     """Orchestrate advisory image filtering and write Tekton results."""
     snapshot = load_json_dict(config.snapshot_file)
+    data = load_json_dict(config.data_file) if config.data_file.is_file() else {}
 
     entries, failed_components = transform_snapshot(snapshot)
 
@@ -240,7 +246,7 @@ def run(config: FilterConfig, results: ResultPaths) -> None:
     if not origin:
         raise ValueError("'origin' in ReleasePlanAdmission spec is empty")
 
-    environment, advisory_secret_name = determine_environment(snapshot)
+    environment, advisory_secret_name = determine_environment(snapshot, data)
     results.environment.write_text(environment, encoding="utf-8")
     logger.info("Environment: %s", environment)
 
