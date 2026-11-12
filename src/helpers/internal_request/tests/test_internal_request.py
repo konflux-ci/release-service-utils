@@ -298,13 +298,13 @@ def test_create_internal_request_raises_when_name_missing(k8s_api: mock.MagicMoc
 def test_create_waits_when_sync_is_true(k8s_api: mock.MagicMock) -> None:
     """Wait for completion after creating the InternalRequest."""
     with (
-        mock.patch.object(ir_module, "cleanup_existing_requests"),
+        mock.patch.object(ir_module._helper, "cleanup_existing_requests"),
         mock.patch.object(
-            ir_module,
+            ir_module._helper,
             "create_internal_request",
             return_value="create-advisory-abc",
         ),
-        mock.patch.object(ir_module, "wait_for_completion") as wait,
+        mock.patch.object(ir_module._helper, "wait_for_completion") as wait,
     ):
         name = ir_module.create(
             "create-advisory",
@@ -323,13 +323,13 @@ def test_create_waits_when_sync_is_true(k8s_api: mock.MagicMock) -> None:
 def test_create_skips_cleanup_when_cleanup_is_false(k8s_api: mock.MagicMock) -> None:
     """Do not delete prior InternalRequests when cleanup is False."""
     with (
-        mock.patch.object(ir_module, "cleanup_existing_requests") as cleanup,
+        mock.patch.object(ir_module._helper, "cleanup_existing_requests") as cleanup,
         mock.patch.object(
-            ir_module,
+            ir_module._helper,
             "create_internal_request",
             return_value="create-advisory-abc",
         ),
-        mock.patch.object(ir_module, "wait_for_completion"),
+        mock.patch.object(ir_module._helper, "wait_for_completion"),
     ):
         ir_module.create(
             "create-advisory",
