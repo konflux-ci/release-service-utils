@@ -1061,6 +1061,93 @@
     "skipFilter": {
       "type": "boolean",
       "description": "If true, skip filtering of already-released images and process all components in the snapshot. Default: false."
+    },
+    "RHSA": {
+      "type": "object",
+      "description": "Container grading summary written by the filter-cve collector task; consumed by Conforma.",
+      "required": [
+        "CRITICAL",
+        "IMPORTANT"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "CRITICAL": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "advisory",
+              "released_on",
+              "cves",
+              "components"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "advisory": {
+                "type": "string",
+                "description": "The RHSA advisory id, e.g. RHSA-2026:58936."
+              },
+              "released_on": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The advisory release timestamp from the Red Hat Security Data API."
+              },
+              "cves": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The gating CVE ids fixed by the advisory, deduped and sorted."
+              },
+              "components": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The Konflux components affected by the advisory, deduped and sorted."
+              }
+            }
+          }
+        },
+        "IMPORTANT": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "advisory",
+              "released_on",
+              "cves",
+              "components"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "advisory": {
+                "type": "string",
+                "description": "The RHSA advisory id, e.g. RHSA-2026:55440."
+              },
+              "released_on": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The advisory release timestamp from the Red Hat Security Data API."
+              },
+              "cves": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The gating CVE ids fixed by the advisory, deduped and sorted."
+              },
+              "components": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The Konflux components affected by the advisory, deduped and sorted."
+              }
+            }
+          }
+        }
+      }
     }
   },
   "allOf": [
