@@ -640,6 +640,7 @@ class TestPulpClient:
                         }
                     ]
                 },
+                {"results": [{"pulp_href": "/repo/1/"}]},
                 {"latest_version_href": "/rv/latest/"},
                 {"count": 1, "results": [{"pulp_href": "/pkg/1/"}]},
                 {"artifact": "/art/1/"},
@@ -658,6 +659,87 @@ class TestPulpClient:
                 fallback_to_latest=True,
             )
             == pulp_client.PulpDigestStatus.MATCH
+        )
+
+    def test_digest_checks_latest_after_stale_publication(self) -> None:
+        """Find a signed RPM added after the currently published version."""
+        client = self._client(
+            [
+                {"results": [{"repository_version": "/rv/published/"}]},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 0, "results": []},
+                {"count": 1, "results": [{"pulp_href": "/pkg/1/"}]},
+                {"artifact": "/art/1/"},
+                {"sha256": "abc123"},
+            ]
+        )
+        assert (
+            client.check_digest(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                fallback_to_latest=True,
+            )
+            == pulp_client.PulpDigestStatus.MATCH
+        )
+
+    def test_digest_latest_missing_even_when_published_matches(self) -> None:
+        """Re-add an RPM removed from the latest unpublished version."""
+        client = self._client(
+            [
+                {"results": [{"repository_version": "/rv/published/"}]},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 1, "results": [{"pulp_href": "/pkg/1/"}]},
+                {"artifact": "/art/1/"},
+                {"sha256": "abc123"},
+                {"count": 0, "results": []},
+            ]
+        )
+        assert (
+            client.check_digest(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                fallback_to_latest=True,
+            )
+            == pulp_client.PulpDigestStatus.NOT_FOUND
+        )
+
+    def test_digest_rejects_conflict_in_latest(self) -> None:
+        """Reject a different signed byte sequence in the unpublished version."""
+        client = self._client(
+            [
+                {"results": [{"repository_version": "/rv/published/"}]},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 0, "results": []},
+                {"count": 1, "results": [{"pulp_href": "/pkg/1/"}]},
+                {"artifact": "/art/1/"},
+                {"sha256": "other"},
+            ]
+        )
+        assert (
+            client.check_digest(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                fallback_to_latest=True,
+            )
+            == pulp_client.PulpDigestStatus.MISMATCH
         )
 
     def test_get_repo_href(self) -> None:
@@ -1080,6 +1162,56 @@ class TestUploadRpm:
         with patch(self._RUN_CMD, return_value=self._completed("")):
             with pytest.raises(RuntimeError, match="href missing"):
                 client.upload_rpm(rpm, "100MB", tmp_path / "cli.toml")
+
+
+class TestSetRpmLabel:
+    """Test the label needed for signed RPM retry detection."""
+
+    _RUN_CMD = "release_service_utils.helpers.pulp_client.pulp_client.subprocess_cmd.run_cmd"
+
+    def test_cli_argv(self, tmp_path: Path) -> None:
+        """Set the label on the exact content digest in the selected domain."""
+        client = pulp_client.PulpClient(MagicMock(), "https://pulp.test", "mydomain")
+        config = tmp_path / "cli.toml"
+        with patch(
+            self._RUN_CMD,
+            return_value=subprocess.CompletedProcess(["pulp"], 0, "", ""),
+        ) as mock_run:
+            client.set_rpm_label("abc", "signed_by", "release4:release2:ima", config)
+        mock_run.assert_called_once_with(
+            [
+                "pulp",
+                "--config",
+                str(config),
+                "--domain",
+                "mydomain",
+                "rpm",
+                "content",
+                "label",
+                "set",
+                "--sha256",
+                "abc",
+                "--key",
+                "signed_by",
+                "--value",
+                "release4:release2:ima",
+            ],
+            check=False,
+        )
+
+    def test_error_raises(self, tmp_path: Path) -> None:
+        """A failed label update fails the push so a retry can repair it."""
+        client = pulp_client.PulpClient(MagicMock(), "https://pulp.test", "mydomain")
+        with (
+            patch(
+                self._RUN_CMD,
+                return_value=subprocess.CompletedProcess(["pulp"], 1, "", "label rejected"),
+            ),
+            pytest.raises(RuntimeError, match="label rejected"),
+        ):
+            client.set_rpm_label(
+                "abc", "signed_by", "release4:release2:ima", tmp_path / "cli.toml"
+            )
 
 
 class TestFileRepositoryCli:
