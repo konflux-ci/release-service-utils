@@ -65,6 +65,10 @@ class PushJob:
     source_auth_file: Path
     retries: int
     copy_bundle_migrations: bool
+    # Per-architecture manifest digests of a multi-arch image. Attached scan
+    # reports (e.g. roxctl) hang off the per-arch manifests, not the top-level
+    # index, so artifact discovery must walk these as well as the image ref.
+    arch_digests: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -160,7 +164,7 @@ def get_image_architectures(container_image: str) -> list[dict[str, Any]]:
 
 
 def oras_discover_referrers(reference: str, auth_file: Path) -> list[dict[str, Any]]:
-    """Run ``oras discover`` and return the referrers list."""
+    """Run ``oras discover`` and return the list of attached referrers."""
     result = subprocess_cmd.run_cmd(
         [
             "oras",
@@ -177,7 +181,11 @@ def oras_discover_referrers(reference: str, auth_file: Path) -> list[dict[str, A
         stderr = result.stderr.strip()
         raise RuntimeError(f"oras discover failed (exit {result.returncode}): {stderr}")
     data = json.loads(result.stdout)
-    return data.get("referrers", [])
+    # ``oras discover --format json`` reports the attached referrer descriptors
+    # under ``manifests`` (the output is an OCI image index, whose entries live
+    # in ``manifests``). Some oras output shapes have instead used a top-level
+    # ``referrers`` key, so accept either to stay robust across oras versions.
+    return data.get("manifests") or data.get("referrers") or []
 
 
 def cosign_copy(
@@ -213,6 +221,40 @@ def _discover_artifacts_with_retry(
         return []
 
 
+def _collect_copyable_artifacts(
+    references: list[str],
+    source_auth_file: Path,
+    retries: int,
+) -> list[dict[str, Any]]:
+    """Discover attached artifacts across *references* and return the copyable set.
+
+    Cosign signatures are dropped (they are propagated separately) and the
+    result is de-duplicated by digest, so the same artifact discovered on both
+    the image index and a per-architecture manifest is only copied once.
+
+    *references* should include the snapshot image reference and each
+    per-architecture digest reference; roxctl and other scan reports are
+    attached to the per-architecture manifests rather than the top-level image
+    index, so discovering on the index alone misses them.
+    """
+    artifacts: list[dict[str, Any]] = []
+    seen_digests: set[str] = set()
+    for reference in references:
+        logger.info("Checking for attached artifacts on %s", reference)
+        for item in _discover_artifacts_with_retry(reference, source_auth_file, retries):
+            artifact_type = item.get("artifactType") or item.get("mediaType") or ""
+            if re.search(r"cosign.*signature|cosign/signature", artifact_type):
+                logger.info("Skipping attached artifact (cosign signature): %s", artifact_type)
+                continue
+            digest = item.get("digest")
+            if digest and digest in seen_digests:
+                continue
+            if digest:
+                seen_digests.add(digest)
+            artifacts.append(item)
+    return artifacts
+
+
 def push_image(job: PushJob) -> dict[str, str]:
     """Push a single image to a destination repository.
 
@@ -226,7 +268,17 @@ def push_image(job: PushJob) -> dict[str, str]:
             dest_ref, auth_file=dest_auth_file, check=False
         )
 
-        if destination_digest is not None and destination_digest == job.origin_digest:
+        image_exists = (
+            destination_digest is not None and destination_digest == job.origin_digest
+        )
+
+        # When the image is already at the destination we skip the image
+        # transfer, but still reconcile attachments if copying is enabled:
+        # this backfills scan reports onto images released before copying was
+        # turned on, and completes attachments left behind by a prior partial
+        # failure. With copying disabled there is nothing to reconcile, so the
+        # whole push is skipped as before.
+        if image_exists and not job.copy_bundle_migrations:
             logger.info(
                 "Component push skipped (source digest exists at destination): %s (%s)",
                 job.name,
@@ -234,63 +286,81 @@ def push_image(job: PushJob) -> dict[str, str]:
             )
             return {"name": job.name, "url": dest_ref}
 
-        logger.info("Pushing component: %s to %s:%s", job.name, job.repository_url, job.tag)
+        if image_exists:
+            logger.info(
+                "Image already at destination; reconciling attached artifacts only: %s (%s)",
+                job.name,
+                job.container_image,
+            )
+        else:
+            logger.info(
+                "Pushing component: %s to %s:%s", job.name, job.repository_url, job.tag
+            )
 
         docker_config_dir = create_combined_docker_config(job.source_auth_file, dest_auth_file)
         try:
             artifacts = []
             if job.copy_bundle_migrations:
-                logger.info("Checking for attached artifacts on %s", job.container_image)
-                raw_artifacts = _discover_artifacts_with_retry(
-                    job.container_image, job.source_auth_file, job.retries
+                image_base = job.container_image.split("@")[0]
+                references = [job.container_image]
+                references += [
+                    f"{image_base}@{arch_digest}"
+                    for arch_digest in job.arch_digests
+                    if arch_digest and arch_digest != job.origin_digest
+                ]
+                artifacts = _collect_copyable_artifacts(
+                    references, job.source_auth_file, job.retries
                 )
-                for item in raw_artifacts:
-                    artifact_type = item.get("artifactType") or item.get("mediaType") or ""
-                    if re.search(r"cosign.*signature|cosign/signature", artifact_type):
-                        logger.info(
-                            "Skipping attached artifact (cosign signature): %s", artifact_type
-                        )
-                    else:
-                        artifacts.append(item)
+
+            def copy_artifacts() -> None:
+                logger.info(
+                    "Copying %d attached artifacts for %s to %s",
+                    len(artifacts),
+                    job.container_image,
+                    job.repository_url,
+                )
+                for artifact in artifacts:
+                    artifact_digest = artifact.get("digest")
+                    if not artifact_digest:
+                        logger.warning("Skipping artifact with missing digest: %s", artifact)
+                        continue
+                    artifact_ref = f"{job.container_image.split('@')[0]}@{artifact_digest}"
+                    dest_artifact_ref = f"{job.repository_url}@{artifact_digest}"
+
+                    logger.info(
+                        "Copying attached artifact: %s to %s",
+                        artifact_ref,
+                        dest_artifact_ref,
+                    )
+                    oras_utils.oras_cp(
+                        artifact_ref,
+                        dest_artifact_ref,
+                        from_auth=job.source_auth_file,
+                        to_auth=dest_auth_file,
+                        recursive=False,
+                    )
 
             def do_copy() -> None:
+                if image_exists:
+                    # Image transfer skipped (already present); only reconcile
+                    # attachments.
+                    if job.copy_bundle_migrations and len(artifacts) > 0:
+                        copy_artifacts()
+                    return
                 if job.copy_bundle_migrations and len(artifacts) > 0:
+                    # Copy the whole image, not a single platform. Passing a
+                    # platform filter here would flatten a multi-arch index to
+                    # one architecture and change its digest; the attachments
+                    # are per-arch, so the full index must be preserved (this
+                    # matches the ``skopeo.copy(..., all=True)`` path below).
                     oras_utils.oras_cp(
                         job.container_image,
                         dest_ref,
                         from_auth=job.source_auth_file,
                         to_auth=dest_auth_file,
                         recursive=False,
-                        platform=job.platform,
                     )
-                    logger.info(
-                        "Copying %d attached artifacts for %s to %s",
-                        len(artifacts),
-                        job.container_image,
-                        job.repository_url,
-                    )
-                    for artifact in artifacts:
-                        artifact_digest = artifact.get("digest")
-                        if not artifact_digest:
-                            logger.warning(
-                                "Skipping artifact with missing digest: %s", artifact
-                            )
-                            continue
-                        artifact_ref = f"{job.container_image.split('@')[0]}@{artifact_digest}"
-                        dest_artifact_ref = f"{job.repository_url}@{artifact_digest}"
-
-                        logger.info(
-                            "Copying attached artifact: %s to %s",
-                            artifact_ref,
-                            dest_artifact_ref,
-                        )
-                        oras_utils.oras_cp(
-                            artifact_ref,
-                            dest_artifact_ref,
-                            from_auth=job.source_auth_file,
-                            to_auth=dest_auth_file,
-                            recursive=False,
-                        )
+                    copy_artifacts()
                 else:
                     skopeo.copy(
                         f"docker://{job.container_image}",
@@ -383,6 +453,7 @@ class _ResolvedComponent:
     container_image: str
     arches: list[str]
     oses: list[str]
+    arch_digests: list[str]
     origin_digest: str
     platform: str
     source_auth_file: Path
@@ -410,6 +481,7 @@ def _resolve_component(
     arch_entries = get_image_architectures(container_image)
     arches = [e["platform"]["architecture"] for e in arch_entries]
     oses = [e["platform"]["os"] for e in arch_entries]
+    arch_digests = [e["digest"] for e in arch_entries if e.get("digest")]
 
     inspect_result = skopeo.inspect(container_image, raw=True)
     if inspect_result.returncode != 0:
@@ -468,6 +540,7 @@ def _resolve_component(
         container_image=container_image,
         arches=arches,
         oses=oses,
+        arch_digests=arch_digests,
         origin_digest=origin_digest,
         platform=platform,
         source_auth_file=source_auth_file,
@@ -526,6 +599,7 @@ def _build_component_jobs(
                         source_auth_file=resolved.source_auth_file,
                         retries=retries,
                         copy_bundle_migrations=copy_bundle_migrations,
+                        arch_digests=tuple(resolved.arch_digests),
                     ),
                 )
             )
