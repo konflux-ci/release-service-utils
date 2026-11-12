@@ -50,6 +50,7 @@ import yaml  # type: ignore
 
 from release_service_utils.helpers import disk_image_utils
 from release_service_utils.helpers import content_gateway
+from release_service_utils.helpers import file as file_helper
 
 import publish_to_cgw_wrapper
 import pulp_push_wrapper
@@ -146,6 +147,59 @@ def _create_exodus_conf(
     conf_path.write_text(conf_content)
 
 
+def _reject_unsafe_short_url_segment(segment: str) -> None:
+    """Raise when *segment* is absolute or contains a ``..`` path part."""
+    if segment.startswith("/") or ".." in segment.split("/"):
+        raise ValueError(
+            f"short URL segment must be a relative path without '..': {segment!r}"
+        )
+
+
+def _cgw_files_from_staged(staged: dict) -> list[dict]:
+    """Return CGW file entries for staged files, with distinct short URLs.
+
+    A source basename published by one repository keeps the plain short URL.
+    When several repositories publish that basename, ``staged.destination``
+    keeps the plain URL if it is one of them. Each other repository sets
+    ``shortUrlSegment`` to its destination.
+    """
+    default_destination = str(staged.get("destination") or "")
+    prepared: list[dict] = []
+    for entry in staged.get("files") or []:
+        if not isinstance(entry, dict):
+            continue
+        source = entry.get("source") or ""
+        if not source:
+            continue
+        copied = dict(entry)
+        copied["destination"] = str(entry.get("destination") or default_destination)
+        prepared.append(copied)
+
+    owners: dict[str, set[str]] = {}
+    for entry in prepared:
+        basename = Path(str(entry["source"])).name
+        owners.setdefault(basename, set()).add(str(entry["destination"]))
+
+    cgw_files: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in prepared:
+        basename = Path(str(entry["source"])).name
+        destination = str(entry["destination"])
+        destinations = owners[basename]
+        plain = default_destination if default_destination in destinations else None
+        segment = ""
+        if len(destinations) >= 2 and destination != plain:
+            _reject_unsafe_short_url_segment(destination)
+            segment = destination
+            entry["shortUrlSegment"] = segment
+        key = (basename, segment)
+        if key in seen:
+            continue
+        seen.add(key)
+        cgw_files.append(entry)
+    return cgw_files
+
+
 def _push_component_to_pulp(
     component_name: str,
     snapshot: dict,
@@ -173,10 +227,7 @@ def _push_component_to_pulp(
     component_dir = CONTENT_DIR / component_name / "ready_for_distribution"
     staging_dir = Path(tempfile.mkdtemp())
     try:
-        dest_files_dir = staging_dir / staged_destination / "FILES"
-        dest_files_dir.mkdir(parents=True)
-
-        staged_files = (component.get("staged") or {}).get("files") or []
+        staged_files = staged.get("files") or []
         if not staged_files:
             logger.warning(
                 "No staged.files specified in RPA for Customer Portal push for %s",
@@ -189,6 +240,11 @@ def _push_component_to_pulp(
             dest_filename = sf.get("filename", "")
             if not source_path:
                 continue
+
+            file_destination = sf.get("destination") or staged_destination
+            repo_dir = file_helper.resolve_path_under_base(staging_dir, str(file_destination))
+            dest_files_dir = repo_dir / "FILES"
+            dest_files_dir.mkdir(parents=True, exist_ok=True)
 
             source_filename = Path(source_path).name
             # Windows sources are declared as .tar.gz, but this pipeline repackages
@@ -377,14 +433,16 @@ def run(exodus_gw_env: str, cgw_hostname: str, cert_expiration_warn_days: int) -
             # deliverables in staged.files[] (consumed by the CDN/Customer Portal
             # flow) but also need those files listed in files[] for CGW registration.
             # If files[] is already populated the team provided it directly (e.g. a
-            # CGW-only release), so we leave it untouched.
+            # CGW-only release), so we leave it untouched. A source basename shared
+            # by several Pulp repositories keeps the plain short URL on
+            # staged.destination and inserts the other repository name.
             # NOTE: this intentionally mutates the component dict in-place. It is safe
             # because the Pulp push and CDN exclusion logic for this component have already
             # completed above, and the only remaining consumer is publish_to_cgw_wrapper
             # called below via json.dumps(snapshot).
             is_disk_image = disk_image_utils.is_disk_image_component(component)
             if is_disk_image and not component.get("files"):
-                component["files"] = (component.get("staged") or {}).get("files", [])
+                component["files"] = _cgw_files_from_staged(component.get("staged") or {})
 
     cgw_push = any(bool(c.get("contentGateway")) for c in snapshot.get("components", []))
     if cgw_push:

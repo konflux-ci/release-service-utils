@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+import yaml
 
 from release_service_utils.helpers import push_artifacts
 
@@ -228,6 +229,183 @@ def test_push_component_to_pulp_calls_pulp_push_wrapper(
         )
 
     mock_pulp.assert_called_once()
+
+
+def test_push_component_to_pulp_routes_files_to_multiple_destinations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each staged file is copied into its Pulp repo, falling back to staged.destination."""
+    monkeypatch.setattr(push_artifacts.push_artifacts, "CONTENT_DIR", tmp_path / "artifacts")
+    comp_dir = tmp_path / "artifacts" / "odf-cli" / "ready_for_distribution"
+    comp_dir.mkdir(parents=True)
+    (comp_dir / "odf-linux-amd64").write_bytes(b"amd64")
+    (comp_dir / "odf-linux-amd64-sha").write_bytes(b"sha")
+    (comp_dir / "odf-linux-arm64").write_bytes(b"arm64")
+    (comp_dir / "odf-linux-s390x").write_bytes(b"s390x")
+    (comp_dir / "odf-linux-ppc64le").write_bytes(b"ppc64le")
+
+    snapshot = {
+        "components": [
+            {
+                "name": "odf-cli",
+                "staged": {
+                    "destination": "odf-default-files",
+                    "version": "4.21.0",
+                    "files": [
+                        {
+                            "source": "odf-linux-amd64",
+                            "filename": "odf-linux-amd64",
+                            "destination": "odf-x86_64-files",
+                            "arch": "amd64",
+                        },
+                        {
+                            "source": "odf-linux-amd64-sha",
+                            "filename": "odf-linux-amd64-sha",
+                            "destination": "odf-x86_64-files",
+                            "arch": "amd64",
+                        },
+                        {
+                            "source": "odf-linux-arm64",
+                            "filename": "odf-linux-arm64",
+                            "destination": "odf-aarch64-files",
+                            "arch": "arm64",
+                        },
+                        {
+                            "source": "odf-linux-s390x",
+                            "filename": "odf-linux-s390x",
+                            "arch": "s390x",
+                        },
+                        {
+                            "source": "odf-linux-ppc64le",
+                            "filename": "odf-linux-ppc64le",
+                            "destination": "",
+                            "arch": "ppc64le",
+                        },
+                    ],
+                },
+            }
+        ]
+    }
+    captured: dict[str, list[str]] = {}
+
+    def fake_main(argv: list[str]) -> None:
+        source = Path(argv[argv.index("--source") + 1])
+        captured["files"] = sorted(
+            path.relative_to(source).as_posix()
+            for path in source.rglob("*")
+            if path.is_file() and path.name != "staged.yaml"
+        )
+        staged_doc = yaml.safe_load((source / "staged.yaml").read_text())
+        captured["payload"] = staged_doc["payload"]["files"]
+
+    with mock.patch(
+        "push_artifacts.push_artifacts.pulp_push_wrapper.main", side_effect=fake_main
+    ):
+        push_artifacts.push_artifacts._push_component_to_pulp(
+            "odf-cli",
+            snapshot,
+            "https://pulp.example.com",
+            Path("/tmp/p.crt"),
+            Path("/tmp/p.key"),
+            "https://udc.example.com",
+        )
+
+    assert captured["files"] == [
+        "odf-aarch64-files/FILES/odf-linux-arm64",
+        "odf-default-files/FILES/odf-linux-ppc64le",
+        "odf-default-files/FILES/odf-linux-s390x",
+        "odf-x86_64-files/FILES/odf-linux-amd64",
+        "odf-x86_64-files/FILES/odf-linux-amd64-sha",
+    ]
+    by_path = {item["relative_path"]: item for item in captured["payload"]}
+    assert set(by_path) == set(captured["files"])
+    assert {item["version"] for item in captured["payload"]} == {"4.21.0"}
+
+
+@pytest.mark.parametrize("kind", ["absolute", "parent", "nested-parent"])
+def test_push_component_to_pulp_rejects_unsafe_file_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """A per-file destination cannot be absolute or climb out of the staging directory."""
+    destination = {
+        "absolute": str(tmp_path / "absolute-repo"),
+        "parent": "../outside",
+        "nested-parent": "nested/../../outside",
+    }[kind]
+    monkeypatch.setattr(push_artifacts.push_artifacts, "CONTENT_DIR", tmp_path / "artifacts")
+    stage = tmp_path / "stage"
+    monkeypatch.setattr(push_artifacts.push_artifacts.tempfile, "mkdtemp", lambda: str(stage))
+    comp_dir = tmp_path / "artifacts" / "odf-cli" / "ready_for_distribution"
+    comp_dir.mkdir(parents=True)
+    (comp_dir / "odf-linux-amd64").write_bytes(b"amd64")
+    snapshot = {
+        "components": [
+            {
+                "name": "odf-cli",
+                "staged": {
+                    "destination": "odf-default-files",
+                    "version": "4.21.0",
+                    "files": [
+                        {
+                            "source": "odf-linux-amd64",
+                            "filename": "odf-linux-amd64",
+                            "destination": destination,
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+
+    with (
+        mock.patch("push_artifacts.push_artifacts.pulp_push_wrapper.main") as mock_pulp,
+        pytest.raises(ValueError, match="path must"),
+    ):
+        push_artifacts.push_artifacts._push_component_to_pulp(
+            "odf-cli",
+            snapshot,
+            "https://pulp.example.com",
+            Path("/tmp/pulp.crt"),
+            Path("/tmp/pulp.key"),
+            "https://udc.example.com",
+        )
+
+    mock_pulp.assert_not_called()
+    assert not (tmp_path / "outside").exists()
+    assert not (tmp_path / "absolute-repo").exists()
+
+
+def test_push_component_to_pulp_still_requires_component_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """File destinations do not replace the required staged.destination."""
+    monkeypatch.setattr(push_artifacts.push_artifacts, "CONTENT_DIR", tmp_path / "artifacts")
+    snapshot = {
+        "components": [
+            {
+                "name": "odf-cli",
+                "staged": {
+                    "version": "4.21.0",
+                    "files": [
+                        {
+                            "source": "odf-linux-amd64",
+                            "filename": "odf-linux-amd64",
+                            "destination": "odf-x86_64-files",
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+    with pytest.raises(RuntimeError, match="staged.destination"):
+        push_artifacts.push_artifacts._push_component_to_pulp(
+            "odf-cli",
+            snapshot,
+            "https://pulp.example.com",
+            Path("/tmp/p.crt"),
+            Path("/tmp/p.key"),
+            "https://udc.example.com",
+        )
 
 
 def test_push_component_to_pulp_raises_on_missing_version(
@@ -577,6 +755,76 @@ def test_run_disk_image_injects_staged_files_into_cgw(
     file_sources = [f["source"] for f in disk_comp["files"]]
     assert "/releases/install.iso.gz" in file_sources
     assert "/releases/disk.qcow2" in file_sources
+
+
+def test_run_disk_image_shared_source_gets_unique_cgw_short_urls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One source mapped to two Pulp repositories gets two CGW short URLs."""
+    import publish_to_cgw_wrapper
+
+    snapshot = json.loads(json.dumps(SNAPSHOT_DISK_IMAGE))
+    snapshot["components"][0]["staged"]["files"].append(
+        {
+            "source": "/releases/disk.qcow2",
+            "filename": "product-1.0-aarch64-kvm.qcow2",
+            "destination": "diskimage-arm64",
+            "os": "linux",
+            "arch": "arm64",
+        }
+    )
+    monkeypatch.setattr(push_artifacts.push_artifacts, "CONTENT_DIR", tmp_path / "artifacts")
+    monkeypatch.setattr(push_artifacts.push_artifacts, "SHARED_DIR", tmp_path / "shared")
+    (tmp_path / "shared").mkdir()
+    monkeypatch.setenv("SNAPSHOT_JSON", json.dumps(snapshot))
+    _setup_secrets(tmp_path, monkeypatch)
+    _setup_published_files_env(tmp_path, monkeypatch)
+
+    comp_dir = tmp_path / "artifacts" / "diskimage-product" / "ready_for_distribution"
+    comp_dir.mkdir(parents=True)
+    (comp_dir / "install.iso.gz").write_bytes(b"fakeisodata")
+    (comp_dir / "disk.qcow2").write_bytes(b"fakeqcowdata")
+
+    captured_snapshot: list[dict] = []
+
+    def fake_cgw_main(argv):
+        for arg in argv:
+            try:
+                captured_snapshot.append(json.loads(arg))
+            except (ValueError, TypeError):
+                pass
+
+    with (
+        mock.patch.object(
+            push_artifacts.push_artifacts,
+            "_check_cert_expiration",
+        ),
+        mock.patch("push_artifacts.push_artifacts.pulp_push_wrapper.main"),
+        mock.patch("subprocess.check_call"),
+        mock.patch("publish_to_cgw_wrapper.main", side_effect=fake_cgw_main),
+    ):
+        push_artifacts.run("pre", "https://cgw.example.com", 7)
+
+    disk_comp = next(
+        c for c in captured_snapshot[0]["components"] if c["name"] == "diskimage-product"
+    )
+    metadata = publish_to_cgw_wrapper.generate_metadata(
+        content_dir=str(comp_dir),
+        component_name=disk_comp["name"],
+        files=disk_comp["files"],
+        product_code=disk_comp["contentGateway"]["productCode"],
+        version_id=1,
+        version_name=disk_comp["contentGateway"]["productVersionName"],
+        mirror_openshift_Push=False,
+        component_index=1,
+    )
+    short_urls = [item["shortURL"] for item in metadata]
+    assert short_urls == [
+        "/DiskProduct/1.0/install.iso.gz",
+        "/DiskProduct/1.0/disk.qcow2",
+        "/DiskProduct/1.0/diskimage-arm64/disk.qcow2",
+    ]
+    assert len(short_urls) == len(set(short_urls))
 
 
 # ---------------------------------------------------------------------------
