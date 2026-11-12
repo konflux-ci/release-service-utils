@@ -471,7 +471,12 @@ def test_wait_for_completion_raises_on_failure(
     ir_body = {
         "metadata": {"name": "ir-1"},
         "status": {
-            "conditions": [{"reason": "Failed"}],
+            "conditions": [
+                {
+                    "reason": "Failed",
+                    "message": "error requesting remote resource from github",
+                }
+            ],
             "pipelineRun": "pr-1",
         },
     }
@@ -486,6 +491,10 @@ def test_wait_for_completion_raises_on_failure(
         wait_for_completion(name="ir-1", timeout=600, k8s_api=k8s_api)
 
     assert exc_info.value.exit_code == EXIT_FAILED
+    assert str(exc_info.value) == (
+        "At least one InternalRequest failed: "
+        "ir-1 (Failed): error requesting remote resource from github"
+    )
     assert output_path.read_text(encoding="utf-8") == (
         '{"name": "ir-1", "pipelineRun": "pr-1"}\n'
     )
