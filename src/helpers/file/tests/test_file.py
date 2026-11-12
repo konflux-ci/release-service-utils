@@ -283,8 +283,37 @@ def test_encode_json_gzip_b64_roundtrip() -> None:
     """Compact JSON survives gzip+base64 encoding."""
     payload = [{"repository": "foo", "cves": {"fixed": {"CVE-1": {}}}}]
     encoded = file.encode_json_gzip_b64(payload)
-    decoded = json.loads(gzip.decompress(base64.standard_b64decode(encoded)))
-    assert decoded == payload
+    assert file.decode_json_gzip_b64(encoded) == payload
+
+
+def test_decode_json_gzip_b64_rejects_invalid_payload() -> None:
+    """Invalid gzip+base64 text raises ValueError."""
+    with pytest.raises(ValueError, match="invalid gzip\\+base64 JSON payload"):
+        file.decode_json_gzip_b64("not-valid")
+
+
+def test_decode_json_gzip_b64_rejects_truncated_gzip() -> None:
+    """A cut-off gzip stream raises ValueError, not a raw EOFError."""
+    raw = gzip.compress(json.dumps({"a": 1}).encode("utf-8"))
+    truncated = base64.standard_b64encode(raw[:8]).decode("ascii")
+    with pytest.raises(ValueError, match="invalid gzip\\+base64 JSON payload"):
+        file.decode_json_gzip_b64(truncated)
+
+
+def test_decode_json_gzip_b64_rejects_non_alphabet_characters() -> None:
+    """Non-base64 characters in the payload raise ValueError."""
+    encoded = file.encode_json_gzip_b64({"a": 1})
+    with pytest.raises(ValueError, match="invalid gzip\\+base64 JSON payload"):
+        file.decode_json_gzip_b64(encoded[:8] + "!" + encoded[8:])
+
+
+def test_decode_json_gzip_b64_accepts_wrapped_payload() -> None:
+    """YAML/MIME line breaks are ignored, matching GNU ``base64 -d``."""
+    payload = [{"repository": "foo", "cves": {"fixed": {"CVE-1": {}}}}]
+    encoded = file.encode_json_gzip_b64(payload)
+    wrapped = "\n".join(encoded[i : i + 40] for i in range(0, len(encoded), 40))
+    assert "\n" in wrapped
+    assert file.decode_json_gzip_b64(wrapped) == payload
 
 
 def test_encode_json_gzip_b64_uses_compact_separators() -> None:

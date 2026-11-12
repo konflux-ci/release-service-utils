@@ -178,6 +178,22 @@ def encode_json_gzip_b64(value: Any) -> str:
     return base64.standard_b64encode(gzip.compress(raw)).decode("ascii")
 
 
+def decode_json_gzip_b64(value: str) -> Any:
+    """Decode standard-base64 gzip-compressed JSON from `encode_json_gzip_b64`.
+
+    Whitespace, including YAML/MIME line breaks, is ignored so wrapped catalog
+    params decode the same way as GNU ``base64 -d``. Other non-base64
+    characters are rejected.
+    """
+    try:
+        cleaned = "".join(value.split())
+        raw = base64.b64decode(cleaned, validate=True)
+        text = gzip.decompress(raw).decode("utf-8")
+        return json.loads(text)
+    except (OSError, EOFError, ValueError) as e:
+        raise ValueError("invalid gzip+base64 JSON payload") from e
+
+
 def require_zip_member_size(info: zipfile.ZipInfo, *, max_bytes: int) -> None:
     """Reject a ZIP member whose declared uncompressed size exceeds *max_bytes*."""
     if info.file_size > max_bytes:

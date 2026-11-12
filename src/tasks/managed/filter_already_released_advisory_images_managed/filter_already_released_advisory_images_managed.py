@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from release_service_utils.helpers import internal_request, subprocess_cmd, tekton
-from release_service_utils.helpers.file import load_json_dict
+from release_service_utils.helpers.file import decode_json_gzip_b64, load_json_dict
 from release_service_utils.helpers.logger import logger
 
 _PENDING_PATTERN = re.compile(r"quay\.io/redhat-pending/|quay\.io/rh-flatpaks-stage/")
@@ -217,7 +217,10 @@ def decode_unreleased_components(raw: str) -> list[str]:
     """Decode the gzip+base64 `unreleased_components` list from IR results."""
     if not raw:
         raise RuntimeError("No unreleased components list found in results")
-    return json.loads(gzip.decompress(base64.b64decode(raw)))
+    decoded = decode_json_gzip_b64(raw)
+    if not isinstance(decoded, list):
+        raise ValueError("unreleased components must be a JSON array")
+    return decoded
 
 
 def filter_snapshot(snapshot: dict[str, Any], unreleased_names: set[str]) -> dict[str, Any]:
