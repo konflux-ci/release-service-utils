@@ -37,7 +37,6 @@ Other env vars:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import os
@@ -50,6 +49,7 @@ import yaml  # type: ignore
 
 from release_service_utils.helpers import disk_image_utils
 from release_service_utils.helpers import content_gateway
+from release_service_utils.helpers.cdn.cdn import create_exodus_conf, push_files_to_cdn
 
 import publish_to_cgw_wrapper
 import pulp_push_wrapper
@@ -120,30 +120,6 @@ def _write_cert_files(
         _write("udc.crt", udc_cert),
         _write("udc.key", udc_key),
     )
-
-
-def _create_exodus_conf(
-    conf_path: Path,
-    gw_cert: Path,
-    gw_key: Path,
-    gw_url: str,
-    gw_env: str,
-) -> None:
-    """Write an exodus-rsync configuration file to conf_path."""
-    logger.info("Creating Exodus configuration file.....")
-    conf_content = (
-        f"gwcert:   {gw_cert}\n"
-        f"gwkey:    {gw_key}\n"
-        f"gwurl:    {gw_url}\n"
-        f"gwenv:    {gw_env}\n"
-        "\n"
-        "logger: file:/proc/1/fd/1\n"
-        "loglevel: info\n"
-        "\n"
-        "environments:\n"
-        "  - prefix: exodus\n"
-    )
-    conf_path.write_text(conf_content)
 
 
 def _push_component_to_pulp(
@@ -252,37 +228,6 @@ def _push_component_to_pulp(
         shutil.rmtree(str(staging_dir), ignore_errors=True)
 
 
-def _push_component_to_cdn(
-    component_name: str, exodus_conf_path: Path, exclude: set[str] | None = None
-) -> None:
-    """Push files in a component's ready_for_distribution dir to CDN via exodus-rsync.
-
-    Files whose names appear in ``exclude`` are skipped. This is used when a component
-    publishes to both Pulp and CGW: staged files are already pushed to CDN by Pulp, so
-    only CGW files and the shared checksum files need to be exodus-rsync'd.
-    """
-    component_dir = CONTENT_DIR / component_name / "ready_for_distribution"
-    exclude = exclude or set()
-    logger.info("Pushing component %s to CDN with exodus-rsync", component_name)
-    prefix = "exodus:/content/origin/files/sha256"
-
-    for file in sorted(component_dir.rglob("*")):
-        if not file.is_file():
-            continue
-        if file.name in exclude:
-            logger.info("  Skipping %s (owned by Pulp on CDN)", file.name)
-            continue
-        h = hashlib.sha256()
-        with open(file, "rb") as fh:
-            for chunk in iter(lambda: fh.read(65536), b""):
-                h.update(chunk)
-        checksum = h.hexdigest()
-        destination_path = f"{prefix}/{checksum[:2]}/{checksum}/{file.name}"
-        subprocess.check_call(
-            ["rsync", "--exodus-conf", str(exodus_conf_path), str(file), destination_path]
-        )
-
-
 def run(exodus_gw_env: str, cgw_hostname: str, cert_expiration_warn_days: int) -> None:
     """Validate certificates and push artifacts to Pulp/CDN/CGW for each component."""
     logger.info("=== Checking certificate expiration ===")
@@ -353,7 +298,7 @@ def run(exodus_gw_env: str, cgw_hostname: str, cert_expiration_warn_days: int) -
             _push_component_to_pulp(name, snapshot, pulp_url, pulp_cert, pulp_key, udc_url)
 
         if has_cgw:
-            _create_exodus_conf(
+            create_exodus_conf(
                 exodus_conf_path, exodus_gw_cert, exodus_gw_key, exodus_url, exodus_gw_env
             )
             # When a component has both staged and CGW content, exclude staged filenames
@@ -366,7 +311,8 @@ def run(exodus_gw_env: str, cgw_hostname: str, cert_expiration_warn_days: int) -
                     src = sf.get("source", "")
                     if src:
                         staged_filenames.add(Path(src).name)
-            _push_component_to_cdn(name, exodus_conf_path, exclude=staged_filenames)
+            component_dir = CONTENT_DIR / name / "ready_for_distribution"
+            push_files_to_cdn(component_dir, exodus_conf_path, exclude=staged_filenames)
 
         if has_cgw:
             component_dir = CONTENT_DIR / name / "ready_for_distribution"
