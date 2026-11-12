@@ -14,10 +14,11 @@ exit codes).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
-from typing import NoReturn, TextIO
+from typing import Any, NoReturn, TextIO
 
 from release_service_utils.helpers.redact import redact_secrets
 
@@ -175,3 +176,18 @@ def exit_with_usage(usage: str, code: int = 1) -> NoReturn:
 def missing_blank_option_values(*options: tuple[str, str | None]) -> list[str]:
     """Return flag names whose values are missing or whitespace-only."""
     return [name for name, val in options if not val or not str(val).strip()]
+
+
+def jq_raw_value(value: Any) -> str:
+    """Render *value* using the scalar representation emitted by ``jq -r``.
+
+    Values loaded from a data file (JSON) are often forwarded as InternalRequest
+    or Tekton string params. ``str()`` alone is wrong for non-string JSON types:
+    ``str(True)`` is ``"True"`` (capitalized, since `bool` is an `int` subclass)
+    and ``str(None)`` is ``"None"``, neither of which match what `jq -r` or a
+    Tekton string param would produce (`"true"`, `"null"`). Strings pass through
+    unchanged; everything else is JSON-serialized.
+    """
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, separators=(",", ":"))
