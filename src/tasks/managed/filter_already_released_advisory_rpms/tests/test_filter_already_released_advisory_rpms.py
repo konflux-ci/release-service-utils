@@ -142,6 +142,7 @@ def _make_config_and_results(
     toml: str | None = None,
     default_excludes: list[str] | None = None,
     default_architectures: list[str] | None = None,
+    signed_pulp_domain: str = "",
 ) -> tuple[filt.FilterConfig, filt.ResultPaths]:
     """Build a ``FilterConfig`` and ``ResultPaths``, writing files to *tmp_path*."""
     snap_file, data_file, rpa_file, toml_file = _setup_base_files(
@@ -157,6 +158,7 @@ def _make_config_and_results(
         rpa_file=rpa_file,
         pulp_config_file=toml_file,
         pulp_domain="dom",
+        signed_pulp_domain=signed_pulp_domain,
         default_excludes=default_excludes if default_excludes is not None else [],
         default_architectures=default_architectures or ["x86_64"],
         pipeline_run_uid="uid",
@@ -965,6 +967,104 @@ class TestValidatePulpDigests:
         pulp.check_digest.assert_not_called()
 
 
+class TestGuardSignedRpms:
+    """Test the signed-Pulp retry guard."""
+
+    def _rpm(self, name: str = "new", repo: str = "x86_64") -> dict:
+        return {
+            "rpm": f"{name}-1-1.x86_64.rpm",
+            "rpmname": name,
+            "epoch": "0",
+            "version": "1",
+            "release": "1",
+            "arch": "x86_64",
+            "sha256": "unsigned-sha",
+            "targetRepos": [{"repository_name": repo}],
+        }
+
+    def _snapshot(self, rpms: list[dict] | None = None, **component_extra: object) -> dict:
+        component: dict = {"rpmsToPublish": rpms or []}
+        component.update(component_extra)
+        return {"components": [component]}
+
+    def test_absent_from_published_and_latest_allows(self) -> None:
+        """Allow a retry when the RPM is in neither published nor latest content."""
+        pulp = MagicMock(spec=filt.PulpClient)
+        pulp.check_digest.return_value = filt.PulpDigestStatus.NOT_FOUND
+        pulp.package_exists_in_latest_version.return_value = False
+        filt.guard_signed_rpms(self._snapshot([self._rpm()]), pulp, "signed")
+        pulp.check_digest.assert_called_once_with(
+            "x86_64", "new", "0", "1", "1", "x86_64", "unsigned-sha"
+        )
+        pulp.package_exists_in_latest_version.assert_called_once_with(
+            "x86_64", "new", "0", "1", "1", "x86_64"
+        )
+
+    def test_stale_publication_blocks(self) -> None:
+        """Stop when the RPM is only in the repository's latest version."""
+        pulp = MagicMock(spec=filt.PulpClient)
+        pulp.check_digest.return_value = filt.PulpDigestStatus.NOT_FOUND
+        pulp.package_exists_in_latest_version.return_value = True
+        with pytest.raises(RuntimeError, match="Stop before re-signing"):
+            filt.guard_signed_rpms(self._snapshot([self._rpm()]), pulp, "signed")
+
+    def test_published_mismatch_blocks_without_latest_lookup(self) -> None:
+        """A published digest mismatch means the RPM is already signed."""
+        pulp = MagicMock(spec=filt.PulpClient)
+        pulp.check_digest.return_value = filt.PulpDigestStatus.MISMATCH
+        with pytest.raises(RuntimeError, match="Stop before re-signing"):
+            filt.guard_signed_rpms(self._snapshot([self._rpm()]), pulp, "signed")
+        pulp.package_exists_in_latest_version.assert_not_called()
+
+    def test_published_match_blocks_without_latest_lookup(self) -> None:
+        """A published digest match also stops a new signing run."""
+        pulp = MagicMock(spec=filt.PulpClient)
+        pulp.check_digest.return_value = filt.PulpDigestStatus.MATCH
+        with pytest.raises(RuntimeError, match="Stop before re-signing"):
+            filt.guard_signed_rpms(self._snapshot([self._rpm()]), pulp, "signed")
+        pulp.package_exists_in_latest_version.assert_not_called()
+
+    def test_partial_release_stops_on_first_completed_rpm(self) -> None:
+        """Stop on the first already-signed RPM in a partial-release component."""
+        pulp = MagicMock(spec=filt.PulpClient)
+        pulp.check_digest.return_value = filt.PulpDigestStatus.MISMATCH
+        with pytest.raises(RuntimeError, match="partial release"):
+            filt.guard_signed_rpms(
+                self._snapshot([self._rpm("released"), self._rpm("new")]),
+                pulp,
+                "signed",
+            )
+        pulp.check_digest.assert_called_once()
+        pulp.package_exists_in_latest_version.assert_not_called()
+
+    def test_missing_repository_fails_closed(self) -> None:
+        """Propagate a missing signed repository as a failure."""
+        pulp = MagicMock(spec=filt.PulpClient)
+        pulp.check_digest.return_value = filt.PulpDigestStatus.NOT_FOUND
+        pulp.package_exists_in_latest_version.side_effect = RuntimeError(
+            "Cannot identify Pulp repository signed/x86_64"
+        )
+        with pytest.raises(RuntimeError, match="Cannot identify Pulp repository"):
+            filt.guard_signed_rpms(self._snapshot([self._rpm()]), pulp, "signed")
+
+    def test_missing_rpms_to_publish_is_skipped(self) -> None:
+        """Components without rpmsToPublish do not query Pulp."""
+        pulp = MagicMock(spec=filt.PulpClient)
+        filt.guard_signed_rpms({"components": [{}]}, pulp, "signed")
+        pulp.check_digest.assert_not_called()
+
+    def test_epoch_is_stringified(self) -> None:
+        """Convert a non-string epoch before calling Pulp."""
+        pulp = MagicMock(spec=filt.PulpClient)
+        pulp.check_digest.return_value = filt.PulpDigestStatus.NOT_FOUND
+        pulp.package_exists_in_latest_version.return_value = False
+        rpm = self._rpm()
+        rpm["epoch"] = 0
+        filt.guard_signed_rpms(self._snapshot([rpm]), pulp, "signed")
+        assert pulp.check_digest.call_args.args[2] == "0"
+        assert pulp.package_exists_in_latest_version.call_args.args[2] == "0"
+
+
 class TestFilterSnapshot:
     """Test snapshot filtering."""
 
@@ -1443,6 +1543,153 @@ class TestRun:
         ):
             filt.run(cfg, res)
 
+    def test_empty_signed_domain_skips_guard(self, tmp_path: Path) -> None:
+        """Do not build a signed-domain client when signed_pulp_domain is empty."""
+        tarball = _make_filter_tarball(
+            tmp_path,
+            unreleased=[_unreleased_hello()],
+            in_advisory=[],
+        )
+        cfg, res = _make_config_and_results(
+            tmp_path,
+            snapshot=_snapshot([{"containerImage": "quay.io/t/i@sha256:a", "name": "c1"}]),
+            data=_data(rpm_repos=_rpm_repos()),
+        )
+        mock_run = _mock_run_cmd_for_oras_and_rpm(
+            ["hello-1.0-1.el9.x86_64.rpm"],
+            filter_tarball=tarball,
+        )
+        from_config = MagicMock(return_value=MagicMock())
+
+        with (
+            patch.object(filt.subprocess_cmd, "run_cmd", mock_run),
+            patch.object(filt.file_helper, "sha256", return_value="sha"),
+            patch.object(filt.PulpClient, "from_config", from_config),
+        ):
+            filt.run(cfg, res)
+
+        assert [call.args[1] for call in from_config.call_args_list] == ["dom"]
+        assert res.skip_release.read_text(encoding="utf-8") == "false"
+
+    def test_skip_release_skips_signed_guard(self, tmp_path: Path) -> None:
+        """Do not query signed Pulp when the release is skipped."""
+        cfg, res = _make_config_and_results(
+            tmp_path,
+            snapshot=_snapshot([{"containerImage": "quay.io/t/i@sha256:a", "name": "c1"}]),
+            data=_data(rpm_repos=_rpm_repos()),
+            signed_pulp_domain="signed",
+        )
+        mock_run = _mock_run_cmd_for_oras_and_rpm(rpm_files=[])
+        from_config = MagicMock()
+
+        with (
+            patch.object(filt.subprocess_cmd, "run_cmd", mock_run),
+            patch.object(filt.file_helper, "sha256", return_value="sha"),
+            patch.object(filt.PulpClient, "from_config", from_config),
+        ):
+            filt.run(cfg, res)
+
+        from_config.assert_not_called()
+        assert res.skip_release.read_text(encoding="utf-8") == "true"
+
+    def test_all_released_skips_signed_guard(self, tmp_path: Path) -> None:
+        """Do not query signed Pulp when every RPM is already in an advisory."""
+        tarball = _make_filter_tarball(tmp_path, unreleased=[], in_advisory=[])
+        cfg, res = _make_config_and_results(
+            tmp_path,
+            snapshot=_snapshot([{"containerImage": "quay.io/t/i@sha256:a", "name": "c1"}]),
+            data=_data(rpm_repos=_rpm_repos()),
+            signed_pulp_domain="signed",
+        )
+        ir_results = {
+            "result": "Success",
+            "filter_results_artifact": "oci:quay.io/r@sha256:abc",
+            "advisory_url": "https://adv.example.com",
+            "advisory_internal_url": "https://int.example.com",
+        }
+        mock_run = _mock_run_cmd_for_oras_and_rpm(
+            ["hello-1.0-1.el9.x86_64.rpm"],
+            ir_results=ir_results,
+            filter_tarball=tarball,
+        )
+        from_config = MagicMock(return_value=MagicMock())
+
+        with (
+            patch.object(filt.subprocess_cmd, "run_cmd", mock_run),
+            patch.object(filt.file_helper, "sha256", return_value="sha"),
+            patch.object(filt.PulpClient, "from_config", from_config),
+        ):
+            filt.run(cfg, res)
+
+        assert [call.args[1] for call in from_config.call_args_list] == ["dom"]
+        assert res.skip_release.read_text(encoding="utf-8") == "true"
+
+    def test_signed_guard_allows_retry(self, tmp_path: Path) -> None:
+        """Query signed Pulp after filtering and continue when RPMs are absent."""
+        tarball = _make_filter_tarball(
+            tmp_path,
+            unreleased=[_unreleased_hello()],
+            in_advisory=[],
+        )
+        cfg, res = _make_config_and_results(
+            tmp_path,
+            snapshot=_snapshot([{"containerImage": "quay.io/t/i@sha256:a", "name": "c1"}]),
+            data=_data(rpm_repos=_rpm_repos()),
+            signed_pulp_domain="signed",
+        )
+        mock_run = _mock_run_cmd_for_oras_and_rpm(
+            ["hello-1.0-1.el9.x86_64.rpm"],
+            filter_tarball=tarball,
+        )
+        unsigned = MagicMock(spec=filt.PulpClient)
+        signed = MagicMock(spec=filt.PulpClient)
+        signed.check_digest.return_value = filt.PulpDigestStatus.NOT_FOUND
+        signed.package_exists_in_latest_version.return_value = False
+        from_config = MagicMock(side_effect=[unsigned, signed])
+
+        with (
+            patch.object(filt.subprocess_cmd, "run_cmd", mock_run),
+            patch.object(filt.file_helper, "sha256", return_value="sha"),
+            patch.object(filt.PulpClient, "from_config", from_config),
+        ):
+            filt.run(cfg, res)
+
+        assert [call.args[1] for call in from_config.call_args_list] == ["dom", "signed"]
+        signed.check_digest.assert_called_once()
+        assert res.skip_release.read_text(encoding="utf-8") == "false"
+
+    def test_signed_guard_blocks_retry(self, tmp_path: Path) -> None:
+        """Leave skip_release false and raise when signed Pulp already has the RPM."""
+        tarball = _make_filter_tarball(
+            tmp_path,
+            unreleased=[_unreleased_hello()],
+            in_advisory=[],
+        )
+        cfg, res = _make_config_and_results(
+            tmp_path,
+            snapshot=_snapshot([{"containerImage": "quay.io/t/i@sha256:a", "name": "c1"}]),
+            data=_data(rpm_repos=_rpm_repos()),
+            signed_pulp_domain="signed",
+        )
+        mock_run = _mock_run_cmd_for_oras_and_rpm(
+            ["hello-1.0-1.el9.x86_64.rpm"],
+            filter_tarball=tarball,
+        )
+        unsigned = MagicMock(spec=filt.PulpClient)
+        signed = MagicMock(spec=filt.PulpClient)
+        signed.check_digest.return_value = filt.PulpDigestStatus.MISMATCH
+        from_config = MagicMock(side_effect=[unsigned, signed])
+
+        with (
+            patch.object(filt.subprocess_cmd, "run_cmd", mock_run),
+            patch.object(filt.file_helper, "sha256", return_value="sha"),
+            patch.object(filt.PulpClient, "from_config", from_config),
+            pytest.raises(RuntimeError, match="Stop before re-signing"),
+        ):
+            filt.run(cfg, res)
+
+        assert res.skip_release.read_text(encoding="utf-8") == "false"
+
 
 class TestMain:
     """Test the CLI entry point."""
@@ -1460,6 +1707,7 @@ class TestMain:
         monkeypatch.setenv("RPA_FILE", str(rpa_file))
         monkeypatch.setenv("PULP_CONFIG_FILE", str(toml_file))
         monkeypatch.setenv("PULP_DOMAIN", "dom")
+        monkeypatch.setenv("SIGNED_PULP_DOMAIN", "signed")
         monkeypatch.setenv("PIPELINE_RUN_UID", "uid")
         monkeypatch.setenv("TASK_GIT_URL", "git-url")
         monkeypatch.setenv("TASK_GIT_REVISION", "rev")
