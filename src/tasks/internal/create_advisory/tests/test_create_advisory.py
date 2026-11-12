@@ -7,6 +7,7 @@ import time
 import base64
 import gzip
 import json
+import logging
 import os
 import subprocess
 from contextlib import ExitStack
@@ -1108,6 +1109,11 @@ def test_main_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _setup_main_env(tmp_path, monkeypatch)
     with mock.patch(f"{TASK}.create_advisory.run_create_advisory"):
         assert create_advisory.create_advisory.main(["create_advisory.py"]) == 0
+
+
+def test_task_logger_is_a_logger_instance() -> None:
+    """Import the configured logger object instead of the logger module."""
+    assert isinstance(create_advisory.create_advisory.logger, logging.Logger)
 
 
 def test_main_writes_failure_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
