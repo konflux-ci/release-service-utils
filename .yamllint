@@ -15,3 +15,4 @@ rules:
 
 ignore:
   - '.tekton/*.yaml'
+  - 'rpms.lock.yaml'
