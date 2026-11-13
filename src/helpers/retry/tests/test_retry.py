@@ -87,3 +87,24 @@ def test_retry_with_exponential_backoff_caps_sleep_at_max_sleep_seconds() -> Non
             sleep_fn=sleeps.append,
         )
     assert sleeps == [5, 10, 20, 20, 20]
+
+
+def test_retry_with_exponential_backoff_stops_when_retry_if_rejects() -> None:
+    """A matching failure rejected by ``retry_if`` is raised without sleeping."""
+    calls = {"n": 0}
+    sleeps: list[float] = []
+
+    def _op() -> None:
+        calls["n"] += 1
+        raise ValueError("permanent")
+
+    with pytest.raises(ValueError, match="permanent"):
+        retry.retry_with_exponential_backoff(
+            _op,
+            max_attempts=5,
+            retry_on=ValueError,
+            retry_if=lambda exc: "permanent" not in str(exc),
+            sleep_fn=sleeps.append,
+        )
+    assert calls["n"] == 1
+    assert sleeps == []

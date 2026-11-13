@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import runpy
 import subprocess
@@ -9,12 +10,16 @@ from pathlib import Path
 from unittest.mock import call, patch
 
 import pytest
+from release_service_utils.helpers import cosign
 
 from release_service_utils.tasks.managed.push_rpm_data_to_pyxis import (
     push_rpm_data_to_pyxis as task,
 )
 
 TASK = "release_service_utils.tasks.managed.push_rpm_data_to_pyxis.push_rpm_data_to_pyxis"
+ARCH_DIGEST = "sha256:" + "a" * 64
+SPDX_TYPE = "https://spdx.dev/Document"
+ECP = json.dumps({"spec": {"publicKey": "k8s://ns/key"}})
 
 
 def _job(
@@ -27,6 +32,7 @@ def _job(
         image_id=image_id,
         container_image=container_image,
         platform=platform,
+        arch_digest=ARCH_DIGEST,
     )
 
 
@@ -98,6 +104,7 @@ class TestImageCollection:
                 image_id="abc123",
                 container_image="quay.io/example/image",
                 platform="linux/arm64",
+                arch_digest="sha256:arch",
             )
         ]
 
@@ -210,7 +217,7 @@ class TestDownloadSbom:
         """Map ImageJob fields and retry count onto cosign.download."""
         with patch.object(task, "SBOM_DIR", tmp_path):
             with patch(f"{TASK}.cosign.download") as download:
-                task.download_sbom(job, retries=retries)
+                task.download_sbom(job, retries=retries, enterprise_contract_policy=None)
 
         download.assert_called_once_with(
             "sbom",
@@ -219,6 +226,179 @@ class TestDownloadSbom:
             max_attempts=expected_attempts,
             platform=job.platform,
         )
+
+
+def _envelope(predicate_type: str, digest: str, predicate: dict) -> str:
+    statement = {
+        "_type": "https://in-toto.io/Statement/v0.1",
+        "predicateType": predicate_type,
+        "subject": [{"name": "image", "digest": {"sha256": digest.split(":")[1]}}],
+        "predicate": predicate,
+    }
+    payload = base64.b64encode(json.dumps(statement).encode()).decode()
+    return json.dumps({"payloadType": "application/vnd.in-toto+json", "payload": payload})
+
+
+def _missing_sbom() -> cosign.SbomNotFoundError:
+    """Model the shared helper's error when a legacy SBOM is missing."""
+    return cosign.SbomNotFoundError("No SBOM attached to image: no sbom attached to reference")
+
+
+class TestSpdxAttestationFallback:
+    """Test the SPDX attestation fallback of download_sbom."""
+
+    SPDX = {"spdxVersion": "SPDX-2.3", "packages": []}
+
+    @pytest.mark.parametrize("bundle", [False, True])
+    @pytest.mark.parametrize("platform", [None, "linux/arm64"])
+    def test_uses_verified_attestation_when_sbom_is_missing(
+        self, tmp_path: Path, bundle: bool, platform: str | None
+    ) -> None:
+        """Extract SPDX from verified envelopes and referrer bundles per architecture."""
+        matching = _envelope(SPDX_TYPE, ARCH_DIGEST, self.SPDX)
+        if bundle:
+            matching = json.dumps(
+                {
+                    "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+                    "dsseEnvelope": json.loads(matching),
+                }
+            )
+        output = "\n\n".join(
+            [
+                # Intentionally wrong digest: skip this attestation and use the matching one.
+                _envelope(SPDX_TYPE, "sha256:" + "b" * 64, {"other": 1}),
+                matching,
+            ]
+        )
+        with patch.object(task, "SBOM_DIR", tmp_path):
+            with patch(f"{TASK}.cosign.download", side_effect=_missing_sbom()):
+                with patch(
+                    f"{TASK}.cosign.verify_spdx_attestation", return_value=output
+                ) as verify:
+                    task.download_sbom(
+                        _job(platform=platform), retries=2, enterprise_contract_policy=ECP
+                    )
+
+        verify.assert_called_once_with(
+            f"quay.io/example/image@{ARCH_DIGEST}", key="k8s://ns/key", max_attempts=3
+        )
+        assert json.loads((tmp_path / "abcdef.json").read_text()) == self.SPDX
+
+    def test_legacy_sbom_success_skips_the_fallback(self, tmp_path: Path) -> None:
+        """Do not verify attestations when the SBOM download succeeds."""
+        with patch.object(task, "SBOM_DIR", tmp_path):
+            with patch(f"{TASK}.cosign.download"):
+                with patch(f"{TASK}.cosign.verify_spdx_attestation") as verify:
+                    task.download_sbom(_job(), retries=0, enterprise_contract_policy=None)
+        verify.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("policy", "output"),
+        [
+            (ECP, ""),
+            (ECP, _envelope(SPDX_TYPE, "sha256:" + "b" * 64, {})),
+            (ECP, "not json"),
+        ],
+    )
+    def test_fallback_failures_are_reported(
+        self, tmp_path: Path, policy: str, output: str
+    ) -> None:
+        """Reject empty, non-matching, and malformed verified output."""
+        with patch.object(task, "SBOM_DIR", tmp_path):
+            with patch(f"{TASK}.cosign.download", side_effect=_missing_sbom()):
+                with patch(f"{TASK}.cosign.verify_spdx_attestation", return_value=output):
+                    with pytest.raises(RuntimeError, match="fallback failed too") as caught:
+                        task.download_sbom(
+                            _job(), retries=0, enterprise_contract_policy=policy
+                        )
+        assert isinstance(caught.value.__cause__, ValueError)
+        assert not (tmp_path / "abcdef.json").exists()
+
+    @pytest.mark.parametrize(
+        ("policy", "message"),
+        [
+            ("{}", "needed for the referrers API SPDX attestation fallback"),
+            (None, "No EnterpriseContractPolicy provided"),
+            ("", "No EnterpriseContractPolicy provided"),
+            ("not json", "not valid JSON"),
+            ("[1]", "must be a JSON object"),
+            (json.dumps({"spec": None}), "'spec' must be a JSON object"),
+            (json.dumps({"spec": {}}), "needed for referrers API SPDX fallback"),
+        ],
+    )
+    def test_missing_public_key_is_explained(
+        self, tmp_path: Path, policy: str | None, message: str
+    ) -> None:
+        """Distinguish an unprovided policy from a policy without a publicKey."""
+        with patch.object(task, "SBOM_DIR", tmp_path):
+            with patch(f"{TASK}.cosign.download", side_effect=_missing_sbom()):
+                with patch(f"{TASK}.cosign.verify_spdx_attestation") as verify:
+                    with pytest.raises(RuntimeError, match="fallback failed too") as caught:
+                        task.download_sbom(
+                            _job(), retries=0, enterprise_contract_policy=policy
+                        )
+        assert message in str(caught.value.__cause__)
+        verify.assert_not_called()
+
+    def test_verification_failure_is_reported(self, tmp_path: Path) -> None:
+        """Do not write an SBOM when cosign verification fails."""
+        with patch.object(task, "SBOM_DIR", tmp_path):
+            with patch(f"{TASK}.cosign.download", side_effect=_missing_sbom()):
+                with patch(
+                    f"{TASK}.cosign.verify_spdx_attestation",
+                    side_effect=RuntimeError("bad sig"),
+                ):
+                    with pytest.raises(RuntimeError, match="bad sig") as caught:
+                        task.download_sbom(_job(), retries=0, enterprise_contract_policy=ECP)
+        assert "no sbom attached to reference" in str(caught.value)
+        assert not (tmp_path / "abcdef.json").exists()
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "not json",
+            json.dumps({"dsseEnvelope": {}}),
+            json.dumps({"payload": "!!!"}),
+            json.dumps({"payload": base64.b64encode(b"nope").decode()}),
+            json.dumps({"payload": base64.b64encode(b"[1]").decode()}),
+            "[1]",
+        ],
+    )
+    def test_malformed_envelope_names_reference_and_line(
+        self, tmp_path: Path, line: str
+    ) -> None:
+        """Wrap parse failures with the image reference and line index."""
+        output = _envelope(SPDX_TYPE, "sha256:" + "b" * 64, {}) + "\n" + line
+        with pytest.raises(ValueError, match=r"quay.io/x@sha256:\w+ \(line 2\)") as caught:
+            task._write_spdx_from_attestations(
+                output, f"quay.io/x@{ARCH_DIGEST}", ARCH_DIGEST, tmp_path / "o.json"
+            )
+        assert caught.value.__cause__ is not None or "not a JSON object" in str(caught.value)
+
+    def test_malformed_envelope_line_number_includes_blank_lines(self, tmp_path: Path) -> None:
+        """Count skipped blank lines when reporting malformed output."""
+        output = _envelope(SPDX_TYPE, "sha256:" + "b" * 64, {}) + "\n \nnot json"
+        with pytest.raises(ValueError, match=r"quay.io/x@sha256:\w+ \(line 3\)"):
+            task._write_spdx_from_attestations(
+                output, f"quay.io/x@{ARCH_DIGEST}", ARCH_DIGEST, tmp_path / "o.json"
+            )
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            RuntimeError("Failed to download sbom for image after 1 attempts."),
+            RuntimeError("output file was not created"),
+            subprocess.CalledProcessError(1, ["select-oci-auth"], stderr="no credentials"),
+        ],
+    )
+    def test_other_download_failures_do_not_fall_back(self, error: Exception) -> None:
+        """Preserve network, authentication, and output-file failures."""
+        with patch(f"{TASK}.cosign.download", side_effect=error):
+            with patch(f"{TASK}.cosign.verify_spdx_attestation") as verify:
+                with pytest.raises(type(error)) as exc:
+                    task.download_sbom(_job(), retries=0, enterprise_contract_policy=ECP)
+        assert exc.value is error
+        verify.assert_not_called()
 
 
 class TestUploadRpmData:
@@ -337,9 +517,9 @@ class TestRun:
         pyxis_file = tmp_path / "pyxis.json"
         pyxis_file.write_text("{}", encoding="utf-8")
         with pytest.raises(ValueError, match="CONCURRENT_LIMIT"):
-            task.run(pyxis_file, 0, 3)
+            task.run(pyxis_file, 0, 3, enterprise_contract_policy=None)
         with pytest.raises(ValueError, match="RETRIES"):
-            task.run(pyxis_file, 1, -1)
+            task.run(pyxis_file, 1, -1, enterprise_contract_policy=None)
 
     @pytest.mark.parametrize(
         "payload",
@@ -357,7 +537,7 @@ class TestRun:
         sbom_dir = tmp_path / "sboms"
         with patch.object(task, "SBOM_DIR", sbom_dir):
             with pytest.raises(RuntimeError, match="No Pyxis images found"):
-                task.run(pyxis_file, 1, 3)
+                task.run(pyxis_file, 1, 3, enterprise_contract_policy=None)
         assert not sbom_dir.exists()
 
     def test_runs_download_then_upload_phases(self, tmp_path: Path) -> None:
@@ -382,7 +562,7 @@ class TestRun:
             with patch(f"{TASK}.collect_image_jobs", return_value=[first, duplicate, other]):
                 with patch(f"{TASK}._run_phase", side_effect=fake_phase):
                     with patch(f"{TASK}.memory_throttle.log_memory_throttle_status") as log:
-                        task.run(pyxis_file, 4, 3)
+                        task.run(pyxis_file, 4, 3, enterprise_contract_policy=None)
 
         assert phase_calls == [
             ([first, other], "SBOM download"),
@@ -400,7 +580,7 @@ class TestRun:
                     f"{TASK}._run_phase", side_effect=RuntimeError("download")
                 ) as phase:
                     with pytest.raises(RuntimeError, match="download"):
-                        task.run(pyxis_file, 1, 3)
+                        task.run(pyxis_file, 1, 3, enterprise_contract_policy=None)
         assert phase.call_count == 1
 
 
@@ -420,6 +600,7 @@ class TestMain:
         monkeypatch.setenv("PYXIS_SERVER", "stage")
         monkeypatch.setenv("CONCURRENT_LIMIT", "7")
         monkeypatch.setenv("RETRIES", "4")
+        monkeypatch.setenv("ENTERPRISE_CONTRACT_POLICY", ECP)
 
         with patch(f"{TASK}.authentication.setup_ca_cert") as setup_ca:
             with patch(f"{TASK}.run") as run:
@@ -432,7 +613,9 @@ class TestMain:
             == "https://graphql-pyxis.preprod.api.redhat.com/graphql/"
         )
         setup_ca.assert_called_once_with()
-        run.assert_called_once_with(Path("/data/pyxis.json"), 7, 4)
+        run.assert_called_once_with(
+            Path("/data/pyxis.json"), 7, 4, enterprise_contract_policy=ECP
+        )
 
     def test_uses_default_retry_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Use three retries when Tekton does not override RETRIES."""
@@ -441,10 +624,13 @@ class TestMain:
         monkeypatch.setenv("PYXIS_SERVER", "production")
         monkeypatch.setenv("CONCURRENT_LIMIT", "1")
         monkeypatch.delenv("RETRIES", raising=False)
+        monkeypatch.delenv("ENTERPRISE_CONTRACT_POLICY", raising=False)
         with patch(f"{TASK}.authentication.setup_ca_cert"):
             with patch(f"{TASK}.run") as run:
                 task.main()
-        run.assert_called_once_with(Path("/data/pyxis.json"), 1, 3)
+        run.assert_called_once_with(
+            Path("/data/pyxis.json"), 1, 3, enterprise_contract_policy=None
+        )
 
     def test_invalid_server_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Propagate validation from the shared Pyxis server mapping helper."""
