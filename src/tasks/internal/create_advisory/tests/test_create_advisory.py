@@ -4298,3 +4298,70 @@ def test_finish_from_merged_passes_remaining_timeout(
             deadline=90.0,
         )
     assert push_merge.call_args.kwargs["timeout_seconds"] == 40.0
+
+
+@pytest.mark.parametrize("response_code", [400, 403, 503])
+def test_dropped_owned_train_requeue_failure_does_not_cancel_replacement(
+    tmp_path: Path, creds: gitlab.GitLabCredentials, response_code: int
+) -> None:
+    """Exercise polling and cleanup without canceling another run's replacement entry."""
+    mr = mock.Mock(
+        iid=7,
+        web_url="https://example.com/mr/7",
+        state="opened",
+        draft=False,
+        merge_status="cannot_be_merged",
+        detailed_merge_status="ci_must_pass",
+        head_pipeline={"status": "success"},
+        merge_when_pipeline_succeeds=False,
+    )
+    mr.manager.get.return_value.state = "opened"
+    elapsed = [0.0]
+    attempt = gitlab.MergeTrainAttempt()
+    error = GitlabError(
+        "No available merge train strategy" if response_code == 400 else "queue failed",
+        response_code=response_code,
+    )
+
+    def enqueue(*args: Any, **kwargs: Any) -> bool:
+        if add.call_count == 1:
+            return True
+        assert not attempt.queued_by_this_run
+        assert attempt.may_merge_without_this_run
+        elapsed[0] = 100
+        raise error
+
+    def sleep(seconds: float) -> None:
+        if entry.call_count == 1:
+            assert attempt.queued_by_this_run
+        else:
+            assert not attempt.queued_by_this_run
+        elapsed[0] += seconds
+
+    with (
+        mock.patch(f"{TASK}.create_advisory._approve_advisory_merge_request"),
+        mock.patch.object(gitlab, "MergeTrainAttempt", return_value=attempt),
+        mock.patch.object(gitlab, "_refresh_merge_request"),
+        mock.patch.object(gitlab, "add_merge_request_to_train", side_effect=enqueue) as add,
+        mock.patch.object(
+            gitlab, "get_merge_request_train_entry", side_effect=[{"status": "fresh"}, None]
+        ) as entry,
+        mock.patch.object(gitlab, "cancel_merge_request_auto_merge") as cancel,
+        mock.patch.object(gitlab.time, "monotonic", side_effect=lambda: elapsed[0]),
+        mock.patch.object(gitlab.time, "sleep", side_effect=sleep),
+        pytest.raises(RuntimeError, match="may still merge after this task fails"),
+    ):
+        create_advisory.create_advisory._finish_from_merged_merge_request(
+            gitlab_client=mock.Mock(),
+            credentials=creds,
+            repo_root=tmp_path,
+            merge_request=mr,
+            source_branch="feat",
+            url_prefix="https://example.com/errata",
+            stderr_path=tmp_path / "e.log",
+            result_paths={},
+            deadline=100,
+            owns_advisory_branch=True,
+        )
+    assert add.call_count == 2
+    cancel.assert_not_called()

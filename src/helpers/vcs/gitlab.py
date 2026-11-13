@@ -94,6 +94,9 @@ def _next_merge_poll_interval(current_interval: float, *, base_interval: float) 
     The cap is at least *base_interval* so an explicitly large poll interval is
     not reduced on later iterations.
     """
+    # RELEASE-2935: keep retries in the polling state machine so every attempt
+    # refreshes MR state and shares the same deadline. A nested helpers.retry
+    # loop would delay those checks and introduce a separate sleep budget.
     max_interval = max(base_interval, _MAX_MERGE_POLL_INTERVAL_SECONDS)
     return min(max_interval, current_interval * 2)
 
@@ -125,8 +128,15 @@ def _refresh_merge_request(merge_request: Any, *, deadline: float) -> None:
         _raise_merge_request_timeout(merge_request)
 
 
-def _raise_merge_request_timeout(merge_request: Any) -> None:
-    """Raise ``TimeoutError`` with the latest MR state in the message."""
+def _raise_merge_request_timeout(
+    merge_request: Any, *, queue_error: GitlabError | None = None
+) -> None:
+    """Raise a timeout with MR state and the last enqueue error, when present."""
+    if queue_error is not None:
+        raise TimeoutError(
+            f"timed out enqueueing merge request {_merge_request_display_url(merge_request)}; "
+            f"last queue error: {queue_error}"
+        ) from queue_error
     state = getattr(merge_request, "state", "") or ""
     url = _merge_request_display_url(merge_request)
     merge_status = getattr(merge_request, "merge_status", None)
@@ -785,6 +795,10 @@ def push_merge_request_to_main(
     must disable conflict cleanup so it does not delete the other run's branch.
     Otherwise poll until GitLab reports the MR mergeable, then accept it directly.
 
+    Retry the specific strategy-not-ready enqueue error within the same budget.
+    Re-enqueue at most twice if the train entry disappears. MR state, conflicts,
+    and pipeline failures are checked again before every enqueue attempt.
+
     A task retry may restart one failed MR pipeline on a reused MR. Wait until
     GitLab reports that pipeline as the head before handling another failure.
 
@@ -805,13 +819,19 @@ def push_merge_request_to_main(
     last_train_pipeline: str | None = None
     restarted_pipeline_id: str | None = None
     previous_failed_pipeline_id: str | None = None
+    train_requeues = 0
+    last_queue_error: GitlabError | None = None
     if train_attempt is None:
         train_attempt = MergeTrainAttempt()
 
     while True:
+        if _poll_remaining_seconds(deadline) <= 0:
+            _raise_merge_request_timeout(merge_request, queue_error=last_queue_error)
         logger.info("checking merge request %s", _merge_request_display_url(merge_request))
         try:
             _refresh_merge_request(merge_request, deadline=deadline)
+        except TimeoutError:
+            _raise_merge_request_timeout(merge_request, queue_error=last_queue_error)
         except GitlabError as exc:
             if not is_transient_gitlab_error(exc):
                 raise
@@ -828,6 +848,8 @@ def push_merge_request_to_main(
             state = getattr(merge_request, "state", "") or ""
             if state in ("closed", "locked"):
                 raise RuntimeError(f"merge request {url} is {state}")
+            if getattr(merge_request, "draft", False) is True:
+                raise RuntimeError(f"merge request {url} is a draft")
             if merge_request_has_conflict(merge_request):
                 if cleanup_on_conflict:
                     cleanup_merge_request_branch(
@@ -841,7 +863,9 @@ def push_merge_request_to_main(
                 if retry_failed_pipeline and restarted_pipeline_id is None:
                     request_timeout = _gitlab_request_timeout_seconds(deadline)
                     if request_timeout <= 0:
-                        _raise_merge_request_timeout(merge_request)
+                        _raise_merge_request_timeout(
+                            merge_request, queue_error=last_queue_error
+                        )
                     previous_failed_pipeline_id = _head_pipeline_id(merge_request)
                     if previous_failed_pipeline_id is None:
                         raise RuntimeError(
@@ -874,14 +898,14 @@ def push_merge_request_to_main(
                 # GitLab can still report the previous failed head pipeline
                 # immediately after accepting a new one. Wait for it to appear.
                 if _poll_remaining_seconds(deadline) <= 0:
-                    _raise_merge_request_timeout(merge_request)
+                    _raise_merge_request_timeout(merge_request, queue_error=last_queue_error)
                 _sleep_for_poll_interval(deadline, interval)
                 interval = _next_merge_poll_interval(interval, base_interval=base_interval)
                 continue
 
             request_timeout = _gitlab_request_timeout_seconds(deadline)
             if request_timeout <= 0:
-                _raise_merge_request_timeout(merge_request)
+                _raise_merge_request_timeout(merge_request, queue_error=last_queue_error)
 
             if use_merge_train and not merge_queued:
                 logger.info("adding merge request %s to the merge train", url)
@@ -893,15 +917,24 @@ def push_merge_request_to_main(
                         request_timeout=request_timeout,
                     )
                 except GitlabError as exc:
-                    if not is_transient_gitlab_error(exc):
+                    strategy_not_ready = (
+                        getattr(exc, "response_code", None) == 400
+                        and "no available merge train strategy" in str(exc).lower()
+                    )
+                    if not (strategy_not_ready or is_transient_gitlab_error(exc)):
                         raise
+                    last_queue_error = exc
                     # The POST may have succeeded despite a lost response. A
                     # later 409 cannot establish ownership in that case.
-                    train_attempt.may_merge_without_this_run = True
+                    if not strategy_not_ready:
+                        train_attempt.may_merge_without_this_run = True
                     logger.warning(
                         "transient GitLab error queuing merge request %s: %s", url, exc
                     )
                 else:
+                    # A resolved enqueue attempt also includes switching to
+                    # direct merging when trains have been disabled.
+                    last_queue_error = None
                     if queued_by_this_run is None:
                         use_merge_train = False
                     else:
@@ -913,7 +946,7 @@ def push_merge_request_to_main(
             if use_merge_train and merge_queued:
                 train_request_timeout = _gitlab_request_timeout_seconds(deadline)
                 if train_request_timeout <= 0:
-                    _raise_merge_request_timeout(merge_request)
+                    _raise_merge_request_timeout(merge_request, queue_error=last_queue_error)
                 try:
                     train_entry = get_merge_request_train_entry(
                         gitlab_client,
@@ -939,7 +972,35 @@ def push_merge_request_to_main(
                             and time.monotonic() - train_queued_at
                             < _MERGE_TRAIN_ENTRY_GRACE_SECONDS
                         )
-                        if train_seen or not (waiting_to_enter or within_grace):
+                        ready_but_missing = _head_pipeline_status(merge_request) == "success"
+                        if train_seen or (
+                            not within_grace and (not waiting_to_enter or ready_but_missing)
+                        ):
+                            # Ownership belongs to the missing entry, never a
+                            # replacement that another run may have established.
+                            train_attempt.queued_by_this_run = False
+                            train_attempt.may_merge_without_this_run = True
+                            # Re-enqueue through GitLab's normal checks regardless
+                            # of the removal reason, within the original deadline.
+                            if train_requeues < 2:
+                                train_requeues += 1
+                                merge_queued = False
+                                train_seen = False
+                                logger.warning(
+                                    "requeueing merge request %s after its train entry "
+                                    "disappeared (attempt %s/2)",
+                                    url,
+                                    train_requeues,
+                                )
+                                if _poll_remaining_seconds(deadline) <= 0:
+                                    _raise_merge_request_timeout(
+                                        merge_request, queue_error=last_queue_error
+                                    )
+                                _sleep_for_poll_interval(deadline, interval)
+                                interval = _next_merge_poll_interval(
+                                    interval, base_interval=base_interval
+                                )
+                                continue
                             detail = (
                                 f"; last train pipeline: {last_train_pipeline}"
                                 if last_train_pipeline
@@ -1019,7 +1080,7 @@ def push_merge_request_to_main(
             )
 
         if _poll_remaining_seconds(deadline) <= 0:
-            _raise_merge_request_timeout(merge_request)
+            _raise_merge_request_timeout(merge_request, queue_error=last_queue_error)
         _sleep_for_poll_interval(deadline, interval)
         interval = _next_merge_poll_interval(interval, base_interval=base_interval)
 
