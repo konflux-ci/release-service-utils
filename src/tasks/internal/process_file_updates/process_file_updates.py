@@ -629,7 +629,7 @@ def find_existing_mr_with_same_diff(
     gitlab_client: Gitlab,
     component_group: str,
 ) -> str | None:
-    """Return result info when an open MR already has the same staged diff.
+    """Return JSON result info when an open MR already has the same staged diff.
 
     Uses lazy iteration to stop as soon as a matching MR is found, avoiding
     unnecessary git fetch operations for remaining MRs.
@@ -643,10 +643,13 @@ def find_existing_mr_with_same_diff(
             mr_url = (
                 getattr(mr, "web_url", None) or f"{upstream_repo}/-/merge_requests/{mr_num}"
             )
-            return (
-                "There is an existing MR with the same updates in the repo\n"
-                + json.dumps({"merge_request": mr_url})
-                + "\n"
+            message = "There is an existing MR with the same updates in the repo"
+            logger.info("%s: %s", message, mr_url)
+            return json.dumps(
+                {
+                    "merge_request": mr_url,
+                    "str": message,
+                }
             )
     return None
 
