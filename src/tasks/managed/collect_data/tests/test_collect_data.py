@@ -591,6 +591,259 @@ class TestCollect:
         assert result.single_component_mode == "false"
 
 
+class TestDataMergeKeys:
+    """Tests for _DATA_MERGE_KEYS, one case per field."""
+
+    @staticmethod
+    def _collect(
+        release_data: dict,
+        release_plan_data: dict,
+        rpa_data: dict,
+        collectors: dict | None = None,
+    ) -> dict:
+        """Run collect() with spec.data and optional collectors, return merged_data."""
+
+        def side_effect(resource_type: str, namespace: str, name: str) -> dict:
+            resources = {
+                "release": {
+                    "metadata": {"name": "r"},
+                    "spec": {"data": release_data},
+                    "status": {"collectors": collectors or {}},
+                },
+                "releaseplan": {
+                    "metadata": {"name": "rp"},
+                    "spec": {"data": release_plan_data},
+                },
+                "releaseplanadmission": {
+                    "metadata": {"name": "rpa"},
+                    "spec": {
+                        "data": rpa_data,
+                        "pipeline": {"pipelineRef": {"resolver": "cluster", "params": []}},
+                    },
+                },
+                "releaseserviceconfig": {"metadata": {"name": "rsc"}, "spec": {}},
+                "snapshot": {
+                    "metadata": {"name": "snap", "labels": {}},
+                    "spec": {"application": "app", "components": [{"name": "c"}]},
+                },
+            }
+            return resources.get(resource_type, {})
+
+        with patch(
+            "release_service_utils.tasks.managed.collect_data.collect_data.get_resource_dict",
+            side_effect=side_effect,
+        ):
+            return collect(
+                release="default/r",
+                release_plan="default/rp",
+                release_plan_admission="default/rpa",
+                release_service_config="default/rsc",
+                snapshot="default/snap",
+                subdirectory="sub",
+            ).merged_data
+
+    def test_repositories_merged_across_release_releaseplan_and_rpa(self) -> None:
+        """Repositories tagged by all three resources merge into one entry."""
+        release_data = {
+            "mapping": {
+                "components": [
+                    {
+                        "name": "c",
+                        "repositories": [
+                            {"url": "quay.io/x/y", "tags": ["release"]},
+                            {"url": "quay.io/x/z", "tags": ["only-release"]},
+                        ],
+                        "componentTags": ["release-ct"],
+                    }
+                ],
+                "defaults": {"pushSourceContainer": True, "tags": ["default"]},
+            }
+        }
+        release_plan_data = {
+            "mapping": {
+                "components": [
+                    {
+                        "name": "c",
+                        "repositories": [{"url": "quay.io/x/y", "tags": ["releaseplan"]}],
+                        "componentTags": ["rp-ct"],
+                    }
+                ]
+            }
+        }
+        rpa_data = {
+            "mapping": {
+                "components": [
+                    {
+                        "name": "c",
+                        "repositories": [{"url": "quay.io/x/y", "tags": ["rpa"]}],
+                    }
+                ],
+                "defaults": {"pushSourceContainer": False, "tags": ["default"]},
+            }
+        }
+        merged = self._collect(release_data, release_plan_data, rpa_data)
+        assert merged["mapping"]["components"] == [
+            {
+                "name": "c",
+                "componentTags": ["release-ct", "rp-ct"],
+                "repositories": [
+                    {"url": "quay.io/x/z", "tags": ["only-release"]},
+                    {"url": "quay.io/x/y", "tags": ["release", "releaseplan", "rpa"]},
+                ],
+            }
+        ]
+        assert merged["mapping"]["defaults"] == {
+            "pushSourceContainer": False,
+            "tags": ["default"],
+        }
+
+    def test_starmap_merged_across_release_and_rpa(self) -> None:
+        """A starmap entry's settings from two resources merge into one."""
+        release_data = {
+            "mapping": {
+                "components": [
+                    {"name": "c", "starmap": [{"name": "disk-image", "cloud": "aws"}]}
+                ]
+            }
+        }
+        rpa_data = {
+            "mapping": {
+                "components": [
+                    {
+                        "name": "c",
+                        "starmap": [{"name": "disk-image", "workflow": "community"}],
+                    }
+                ]
+            }
+        }
+        merged = self._collect(release_data, {}, rpa_data)
+        assert merged["mapping"]["components"] == [
+            {
+                "name": "c",
+                "starmap": [{"name": "disk-image", "cloud": "aws", "workflow": "community"}],
+            }
+        ]
+
+    def test_rpm_repositories_merged_by_name_and_arch_not_just_name(self) -> None:
+        """Same name and arch merge into one, same name with different arch stays separate."""
+        release_data = {
+            "mapping": {
+                "rpm-repositories": [
+                    {"name": "baseos", "arch": "x86_64", "repository_id": "repo-x86"},
+                    {
+                        "name": "baseos",
+                        "arch": "aarch64",
+                        "repository_id": "repo-aarch",
+                    },
+                ]
+            }
+        }
+        rpa_data = {
+            "mapping": {
+                "rpm-repositories": [{"name": "baseos", "arch": "x86_64", "distro": "rhel9"}]
+            }
+        }
+        merged = self._collect(release_data, {}, rpa_data)
+        repos = merged["mapping"]["rpm-repositories"]
+        assert len(repos) == 2
+        by_arch = {r["arch"]: r for r in repos}
+        assert by_arch["x86_64"]["distro"] == "rhel9"
+        assert by_arch["aarch64"]["repository_id"] == "repo-aarch"
+
+    def test_cves_merged_between_collector_and_manual_release_entry(self) -> None:
+        """A CVE collector and a manually added CVE on the same Release merge into one."""
+        release_data = {
+            "releaseNotes": {
+                "cves": [
+                    {
+                        "key": "CVE-2024-8260",
+                        "component": "c",
+                        "packages": ["pkg:rpm/manual@1.0"],
+                    }
+                ]
+            }
+        }
+        collectors = {
+            "tenant": {
+                "gitlog-cve": {
+                    "releaseNotes": {"cves": [{"key": "CVE-2024-8260", "component": "c"}]}
+                }
+            }
+        }
+        merged = self._collect(release_data, {}, {}, collectors)
+        assert merged["releaseNotes"]["cves"] == [
+            {
+                "key": "CVE-2024-8260",
+                "component": "c",
+                "packages": ["pkg:rpm/manual@1.0"],
+            }
+        ]
+
+    def test_fixed_issues_merged_between_collector_and_manual_release_entry(
+        self,
+    ) -> None:
+        """A Jira collector and a manually added issue on the same Release merge into one."""
+        release_data = {
+            "releaseNotes": {
+                "issues": {
+                    "fixed": [
+                        {
+                            "id": "RELEASE-1",
+                            "source": "redhat.atlassian.net",
+                            "summary": "manual note",
+                        }
+                    ]
+                }
+            }
+        }
+        collectors = {
+            "tenant": {
+                "jira-collector": {
+                    "releaseNotes": {
+                        "issues": {
+                            "fixed": [{"id": "RELEASE-1", "source": "redhat.atlassian.net"}]
+                        }
+                    }
+                }
+            }
+        }
+        merged = self._collect(release_data, {}, {}, collectors)
+        assert merged["releaseNotes"]["issues"]["fixed"] == [
+            {
+                "id": "RELEASE-1",
+                "source": "redhat.atlassian.net",
+                "summary": "manual note",
+            }
+        ]
+
+    def test_files_not_merged_by_source_kept_as_separate_entries(self) -> None:
+        """Entries sharing source both survive because "files" is not in _DATA_MERGE_KEYS."""
+        release_data = {
+            "mapping": {
+                "components": [
+                    {
+                        "name": "c",
+                        "files": [{"source": "roxctl", "arch": "amd64", "os": "linux"}],
+                    }
+                ]
+            }
+        }
+        rpa_data = {
+            "mapping": {
+                "components": [
+                    {
+                        "name": "c",
+                        "files": [{"source": "roxctl", "arch": "amd64", "os": "darwin"}],
+                    }
+                ]
+            }
+        }
+        merged = self._collect(release_data, {}, rpa_data)
+        files = merged["mapping"]["components"][0]["files"]
+        assert len(files) == 2
+        assert {f["os"] for f in files} == {"linux", "darwin"}
+
+
 class TestWriteOutputs:
     """Tests for the write_outputs function."""
 
