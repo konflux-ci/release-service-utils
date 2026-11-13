@@ -568,9 +568,13 @@ def _push_argv(
     branch: str | None,
     *,
     force: bool,
+    set_upstream: bool = False,
 ) -> list[str]:
     """Build the `git push` argv for *remote* and optional *branch*."""
-    argv = ["git", "push", remote]
+    argv = ["git", "push"]
+    if set_upstream:
+        argv.append("-u")
+    argv.append(remote)
     if force:
         argv.append("--force")
     if branch is not None:
@@ -610,6 +614,7 @@ def push(
     *,
     remote: str = "origin",
     force: bool = False,
+    set_upstream: bool = False,
     retries: int = 0,
     rebase_branch: str | None = None,
     stderr_path: Path | None = None,
@@ -617,15 +622,16 @@ def push(
     """Push to *remote* via the git CLI.
 
     When *branch* is set, push that ref; otherwise push the current branch.
-    With *rebase_branch* set and *retries* > 0, run `pull --rebase` after each
-    rejected push and retry with exponential backoff.
+    With *set_upstream* true, pass `-u` so Git remembers this as the branch's
+    upstream. With *rebase_branch* set and *retries* > 0, run `pull --rebase`
+    after each rejected push and retry with exponential backoff.
     """
     if retries > 0 and rebase_branch is None:
         msg = "rebase_branch is required when retries > 0"
         raise ValueError(msg)
     if retries == 0 and rebase_branch is None:
         _run_git_cmd(
-            _push_argv(remote, branch, force=force),
+            _push_argv(remote, branch, force=force, set_upstream=set_upstream),
             cwd=repo_dir,
             stderr_path=stderr_path,
         )
@@ -646,7 +652,7 @@ def push(
         current_attempt = attempt
         try:
             _run_git_cmd(
-                _push_argv(remote, branch, force=force),
+                _push_argv(remote, branch, force=force, set_upstream=set_upstream),
                 cwd=repo_dir,
                 stderr_path=stderr_path,
             )
