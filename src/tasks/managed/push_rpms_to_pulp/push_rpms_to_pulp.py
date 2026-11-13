@@ -154,11 +154,35 @@ def extract_from_signed(oci_artifact: str, files_dir: Path) -> None:
         archive.unlink()
 
 
+def _logged_rpm_repo_map(snapshot: dict[str, Any]) -> dict[str, list[str]]:
+    """Build the rpm-to-repo map and log whether a pre-filter is present."""
+    rpm_repo_map = build_rpm_repo_map(snapshot)
+    logger.info("RPM pre-filter detected in snapshot: %s", bool(rpm_repo_map))
+    return rpm_repo_map
+
+
+def repo_map_for_signed_push(snapshot_path: Path | None) -> dict[str, list[str]]:
+    """Return per-RPM repository targets for a signed RPM push.
+
+    ``None`` or a directory means the caller did not supply a snapshot
+    file. Those pushes keep filename-based repository selection.
+
+    Any other path is loaded as a snapshot. A missing file raises
+    ``FileNotFoundError``.
+    """
+    if snapshot_path is None or snapshot_path.is_dir():
+        logger.info(
+            "Signed push has no snapshot file; using filename-based repository targets"
+        )
+        return {}
+    snapshot = file_helper.load_json_dict(snapshot_path)
+    return _logged_rpm_repo_map(snapshot)
+
+
 def extract_from_snapshot(snapshot_path: Path, files_dir: Path) -> dict[str, list[str]]:
     """Pull RPMs from each snapshot containerImage and return the rpm-to-repo map."""
     snapshot = file_helper.load_json_dict(snapshot_path)
-    rpm_repo_map = build_rpm_repo_map(snapshot)
-    logger.info("RPM pre-filter detected in snapshot: %s", bool(rpm_repo_map))
+    rpm_repo_map = _logged_rpm_repo_map(snapshot)
     for component in snapshot.get("components") or []:
         image = component.get("containerImage")
         if image is None or not str(image).strip():
@@ -429,8 +453,8 @@ def _run(config: PushConfig) -> None:
     docs = OutputDocs()
     config.files_dir.mkdir(parents=True, exist_ok=True)
     if config.signed_rpms_oci_artifact:
+        rpm_repo_map = repo_map_for_signed_push(config.snapshot_path)
         extract_from_signed(config.signed_rpms_oci_artifact, config.files_dir)
-        rpm_repo_map: dict[str, list[str]] = {}
     else:
         if config.snapshot_path is None:
             raise RuntimeError(

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import tarfile
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -720,6 +722,173 @@ class TestRun:
             pytest.raises(RuntimeError, match="different digest"),
         ):
             task.run(cfg)
+
+
+SRC_RPM = "hello-2.12.1-6.fc44.src.rpm"
+NOARCH_RPM = "hello-docs-2.12.1-6.fc44.noarch.rpm"
+X86_RPM = "hello-2.12.1-6.fc44.x86_64.rpm"
+AARCH64_RPM = "hello-2.12.1-6.fc44.aarch64.rpm"
+DEFAULT_WITH_SOURCE = ["x86_64", "aarch64", "s390x", "ppc64le", "source"]
+
+
+def _signed_blob_fetch(names: list[str]) -> Callable[..., None]:
+    """Return an oras blob fetch that unpacks *names* as signed RPMs."""
+
+    def fake_fetch(_ref: str, dest: Path, *_args: object, **_kwargs: object) -> None:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(dest, "w:gz") as handle:
+            for name in names:
+                payload = dest.parent / name
+                payload.write_bytes(b"signed")
+                handle.add(payload, arcname=name)
+                payload.unlink()
+
+    return fake_fetch
+
+
+def _targets_snapshot(path: Path, mapping: dict[str, list[str]]) -> None:
+    """Write a snapshot whose rpmsToPublish rows carry *mapping*."""
+    _write_snapshot(
+        path,
+        [
+            {
+                "containerImage": "quay.io/unsigned-should-not-be-pulled",
+                "rpmsToPublish": [
+                    {
+                        "rpm": rpm,
+                        "targetRepos": [{"repository_name": repo} for repo in repos],
+                    }
+                    for rpm, repos in mapping.items()
+                ],
+            }
+        ],
+    )
+
+
+def _placements(results: dict[str, Any]) -> dict[str, set[str]]:
+    """Return rpm filename to pulprepo set from a results document."""
+    found: dict[str, set[str]] = {}
+    for row in results["rpmfiles"]:
+        found.setdefault(row["rpm"], set()).add(row["pulprepo"])
+    return found
+
+
+class TestSignedSnapshotTargets:
+    """Signed pushes honor rpmsToPublish and otherwise keep filename selection."""
+
+    @pytest.mark.parametrize(
+        ("files", "mapping", "repos", "placements"),
+        [
+            pytest.param(
+                [SRC_RPM, NOARCH_RPM],
+                {SRC_RPM: ["source"], NOARCH_RPM: ["aarch64", "x86_64"]},
+                ["aarch64", "x86_64", "source"],
+                {
+                    SRC_RPM: {"mydomain/source"},
+                    NOARCH_RPM: {"mydomain/aarch64", "mydomain/x86_64"},
+                },
+                id="src-noarch",
+            ),
+            pytest.param(
+                [X86_RPM, NOARCH_RPM],
+                {X86_RPM: ["x86_64"], NOARCH_RPM: ["x86_64"]},
+                ["x86_64"],
+                {X86_RPM: {"mydomain/x86_64"}, NOARCH_RPM: {"mydomain/x86_64"}},
+                id="mixed-binary-noarch",
+            ),
+            pytest.param(
+                [AARCH64_RPM, NOARCH_RPM],
+                {AARCH64_RPM: ["aarch64"], NOARCH_RPM: ["x86_64"]},
+                ["aarch64", "x86_64"],
+                {AARCH64_RPM: {"mydomain/aarch64"}, NOARCH_RPM: {"mydomain/x86_64"}},
+                id="per-rpm-targets",
+            ),
+        ],
+    )
+    def test_signed_push_uses_snapshot_targets(
+        self,
+        tmp_path: Path,
+        files: list[str],
+        mapping: dict[str, list[str]],
+        repos: list[str],
+        placements: dict[str, set[str]],
+    ) -> None:
+        """Publish signed bytes only into the snapshot's per-RPM repositories."""
+        snap = tmp_path / "snap.json"
+        _targets_snapshot(snap, mapping)
+        cfg = _config(tmp_path, snapshot=snap, signed="oci:quay.io/signed@sha256:abc")
+        client = MagicMock()
+        client.check_digest.return_value = PulpDigestStatus.NOT_FOUND
+        client.upload_rpm.return_value = "/href/1"
+
+        with (
+            patch(f"{TASK}.PulpClient.from_config", return_value=client),
+            patch(f"{TASK}.oras_utils.oras_blob_fetch", side_effect=_signed_blob_fetch(files)),
+            patch(f"{TASK}.oras_utils.oras_pull") as mock_pull,
+        ):
+            task.run(cfg)
+
+        mock_pull.assert_not_called()
+        client.ensure_repos_exist.assert_called_once_with(repos)
+        assert [call.args[0] for call in client.add_content.call_args_list] == repos
+        results = json.loads(
+            (cfg.data_dir / "results" / "push-rpms-to-pulp-results.json").read_text()
+        )
+        assert _placements(results) == placements
+        uploaded = [call.args[0].name for call in client.upload_rpm.call_args_list]
+        assert uploaded == files
+
+    @pytest.mark.parametrize("kind", ["omitted", "directory", "empty-map"])
+    def test_signed_without_targets_keeps_filename_defaults(
+        self,
+        tmp_path: Path,
+        kind: str,
+    ) -> None:
+        """Src+noarch without a repo map still preflights the default arches."""
+        snapshot: Path | None
+        if kind == "omitted":
+            snapshot = None
+        elif kind == "directory":
+            snapshot = tmp_path
+        else:
+            snapshot = tmp_path / "snap.json"
+            _write_snapshot(snapshot, [{"containerImage": "quay.io/unsigned"}])
+        cfg = _config(
+            tmp_path,
+            snapshot=snapshot,
+            signed="oci:quay.io/signed@sha256:abc",
+        )
+        client = MagicMock()
+        client.check_digest.return_value = PulpDigestStatus.NOT_FOUND
+        client.upload_rpm.return_value = "/href/1"
+        files = [SRC_RPM, NOARCH_RPM]
+
+        with (
+            patch(f"{TASK}.PulpClient.from_config", return_value=client),
+            patch(f"{TASK}.oras_utils.oras_blob_fetch", side_effect=_signed_blob_fetch(files)),
+            patch(f"{TASK}.oras_utils.oras_pull") as mock_pull,
+        ):
+            task.run(cfg)
+
+        mock_pull.assert_not_called()
+        client.ensure_repos_exist.assert_called_once_with(DEFAULT_WITH_SOURCE)
+
+    def test_signed_missing_snapshot_file_raises(self, tmp_path: Path) -> None:
+        """An explicit missing snapshot fails before the signed blob is fetched."""
+        cfg = _config(
+            tmp_path,
+            snapshot=tmp_path / "missing.json",
+            signed="oci:quay.io/signed@sha256:abc",
+        )
+        with (
+            patch(f"{TASK}.PulpClient.from_config", return_value=MagicMock()),
+            patch(f"{TASK}.oras_utils.oras_blob_fetch") as mock_fetch,
+            patch(f"{TASK}.oras_utils.oras_pull") as mock_pull,
+            pytest.raises(FileNotFoundError),
+        ):
+            task.run(cfg)
+        mock_fetch.assert_not_called()
+        mock_pull.assert_not_called()
 
 
 class TestMain:
