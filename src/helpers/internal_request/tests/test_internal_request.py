@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Generator
 from pathlib import Path
 from unittest import mock
@@ -26,6 +27,19 @@ def k8s_api() -> Generator[mock.MagicMock]:
     api = mock.MagicMock()
     with mock.patch.object(ir_module, "_get_namespace", return_value="test-ns"):
         yield api
+
+
+def test_log_internal_run_names(caplog: pytest.LogCaptureFixture) -> None:
+    """Log both internal run names, using an empty string when one is missing."""
+    caplog.set_level(logging.INFO, logger="release")
+    ir_module.log_internal_run_names(
+        {
+            "internalRequestPipelineRunName": "file-updates-pr",
+            "internalRequestTaskRunName": None,
+        }
+    )
+    assert "** internalRequestPipelineRunName: file-updates-pr" in caplog.text
+    assert "** internalRequestTaskRunName: " in caplog.text
 
 
 def test_duration_to_seconds_parses_hms() -> None:
@@ -486,6 +500,7 @@ def test_wait_for_completion_raises_on_failure(
         wait_for_completion(name="ir-1", timeout=600, k8s_api=k8s_api)
 
     assert exc_info.value.exit_code == EXIT_FAILED
+    assert exc_info.value.name == "ir-1"
     assert output_path.read_text(encoding="utf-8") == (
         '{"name": "ir-1", "pipelineRun": "pr-1"}\n'
     )
@@ -507,6 +522,7 @@ def test_wait_for_completion_raises_on_timeout(k8s_api: mock.MagicMock) -> None:
         wait_for_completion(name="ir-1", timeout=600, k8s_api=k8s_api)
 
     assert exc_info.value.exit_code == EXIT_TIMEOUT
+    assert exc_info.value.name == "ir-1"
 
 
 def test_wait_for_completion_keeps_polling_when_label_selector_matches_nothing(
@@ -523,6 +539,7 @@ def test_wait_for_completion_keeps_polling_when_label_selector_matches_nothing(
         wait_for_completion(label_selector="foo=bar", timeout=600, k8s_api=k8s_api)
 
     assert exc_info.value.exit_code == EXIT_TIMEOUT
+    assert exc_info.value.name is None
 
 
 def test_fetch_results_returns_empty_when_no_results(k8s_api: mock.MagicMock) -> None:

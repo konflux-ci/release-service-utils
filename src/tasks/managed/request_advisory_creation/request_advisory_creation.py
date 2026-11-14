@@ -216,10 +216,7 @@ def _write_task_results(
     params.advisory_url_result.write_text("", encoding="utf-8")
     params.advisory_internal_url_result.write_text("", encoding="utf-8")
 
-    pipeline_run_name = str(results.get("internalRequestPipelineRunName") or "")
-    task_run_name = str(results.get("internalRequestTaskRunName") or "")
-    logger.info("** internalRequestPipelineRunName: %s", pipeline_run_name)
-    logger.info("** internalRequestTaskRunName: %s", task_run_name)
+    internal_request.log_internal_run_names(results)
 
     result = str(results.get("result") or "").strip()
     if result != "Success":

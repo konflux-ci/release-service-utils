@@ -138,10 +138,11 @@ _NAMESPACE_FILE = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 class InternalRequestWaitError(RuntimeError):
     """Raised when waiting for InternalRequests fails or times out."""
 
-    def __init__(self, message: str, exit_code: int) -> None:
-        """Store *message* and *exit_code* on the exception instance."""
+    def __init__(self, message: str, exit_code: int, name: str | None = None) -> None:
+        """Store *message*, *exit_code*, and the optional InternalRequest *name*."""
         super().__init__(message)
         self.exit_code = exit_code
+        self.name = name
 
 
 class _InternalRequestNotComplete(Exception):
@@ -447,6 +448,7 @@ def wait_for_completion(
             raise InternalRequestWaitError(
                 "At least one InternalRequest failed",
                 EXIT_FAILED,
+                name=name,
             )
 
         if time.time() > end_time:
@@ -454,6 +456,7 @@ def wait_for_completion(
             raise InternalRequestWaitError(
                 "Timeout while waiting for the InternalRequests to complete",
                 EXIT_TIMEOUT,
+                name=name,
             )
 
         raise _InternalRequestNotComplete()
@@ -561,6 +564,18 @@ def fetch_results(
     )
     results = resource.get("status", {}).get("results")
     return results if isinstance(results, dict) else {}
+
+
+def log_internal_run_names(results: Mapping[str, Any]) -> None:
+    """Log the internal PipelineRun and TaskRun names from InternalRequest results."""
+    logger.info(
+        "** internalRequestPipelineRunName: %s",
+        results.get("internalRequestPipelineRunName") or "",
+    )
+    logger.info(
+        "** internalRequestTaskRunName: %s",
+        results.get("internalRequestTaskRunName") or "",
+    )
 
 
 def create(

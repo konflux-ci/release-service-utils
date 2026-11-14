@@ -52,10 +52,7 @@ def run_request_advisory_oci_artifact(params: TaskParams) -> None:
     logger.info("done (%s)", internal_request_name)
 
     results = internal_request.fetch_results(internal_request_name)
-    pipeline_run_name = str(results.get("internalRequestPipelineRunName") or "")
-    task_run_name = str(results.get("internalRequestTaskRunName") or "")
-    logger.info("** internalRequestPipelineRunName: %s", pipeline_run_name)
-    logger.info("** internalRequestTaskRunName: %s", task_run_name)
+    internal_request.log_internal_run_names(results)
 
     if results.get("result") != "Success":
         logger.error("The InternalRequest to find the ADVISORY_OCI_ARTIFACT was unsuccessful")
