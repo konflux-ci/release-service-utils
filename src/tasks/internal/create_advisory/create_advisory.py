@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create advisory YAML under `data/advisories` in a Git repo (Tekton task).
+"""Create advisory YAML in either supported layout in a Git repo (Tekton task).
 
 * Reads advisory credentials from `/mnt/advisory_secret` (or
   `ADVISORY_SECRET_MOUNT`) and Errata credentials from `/mnt/errata_secret`
@@ -100,7 +100,7 @@ def _clone_advisory_repo(
         credentials.git_author_email,
     )
     # Sparse checkout: only this tenant's advisories plus repo schema (for validation).
-    sparse_dirs = [f"data/advisories/{origin}", "schema"]
+    sparse_dirs = [f"data/advisories/{origin}", f"data/{origin}", "schema"]
     logger.info(
         "cloning advisory repository %s at %s (sparse: %s)",
         credentials.git_repo,
@@ -114,7 +114,11 @@ def _clone_advisory_repo(
         parent_dir=work_dir,
         stderr_path=stderr_path,
     )
-    advisory_base = repo_root / "data" / "advisories" / origin
+    advisory_base = advisory_data.advisory_base_path(
+        repo_root,
+        origin,
+        legacy=git.tree_has_directory(repo_root, "data/advisories", stderr_path=stderr_path),
+    )
     logger.info("cloned advisory repository to %s", repo_root)
     return repo_root, advisory_base
 
@@ -257,17 +261,16 @@ def _finish_if_all_content_already_published(
     latest_advisory_file: str | None = None
 
     logger.info("Checking existing advisories for already-published content")
-    # Newest advisories first (by directory mtime). For each, drop rows already
+    # Newest advisories first (by layout-specific mtime). Drop rows already
     # published there; stop early if nothing remains to release.
-    existing_subdirs = advisory_data.list_existing_advisory_subdirs(advisory_base)
+    existing_files = advisory_data.list_existing_advisory_files(advisory_base)
     logger.info(
         "checking whether advisory content is already published by walking "
         "%d existing advisories under %s",
-        len(existing_subdirs),
+        len(existing_files),
         advisory_base,
     )
-    for year_num_subdir in existing_subdirs:
-        candidate_yaml = advisory_base / year_num_subdir / "advisory.yaml"
+    for candidate_yaml in existing_files:
         yaml_doc = advisory_data.load_advisory_yaml(candidate_yaml)
         existing_rows = advisory_data.spec_content_array_from_advisory_yaml(
             yaml_doc, content_list_path
@@ -293,7 +296,7 @@ def _finish_if_all_content_already_published(
         if rows_before != rows_after:
             logger.info(
                 "Advisory %s matched %d of %d content rows",
-                year_num_subdir,
+                candidate_yaml.relative_to(advisory_base),
                 rows_before - rows_after,
                 rows_before,
             )
@@ -415,7 +418,10 @@ def _ensure_advisory_number_unused(
 ) -> None:
     # Another pipeline may have pushed the same year/number.
     # Sparse clone may not list every tenant path.
-    pattern = rf"data/advisories/.*/{year}/{advisory_number_segment}/"
+    pattern = (
+        rf"^data/(?:advisories/[^/]+/{year}/{advisory_number_segment}/advisory\.yaml"
+        rf"|[^/]+/{year}/{advisory_number_segment}\.yaml)$"
+    )
     if git.origin_main_has_path_matching(
         repo_root,
         pattern,
@@ -429,7 +435,7 @@ def _ensure_advisory_number_unused(
 def _render_and_validate_advisory_yaml(
     *,
     repo_root: Path,
-    new_advisory_dir: Path,
+    new_advisory_yaml_path: Path,
     merged: dict[str, Any],
     portal_advisory_id: str,
     ship_date: str,
@@ -437,8 +443,7 @@ def _render_and_validate_advisory_yaml(
     stderr_path: Path,
 ) -> str:
     """Apply the Jinja template, validate schema, return repo-relative YAML path."""
-    rendered_json_path = new_advisory_dir / "advisory.json"
-    new_advisory_yaml_path = new_advisory_dir / "advisory.yaml"
+    rendered_json_path = work_dir / "advisory.json"
     logger.info(
         "rendering advisory.yaml from %s for portal id %s into %s",
         ADVISORY_TEMPLATE_PATH,
@@ -523,7 +528,7 @@ def _advisory_yaml_path_from_merge_request(merge_request: Any) -> str | None:
     changes = merge_request.changes()
     for change in changes.get("changes", []):
         new_path = change.get("new_path") or ""
-        if new_path.endswith("/advisory.yaml") and "data/advisories/" in new_path:
+        if advisory_data.is_advisory_path(new_path):
             return new_path
     return None
 
@@ -1232,18 +1237,23 @@ def _create_new_advisory(
         portal_advisory_id,
         params["component_group"],
     )
-    new_advisory_dir = advisory_base / year / advisory_number_segment
+    if advisory_base.parent.parent == repo_root / "data":
+        new_advisory_yaml_path = (
+            advisory_base / year / advisory_number_segment / "advisory.yaml"
+        )
+    else:
+        new_advisory_yaml_path = advisory_base / year / f"{advisory_number_segment}.yaml"
     logger.info(
         "creating new advisory %s in %s on branch %s",
         portal_advisory_id,
-        new_advisory_dir,
+        new_advisory_yaml_path,
         source_branch,
     )
-    new_advisory_dir.mkdir(parents=True, exist_ok=True)
+    new_advisory_yaml_path.parent.mkdir(parents=True, exist_ok=True)
 
     yaml_repo_path = _render_and_validate_advisory_yaml(
         repo_root=repo_root,
-        new_advisory_dir=new_advisory_dir,
+        new_advisory_yaml_path=new_advisory_yaml_path,
         merged=merged,
         portal_advisory_id=portal_advisory_id,
         ship_date=ship_date,
@@ -1439,7 +1449,7 @@ def run_create_advisory(
             stderr_path=stderr_path,
             krb5_template=krb5_template,
         )
-        # Directory name under data/advisories/<origin>/<year>/ (four-digit live id).
+        # Use the four-digit live id in either layout.
         advisory_number_segment = f"{live_num:04d}"
         origin_ls_tree_listing = work_dir / "origin_ls_tree.txt"
         _ensure_advisory_number_unused(

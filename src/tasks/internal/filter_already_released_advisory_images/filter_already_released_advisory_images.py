@@ -24,7 +24,7 @@ from typing import Any
 
 from git.exc import GitCommandError
 
-from release_service_utils.helpers import file
+from release_service_utils.helpers import advisory_data, file
 from release_service_utils.helpers.internal_request import internal_request_results
 from release_service_utils.helpers import subprocess_cmd
 from release_service_utils.helpers import tekton
@@ -127,22 +127,6 @@ def filter_arch_images(
     return kept
 
 
-def list_advisory_subdirs(advisory_base_dir: Path) -> list[str]:
-    """Return advisory subdirectories relative to ``advisory_base_dir``, newest first."""
-    if not advisory_base_dir.is_dir():
-        return []
-    newest: dict[str, float] = {}
-    for advisory_file in advisory_base_dir.rglob("advisory.yaml"):
-        subdir = advisory_file.parent
-        rel = subdir.relative_to(advisory_base_dir)
-        if len(rel.parts) < 2:
-            continue
-        key = rel.as_posix()
-        mtime = subdir.stat().st_mtime
-        newest[key] = max(newest.get(key, 0.0), mtime)
-    return [name for name, _ in sorted(newest.items(), key=lambda item: item[1], reverse=True)]
-
-
 def advisory_errata_url_prefix(git_repo: str) -> str:
     """Return the public errata URL prefix for production or stage advisories."""
     if "/rhtap-release/" in git_repo:
@@ -183,7 +167,7 @@ def run_filter(
     gitlab.export_env_for_image_helpers(credentials)
     gitlab.configure_git_oauth2_auth(credentials.access_token)
 
-    advisory_base_dir = f"data/advisories/{origin.strip()}"
+    origin = origin.strip()
     tmp_root = work_dir or Path("/tmp")
     try:
         if clone_sparse is not None:
@@ -192,16 +176,16 @@ def run_filter(
             repo_dir = gitlab.clone_project_sparse(
                 credentials.git_repo,
                 gitlab.DEFAULT_BRANCH,
-                [advisory_base_dir],
+                [f"data/advisories/{origin}", f"data/{origin}"],
                 parent_dir=tmp_root,
                 stderr_path=None,
             )
     except GitCommandError as e:
         raise tekton.CheckStepError("cloning the advisory Git repository", e) from e
 
-    advisory_root = repo_dir / advisory_base_dir
+    advisory_root = advisory_data.advisory_base_path(repo_dir, origin)
 
-    existing = list_advisory_subdirs(advisory_root)
+    existing = advisory_data.list_existing_advisory_files(advisory_root)
     if not existing:
         logger.info("No existing advisories found. No components have been released yet.")
         names = unique_component_names(arch_images)
@@ -214,8 +198,7 @@ def run_filter(
 
     latest_advisory_file = ""
     working = arch_images
-    for subdir in existing:
-        advisory_file = advisory_root / subdir / "advisory.yaml"
+    for advisory_file in existing:
         existing_images = subprocess_cmd.run_yq_json(
             advisory_file,
             ".spec.content.images // []",
