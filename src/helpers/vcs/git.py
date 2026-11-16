@@ -430,6 +430,21 @@ def set_remote_url(
     )
 
 
+def tree_has_directory(
+    repo_root: Path,
+    path: str,
+    *,
+    stderr_path: Path | None = None,
+) -> bool:
+    """Check for a directory on origin/main, including outside sparse checkout."""
+    result = _run_git_cmd(
+        ["git", "ls-tree", "-d", "--name-only", "origin/main", "--", path],
+        cwd=repo_root,
+        stderr_path=stderr_path,
+    )
+    return path in (result.stdout or "").splitlines()
+
+
 def origin_main_has_path_matching(
     repo_root: Path,
     pattern: str,

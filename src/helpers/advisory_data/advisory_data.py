@@ -446,20 +446,18 @@ def categorize_rpm_entries(
 
 def build_purl_to_advisory_map(
     repo_dir: Path,
-    advisory_root: Path,
-    subdirs: Sequence[str],
+    advisory_files: Sequence[Path],
 ) -> dict[str, str]:
-    """Map artifact PURLs to advisory.yaml paths relative to *repo_dir*.
+    """Map artifact PURLs to advisory file paths relative to *repo_dir*.
 
-    *subdirs* is newest-first. Later (older) advisories overwrite, so the
+    *advisory_files* is newest-first. Later (older) advisories overwrite, so the
     oldest advisory wins when the same PURL appears more than once. Logs the
     number of files scanned, unique PURLs, and elapsed scan time.
     """
     purl_to_advisory: dict[str, str] = {}
     scanned = 0
     start = time.monotonic()
-    for subdir in subdirs:
-        advisory_file = advisory_root / subdir / "advisory.yaml"
+    for advisory_file in advisory_files:
         if not advisory_file.is_file():
             continue
         scanned += 1
@@ -482,22 +480,50 @@ def build_purl_to_advisory_map(
     return purl_to_advisory
 
 
-def list_existing_advisory_subdirs(advisory_base: Path) -> list[str]:
-    """List `year/num` paths under *advisory_base*, newest leaf mtime first."""
-    if not advisory_base.is_dir():
-        return []
-    pairs: list[tuple[float, str]] = []
-    for year_dir in advisory_base.iterdir():
-        if not year_dir.is_dir():
-            continue
-        for num_dir in year_dir.iterdir():
-            if not num_dir.is_dir():
-                continue
-            rel = f"{year_dir.name}/{num_dir.name}"
-            # Sort by leaf dir mtime so `year/num` matches `find … -printf %T@`.
-            pairs.append((num_dir.stat().st_mtime, rel))
-    pairs.sort(key=lambda mtime_and_relpath: -mtime_and_relpath[0])
-    return [relpath for _mtime, relpath in pairs]
+def advisory_base_path(repo_root: Path, origin: str, *, legacy: bool | None = None) -> Path:
+    """Return the tenant base for the repository's existing advisory layout.
+
+    The presence of data/advisories selects the legacy layout, even when this
+    tenant has no advisories yet. Pass the Git tree result for sparse checkouts.
+    Empty repositories default to the flat layout.
+    """
+    data = repo_root / "data"
+    if legacy is None:
+        legacy = (data / "advisories").is_dir()
+    if legacy:
+        return data / "advisories" / origin
+    return data / origin
+
+
+def is_advisory_path(path: str) -> bool:
+    """Recognize repository-relative advisory YAML paths in either layout."""
+    return bool(
+        re.fullmatch(r"data/advisories/[^/]+/[0-9]{4}/[0-9]+/advisory\.yaml", path)
+        or re.fullmatch(r"data/[^/]+/[0-9]{4}/[0-9]+\.yaml", path)
+    )
+
+
+def list_existing_advisory_files(advisory_base: Path) -> list[Path]:
+    """List advisory files under a tenant base, newest mtime first.
+
+    Preserve leaf directory ordering for legacy advisories; use file mtimes for
+    flat advisories, which share a year directory.
+    """
+    files = [
+        path
+        for path in advisory_base.glob("*/*.yaml")
+        if path.is_file() and path.stem.isdigit()
+    ]
+    files.extend(path for path in advisory_base.glob("*/*/advisory.yaml") if path.is_file())
+    return sorted(
+        files,
+        key=lambda path: (
+            path.parent.stat().st_mtime
+            if path.name == "advisory.yaml"
+            else path.stat().st_mtime
+        ),
+        reverse=True,
+    )
 
 
 def filter_content_by_existing(

@@ -8,7 +8,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 from unittest import mock
 
@@ -84,29 +83,30 @@ def _catalog_yq_fake(args: list[str], *, cwd: Path | None = None) -> str:
         return ""
     expression = args[2]
     advisory_path = args[3]
-    advisory_num = Path(advisory_path).parent.name
+    flat = Path(advisory_path).name != "advisory.yaml"
+    advisory_num = Path(advisory_path).stem if flat else Path(advisory_path).parent.name
     if expression == ".spec.type":
         return json.dumps("RHBA")
     if expression == ".metadata.name":
-        year = Path(advisory_path).parent.parent.name
+        year = (
+            Path(advisory_path).parent.name if flat else Path(advisory_path).parent.parent.name
+        )
         return json.dumps(f"{year}:{advisory_num}")
     if expression == ".spec.content.images // []":
         return json.dumps(_advisory_images_by_num(advisory_num))
     return ""
 
 
-def _setup_repo_tree(repo: Path, origin: str, advisory_nums: list[str]) -> None:
-    """Create advisory layout under ``repo/data/advisories/<origin>/``."""
-    base = repo / "data" / "advisories" / origin
-    if not advisory_nums:
-        base.mkdir(parents=True, exist_ok=True)
-        return
+def _setup_repo_tree(
+    repo: Path, origin: str, advisory_nums: list[str], *, flat: bool = False
+) -> None:
+    """Create a tenant's advisories in the selected repository layout."""
+    base = repo / ("data" if flat else "data/advisories") / origin
+    base.mkdir(parents=True, exist_ok=True)
     for sub in advisory_nums:
-        (base / sub).mkdir(parents=True, exist_ok=True)
-        (base / sub / "advisory.yaml").write_text(
-            "spec: {}\nmetadata: {}\n",
-            encoding="utf-8",
-        )
+        advisory = base / (f"{sub}.yaml" if flat else f"{sub}/advisory.yaml")
+        advisory.parent.mkdir(parents=True, exist_ok=True)
+        advisory.write_text("spec: {}\nmetadata: {}\n", encoding="utf-8")
 
 
 def _make_clone_sparse(
@@ -114,13 +114,14 @@ def _make_clone_sparse(
     *,
     origin: str = "test-origin",
     advisory_nums: list[str] | None = None,
+    flat: bool = False,
 ) -> object:
     """Return a ``clone_sparse`` callable that materializes a fake advisory repo tree."""
     repo = tmp_path / "work" / "repo"
     nums = advisory_nums if advisory_nums is not None else ["2025/1601"]
 
     def _clone() -> Path:
-        _setup_repo_tree(repo, origin, nums)
+        _setup_repo_tree(repo, origin, nums, flat=flat)
         return repo
 
     return _clone
@@ -306,44 +307,6 @@ def test_filter_arch_images_tag_mismatch_keeps_row() -> None:
     ) == [row]
 
 
-def test_list_advisory_subdirs_newest_first(tmp_path: Path) -> None:
-    """Advisories are listed by directory mtime, newest first."""
-    base = tmp_path / "data/advisories/origin"
-    old = base / "2024" / "100"
-    new = base / "2025" / "200"
-    old.mkdir(parents=True)
-    new.mkdir(parents=True)
-    (old / "advisory.yaml").write_text("old: true\n", encoding="utf-8")
-    (new / "advisory.yaml").write_text("new: true\n", encoding="utf-8")
-    old_time = time.time() - 100
-    new_time = time.time()
-    os.utime(old, (old_time, old_time))
-    os.utime(new, (new_time, new_time))
-    assert filt.filter_already_released_advisory_images.list_advisory_subdirs(base) == [
-        "2025/200",
-        "2024/100",
-    ]
-
-
-def test_list_advisory_subdirs_missing_dir() -> None:
-    """A missing advisory base directory yields an empty list."""
-    assert (
-        filt.filter_already_released_advisory_images.list_advisory_subdirs(
-            Path("/does/not/exist")
-        )
-        == []
-    )
-
-
-def test_list_advisory_subdirs_skips_shallow_paths(tmp_path: Path) -> None:
-    """Advisory paths with fewer than two relative segments are ignored."""
-    base = tmp_path / "data/advisories/origin"
-    shallow = base / "2025"
-    shallow.mkdir(parents=True)
-    (shallow / "advisory.yaml").write_text("x: 1\n", encoding="utf-8")
-    assert filt.filter_already_released_advisory_images.list_advisory_subdirs(base) == []
-
-
 def test_advisory_errata_url_prefixes() -> None:
     """Production and stage errata prefixes are selected from the repo URL."""
     assert (
@@ -399,7 +362,8 @@ def test_run_filter_empty_advisory_directory(tmp_path: Path) -> None:
     assert _decode_components(out.unreleased_components_b64) == ["c1", "c2"]
 
 
-def test_run_filter_partial_release(tmp_path: Path) -> None:
+@pytest.mark.parametrize("flat", [False, True])
+def test_run_filter_partial_release(tmp_path: Path, flat: bool) -> None:
     """Released triples are filtered out and unreleased component names remain."""
     secret = tmp_path / "secret"
     _write_secret(secret)
@@ -422,7 +386,7 @@ def test_run_filter_partial_release(tmp_path: Path) -> None:
         "test-origin",
         secret,
         work_dir=tmp_path / "work",
-        clone_sparse=_make_clone_sparse(tmp_path),
+        clone_sparse=_make_clone_sparse(tmp_path, flat=flat),
         run_cmd=_make_yq_run_cmd(),
     )
     assert out.result == "Success"
@@ -430,7 +394,8 @@ def test_run_filter_partial_release(tmp_path: Path) -> None:
     assert out.advisory_url == ""
 
 
-def test_run_filter_all_released(tmp_path: Path) -> None:
+@pytest.mark.parametrize("flat", [False, True])
+def test_run_filter_all_released(tmp_path: Path, flat: bool) -> None:
     """When every row is filtered out, advisory URLs are returned."""
     secret = tmp_path / "secret"
     _write_secret(secret)
@@ -447,13 +412,18 @@ def test_run_filter_all_released(tmp_path: Path) -> None:
         "test-origin",
         secret,
         work_dir=tmp_path / "work",
-        clone_sparse=_make_clone_sparse(tmp_path),
+        clone_sparse=_make_clone_sparse(tmp_path, flat=flat),
         run_cmd=_make_yq_run_cmd(),
     )
     assert out.result == "Success"
     assert _decode_components(out.unreleased_components_b64) == []
     assert out.advisory_url == "https://access.redhat.com/errata/RHBA-2025:1601"
-    assert "2025/1601/advisory.yaml" in out.advisory_internal_url
+    expected = (
+        "data/test-origin/2025/1601.yaml"
+        if flat
+        else ("data/advisories/test-origin/2025/1601/advisory.yaml")
+    )
+    assert out.advisory_internal_url.endswith(expected)
 
 
 def test_run_filter_multi_arch_all_released(tmp_path: Path) -> None:
@@ -486,7 +456,8 @@ def test_run_filter_multi_arch_all_released(tmp_path: Path) -> None:
     assert out.advisory_url.endswith("RHBA-2025:1601")
 
 
-def test_run_filter_multi_advisory_progressive(tmp_path: Path) -> None:
+@pytest.mark.parametrize("flat", [False, True])
+def test_run_filter_multi_advisory_progressive(tmp_path: Path, flat: bool) -> None:
     """Filtering continues across multiple advisories until rows remain."""
     secret = tmp_path / "secret"
     _write_secret(secret)
@@ -515,7 +486,9 @@ def test_run_filter_multi_advisory_progressive(tmp_path: Path) -> None:
         "test-origin",
         secret,
         work_dir=tmp_path / "work",
-        clone_sparse=_make_clone_sparse(tmp_path, advisory_nums=["2025/1601", "2025/1602"]),
+        clone_sparse=_make_clone_sparse(
+            tmp_path, flat=flat, advisory_nums=["2025/1601", "2025/1602"]
+        ),
         run_cmd=_make_yq_run_cmd(),
     )
     assert _decode_components(out.unreleased_components_b64) == ["still-new"]

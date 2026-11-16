@@ -51,11 +51,16 @@ def _write_advisory(
     *,
     spec_type: str = "RHBA",
     name: str = "2025:1601",
+    flat: bool = False,
 ) -> None:
-    directory = repo / "data" / "advisories" / origin / subdir
-    directory.mkdir(parents=True, exist_ok=True)
+    path = (
+        repo / "data" / origin / f"{subdir}.yaml"
+        if flat
+        else repo / "data" / "advisories" / origin / subdir / "advisory.yaml"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
     artifacts = "\n".join(f"      - purl: {purl}" for purl in purls)
-    (directory / "advisory.yaml").write_text(
+    path.write_text(
         f"metadata:\n  name: {name}\n"
         f"spec:\n  type: {spec_type}\n  content:\n    artifacts:\n{artifacts}\n",
         encoding="utf-8",
@@ -335,12 +340,13 @@ def test_run_filter_no_advisories(tmp_path: Path) -> None:
     assert unreleased == [{"name": "new", "purl": _NEW}]
 
 
-def test_run_filter_partial_release(tmp_path: Path) -> None:
+@pytest.mark.parametrize("flat", [False, True])
+def test_run_filter_partial_release(tmp_path: Path, flat: bool) -> None:
     """A mix of released and new RPMs leaves the new RPM unreleased."""
     secret = tmp_path / "secret"
     _write_secret(secret)
     repo = tmp_path / "repo"
-    _write_advisory(repo, "test-origin", "2025/1601", [_RELEASED])
+    _write_advisory(repo, "test-origin", "2025/1601", [_RELEASED], flat=flat)
     clone, auth, push = _patch_run_filter_deps(repo)
     with mock.patch.object(task.authentication, "setup_docker_config"), clone, auth, push:
         output = task.run_filter(
@@ -360,7 +366,8 @@ def test_run_filter_partial_release(tmp_path: Path) -> None:
     assert output.filter_results_artifact.endswith("sha256:abc")
 
 
-def test_run_filter_all_released_single_advisory(tmp_path: Path) -> None:
+@pytest.mark.parametrize("flat", [False, True])
+def test_run_filter_all_released_single_advisory(tmp_path: Path, flat: bool) -> None:
     """All RPMs from one advisory set public and internal URLs."""
     secret = tmp_path / "secret"
     _write_secret(secret)
@@ -371,6 +378,7 @@ def test_run_filter_all_released_single_advisory(tmp_path: Path) -> None:
         "2025/1601",
         [_ALL_A, _ALL_B],
         name="2025:1601",
+        flat=flat,
     )
     clone, auth, push = _patch_run_filter_deps(repo)
     with mock.patch.object(task.authentication, "setup_docker_config"), clone, auth, push:
@@ -388,17 +396,20 @@ def test_run_filter_all_released_single_advisory(tmp_path: Path) -> None:
         )
     assert output.advisory_url == "https://access.redhat.com/errata/RHBA-2025:1601"
     assert output.advisory_internal_url.endswith(
-        "data/advisories/test-origin/2025/1601/advisory.yaml"
+        "data/test-origin/2025/1601.yaml"
+        if flat
+        else "data/advisories/test-origin/2025/1601/advisory.yaml"
     )
 
 
-def test_run_filter_all_released_multiple_advisories(tmp_path: Path) -> None:
+@pytest.mark.parametrize("flat", [False, True])
+def test_run_filter_all_released_multiple_advisories(tmp_path: Path, flat: bool) -> None:
     """RPMs split across advisories do not set advisory_url."""
     secret = tmp_path / "secret"
     _write_secret(secret, git_repo="https://gitlab.com/rhtap-release/org/repo.git")
     repo = tmp_path / "repo"
-    _write_advisory(repo, "test-origin", "2025/1601", [_ALL_A], name="2025:1601")
-    _write_advisory(repo, "test-origin", "2025/1602", [_ALL_B], name="2025:1602")
+    _write_advisory(repo, "test-origin", "2025/1601", [_ALL_A], name="2025:1601", flat=flat)
+    _write_advisory(repo, "test-origin", "2025/1602", [_ALL_B], name="2025:1602", flat=flat)
     clone, auth, push = _patch_run_filter_deps(repo)
     with mock.patch.object(task.authentication, "setup_docker_config"), clone, auth, push:
         output = task.run_filter(

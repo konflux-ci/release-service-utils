@@ -145,23 +145,22 @@ def run_filter(
     gitlab.configure_git_oauth2_auth(credentials.access_token)
 
     origin_name = origin.strip()
-    advisory_base_dir = f"data/advisories/{origin_name}"
     logger.info("Cloning %s...", credentials.git_repo)
     try:
         repo_dir = gitlab.clone_project_sparse(
             credentials.git_repo,
             None,
-            [advisory_base_dir],
+            [f"data/advisories/{origin_name}", f"data/{origin_name}"],
             parent_dir=CLONE_PARENT_DIR,
             stderr_path=command_log,
         )
     except (GitCommandError, subprocess.CalledProcessError) as e:
         raise tekton.CheckStepError("cloning the advisory Git repository", e) from e
 
-    logger.info("Checking existing advisories in %s...", advisory_base_dir)
-    advisory_root = repo_dir / advisory_base_dir
-    subdirs = advisory_data.list_existing_advisory_subdirs(advisory_root)
-    if not subdirs:
+    advisory_root = advisory_data.advisory_base_path(repo_dir, origin_name)
+    logger.info("Checking existing advisories in %s...", advisory_root)
+    existing_files = advisory_data.list_existing_advisory_files(advisory_root)
+    if not existing_files:
         logger.info("No existing advisories found. All RPMs are unreleased.")
         results_dir = write_results_archive(snapshot, [])
         artifact_ref = push_results_to_oci(
@@ -179,7 +178,7 @@ def run_filter(
         )
 
     logger.info("Extracting purls from advisories...")
-    purl_map = advisory_data.build_purl_to_advisory_map(repo_dir, advisory_root, subdirs)
+    purl_map = advisory_data.build_purl_to_advisory_map(repo_dir, existing_files)
     logger.info("Categorizing RPMs by advisory presence...")
     unreleased, in_advisory, advisory_files = advisory_data.categorize_rpm_entries(
         snapshot,
