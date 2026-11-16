@@ -1,4 +1,4 @@
-"""Create advisory YAML under `data/advisories` in a Git repo (Tekton task).
+"""Create advisory YAML in either supported layout in a Git repo (Tekton task).
 
 * Reads advisory credentials from `/mnt/advisory_secret` (or
   `ADVISORY_SECRET_MOUNT`) and Errata credentials from `/mnt/errata_secret`
@@ -12,5 +12,7 @@
   success or failure is in the result files.
 * Missing env before result handling exits `1`.
 """
+
+from __future__ import annotations
 
 from . import create_advisory  # noqa: F401

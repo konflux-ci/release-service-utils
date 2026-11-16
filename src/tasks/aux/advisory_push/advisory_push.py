@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-from release_service_utils.helpers import retry, tekton
+from release_service_utils.helpers import advisory_data, retry, tekton
 from release_service_utils.helpers.logger import logger
 from release_service_utils.helpers.pyxis_api import (
     create_or_update_advisory,
@@ -176,11 +176,7 @@ def clone_and_find_changes(
         "A",
         stderr_path=parent_dir / "git-stderr.log",
     )
-    new_advisories = [
-        f
-        for f in new_files
-        if f.startswith("data/advisories/") and f.endswith("/advisory.yaml")
-    ]
+    new_advisories = [f for f in new_files if advisory_data.is_advisory_path(f)]
 
     updated_files = git.diff_files(
         repo_dir,
@@ -189,11 +185,7 @@ def clone_and_find_changes(
         "M",
         stderr_path=parent_dir / "git-stderr.log",
     )
-    updated_advisories = [
-        f
-        for f in updated_files
-        if f.startswith("data/advisories/") and f.endswith("/advisory.yaml")
-    ]
+    updated_advisories = [f for f in updated_files if advisory_data.is_advisory_path(f)]
 
     logger.info(
         f"Found {len(new_advisories)} new, {len(updated_advisories)} updated advisories"
