@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import io
 import json
 import tarfile
 import zipfile
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 import pytest
 
 from release_service_utils.helpers.compress_artifacts import compress_artifacts
+from release_service_utils.helpers.push_unsigned import push_unsigned
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -648,3 +651,142 @@ def test_compress_file_entry_per_source_subdir_different_binaries(tmp_path: Path
 
     assert installer_names == ["installer"]
     assert client_names == ["client"]
+
+
+# ---------------------------------------------------------------------------
+# release archive member ownership
+# ---------------------------------------------------------------------------
+
+HIGH_UID = 1000870000  # above the ustar limit, so tarfile stores it in PAX records
+BINARY_BYTES = b"\x7fELF release binary"
+BINARY_MODE = 0o755
+BINARY_MTIME = 1729468800
+
+
+def _simulate_runtime_owner(monkeypatch: pytest.MonkeyPatch, uid: int, name: str) -> None:
+    """Report files added to tar archives as owned by *uid*, like a non-root task pod.
+
+    The tests run without root, so the owner is set on the TarInfo built from the
+    file's stat result instead of with chown.
+    """
+    real_gettarinfo = tarfile.TarFile.gettarinfo
+
+    def gettarinfo(self: tarfile.TarFile, *args: Any, **kwargs: Any) -> tarfile.TarInfo:
+        tarinfo = real_gettarinfo(self, *args, **kwargs)
+        tarinfo.uid = tarinfo.gid = uid
+        tarinfo.uname = tarinfo.gname = name
+        return tarinfo
+
+    monkeypatch.setattr(tarfile.TarFile, "gettarinfo", gettarinfo)
+
+
+def _write_source_archive(path: Path, member_name: str) -> None:
+    """Write a .tar.gz whose single member is owned by HIGH_UID:HIGH_UID."""
+    tarinfo = tarfile.TarInfo(member_name)
+    tarinfo.size = len(BINARY_BYTES)
+    tarinfo.mode = BINARY_MODE
+    tarinfo.mtime = BINARY_MTIME
+    tarinfo.uid = tarinfo.gid = HIGH_UID
+    tarinfo.uname = tarinfo.gname = "builder"
+    with tarfile.open(str(path), "w:gz", format=tarfile.PAX_FORMAT) as tf:
+        tf.addfile(tarinfo, io.BytesIO(BINARY_BYTES))
+
+
+@pytest.mark.parametrize(("runtime_uid", "runtime_name"), [(HIGH_UID, ""), (1001, "runner")])
+def test_linux_release_archive_members_owned_by_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runtime_uid: int, runtime_name: str
+) -> None:
+    """Linux archives repacked after push_unsigned unpacking are owned by root.
+
+    The source member is owned by a high uid/gid, and the unpacked file is reported as
+    owned by the task's runtime user. The final member must be 0:0 root/root, with
+    the original name, bytes, mode and mtime.
+    """
+    monkeypatch.setattr(compress_artifacts, "CONTENT_DIR", tmp_path)
+    comp_dir = tmp_path / "testproduct"
+    comp_dir.mkdir()
+    source_archive = comp_dir / "binary-linux-amd64.tar.gz"
+    _write_source_archive(source_archive, "mybinary")
+    with tarfile.open(str(source_archive), "r:gz") as tf:
+        source_member = tf.getmember("mybinary")
+    assert (source_member.uid, source_member.gid) == (HIGH_UID, HIGH_UID)
+    assert {"uid", "gid"} <= source_member.pax_headers.keys()
+
+    push_unsigned._unpack_file_entries(
+        COMPONENT_LINUX["files"], comp_dir, comp_dir / "unsigned"
+    )
+    _simulate_runtime_owner(monkeypatch, runtime_uid, runtime_name)
+    compress_artifacts.compress_component(COMPONENT_LINUX, {})
+
+    out = comp_dir / "ready_for_distribution" / "binary-linux-amd64.tar.gz"
+    with tarfile.open(str(out), "r:gz") as tf:
+        members = tf.getmembers()
+        assert [m.name for m in members] == ["mybinary"]
+        member = members[0]
+        extracted = tf.extractfile(member)
+        assert extracted is not None
+        content = extracted.read()
+
+    assert (member.uid, member.gid) == (0, 0)
+    assert (member.uname, member.gname) == ("root", "root")
+    assert not {"uid", "gid", "uname", "gname"} & member.pax_headers.keys()
+    assert content == BINARY_BYTES
+    assert member.mode == BINARY_MODE
+    assert member.mtime == BINARY_MTIME
+
+
+def test_set_root_owner_drops_pax_owner_records() -> None:
+    """PAX owner records cannot override the root owner; other PAX records are kept."""
+    tarinfo = tarfile.TarInfo("mybinary")
+    tarinfo.size = len(BINARY_BYTES)
+    tarinfo.mode = BINARY_MODE
+    tarinfo.mtime = BINARY_MTIME
+    tarinfo.uid = tarinfo.gid = HIGH_UID
+    tarinfo.uname = tarinfo.gname = "builder"
+    tarinfo.pax_headers = {
+        "uid": str(HIGH_UID),
+        "gid": str(HIGH_UID),
+        "uname": "builder",
+        "gname": "builder",
+        "comment": "kept",
+    }
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tf:
+        tf.addfile(compress_artifacts._set_root_owner(tarinfo), io.BytesIO(BINARY_BYTES))
+    buf.seek(0)
+    with tarfile.open(fileobj=buf, mode="r") as tf:
+        member = tf.getmember("mybinary")
+        extracted = tf.extractfile(member)
+        assert extracted is not None
+        content = extracted.read()
+
+    assert (member.uid, member.gid) == (0, 0)
+    assert (member.uname, member.gname) == ("root", "root")
+    assert member.pax_headers == {"comment": "kept"}
+    assert content == BINARY_BYTES
+    assert member.mode == BINARY_MODE
+    assert member.mtime == BINARY_MTIME
+
+
+def test_darwin_release_archive_owner_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Darwin archives keep the owner of the packed files; the root reset is Linux-only."""
+    comp_dir = tmp_path / "prod"
+    ready_dir = comp_dir / "ready_for_distribution"
+    ready_dir.mkdir(parents=True)
+    _make_arch_dir(comp_dir / "signed", "macos", "amd64")
+    _simulate_runtime_owner(monkeypatch, HIGH_UID, "")
+
+    compress_artifacts._compress_file_entry(
+        {"source": "/releases/binary-darwin-amd64.tar.gz", "os": "darwin", "arch": "amd64"},
+        "files",
+        comp_dir,
+        ready_dir,
+    )
+
+    with tarfile.open(str(ready_dir / "binary-darwin-amd64.tar.gz"), "r:gz") as tf:
+        member = tf.getmember("mybinary")
+    assert (member.uid, member.gid) == (HIGH_UID, HIGH_UID)
+    assert (member.uname, member.gname) == ("", "")
