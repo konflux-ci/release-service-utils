@@ -279,6 +279,164 @@ def test_run_check_data_keys_pass_undeclared_system(
     )
 
 
+def test_run_check_data_keys_accepts_top_level_rhsa(
+    tmp_path: Path,
+    schema_path: Path,
+) -> None:
+    """Validate a well-formed top-level rhsa summary when the system is declared."""
+    data_dir = tmp_path / "data"
+    data_file = data_dir / "data.json"
+    _write_data(
+        data_file,
+        {
+            "cdn": {"env": "qa"},
+            "rhsa": {
+                "CRITICAL": [
+                    {
+                        "advisory": "RHSA-2026:58936",
+                        "released_on": "2026-08-03T14:37:22Z",
+                        "cves": ["CVE-2024-1234", "CVE-2024-1235"],
+                        "components": ["konflux-component-a"],
+                    }
+                ],
+                "IMPORTANT": [],
+            },
+        },
+    )
+    check_data_keys.run_check_data_keys(
+        data_dir=data_dir,
+        data_path=Path("data.json"),
+        schema_path=schema_path,
+        systems_json='[{"systemName": "cdn", "dynamic": false},'
+        '{"systemName": "rhsa", "dynamic": false}]',
+    )
+
+
+def test_run_check_data_keys_requires_rhsa_when_declared(
+    tmp_path: Path,
+    schema_path: Path,
+) -> None:
+    """Fail when the rhsa system is declared non-dynamic but no rhsa data is present."""
+    data_dir = tmp_path / "data"
+    data_file = data_dir / "data.json"
+    _write_data(data_file, {"cdn": {"env": "qa"}})
+    with pytest.raises(ValueError, match="schema validation failed"):
+        check_data_keys.run_check_data_keys(
+            data_dir=data_dir,
+            data_path=Path("data.json"),
+            schema_path=schema_path,
+            systems_json='[{"systemName": "cdn", "dynamic": false},'
+            '{"systemName": "rhsa", "dynamic": false}]',
+        )
+
+
+def test_run_check_data_keys_rhsa_dynamic_missing_passes(
+    tmp_path: Path,
+    schema_path: Path,
+) -> None:
+    """Pass when rhsa is declared dynamic and its data is absent."""
+    data_dir = tmp_path / "data"
+    data_file = data_dir / "data.json"
+    _write_data(data_file, {"cdn": {"env": "qa"}})
+    check_data_keys.run_check_data_keys(
+        data_dir=data_dir,
+        data_path=Path("data.json"),
+        schema_path=schema_path,
+        systems_json='[{"systemName": "cdn", "dynamic": false},'
+        '{"systemName": "rhsa", "dynamic": true}]',
+    )
+
+
+def test_run_check_data_keys_rejects_malformed_rhsa(
+    tmp_path: Path,
+    schema_path: Path,
+) -> None:
+    """Reject a top-level rhsa whose bucket is not an array (locks the schema type)."""
+    data_dir = tmp_path / "data"
+    data_file = data_dir / "data.json"
+    _write_data(data_file, {"rhsa": {"CRITICAL": "not-an-array", "IMPORTANT": []}})
+    with pytest.raises(ValueError, match="schema validation failed"):
+        check_data_keys.run_check_data_keys(
+            data_dir=data_dir,
+            data_path=Path("data.json"),
+            schema_path=schema_path,
+            systems_json="[]",
+        )
+
+
+def test_run_check_data_keys_rhsa_shape_lenient_when_undeclared(
+    tmp_path: Path,
+    schema_path: Path,
+) -> None:
+    """Pass a present-but-incomplete rhsa when the rhsa system is not declared.
+
+    Entry-shape strictness (required buckets/fields, extra fields, released_on
+    length) is gated behind the rhsa system, mirroring releaseNotes. Only the
+    field types are validated unconditionally.
+    """
+    data_dir = tmp_path / "data"
+    data_file = data_dir / "data.json"
+    _write_data(
+        data_file,
+        {"rhsa": {"CRITICAL": [{"advisory": "RHSA-2026:58936", "extra": "x"}]}},
+    )
+    check_data_keys.run_check_data_keys(
+        data_dir=data_dir,
+        data_path=Path("data.json"),
+        schema_path=schema_path,
+        systems_json="[]",
+    )
+
+
+def _rhsa_entry() -> dict[str, Any]:
+    """Return a complete rhsa advisory entry that satisfies the schema."""
+    return {
+        "advisory": "RHSA-2026:58936",
+        "released_on": "2026-08-03T14:37:22Z",
+        "cves": ["CVE-2024-1234"],
+        "components": ["konflux-component-a"],
+    }
+
+
+@pytest.mark.parametrize(
+    "rhsa",
+    [
+        pytest.param({"CRITICAL": [_rhsa_entry()]}, id="missing-important-bucket"),
+        pytest.param(
+            {
+                "CRITICAL": [{k: v for k, v in _rhsa_entry().items() if k != "released_on"}],
+                "IMPORTANT": [],
+            },
+            id="entry-missing-released_on",
+        ),
+        pytest.param(
+            {"CRITICAL": [{**_rhsa_entry(), "released_on": ""}], "IMPORTANT": []},
+            id="entry-empty-released_on",
+        ),
+        pytest.param(
+            {"CRITICAL": [{**_rhsa_entry(), "extra": "x"}], "IMPORTANT": []},
+            id="entry-extra-field",
+        ),
+    ],
+)
+def test_run_check_data_keys_rejects_incomplete_rhsa(
+    tmp_path: Path,
+    schema_path: Path,
+    rhsa: dict[str, Any],
+) -> None:
+    """Reject an rhsa summary missing a bucket, a required field, or a valid date."""
+    data_dir = tmp_path / "data"
+    data_file = data_dir / "data.json"
+    _write_data(data_file, {"rhsa": rhsa})
+    with pytest.raises(ValueError, match="schema validation failed"):
+        check_data_keys.run_check_data_keys(
+            data_dir=data_dir,
+            data_path=Path("data.json"),
+            schema_path=schema_path,
+            systems_json='[{"systemName": "rhsa", "dynamic": false}]',
+        )
+
+
 def test_run_check_data_keys_malformed_cve_key(
     tmp_path: Path,
     schema_path: Path,
