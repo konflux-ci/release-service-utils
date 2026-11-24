@@ -111,6 +111,42 @@ def test_extract_sboms_from_wheel_ignores_other_sboms(tmp_path: Path) -> None:
     assert list(sboms_dir.iterdir()) == [sboms_dir / _output_name(wheel, redhat_member)]
 
 
+def test_extract_sboms_from_wheel_falls_back_to_fromager(tmp_path: Path) -> None:
+    """Extract Fromager's unrenamed SBOM when the wheel has no redhat.spdx.json."""
+    sboms_dir = tmp_path / "sboms"
+    sboms_dir.mkdir()
+    wheel = tmp_path / "pkg-1.0-py3-none-any.whl"
+    fromager_member = "pkg-1.0.dist-info/sboms/fromager.spdx.json"
+    _write_wheel(wheel, {fromager_member: _SBOM})
+
+    count = extract_sboms_from_wheel(wheel, sboms_dir)
+
+    assert count == 1
+    out = sboms_dir / _output_name(wheel, fromager_member)
+    assert list(sboms_dir.iterdir()) == [out]
+    assert out.read_text(encoding="utf-8") == _SBOM
+
+
+def test_extract_sboms_from_wheel_prefers_redhat_over_fromager(tmp_path: Path) -> None:
+    """Extract only redhat.spdx.json when the wheel carries both SBOM names."""
+    sboms_dir = tmp_path / "sboms"
+    sboms_dir.mkdir()
+    wheel = tmp_path / "pkg-1.0-py3-none-any.whl"
+    redhat_member = "pkg-1.0.dist-info/sboms/redhat.spdx.json"
+    _write_wheel(
+        wheel,
+        {
+            "pkg-1.0.dist-info/sboms/fromager.spdx.json": _SBOM,
+            redhat_member: _SBOM,
+        },
+    )
+
+    count = extract_sboms_from_wheel(wheel, sboms_dir)
+
+    assert count == 1
+    assert list(sboms_dir.iterdir()) == [sboms_dir / _output_name(wheel, redhat_member)]
+
+
 def test_extract_sboms_from_wheel_skips_directory_entries(tmp_path: Path) -> None:
     """Ignore zip directory entries under ``.dist-info/sboms/``."""
     sboms_dir = tmp_path / "sboms"

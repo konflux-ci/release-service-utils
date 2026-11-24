@@ -26,7 +26,10 @@ PROG = "extract_py_artifacts.py"
 GENERIC_CONTENT_TYPE = "generic"
 COSIGN_KEY = "k8s://openshift-pipelines/public-key"
 DEFAULT_FILES_DIR = "files"
-SBOM_MEMBER_SUFFIX = ".dist-info/sboms/redhat.spdx.json"
+SBOM_MEMBER_SUFFIXES = (
+    ".dist-info/sboms/redhat.spdx.json",
+    ".dist-info/sboms/fromager.spdx.json",
+)
 # Same path the task's extract-artifacts step uses for ``select-oci-auth``.
 _AUTH_FILE = Path("/tmp/auth.json")
 
@@ -113,15 +116,22 @@ def extract_sbom_from_wheel(wheel: Path, name: str, version: str) -> dict[str, A
     """Return the SPDX object at ``{name}-{version}.dist-info/sboms/...``.
 
     The member path is the literal dist-info directory from the wheel
-    filename. A missing member or an unreadable archive fails the step.
+    filename. Wheels that ship Fromager's SBOM unrenamed carry
+    ``fromager.spdx.json`` instead of ``redhat.spdx.json``, so each name in
+    ``SBOM_MEMBER_SUFFIXES`` is tried in order. A missing member or an
+    unreadable archive fails the step.
     """
-    sbom_path = f"{name}-{version}{SBOM_MEMBER_SUFFIX}"
-    logger.info("  Extracting SBOM: %s", sbom_path)
+    candidates = [f"{name}-{version}{suffix}" for suffix in SBOM_MEMBER_SUFFIXES]
     try:
         with zipfile.ZipFile(wheel) as archive:
+            members = set(archive.namelist())
+            sbom_path = next((path for path in candidates if path in members), None)
+            if sbom_path is None:
+                _fail(f"ERROR: SBOM not found in wheel: {' or '.join(candidates)}")
+            logger.info("  Extracting SBOM: %s", sbom_path)
             raw = archive.read(sbom_path)
-    except (OSError, KeyError, zipfile.BadZipFile, zipfile.LargeZipFile):
-        _fail(f"ERROR: SBOM not found in wheel: {sbom_path}")
+    except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile):
+        _fail(f"ERROR: SBOM not found in wheel: {' or '.join(candidates)}")
     parsed = json.loads(raw)
     if not isinstance(parsed, dict):
         raise ValueError(f"SBOM root must be an object: {sbom_path}")

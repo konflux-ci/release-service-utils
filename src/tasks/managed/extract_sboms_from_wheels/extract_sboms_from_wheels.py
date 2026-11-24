@@ -4,8 +4,9 @@
 Recursively walk ``*.whl`` files under a data directory, pull
 ``redhat.spdx.json`` from each wheel's ``.dist-info/sboms/`` path, and
 write it into ``<data_dir>/sboms`` for a later Atlas/TPA upload step.
-Other SBOM files in the wheel are ignored: only the Red Hat-generated
-SBOM is known to pass Atlas validation.
+Wheels that ship Fromager's SBOM without renaming it carry
+``fromager.spdx.json`` instead, which is used when a wheel has no
+``redhat.spdx.json``. Other SBOM files in the wheel are ignored.
 """
 
 from __future__ import annotations
@@ -20,7 +21,11 @@ from typing import BinaryIO
 from release_service_utils.helpers import file, tekton
 from release_service_utils.helpers.logger import logger
 
-_SBOM_MEMBER_SUFFIX = ".dist-info/sboms/redhat.spdx.json"
+# In order of preference: a wheel's SBOMs come from the first suffix that matches.
+_SBOM_MEMBER_SUFFIXES = (
+    ".dist-info/sboms/redhat.spdx.json",
+    ".dist-info/sboms/fromager.spdx.json",
+)
 SBOMS_SUBDIR = "sboms"
 _HASH_CHUNK_SIZE = 64 * 1024
 _FILENAME_MAX_BYTES = 255
@@ -28,9 +33,17 @@ _PATH_DIGEST_HEX = 16
 _READABLE_SUFFIX_BYTES = 64
 
 
-def _is_sbom_zip_member(name: str) -> bool:
-    """Return True if *name* is ``redhat.spdx.json`` under ``.dist-info/sboms/``."""
-    return name.endswith(_SBOM_MEMBER_SUFFIX)
+def _sbom_zip_members(names: list[str]) -> list[str]:
+    """Return the SBOM members to extract from a wheel's *names*.
+
+    Uses the first suffix in ``_SBOM_MEMBER_SUFFIXES`` that matches any
+    member, so a wheel carrying both names yields only ``redhat.spdx.json``.
+    """
+    for suffix in _SBOM_MEMBER_SUFFIXES:
+        members = [name for name in names if name.endswith(suffix)]
+        if members:
+            return members
+    return []
 
 
 def _wheel_identity(wheel: Path, wheels_dir: Path) -> str:
@@ -125,7 +138,7 @@ def extract_sboms_from_wheel(
     output_prefix: str | None = None,
     written: dict[Path, tuple[str, int]] | None = None,
 ) -> int:
-    """Extract ``redhat.spdx.json`` from *wheel* into *sboms_dir*.
+    """Extract the wheel SBOM (see ``_SBOM_MEMBER_SUFFIXES``) into *sboms_dir*.
 
     *output_prefix* is the wheel identity hashed into each output name.
     When omitted, the wheel filename is used. *written* tracks digest
@@ -143,7 +156,7 @@ def extract_sboms_from_wheel(
     retained = written if written is not None else {}
     try:
         with zipfile.ZipFile(wheel) as zf:
-            members = [n for n in zf.namelist() if _is_sbom_zip_member(n)]
+            members = _sbom_zip_members(zf.namelist())
             if not members:
                 logger.info("No SBOMs found in %s", wheel)
                 return 0
@@ -189,7 +202,7 @@ def extract_sboms_from_wheel(
 
 
 def run(data_dir: Path, files_dir: str) -> int:
-    """Extract ``redhat.spdx.json`` from every wheel under *data_dir* / *files_dir*.
+    """Extract the SBOM from every wheel under *data_dir* / *files_dir*.
 
     Writes into a temporary sibling of ``data_dir / sboms`` and replaces
     that directory only after collision checks succeed and at least one
