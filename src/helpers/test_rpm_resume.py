@@ -403,6 +403,17 @@ def test_falls_back_to_recent_internal_request() -> None:
         assert rpm_resume.find_resume_checkpoint("quay.io/storage", INPUTS, "release4") == REF
 
 
+def test_missing_checkpoint_and_request_reaches_signer_with_raw_alias() -> None:
+    """Allow a new signer run when neither resume source exists."""
+    alias = "e2epq,e2e,ima"
+    with (
+        patch.object(rpm_resume, "read_checkpoint", return_value=None),
+        patch.object(rpm_resume, "find_resume_request", return_value=None) as find,
+    ):
+        assert rpm_resume.find_resume_checkpoint("quay.io/storage", INPUTS, alias) is None
+    find.assert_called_once_with(INPUTS, alias)
+
+
 @pytest.mark.parametrize("request_name,expected", [("signing-1", REF), (None, None)])
 def test_explicit_request_result_is_returned(
     request_name: str | None, expected: str | None
