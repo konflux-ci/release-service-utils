@@ -41,6 +41,7 @@ class PulpDigestStatus(Enum):
     MATCH = "match"
     NOT_FOUND = "not_found"
     MISMATCH = "mismatch"
+    UNPUBLISHED_MISMATCH = "unpublished_mismatch"
 
 
 def parse_pulp_config(config_path: Path) -> dict[str, str]:
@@ -328,16 +329,21 @@ class PulpClient:
         repo_name: str,
         hrefs: list[str],
         timeout_seconds: int,
+        *,
+        remove_hrefs: list[str] | None = None,
     ) -> None:
-        """Add content units identified by *hrefs* to *repo_name* and wait."""
-        if not hrefs:
+        """Modify *repo_name*, removing old units before adding *hrefs*."""
+        if not hrefs and not remove_hrefs:
             return
         repo_href = self.get_repo_href(repo_name)
         url = f"{self._base_url}{repo_href}modify/"
         logger.info("Calling API: POST %s", url)
+        payload = {"add_content_units": hrefs}
+        if remove_hrefs:
+            payload["remove_content_units"] = remove_hrefs
         resp = self._session.post(
             url,
-            json={"add_content_units": hrefs},
+            json=payload,
             timeout=60,
         )
         if resp.status_code not in (200, 202):
@@ -442,41 +448,17 @@ class PulpClient:
                 f"(rc={result.returncode}){f': {suffix}' if suffix else ''}"
             )
 
-    def check_digest(
+    def _version_digest(
         self,
-        repo_name: str,
+        rv_href: str,
         name: str,
         epoch: str,
         version: str,
         release: str,
         arch: str,
         expected_sha: str,
-        *,
-        fallback_to_latest: bool = False,
-    ) -> PulpDigestStatus:
-        """Check Pulp for an RPM digest in published content.
-
-        Return ``MATCH`` when the digest matches, ``NOT_FOUND`` when
-        no published version or no matching RPM exists, and ``MISMATCH``
-        when a different digest is found.
-
-        By default only published distribution/publication content is
-        searched. Pass *fallback_to_latest* True to also search the
-        repository's unpublished ``latest_version_href``.
-
-        Raise ``requests.RequestException`` on API failures.
-        """
-        rv_href = self.get_published_version_href(
-            repo_name, fallback_to_latest=fallback_to_latest
-        )
-
-        if not rv_href:
-            logger.info(
-                "  -> No published version for %s. RPM not accessible to users.",
-                repo_name,
-            )
-            return PulpDigestStatus.NOT_FOUND
-
+    ) -> tuple[PulpDigestStatus, list[str]]:
+        """Check one repository version and return conflicting content hrefs."""
         query_url = (
             f"{self._base_url}/api/pulp/{self._domain}"
             f"/api/v3/content/rpm/packages/"
@@ -493,11 +475,15 @@ class PulpClient:
 
         data = resp.json()
         if data.get("count", 0) == 0:
-            return PulpDigestStatus.NOT_FOUND
+            return PulpDigestStatus.NOT_FOUND, []
 
+        matched = False
+        conflicts: list[str] = []
+        incomplete = False
         for result in data.get("results", []):
             chref = result.get("pulp_href")
             if not chref:
+                incomplete = True
                 continue
             content_data = self.get_json(f"{self._base_url}{chref}")
 
@@ -505,13 +491,109 @@ class PulpClient:
                 (content_data.get("artifacts") or [None])[0]
             )
             if not artifact_href:
+                incomplete = True
                 continue
 
             server_sha = self.get_json(f"{self._base_url}{artifact_href}").get("sha256", "")
-            if server_sha and server_sha == expected_sha:
-                return PulpDigestStatus.MATCH
+            if not server_sha:
+                incomplete = True
+            elif server_sha == expected_sha:
+                matched = True
+            else:
+                conflicts.append(str(chref))
 
-        return PulpDigestStatus.MISMATCH
+        if incomplete:
+            return PulpDigestStatus.MISMATCH, []
+        if conflicts:
+            return PulpDigestStatus.MISMATCH, conflicts
+        if matched:
+            return PulpDigestStatus.MATCH, []
+        return PulpDigestStatus.MISMATCH, []
+
+    def check_digest(
+        self,
+        repo_name: str,
+        name: str,
+        epoch: str,
+        version: str,
+        release: str,
+        arch: str,
+        expected_sha: str,
+        *,
+        fallback_to_latest: bool = False,
+        allow_unpublished_rebuild: bool = False,
+    ) -> PulpDigestStatus:
+        """Check published and optionally latest content for an RPM digest.
+
+        Reject published conflicts. With both options enabled, return
+        ``UNPUBLISHED_MISMATCH`` for a replaceable conflict in the latest
+        unpublished version. Missing or incomplete metadata stays strict.
+        """
+        published = self.get_published_version_href(repo_name)
+        published_status = PulpDigestStatus.NOT_FOUND
+        if published:
+            published_status, _ = self._version_digest(
+                published, name, epoch, version, release, arch, expected_sha
+            )
+            if published_status is PulpDigestStatus.MISMATCH:
+                return published_status
+
+        if not fallback_to_latest:
+            return published_status
+
+        repo_href = self.get_repo_href(repo_name)
+        latest = self.get_json(f"{self._base_url}{repo_href}").get("latest_version_href")
+        if not latest or latest == published:
+            return published_status
+
+        latest_status, conflicts = self._version_digest(
+            str(latest), name, epoch, version, release, arch, expected_sha
+        )
+        if (
+            latest_status is PulpDigestStatus.MISMATCH
+            and conflicts
+            and allow_unpublished_rebuild
+        ):
+            return PulpDigestStatus.UNPUBLISHED_MISMATCH
+        return latest_status
+
+    def replace_unpublished_rpm(
+        self,
+        repo_name: str,
+        name: str,
+        epoch: str,
+        version: str,
+        release: str,
+        arch: str,
+        expected_sha: str,
+        new_href: str,
+        timeout_seconds: int,
+    ) -> None:
+        """Replace conflicting unpublished RPM content in one modify request."""
+        published = self.get_published_version_href(repo_name)
+        if published:
+            published_status, _ = self._version_digest(
+                published, name, epoch, version, release, arch, expected_sha
+            )
+            if published_status is PulpDigestStatus.MISMATCH:
+                raise RuntimeError(f"Published RPM has a different digest in {repo_name}")
+
+        repo_href = self.get_repo_href(repo_name)
+        latest = self.get_json(f"{self._base_url}{repo_href}").get("latest_version_href")
+        if not latest or latest == published:
+            raise RuntimeError(f"No unpublished RPM version to rebuild in {repo_name}")
+
+        latest_status, conflicts = self._version_digest(
+            str(latest), name, epoch, version, release, arch, expected_sha
+        )
+        if latest_status is PulpDigestStatus.MATCH:
+            return
+        if latest_status is PulpDigestStatus.NOT_FOUND:
+            self.add_content(repo_name, [new_href], timeout_seconds)
+            return
+        if not conflicts:
+            raise RuntimeError(f"Cannot identify conflicting RPM content in {repo_name}")
+        self.add_content(repo_name, [new_href], timeout_seconds, remove_hrefs=conflicts)
 
 
 def _pulp_file_cmd(config_file: Path, domain: str, *args: str) -> list[str]:

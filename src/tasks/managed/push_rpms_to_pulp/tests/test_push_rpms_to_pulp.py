@@ -436,10 +436,18 @@ class TestRun:
         assert copied != cfg.pulp_config_file
         assert not copied.exists()
 
-    def test_signed_artifact_oauth_and_results_dir_fallback(self, tmp_path: Path) -> None:
-        """Signed artifact path, oauth log, and artifacts.json in the results dir."""
-        cfg = _config(
-            tmp_path, signed="oci:quay.io/signed@sha256:abc", artifacts_dir="", basic=False
+    @pytest.mark.parametrize(
+        "alias", ["release4,release2,ima", "release4:release2:ima", "release4,release2 (ima)"]
+    )
+    def test_signed_artifact_oauth_and_results_dir_fallback(
+        self, tmp_path: Path, alias: str
+    ) -> None:
+        """Keep the exact signing alias in Pulp's label and write result files."""
+        cfg = replace(
+            _config(
+                tmp_path, signed="oci:quay.io/signed@sha256:abc", artifacts_dir="", basic=False
+            ),
+            signed_by=alias,
         )
         client = MagicMock()
         client.check_digest.return_value = PulpDigestStatus.NOT_FOUND
@@ -465,7 +473,7 @@ class TestRun:
         client.set_rpm_label.assert_called_once_with(
             task.file_helper.sha256(cfg.files_dir / "hello-2.12.1-6.fc44.x86_64.rpm"),
             "signed_by",
-            "release4:release2:ima",
+            alias,
             client.upload_rpm.call_args.args[2],
         )
         method_names = [entry[0] for entry in client.method_calls]
@@ -694,6 +702,43 @@ class TestRun:
             pytest.raises(RuntimeError, match="different digest"),
         ):
             task.run(cfg)
+
+    def test_unpublished_rebuild_replaces_conflict(self, tmp_path: Path) -> None:
+        """Replace only an unpublished conflict and preserve release outputs."""
+        snap = tmp_path / "snap.json"
+        _write_snapshot(snap, [{"containerImage": "quay.io/a"}])
+        cfg = _config(tmp_path, snapshot=snap)
+        client = MagicMock()
+        client.check_digest.return_value = PulpDigestStatus.UNPUBLISHED_MISMATCH
+        client.upload_rpm.return_value = "/href/new"
+
+        def fake_pull(_image: str, dest: Path) -> None:
+            (dest / "hello-2.12.1-6.fc44.x86_64.rpm").write_bytes(b"rebuilt")
+
+        with (
+            patch(f"{TASK}.PulpClient.from_config", return_value=client),
+            patch(f"{TASK}.oras_utils.oras_pull", side_effect=fake_pull),
+        ):
+            task.run(cfg)
+
+        rpm_path = cfg.files_dir / "hello-2.12.1-6.fc44.x86_64.rpm"
+        client.replace_unpublished_rpm.assert_called_once_with(
+            "x86_64",
+            "hello",
+            "0",
+            "2.12.1",
+            "6.fc44",
+            "x86_64",
+            task.file_helper.sha256(rpm_path),
+            "/href/new",
+            30,
+        )
+        client.add_content.assert_not_called()
+        assert client.check_digest.call_args.kwargs["allow_unpublished_rebuild"] is True
+        results = json.loads(
+            (cfg.data_dir / "results" / "push-rpms-to-pulp-results.json").read_text()
+        )
+        assert results["rpmfiles"][0]["rpm"] == rpm_path.name
 
     def test_filter_skips_untargeted(self, tmp_path: Path) -> None:
         """Only RPMs listed in rpmsToPublish are uploaded."""
