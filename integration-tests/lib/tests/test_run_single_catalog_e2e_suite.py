@@ -500,6 +500,7 @@ def test_build_catalog_e2e_pipelinerun_shape() -> None:
         pipeline_used="pipe-a",
         vault_password_secret_name="vp",
         github_token_secret_name="gt",
+        staging_pipeline_path="integration-tests/pipelines/e2e-tests-staging-pipeline.yaml",
     )
     assert m["kind"] == "PipelineRun"
     assert m["metadata"]["name"] == "utils-e2e-catalog-uid1"
@@ -517,6 +518,33 @@ def test_build_catalog_e2e_pipelinerun_shape() -> None:
     ref_params = {p["name"]: p["value"] for p in m["spec"]["pipelineRef"]["params"]}
     assert ref_params["url"] == "https://github.com/konflux-ci/release-service-catalog.git"
     assert ref_params["revision"] == "development"
+    assert (
+        ref_params["pathInRepo"]
+        == "integration-tests/pipelines/e2e-tests-staging-pipeline.yaml"
+    )
+
+
+def test_build_catalog_e2e_pipelinerun_uses_staging_pipeline_path_verbatim() -> None:
+    """``pathInRepo`` is whatever staging_pipeline_path the caller passes in."""
+    snap = rs._build_snapshot(runner="r", url="u", rev="v")
+    m = rs._build_catalog_e2e_pipelinerun(
+        ns="konflux-release-service-tenant",
+        child_plr_name="utils-e2e-catalog-uid1",
+        parent="parent-plr",
+        suite="fbc-release",
+        suite_vars="{}",
+        snap=snap,
+        pipeline_used="fbc-release",
+        vault_password_secret_name="vp",
+        github_token_secret_name="gt",
+        staging_pipeline_path="integration-tests/pipelines/"
+        "fbc-e2e-tests-staging-pipeline.yaml",
+    )
+    ref_params = {p["name"]: p["value"] for p in m["spec"]["pipelineRef"]["params"]}
+    assert (
+        ref_params["pathInRepo"]
+        == "integration-tests/pipelines/fbc-e2e-tests-staging-pipeline.yaml"
+    )
 
 
 def test_main_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_path, capsys) -> None:
@@ -528,6 +556,10 @@ def test_main_happy_path(monkeypatch: pytest.MonkeyPatch, tmp_path, capsys) -> N
     monkeypatch.setenv("PIPELINE_TEST_SUITE", "suite1")
     monkeypatch.setenv("PIPELINE_TEST_SUITE_VARS", '{"var":"val"}')
     monkeypatch.setenv("PIPELINE_USED", "pipe1")
+    monkeypatch.setenv(
+        "CATALOG_STAGING_PIPELINE_PATH",
+        "integration-tests/pipelines/e2e-tests-staging-pipeline.yaml",
+    )
     monkeypatch.setenv("ORCHESTRATOR_PIPELINE_RUN_UID", "abc-123")
     monkeypatch.setenv("E2E_WAIT_TIMEOUT", "60")
 
@@ -576,6 +608,10 @@ def test_main_wait_failure_exits_1(monkeypatch: pytest.MonkeyPatch, tmp_path, ca
     monkeypatch.setenv("CATALOG_E2E_RUNNER_IMAGE", "i")
     monkeypatch.setenv("PIPELINE_TEST_SUITE", "s")
     monkeypatch.setenv("PIPELINE_USED", "p")
+    monkeypatch.setenv(
+        "CATALOG_STAGING_PIPELINE_PATH",
+        "integration-tests/pipelines/e2e-tests-staging-pipeline.yaml",
+    )
     monkeypatch.setenv("ORCHESTRATOR_PIPELINE_RUN_UID", "uid")
 
     def fake_mkstemp(suffix: str = "", **kw):
@@ -628,6 +664,10 @@ def test_main_bad_test_output_dumps_logs(
     monkeypatch.setenv("CATALOG_E2E_RUNNER_IMAGE", "quay.io/runner:v1")
     monkeypatch.setenv("PIPELINE_TEST_SUITE", "suite1")
     monkeypatch.setenv("PIPELINE_USED", "pipe1")
+    monkeypatch.setenv(
+        "CATALOG_STAGING_PIPELINE_PATH",
+        "integration-tests/pipelines/e2e-tests-staging-pipeline.yaml",
+    )
     monkeypatch.setenv("ORCHESTRATOR_PIPELINE_RUN_UID", "abc-123")
 
     def fake_mkstemp(suffix: str = "", **kw):
@@ -674,6 +714,10 @@ def test_main_missing_test_output_dumps_logs(
     monkeypatch.setenv("CATALOG_E2E_RUNNER_IMAGE", "quay.io/runner:v1")
     monkeypatch.setenv("PIPELINE_TEST_SUITE", "suite1")
     monkeypatch.setenv("PIPELINE_USED", "pipe1")
+    monkeypatch.setenv(
+        "CATALOG_STAGING_PIPELINE_PATH",
+        "integration-tests/pipelines/e2e-tests-staging-pipeline.yaml",
+    )
     monkeypatch.setenv("ORCHESTRATOR_PIPELINE_RUN_UID", "abc-123")
 
     def fake_mkstemp(suffix: str = "", **kw):
@@ -748,6 +792,10 @@ def test_main_in_cluster_uses_env_namespace(
     monkeypatch.setenv("CATALOG_E2E_RUNNER_IMAGE", "quay.io/runner:v1")
     monkeypatch.setenv("PIPELINE_TEST_SUITE", "suite1")
     monkeypatch.setenv("PIPELINE_USED", "pipe1")
+    monkeypatch.setenv(
+        "CATALOG_STAGING_PIPELINE_PATH",
+        "integration-tests/pipelines/e2e-tests-staging-pipeline.yaml",
+    )
     monkeypatch.setenv("ORCHESTRATOR_PIPELINE_RUN_UID", "abc-123")
 
     manifests: list[dict] = []

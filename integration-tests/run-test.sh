@@ -24,7 +24,8 @@
 # Optional (omit env vars to use Tekton defaults from the resolved pipeline YAML):
 #   NAMESPACE (default konflux-release-service-tenant only for kubectl; not a pipeline param).
 #   CATALOG_REPO, CATALOG_REF, DEST_REPO_PREFIX, CATALOG_E2E_RUNNER_IMAGE, VAULT_PASSWORD_SECRET_NAME,
-#   GITHUB_TOKEN_SECRET_NAME, E2E_WAIT_TIMEOUT (pipeline param e2eWaitTimeout).
+#   GITHUB_TOKEN_SECRET_NAME, E2E_WAIT_TIMEOUT (pipeline param e2eWaitTimeout),
+#   CATALOG_STAGING_PIPELINE_PATH (pipeline param catalogStagingPipelinePath).
 #   With --wait, E2E_WAIT_TIMEOUT is required (kubectl wait --timeout); pick a duration that fits your run
 #   (the pipeline default for e2eWaitTimeout is in utils-e2e-catalog-pipeline.yaml).
 #   RUN_TEST_KEEP_PIPELINERUN=1  With --wait, skip deleting the PipelineRun when finished (debugging).
@@ -147,6 +148,7 @@ optional_plr_param_add_if_set catalogE2eRunnerImage "${CATALOG_E2E_RUNNER_IMAGE:
 optional_plr_param_add_if_set VAULT_PASSWORD_SECRET_NAME "${VAULT_PASSWORD_SECRET_NAME:-}"
 optional_plr_param_add_if_set GITHUB_TOKEN_SECRET_NAME "${GITHUB_TOKEN_SECRET_NAME:-}"
 optional_plr_param_add_if_set e2eWaitTimeout "${E2E_WAIT_TIMEOUT:-}"
+optional_plr_param_add_if_set catalogStagingPipelinePath "${CATALOG_STAGING_PIPELINE_PATH:-}"
 
 PR_JSON=$(jq -n \
   --arg ns "${NAMESPACE}" --rawfile snap "${SNAPSHOT_FILE}" \

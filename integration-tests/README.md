@@ -10,7 +10,7 @@
 
 4. **`git-clone-catalog-patch-git-push`** — clones catalog, patches utils image refs, pushes a temporary GitHub fork (only when the `when:` clauses pass: non-empty **`pipelineUsed`** and **`runCatalogE2e`** is `yes`).
 
-5. **`run-catalog-e2e`** — creates a child `PipelineRun` for catalog’s integration-test pipeline (`integration-tests/pipelines/e2e-tests-staging-pipeline.yaml` in **release-service-catalog**), using pipeline params **`PIPELINE_TEST_SUITE`** / **`PIPELINE_USED`** (same names as the catalog IntegrationTestScenario; not the raw find-affected strings), then waits for success.
+5. **`run-catalog-e2e`** — creates a child `PipelineRun` for catalog’s integration-test pipeline (`catalogStagingPipelinePath`, default `integration-tests/pipelines/e2e-tests-staging-pipeline.yaml` in release-service-catalog), using pipeline params **`PIPELINE_TEST_SUITE`** / **`PIPELINE_USED`** (same names as the catalog IntegrationTestScenario; not the raw find-affected strings), then waits for success.
 
 Callers that target one catalog suite per check pass different **`PIPELINE_TEST_SUITE`** / **`PIPELINE_USED`** pairs while reusing this pipeline file.
 
