@@ -6,9 +6,9 @@ metadata:
 spec:
   description: >-
     Clone release-service-catalog, patch it to use the utils image from SNAPSHOT, push to a temporary
-    GitHub fork, then optionally start a child PipelineRun for catalog integration tests (the path in
-    catalog is integration-tests/pipelines/e2e-tests-staging-pipeline.yaml today; change the ref if that
-    moves). find-affected-tasks maps the utils diff to affected catalog integration suite directory
+    GitHub fork, then optionally start a child PipelineRun at the catalog path given by
+    catalogStagingPipelinePath, defaulting to integration-tests/pipelines/e2e-tests-staging-pipeline.yaml.
+    find-affected-tasks maps the utils diff to affected catalog integration suite directory
     names; match-affected-suite decides whether PIPELINE_TEST_SUITE is in that set. If not, patch
     and downstream catalog test tasks are skipped (no-op success). Pipeline params use the same names
     as the catalog IntegrationTestScenario (PIPELINE_TEST_SUITE, PIPELINE_USED, secret *_NAME params).
@@ -61,6 +61,11 @@ spec:
       description: >-
         Secret name (key kubeconfig) used by run-catalog-e2e for kubectl.
         Optional: if the Secret is missing, kubectl uses in-cluster config.
+    - name: catalogStagingPipelinePath
+      type: string
+      default: "integration-tests/pipelines/e2e-tests-staging-pipeline.yaml"
+      description: >-
+        Catalog pathInRepo run-catalog-e2e uses for the child PipelineRun.
     - name: e2eWaitTimeout
       type: string
       default: "14400"
@@ -375,6 +380,8 @@ spec:
           value: $(params.PIPELINE_TEST_SUITE_VARS)
         - name: orchestrationKubeconfigSecretName
           value: $(params.orchestrationKubeconfigSecretName)
+        - name: catalogStagingPipelinePath
+          value: $(params.catalogStagingPipelinePath)
         - name: e2eWaitTimeout
           value: $(params.e2eWaitTimeout)
         - name: parentPipelineRun
@@ -391,6 +398,7 @@ spec:
           - name: GITHUB_TOKEN_SECRET_NAME
           - name: PIPELINE_TEST_SUITE_VARS
           - name: orchestrationKubeconfigSecretName
+          - name: catalogStagingPipelinePath
           - name: e2eWaitTimeout
           - name: parentPipelineRun
         steps:
@@ -433,6 +441,7 @@ spec:
               export PIPELINE_USED="$(params.PIPELINE_USED)"
               export VAULT_PASSWORD_SECRET_NAME="$(params.VAULT_PASSWORD_SECRET_NAME)"
               export GITHUB_TOKEN_SECRET_NAME="$(params.GITHUB_TOKEN_SECRET_NAME)"
+              export CATALOG_STAGING_PIPELINE_PATH="$(params.catalogStagingPipelinePath)"
               export PARENT_PIPELINE_RUN="$(params.parentPipelineRun)"
               export E2E_WAIT_TIMEOUT="$(params.e2eWaitTimeout)"
               exec python3 /home/integration-tests/lib/run_single_catalog_e2e_suite.py

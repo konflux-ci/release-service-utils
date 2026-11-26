@@ -3,15 +3,12 @@
 
 Usage: python3 run_single_catalog_e2e_suite.py
 
-Invokes the pipeline defined in catalog at
-``integration-tests/pipelines/e2e-tests-staging-pipeline.yaml``.
-
 Used by ``utils-e2e-catalog-pipeline`` task ``run-catalog-e2e`` (this file:
 ``run_single_catalog_e2e_suite.py``). Expects a single suite pair in env.
 
 Required env:
   CATALOG_GIT_URL, CATALOG_GIT_REVISION, CATALOG_E2E_RUNNER_IMAGE,
-  PIPELINE_TEST_SUITE, PIPELINE_USED,
+  PIPELINE_TEST_SUITE, PIPELINE_USED, CATALOG_STAGING_PIPELINE_PATH,
   VAULT_PASSWORD_SECRET_NAME, GITHUB_TOKEN_SECRET_NAME,
   ORCHESTRATOR_PIPELINE_RUN_UID — orchestrator PLR ``metadata.uid`` (pipeline sets
   ``$(context.pipelineRun.uid)``); child PLR name is ``utils-e2e-catalog-<uid>``
@@ -381,6 +378,7 @@ def _build_catalog_e2e_pipelinerun(
     pipeline_used: str,
     vault_password_secret_name: str,
     github_token_secret_name: str,
+    staging_pipeline_path: str,
 ) -> dict[str, object]:
     """Build the child catalog e2e PipelineRun manifest (metadata, pipelineRef, params)."""
     return {
@@ -407,10 +405,7 @@ def _build_catalog_e2e_pipelinerun(
                         "value": "https://github.com/konflux-ci/release-service-catalog.git",
                     },
                     {"name": "revision", "value": "development"},
-                    {
-                        "name": "pathInRepo",
-                        "value": "integration-tests/pipelines/e2e-tests-staging-pipeline.yaml",
-                    },
+                    {"name": "pathInRepo", "value": staging_pipeline_path},
                 ],
             },
             "params": [
@@ -434,6 +429,7 @@ def main() -> None:
     suite = require_env("PIPELINE_TEST_SUITE")
     suite_vars = opt_env("PIPELINE_TEST_SUITE_VARS", "{}")
     used = require_env("PIPELINE_USED")
+    staging_pipeline_path = require_env("CATALOG_STAGING_PIPELINE_PATH")
 
     parent = os.environ.get("PARENT_PIPELINE_RUN", "")
     wait_seconds = float(os.environ.get("E2E_WAIT_TIMEOUT") or "14400")
@@ -453,6 +449,7 @@ def main() -> None:
         pipeline_used=used,
         vault_password_secret_name=vault,
         github_token_secret_name=gh,
+        staging_pipeline_path=staging_pipeline_path,
     )
 
     path: Path | None = None
