@@ -111,6 +111,7 @@ from typing import Any
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 
+from release_service_utils.framework import Helper
 from release_service_utils.helpers import retry
 from release_service_utils.helpers.logger import logger
 
@@ -169,111 +170,6 @@ def _get_namespace() -> str:
     except FileNotFoundError:
         _, context = k8s_config.list_kube_config_contexts()
         return context.get("context", {}).get("namespace", "default")
-
-
-def duration_to_seconds(duration: str) -> int:
-    """Convert an `XhYmZs` duration string to seconds."""
-    match = _DURATION_RE.fullmatch(duration)
-    if match is None:
-        msg = f"duration must use XhYmZs format: {duration!r}"
-        raise ValueError(msg)
-    hours, minutes, seconds = (int(match.group(i)) for i in range(1, 4))
-    return (hours * 3600) + (minutes * 60) + seconds
-
-
-def seconds_to_duration(seconds: int) -> str:
-    """Format *seconds* as zero-padded XhYmZs (e.g. 3661 -> 01h01m01s)."""
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    secs = seconds % 60
-    return f"{hours:02d}h{minutes:02d}m{secs:02d}s"
-
-
-def validate_timeouts(
-    *,
-    timeout: int,
-    pipeline_timeout: str,
-    task_timeout: str,
-    finally_timeout: str,
-) -> None:
-    """Validate timeout strings and their relationships."""
-    for label, value in (
-        ("pipeline_timeout", pipeline_timeout),
-        ("task_timeout", task_timeout),
-        ("finally_timeout", finally_timeout),
-    ):
-        if _DURATION_RE.fullmatch(value) is None:
-            msg = f"{label} must use XhYmZs format, where X, Y, and Z are integers"
-            raise ValueError(msg)
-
-    pipeline_timeout_secs = duration_to_seconds(pipeline_timeout)
-    task_timeout_secs = duration_to_seconds(task_timeout)
-    finally_timeout_secs = duration_to_seconds(finally_timeout)
-    all_tasks_timeout = task_timeout_secs + finally_timeout_secs
-    if all_tasks_timeout > pipeline_timeout_secs:
-        msg = (
-            "The sum of the task and finally timeout cannot exceed the pipeline "
-            f"timeout. Pipeline timeout is {pipeline_timeout_secs} and the sum "
-            f"of the others is {all_tasks_timeout}."
-        )
-        raise ValueError(msg)
-
-    if pipeline_timeout_secs > timeout:
-        logger.warning(
-            "The passed pipeline timeout is greater than the script timeout. "
-            "This means the script can fail before the pipeline times out, "
-            "should it take that long.",
-        )
-
-
-def build_payload(
-    *,
-    pipeline: str,
-    params: Mapping[str, str],
-    labels: Mapping[str, str],
-    pipeline_git_url: str,
-    pipeline_git_revision: str,
-    pipeline_timeout: str,
-    task_timeout: str,
-    finally_timeout: str,
-    service_account: str | None,
-) -> dict[str, Any]:
-    """Build the InternalRequest manifest payload."""
-    merged_labels = dict(labels)
-    merged_labels[PIPELINE_NAME_LABEL] = pipeline
-
-    payload: dict[str, Any] = {
-        "apiVersion": "appstudio.redhat.com/v1alpha1",
-        "kind": "InternalRequest",
-        "metadata": {
-            "generateName": f"{pipeline}-",
-            "labels": merged_labels,
-        },
-        "spec": {
-            "pipeline": {
-                "pipelineRef": {
-                    "resolver": "git",
-                    "params": [
-                        {"name": "url", "value": pipeline_git_url},
-                        {"name": "revision", "value": pipeline_git_revision},
-                        {
-                            "name": "pathInRepo",
-                            "value": f"pipelines/internal/{pipeline}/{pipeline}.yaml",
-                        },
-                    ],
-                },
-            },
-            "params": dict(params),
-            "timeouts": {
-                "pipeline": pipeline_timeout,
-                "tasks": task_timeout,
-                "finally": finally_timeout,
-            },
-        },
-    }
-    if service_account:
-        payload["spec"]["serviceAccount"] = service_account
-    return payload
 
 
 _DELETION_TIMEOUT_SECONDS = 60
@@ -363,272 +259,415 @@ def _append_ir_output(ir_name: str, pipeline_run: str) -> None:
         output_file.write(f"{payload}\n")
 
 
-def wait_for_completion(
-    *,
-    name: str | None = None,
-    label_selector: str | None = None,
-    timeout: int = 600,
-    k8s_api: k8s_client.CustomObjectsApi | None = None,
-    poll_base_sleep_seconds: int = IR_POLL_BASE_SLEEP_SECONDS,
-    poll_max_sleep_seconds: int = IR_POLL_MAX_SLEEP_SECONDS,
-) -> None:
-    """Block until InternalRequests complete or *timeout* seconds elapse.
+class InternalRequestHelper(Helper):
+    """Create and wait for InternalRequest resources in Kubernetes."""
 
-    One of *name* or *label_selector* must be set, but not both. Polls with
-    exponential backoff starting at *poll_base_sleep_seconds* (5, 10, 20, ...)
-    capped at *poll_max_sleep_seconds* (default 300s / 5 minutes), so quickly
-    completing InternalRequests are observed promptly while long-running ones
-    settle into a bounded fixed-interval poll instead of backing off
-    unboundedly.
+    def duration_to_seconds(self, duration: str) -> int:
+        """Convert an `XhYmZs` duration string to seconds."""
+        match = _DURATION_RE.fullmatch(duration)
+        if match is None:
+            msg = f"duration must use XhYmZs format: {duration!r}"
+            raise ValueError(msg)
+        hours, minutes, seconds = (int(match.group(i)) for i in range(1, 4))
+        return (hours * 3600) + (minutes * 60) + seconds
 
-    Raises:
-        ValueError: When neither or both selectors are provided.
-        InternalRequestWaitError: When an IR fails or the wait times out.
+    def seconds_to_duration(self, seconds: int) -> str:
+        """Format *seconds* as zero-padded XhYmZs (e.g. 3661 -> 01h01m01s)."""
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+        return f"{hours:02d}h{minutes:02d}m{secs:02d}s"
 
-    """
-    has_name = bool(name)
-    has_labels = bool(label_selector)
-    if has_name == has_labels:
-        msg = "exactly one of name or label_selector must be set"
-        raise ValueError(msg)
+    def validate_timeouts(
+        self,
+        *,
+        timeout: int,
+        pipeline_timeout: str,
+        task_timeout: str,
+        finally_timeout: str,
+    ) -> None:
+        """Validate timeout strings and their relationships."""
+        for label, value in (
+            ("pipeline_timeout", pipeline_timeout),
+            ("task_timeout", task_timeout),
+            ("finally_timeout", finally_timeout),
+        ):
+            if _DURATION_RE.fullmatch(value) is None:
+                msg = f"{label} must use XhYmZs format, where X, Y, and Z are integers"
+                raise ValueError(msg)
 
-    if k8s_api is None:
-        k8s_api = _default_k8s_api()
+        pipeline_timeout_secs = self.duration_to_seconds(pipeline_timeout)
+        task_timeout_secs = self.duration_to_seconds(task_timeout)
+        finally_timeout_secs = self.duration_to_seconds(finally_timeout)
+        all_tasks_timeout = task_timeout_secs + finally_timeout_secs
+        if all_tasks_timeout > pipeline_timeout_secs:
+            msg = (
+                "The sum of the task and finally timeout cannot exceed the pipeline "
+                f"timeout. Pipeline timeout is {pipeline_timeout_secs} and the sum "
+                f"of the others is {all_tasks_timeout}."
+            )
+            raise ValueError(msg)
 
-    end_time = time.time() + timeout
-    written_outputs: set[str] = set()
+        if pipeline_timeout_secs > timeout:
+            logger.warning(
+                "The passed pipeline timeout is greater than the script timeout. "
+                "This means the script can fail before the pipeline times out, "
+                "should it take that long.",
+            )
 
-    def _poll_once() -> None:
-        logger.info("Checking IR statuses...")
-        internal_requests = _fetch_internal_requests(
-            name=name,
-            label_selector=label_selector,
-            k8s_api=k8s_api,
-        )
-        logger.info(
-            "Found %d InternalRequests matching the name or label",
-            len(internal_requests),
-        )
+    def build_payload(
+        self,
+        *,
+        pipeline: str,
+        params: Mapping[str, str],
+        labels: Mapping[str, str],
+        pipeline_git_url: str,
+        pipeline_git_revision: str,
+        pipeline_timeout: str,
+        task_timeout: str,
+        finally_timeout: str,
+        service_account: str | None,
+    ) -> dict[str, Any]:
+        """Build the InternalRequest manifest payload."""
+        merged_labels = dict(labels)
+        merged_labels[PIPELINE_NAME_LABEL] = pipeline
 
-        done_count = 0
-        all_succeeded = True
-        for item in internal_requests:
-            ir_name = item.get("metadata", {}).get("name", "")
-            conditions = item.get("status", {}).get("conditions") or []
-            reason = ""
-            if conditions and isinstance(conditions[0], dict):
-                reason = str(conditions[0].get("reason") or "")
-            pipeline_run = item.get("status", {}).get("pipelineRun") or ""
+        payload: dict[str, Any] = {
+            "apiVersion": "appstudio.redhat.com/v1alpha1",
+            "kind": "InternalRequest",
+            "metadata": {
+                "generateName": f"{pipeline}-",
+                "labels": merged_labels,
+            },
+            "spec": {
+                "pipeline": {
+                    "pipelineRef": {
+                        "resolver": "git",
+                        "params": [
+                            {"name": "url", "value": pipeline_git_url},
+                            {"name": "revision", "value": pipeline_git_revision},
+                            {
+                                "name": "pathInRepo",
+                                "value": f"pipelines/internal/{pipeline}/{pipeline}.yaml",
+                            },
+                        ],
+                    },
+                },
+                "params": dict(params),
+                "timeouts": {
+                    "pipeline": pipeline_timeout,
+                    "tasks": task_timeout,
+                    "finally": finally_timeout,
+                },
+            },
+        }
+        if service_account:
+            payload["spec"]["serviceAccount"] = service_account
+        return payload
 
-            if not reason:
-                logger.info("  %s: no condition yet", ir_name)
-            elif reason == "Running":
-                logger.info("  %s: running - pipelineRun: %s", ir_name, pipeline_run)
-            elif reason == "Succeeded":
-                logger.info("  %s: succeeded - pipelineRun: %s", ir_name, pipeline_run)
-                if ir_name and ir_name not in written_outputs:
-                    _append_ir_output(ir_name, pipeline_run)
-                    written_outputs.add(ir_name)
-                done_count += 1
-            else:
-                logger.info("  %s: %s", ir_name, reason)
-                if ir_name and ir_name not in written_outputs:
-                    _append_ir_output(ir_name, pipeline_run)
-                    written_outputs.add(ir_name)
-                done_count += 1
-                all_succeeded = False
+    def wait_for_completion(
+        self,
+        *,
+        name: str | None = None,
+        label_selector: str | None = None,
+        timeout: int = 600,
+        k8s_api: k8s_client.CustomObjectsApi | None = None,
+        poll_base_sleep_seconds: int = IR_POLL_BASE_SLEEP_SECONDS,
+        poll_max_sleep_seconds: int = IR_POLL_MAX_SLEEP_SECONDS,
+    ) -> None:
+        """Block until InternalRequests complete or *timeout* seconds elapse.
 
-        if internal_requests and done_count == len(internal_requests):
-            if all_succeeded:
+        One of *name* or *label_selector* must be set, but not both. Polls with
+        exponential backoff starting at *poll_base_sleep_seconds* (5, 10, 20, ...)
+        capped at *poll_max_sleep_seconds* (default 300s / 5 minutes), so quickly
+        completing InternalRequests are observed promptly while long-running ones
+        settle into a bounded fixed-interval poll instead of backing off
+        unboundedly.
+
+        Raises:
+            ValueError: When neither or both selectors are provided.
+            InternalRequestWaitError: When an IR fails or the wait times out.
+
+        """
+        has_name = bool(name)
+        has_labels = bool(label_selector)
+        if has_name == has_labels:
+            msg = "exactly one of name or label_selector must be set"
+            raise ValueError(msg)
+
+        if k8s_api is None:
+            k8s_api = _default_k8s_api()
+
+        end_time = time.time() + timeout
+        written_outputs: set[str] = set()
+
+        def _poll_once() -> None:
+            logger.info("Checking IR statuses...")
+            internal_requests = _fetch_internal_requests(
+                name=name,
+                label_selector=label_selector,
+                k8s_api=k8s_api,
+            )
+            logger.info(
+                "Found %d InternalRequests matching the name or label",
+                len(internal_requests),
+            )
+
+            done_count = 0
+            all_succeeded = True
+            for item in internal_requests:
+                ir_name = item.get("metadata", {}).get("name", "")
+                conditions = item.get("status", {}).get("conditions") or []
+                reason = ""
+                if conditions and isinstance(conditions[0], dict):
+                    reason = str(conditions[0].get("reason") or "")
+                pipeline_run = item.get("status", {}).get("pipelineRun") or ""
+
+                if not reason:
+                    logger.info("  %s: no condition yet", ir_name)
+                elif reason == "Running":
+                    logger.info("  %s: running - pipelineRun: %s", ir_name, pipeline_run)
+                elif reason == "Succeeded":
+                    logger.info("  %s: succeeded - pipelineRun: %s", ir_name, pipeline_run)
+                    if ir_name and ir_name not in written_outputs:
+                        _append_ir_output(ir_name, pipeline_run)
+                        written_outputs.add(ir_name)
+                    done_count += 1
+                else:
+                    logger.info("  %s: %s", ir_name, reason)
+                    if ir_name and ir_name not in written_outputs:
+                        _append_ir_output(ir_name, pipeline_run)
+                        written_outputs.add(ir_name)
+                    done_count += 1
+                    all_succeeded = False
+
+            if internal_requests and done_count == len(internal_requests):
+                if all_succeeded:
+                    _print_conditions(internal_requests)
+                    logger.info("Result: success")
+                    return
                 _print_conditions(internal_requests)
-                logger.info("Result: success")
-                return
-            _print_conditions(internal_requests)
-            raise InternalRequestWaitError(
-                "At least one InternalRequest failed",
-                EXIT_FAILED,
+                raise InternalRequestWaitError(
+                    "At least one InternalRequest failed",
+                    EXIT_FAILED,
+                )
+
+            if time.time() > end_time:
+                _print_conditions(internal_requests)
+                raise InternalRequestWaitError(
+                    "Timeout while waiting for the InternalRequests to complete",
+                    EXIT_TIMEOUT,
+                )
+
+            raise _InternalRequestNotComplete()
+
+        # Enough attempts for the full timeout at the minimum backoff interval.
+        max_attempts = max(timeout // poll_base_sleep_seconds + 1, 2)
+        retry.retry_with_exponential_backoff(
+            _poll_once,
+            max_attempts=max_attempts,
+            retry_on=_InternalRequestNotComplete,
+            base_sleep_seconds=poll_base_sleep_seconds,
+            max_sleep_seconds=poll_max_sleep_seconds,
+        )
+
+    def cleanup_existing_requests(
+        self,
+        *,
+        pipeline: str,
+        labels: Mapping[str, str],
+        k8s_api: k8s_client.CustomObjectsApi | None = None,
+    ) -> None:
+        """Delete prior InternalRequests for the same pipeline run and pipeline name."""
+        if k8s_api is None:
+            k8s_api = _default_k8s_api()
+
+        pipelinerun_uid = _pipelinerun_uid_from_labels(labels)
+        if not pipelinerun_uid:
+            return
+
+        label_selector = (
+            f"{PIPELINERUN_UID_LABEL}={pipelinerun_uid}," f"{PIPELINE_NAME_LABEL}={pipeline}"
+        )
+        items = _fetch_internal_requests(
+            name=None, label_selector=label_selector, k8s_api=k8s_api
+        )
+        if not items:
+            return
+
+        namespace = _get_namespace()
+
+        logger.info("Found existing InternalRequests from prior attempts. Cleaning up...")
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            ir_name = item.get("metadata", {}).get("name")
+            if not isinstance(ir_name, str) or not ir_name:
+                continue
+            logger.info("Deleting InternalRequest %s...", ir_name)
+            k8s_api.delete_namespaced_custom_object(
+                group=_IR_GROUP,
+                version=_IR_VERSION,
+                namespace=namespace,
+                plural=_IR_PLURAL,
+                name=ir_name,
             )
+            _wait_for_deletion(ir_name, namespace, k8s_api)
+            logger.info("Deleted InternalRequest %s", ir_name)
 
-        if time.time() > end_time:
-            _print_conditions(internal_requests)
-            raise InternalRequestWaitError(
-                "Timeout while waiting for the InternalRequests to complete",
-                EXIT_TIMEOUT,
-            )
+        logger.info(
+            "Cleanup complete. Waiting %ds for PipelineRun cancellation to propagate...",
+            CLEANUP_PROPAGATION_SLEEP_SECONDS,
+        )
+        time.sleep(CLEANUP_PROPAGATION_SLEEP_SECONDS)
 
-        raise _InternalRequestNotComplete()
+    def create_internal_request(
+        self,
+        payload: dict[str, Any],
+        *,
+        k8s_api: k8s_client.CustomObjectsApi | None = None,
+    ) -> str:
+        """Create an InternalRequest from *payload* and return its name."""
+        if k8s_api is None:
+            k8s_api = _default_k8s_api()
 
-    # Enough attempts for the full timeout at the minimum backoff interval.
-    max_attempts = max(timeout // poll_base_sleep_seconds + 1, 2)
-    retry.retry_with_exponential_backoff(
-        _poll_once,
-        max_attempts=max_attempts,
-        retry_on=_InternalRequestNotComplete,
-        base_sleep_seconds=poll_base_sleep_seconds,
-        max_sleep_seconds=poll_max_sleep_seconds,
-    )
-
-
-def cleanup_existing_requests(
-    *,
-    pipeline: str,
-    labels: Mapping[str, str],
-    k8s_api: k8s_client.CustomObjectsApi | None = None,
-) -> None:
-    """Delete prior InternalRequests for the same pipeline run and pipeline name."""
-    if k8s_api is None:
-        k8s_api = _default_k8s_api()
-
-    pipelinerun_uid = _pipelinerun_uid_from_labels(labels)
-    if not pipelinerun_uid:
-        return
-
-    label_selector = (
-        f"{PIPELINERUN_UID_LABEL}={pipelinerun_uid}," f"{PIPELINE_NAME_LABEL}={pipeline}"
-    )
-    items = _fetch_internal_requests(name=None, label_selector=label_selector, k8s_api=k8s_api)
-    if not items:
-        return
-
-    namespace = _get_namespace()
-
-    logger.info("Found existing InternalRequests from prior attempts. Cleaning up...")
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        ir_name = item.get("metadata", {}).get("name")
-        if not isinstance(ir_name, str) or not ir_name:
-            continue
-        logger.info("Deleting InternalRequest %s...", ir_name)
-        k8s_api.delete_namespaced_custom_object(
+        namespace = _get_namespace()
+        resource = k8s_api.create_namespaced_custom_object(
             group=_IR_GROUP,
             version=_IR_VERSION,
             namespace=namespace,
             plural=_IR_PLURAL,
-            name=ir_name,
+            body=payload,
         )
-        _wait_for_deletion(ir_name, namespace, k8s_api)
-        logger.info("Deleted InternalRequest %s", ir_name)
+        name = resource.get("metadata", {}).get("name")
+        if not isinstance(name, str) or not name:
+            msg = "API did not return an InternalRequest name"
+            raise RuntimeError(msg)
+        logger.info("Created InternalRequest: %s", name)
+        return name
 
-    logger.info(
-        "Cleanup complete. Waiting %ds for PipelineRun cancellation to propagate...",
-        CLEANUP_PROPAGATION_SLEEP_SECONDS,
-    )
-    time.sleep(CLEANUP_PROPAGATION_SLEEP_SECONDS)
+    def fetch_results(
+        self,
+        internal_request_name: str,
+        *,
+        k8s_api: k8s_client.CustomObjectsApi | None = None,
+    ) -> dict[str, Any]:
+        """Read InternalRequest ``status.results`` from the API."""
+        if k8s_api is None:
+            k8s_api = _default_k8s_api()
 
-
-def create_internal_request(
-    payload: dict[str, Any],
-    *,
-    k8s_api: k8s_client.CustomObjectsApi | None = None,
-) -> str:
-    """Create an InternalRequest from *payload* and return its name."""
-    if k8s_api is None:
-        k8s_api = _default_k8s_api()
-
-    namespace = _get_namespace()
-    resource = k8s_api.create_namespaced_custom_object(
-        group=_IR_GROUP,
-        version=_IR_VERSION,
-        namespace=namespace,
-        plural=_IR_PLURAL,
-        body=payload,
-    )
-    name = resource.get("metadata", {}).get("name")
-    if not isinstance(name, str) or not name:
-        msg = "API did not return an InternalRequest name"
-        raise RuntimeError(msg)
-    logger.info("Created InternalRequest: %s", name)
-    return name
-
-
-def fetch_results(
-    internal_request_name: str,
-    *,
-    k8s_api: k8s_client.CustomObjectsApi | None = None,
-) -> dict[str, Any]:
-    """Read InternalRequest ``status.results`` from the API."""
-    if k8s_api is None:
-        k8s_api = _default_k8s_api()
-
-    namespace = _get_namespace()
-    resource = k8s_api.get_namespaced_custom_object(
-        group=_IR_GROUP,
-        version=_IR_VERSION,
-        namespace=namespace,
-        plural=_IR_PLURAL,
-        name=internal_request_name,
-    )
-    results = resource.get("status", {}).get("results")
-    return results if isinstance(results, dict) else {}
-
-
-def create(
-    pipeline: str,
-    *,
-    params: Mapping[str, str],
-    labels: Mapping[str, str] | None = None,
-    sync: bool = True,
-    timeout: int = 3600,
-    service_account: str | None = None,
-    pipeline_timeout: str = "1h0m0s",
-    task_timeout: str = "0h55m0s",
-    finally_timeout: str = "0h5m0s",
-    cleanup: bool = True,
-    k8s_api: k8s_client.CustomObjectsApi | None = None,
-) -> str:
-    """Create an InternalRequest and optionally wait for it to complete.
-
-    Returns the created InternalRequest name. When *sync* is true, blocks until
-    the InternalRequest completes using the same semantics as the bash utility.
-
-    When *cleanup* is false it skips deleting prior InternalRequests for the same
-    pipeline run. Set this when multiple InternalRequests are created
-    concurrently with the same labels.
-    """
-    if not pipeline:
-        msg = "pipeline is required"
-        raise ValueError(msg)
-
-    merged_labels = dict(labels or {})
-    merged_params = dict(params)
-    pipeline_git_url = merged_params.get("taskGitUrl")
-    pipeline_git_revision = merged_params.get("taskGitRevision")
-    if not pipeline_git_url or not pipeline_git_revision:
-        msg = (
-            "params must include taskGitUrl and taskGitRevision for the git "
-            "resolver pipeline reference"
+        namespace = _get_namespace()
+        resource = k8s_api.get_namespaced_custom_object(
+            group=_IR_GROUP,
+            version=_IR_VERSION,
+            namespace=namespace,
+            plural=_IR_PLURAL,
+            name=internal_request_name,
         )
-        raise ValueError(msg)
+        results = resource.get("status", {}).get("results")
+        return results if isinstance(results, dict) else {}
 
-    validate_timeouts(
-        timeout=timeout,
-        pipeline_timeout=pipeline_timeout,
-        task_timeout=task_timeout,
-        finally_timeout=finally_timeout,
-    )
+    def create(
+        self,
+        pipeline: str,
+        *,
+        params: Mapping[str, str],
+        labels: Mapping[str, str] | None = None,
+        sync: bool = True,
+        timeout: int = 3600,
+        service_account: str | None = None,
+        pipeline_timeout: str = "1h0m0s",
+        task_timeout: str = "0h55m0s",
+        finally_timeout: str = "0h5m0s",
+        cleanup: bool = True,
+        k8s_api: k8s_client.CustomObjectsApi | None = None,
+    ) -> str:
+        """Create an InternalRequest and optionally wait for it to complete.
 
-    if k8s_api is None:
-        k8s_api = _default_k8s_api()
-    if cleanup:
-        cleanup_existing_requests(pipeline=pipeline, labels=merged_labels, k8s_api=k8s_api)
+        Returns the created InternalRequest name. When *sync* is true, blocks until
+        the InternalRequest completes using the same semantics as the bash utility.
 
-    payload = build_payload(
-        pipeline=pipeline,
-        params=merged_params,
-        labels=merged_labels,
-        pipeline_git_url=pipeline_git_url,
-        pipeline_git_revision=pipeline_git_revision,
-        pipeline_timeout=pipeline_timeout,
-        task_timeout=task_timeout,
-        finally_timeout=finally_timeout,
-        service_account=service_account,
-    )
-    internal_request_name = create_internal_request(payload, k8s_api=k8s_api)
-    logger.info("InternalRequest '%s' created.", internal_request_name)
+        When *cleanup* is false it skips deleting prior InternalRequests for the same
+        pipeline run. Set this when multiple InternalRequests are created
+        concurrently with the same labels.
+        """
+        if not pipeline:
+            msg = "pipeline is required"
+            raise ValueError(msg)
 
-    if sync:
-        logger.info("Sync flag set to true. Waiting for the InternalRequest to complete.")
-        wait_for_completion(name=internal_request_name, timeout=timeout, k8s_api=k8s_api)
+        merged_labels = dict(labels or {})
+        merged_params = dict(params)
+        pipeline_git_url = merged_params.get("taskGitUrl")
+        pipeline_git_revision = merged_params.get("taskGitRevision")
+        if not pipeline_git_url or not pipeline_git_revision:
+            msg = (
+                "params must include taskGitUrl and taskGitRevision for the git "
+                "resolver pipeline reference"
+            )
+            raise ValueError(msg)
 
-    return internal_request_name
+        self.validate_timeouts(
+            timeout=timeout,
+            pipeline_timeout=pipeline_timeout,
+            task_timeout=task_timeout,
+            finally_timeout=finally_timeout,
+        )
+
+        if k8s_api is None:
+            k8s_api = _default_k8s_api()
+        if cleanup:
+            self.cleanup_existing_requests(
+                pipeline=pipeline, labels=merged_labels, k8s_api=k8s_api
+            )
+
+        payload = self.build_payload(
+            pipeline=pipeline,
+            params=merged_params,
+            labels=merged_labels,
+            pipeline_git_url=pipeline_git_url,
+            pipeline_git_revision=pipeline_git_revision,
+            pipeline_timeout=pipeline_timeout,
+            task_timeout=task_timeout,
+            finally_timeout=finally_timeout,
+            service_account=service_account,
+        )
+        internal_request_name = self.create_internal_request(payload, k8s_api=k8s_api)
+        logger.info("InternalRequest '%s' created.", internal_request_name)
+
+        if sync:
+            logger.info("Sync flag set to true. Waiting for the InternalRequest to complete.")
+            self.wait_for_completion(
+                name=internal_request_name, timeout=timeout, k8s_api=k8s_api
+            )
+
+        return internal_request_name
+
+
+# Singleton instance for backward compatibility
+_helper = InternalRequestHelper()
+
+# Export instance methods as module-level functions
+duration_to_seconds = _helper.duration_to_seconds
+seconds_to_duration = _helper.seconds_to_duration
+validate_timeouts = _helper.validate_timeouts
+build_payload = _helper.build_payload
+wait_for_completion = _helper.wait_for_completion
+cleanup_existing_requests = _helper.cleanup_existing_requests
+create_internal_request = _helper.create_internal_request
+fetch_results = _helper.fetch_results
+create = _helper.create
+
+
+# Singleton instance for backward compatibility
+_helper = InternalRequestHelper()
+
+# Export instance methods as module-level functions
+duration_to_seconds = _helper.duration_to_seconds
+seconds_to_duration = _helper.seconds_to_duration
+validate_timeouts = _helper.validate_timeouts
+build_payload = _helper.build_payload
+wait_for_completion = _helper.wait_for_completion
+cleanup_existing_requests = _helper.cleanup_existing_requests
+create_internal_request = _helper.create_internal_request
+fetch_results = _helper.fetch_results
+create = _helper.create

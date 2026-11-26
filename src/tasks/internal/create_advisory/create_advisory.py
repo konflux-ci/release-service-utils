@@ -22,7 +22,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 from collections.abc import Callable
@@ -49,8 +48,10 @@ from release_service_utils.helpers.internal_request import internal_request_resu
 from release_service_utils.helpers import subprocess_cmd
 from release_service_utils.helpers import tekton
 
-from release_service_utils.helpers.vcs import git
+from release_service_utils.helpers.vcs import git, GitHelper
 from release_service_utils.helpers.vcs import gitlab
+from release_service_utils.helpers.advisory_data import AdvisoryData
+from release_service_utils.framework import InternalTask
 
 PROG = "create_advisory.py"
 ADVISORY_TEMPLATE_PATH = Path("/home/templates/advisory.yaml.jinja")
@@ -1485,58 +1486,51 @@ def run_create_advisory(
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI entry: decode advisory JSON, run the workflow, and write Tekton results.
+class CreateAdvisoryTask(InternalTask):
+    """Create advisory YAML in Git repo - internal task implementation."""
 
-    Always returns 0; logical success is ``Success`` in ``RESULT_RESULT``, and
-    failures are recorded there via ``write_failure_result``.
-    """
-    (
-        path_step_result,
-        path_advisory_url,
-        path_advisory_internal_url,
-        path_internal_pr,
-        path_internal_task_run,
-    ) = tekton.result_paths_from_env(
+    helpers = {
+        "advisory": AdvisoryData,
+        "git": GitHelper,
+    }
+
+    results = [
         "RESULT_RESULT",
         "RESULT_ADVISORY_URL",
         "RESULT_ADVISORY_INTERNAL_URL",
         "RESULT_INTERNAL_REQUEST_PIPELINE_RUN_NAME",
         "RESULT_INTERNAL_REQUEST_TASK_RUN_NAME",
-    )
-    result_paths = {
-        "result": path_step_result,
-        "advisory_url": path_advisory_url,
-        "advisory_internal_url": path_advisory_internal_url,
-        "internal_pr_name": path_internal_pr,
-        "internal_task_run_name": path_internal_task_run,
-    }
+    ]
 
-    advisory_json = tekton.require_env("ADVISORY_JSON")
-    params = {
-        "component_group": tekton.require_env("PARAM_COMPONENT_GROUP"),
-        "origin": tekton.require_env("PARAM_ORIGIN"),
-        "config_map_name": tekton.require_env("PARAM_CONFIG_MAP_NAME"),
-        "content_type": os.environ.get("PARAM_CONTENT_TYPE", "image").strip(),
-        "internal_request_pr_name": tekton.require_env(
-            "PARAM_INTERNAL_REQUEST_PIPELINE_RUN_NAME"
-        ),
-        "task_run_name": tekton.require_env("PARAM_TASK_RUN_NAME"),
-    }
+    def run(self) -> None:
+        """Execute create-advisory workflow.
 
-    program_basename = str(Path((argv or sys.argv)[0]).name)
-    command_log_path = _COMMAND_LOG_PATH
-    command_log_path.write_text("", encoding="utf-8")
+        Raises on failure - base class execute() handles exception and writes result.
+        """
+        # Read parameters from environment
+        advisory_json = tekton.require_env("ADVISORY_JSON")
+        params = {
+            "component_group": tekton.require_env("PARAM_COMPONENT_GROUP"),
+            "origin": tekton.require_env("PARAM_ORIGIN"),
+            "config_map_name": tekton.require_env("PARAM_CONFIG_MAP_NAME"),
+            "content_type": os.environ.get("PARAM_CONTENT_TYPE", "image").strip(),
+            "internal_request_pr_name": tekton.require_env(
+                "PARAM_INTERNAL_REQUEST_PIPELINE_RUN_NAME"
+            ),
+            "task_run_name": tekton.require_env("PARAM_TASK_RUN_NAME"),
+        }
 
-    # Placeholders so error handlers can always overwrite URL result files.
-    path_advisory_url.write_text("", encoding="utf-8")
-    path_advisory_internal_url.write_text("", encoding="utf-8")
+        # Command log for stderr tracking
+        _COMMAND_LOG_PATH.write_text("", encoding="utf-8")
 
-    logger.info("create advisory task starting")
+        # Placeholders for URL result files
+        self.result_paths[1].write_text("", encoding="utf-8")  # advisory_url
+        self.result_paths[2].write_text("", encoding="utf-8")  # advisory_internal_url
 
-    try:
-        # ADVISORY_JSON may be gzip+base64 from the parent pipeline (see advisory_data).
-        decoded = advisory_data.decode_advisory_param(advisory_json)
+        # Decode advisory JSON
+        decoded = self.helpers.advisory.decode_advisory_param(advisory_json)
+
+        # Run the workflow
         run_create_advisory(
             advisory_secret=file.path_from_env_variable(
                 "ADVISORY_SECRET_MOUNT", "/mnt/advisory_secret"
@@ -1544,14 +1538,23 @@ def main(argv: list[str] | None = None) -> int:
             errata_mount=file.path_from_env_variable(
                 "ERRATA_SECRET_MOUNT", "/mnt/errata_secret"
             ),
-            stderr_path=command_log_path,
-            result_paths=result_paths,
+            stderr_path=_COMMAND_LOG_PATH,
+            result_paths={
+                "result": self.result_paths[0],
+                "advisory_url": self.result_paths[1],
+                "advisory_internal_url": self.result_paths[2],
+                "internal_pr_name": self.result_paths[3],
+                "internal_task_run_name": self.result_paths[4],
+            },
             params=params,
             decoded=decoded,
         )
-    except Exception as e:
-        logger.error("create-advisory failed: %s", e)
-        # Best-effort: never let log inspection block writing RESULT_RESULT.
+
+    def write_failure(self, exception: Exception) -> None:
+        """Write failure to result file with command log context."""
+        command_log_path = _COMMAND_LOG_PATH
+
+        # Best-effort: never let log inspection block writing RESULT_RESULT
         failure_command_log: Path | None = command_log_path
         try:
             if command_log_path.is_file():
@@ -1571,17 +1574,24 @@ def main(argv: list[str] | None = None) -> int:
                 log_error,
             )
             failure_command_log = None
+
         tekton.write_failure_result(
-            path_step_result,
-            program_basename,
-            e,
+            self.result_paths[0],
+            "create_advisory",
+            exception,
             command_log_path=failure_command_log,
             workflow_action="running the advisory workflow",
         )
-    else:
-        logger.info("create-advisory completed successfully")
-    # Tekton step succeeds; operators read failure detail from RESULT_RESULT.
-    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry: Create advisory task.
+
+    Always returns 0; logical success is ``Success`` in ``RESULT_RESULT``, and
+    failures are recorded there via task's write_failure method.
+    """
+    task = CreateAdvisoryTask()
+    return task.execute()
 
 
 if __name__ == "__main__":  # pragma: no cover

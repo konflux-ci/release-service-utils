@@ -5,8 +5,17 @@ so it does not conflict with the create-advisory internal task script.
 """
 
 from .request_advisory_creation import (  # noqa: F401
-    release_notes_purl,
-    run_request_advisory_creation,
+    RequestAdvisoryCreationTask,
     TaskParams,
     main,
+    release_notes_purl,
+    run_request_advisory_creation,
 )
+
+__all__ = [
+    "RequestAdvisoryCreationTask",
+    "TaskParams",
+    "main",
+    "release_notes_purl",
+    "run_request_advisory_creation",
+]
