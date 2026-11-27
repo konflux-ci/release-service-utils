@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .internal_request import (  # noqa: F401
     CLEANUP_PROPAGATION_SLEEP_SECONDS,
+    CREATOR_POD_LABEL,
     EXIT_FAILED,
     EXIT_TIMEOUT,
     InternalRequestWaitError,
