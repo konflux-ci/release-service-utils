@@ -25,10 +25,11 @@ from release_service_utils.helpers.internal_request import (
     InternalRequestWaitError,
 )
 from release_service_utils.helpers.logger import setup_logger
-from release_service_utils.helpers.decorators import async_in_executor
+from release_service_utils.helpers.decorators import ExecutorWrapper, async_in_executor
 
 # Create process pool executor for parallel execution
 executor = ThreadPoolExecutor()
+executor_wrapper = ExecutorWrapper(executor)
 
 
 def _create_ir_wrapper(pipeline, params, labels, task_timeout, pipeline_timeout, **kwargs):
@@ -73,8 +74,8 @@ def _wait_for_ir_wrapper(name):
     _wait_for_completion(name=name)
 
 
-create_internal_request = async_in_executor(executor)(_create_ir_wrapper)
-wait_for_internal_request = async_in_executor(executor)(_wait_for_ir_wrapper)
+create_internal_request = async_in_executor(executor_wrapper)(_create_ir_wrapper)
+wait_for_internal_request = async_in_executor(executor_wrapper)(_wait_for_ir_wrapper)
 
 PIPELINERUN_LABEL = "internal-services.appstudio.openshift.io/pipelinerun-uid"
 

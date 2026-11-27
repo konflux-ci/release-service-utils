@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -1677,6 +1678,70 @@ def test_process_component_jinja_substitution_label_with_dashes() -> None:
 # ---------------------------------------------------------------------------
 # process_components
 # ---------------------------------------------------------------------------
+
+
+def test_process_components_schedules_all_components_asynchronously() -> None:
+    """All components are scheduled through the asynchronous component wrapper."""
+    snapshot = {
+        "components": [
+            _base_component(name="comp1"),
+            _base_component(name="comp2"),
+        ]
+    }
+    first_future: Future[dict] = Future()
+    second_future: Future[dict] = Future()
+    first_future.set_result({"name": "comp1", "processed": True})
+    second_future.set_result({"name": "comp2", "processed": True})
+    executor = mock.Mock()
+    executor.submit.side_effect = [first_future, second_future]
+
+    apply_mapping.process_components(
+        snapshot,
+        {"defaults": {"tags": ["default-tag"]}},
+        False,
+        inspect_fn=_fake_inspect({}, {}),
+        list_tags_fn=_fake_list_tags({}),
+        get_arch_fn=_fake_get_arch(),
+        format_date_fn=_fake_format_date,
+        current_timestamp_fn=lambda: "NOW",
+        executor=executor,
+    )
+
+    assert executor.submit.call_count == 2
+    for call, component_name in zip(executor.submit.call_args_list, ("comp1", "comp2")):
+        assert call.args[1]["name"] == component_name
+        assert call.kwargs["default_tags"] == ["default-tag"]
+        assert call.kwargs["current_timestamp"] == "NOW"
+    assert snapshot["components"] == [
+        {"name": "comp1", "processed": True},
+        {"name": "comp2", "processed": True},
+    ]
+
+
+def test_process_components_reports_all_worker_failures() -> None:
+    """Failures from concurrent component processing include every component."""
+    snapshot = {
+        "components": [
+            _base_component(name="first"),
+            _base_component(name="second"),
+        ]
+    }
+    first_future: Future[None] = Future()
+    second_future: Future[None] = Future()
+    first_future.set_exception(ValueError("first failure"))
+    second_future.set_exception(RuntimeError("second failure"))
+    executor = mock.Mock()
+    executor.submit.side_effect = [first_future, second_future]
+
+    with pytest.raises(RuntimeError) as exc_info:
+        apply_mapping.process_components(snapshot, {}, False, executor=executor)
+
+    assert str(exc_info.value) == (
+        "Failed to process component(s):\n"
+        "Component 'first': first failure\n"
+        "Component 'second': second failure"
+    )
+    assert isinstance(exc_info.value.__cause__, ValueError)
 
 
 def test_process_components_applies_mapping_defaults() -> None:
