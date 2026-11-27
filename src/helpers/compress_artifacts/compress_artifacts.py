@@ -5,7 +5,8 @@ For each component:
 * Pulls signed macOS and Windows OCI artifacts from Quay into a ``signed/`` directory.
 * Restores supplementary files (readme, license, changelog) that were held during signing.
 * Compresses each file entry into the final deliverable format:
-  - macOS / Linux (non-disk-image) → ``.tar.gz`` (from ``os/arch/`` directory)
+  - macOS / Linux (non-disk-image) → ``.tar.gz`` (from ``os/arch/`` directory);
+    Linux tar members are written as owned by root (``0:0``, ``root``/``root``)
   - Linux disk images (``.qcow2``, ``.iso``) → copied as-is to ``ready_for_distribution/``
   - Windows → ``.zip`` (from ``os/arch/`` directory, extension corrected from
     ``.tar.gz``/``.tar``)
@@ -49,6 +50,9 @@ CONTENT_DIR = Path(os.environ.get("CONTENT_DIR", "/shared/artifacts"))
 SHARED_DIR = Path(os.environ.get("SHARED_DIR", "/shared"))
 
 logger = logging.getLogger(__name__)
+
+# PAX records that take priority over the ustar owner fields when present.
+_PAX_OWNER_KEYS = ("uid", "gid", "uname", "gname")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -96,6 +100,21 @@ def _restore_supplementary(component_dir: Path) -> None:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(file), str(dest))
                 logger.info("  Restored supplementary file: %s/%s", os_name, rel)
+
+
+def _set_root_owner(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo:
+    """Set the owner of *tarinfo* to root (0:0) in place and return it.
+
+    PAX owner records would override the ustar owner fields, so they are dropped;
+    other PAX records are kept. This is defensive: ``TarFile.gettarinfo`` returns
+    entries without PAX records.
+    """
+    tarinfo.uid = tarinfo.gid = 0
+    tarinfo.uname = tarinfo.gname = "root"
+    tarinfo.pax_headers = {
+        key: value for key, value in tarinfo.pax_headers.items() if key not in _PAX_OWNER_KEYS
+    }
+    return tarinfo
 
 
 def _compress_file_entry(
@@ -160,10 +179,18 @@ def _compress_file_entry(
                 )
             shutil.copy2(str(src_file), str(out_path))
         else:
+            # Linux inputs were unpacked with the "data" filter, which drops the
+            # original owner, so the files belong to whatever uid runs this task.
+            # Reset Linux members to root so published headers do not depend on it.
+            owner_filter = _set_root_owner if os_name == "linux" else None
             with tarfile.open(str(out_path), "w:gz") as tf:
                 for item in sorted(arch_dir.rglob("*")):
                     if item.is_file():
-                        tf.add(str(item), arcname=str(item.relative_to(arch_dir)))
+                        tf.add(
+                            str(item),
+                            arcname=str(item.relative_to(arch_dir)),
+                            filter=owner_filter,
+                        )
         logger.info("  Created (%s): %s", array_name, source_filename)
         return source
 
