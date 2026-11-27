@@ -41,6 +41,7 @@ class PushConfig:
 
     snapshot_path: Path | None
     signed_rpms_oci_artifact: str
+    signed_by: str
     pulp_domain: str
     pulp_config_file: Path
     default_excludes: list[str]
@@ -334,9 +335,10 @@ def process_local_rpm(
     if not placements:
         return {}
 
-    to_add: list[RpmPlacement] = []
+    pending: list[tuple[RpmPlacement, PulpDigestStatus]] = []
     artifact_recorded = False
     for placement in placements:
+        # Retries must reuse matching RPMs in the repository before publication.
         status = ctx.client.check_digest(
             placement.repo,
             rpm.nevra.name,
@@ -345,7 +347,8 @@ def process_local_rpm(
             rpm.nevra.release,
             rpm.nevra.arch,
             rpm.sha256,
-            fallback_to_latest=False,
+            fallback_to_latest=True,
+            allow_unpublished_rebuild=True,
         )
         if status is PulpDigestStatus.MISMATCH:
             raise RuntimeError(
@@ -357,21 +360,35 @@ def process_local_rpm(
                 rpm.filename,
                 placement.repo,
             )
+            ctx.docs.append_rpmfile(rpm, placement, ctx.domain)
             if not artifact_recorded:
                 _record_artifact(ctx, rpm, placement)
                 artifact_recorded = True
             continue
-        to_add.append(placement)
+        pending.append((placement, status))
 
-    if not to_add:
+    if not pending:
         return {}
 
-    _log_upload(rpm, to_add)
+    _log_upload(rpm, [placement for placement, _ in pending])
     href = ctx.client.upload_rpm(rpm.path, ctx.chunk_size, ctx.config_file)
     hrefs_by_repo: dict[str, list[str]] = {}
-    for placement in to_add:
+    for placement, status in pending:
+        if status is PulpDigestStatus.UNPUBLISHED_MISMATCH:
+            ctx.client.replace_unpublished_rpm(
+                placement.repo,
+                rpm.nevra.name,
+                rpm.nevra.epoch,
+                rpm.nevra.version,
+                rpm.nevra.release,
+                rpm.nevra.arch,
+                rpm.sha256,
+                href,
+                ctx.timeout,
+            )
+        else:
+            hrefs_by_repo.setdefault(placement.repo, []).append(href)
         ctx.docs.append_rpmfile(rpm, placement, ctx.domain)
-        hrefs_by_repo.setdefault(placement.repo, []).append(href)
         if not artifact_recorded:
             _record_artifact(ctx, rpm, placement)
             artifact_recorded = True
@@ -454,13 +471,25 @@ def _run(config: PushConfig) -> None:
     )
 
     hrefs_by_repo: dict[str, list[str]] = {}
+    placed_rpms: list[LocalRpm] = []
     for rpm in rpms:
         placements = target_placements(rpm, repo_order, rpm_repo_map)
+        if placements:
+            placed_rpms.append(rpm)
         added = process_local_rpm(rpm, placements, ctx)
         for repo, hrefs in added.items():
             hrefs_by_repo.setdefault(repo, []).extend(hrefs)
 
     add_content_by_repo(ctx, hrefs_by_repo, repo_order)
+
+    if config.signed_rpms_oci_artifact and config.signed_by.strip():
+        # The signer searches this label to skip RPMs already signed with the
+        # requested key. Older catalog tasks do not pass SIGNED_BY, so leave
+        # their signed uploads unlabeled until the catalog is updated.
+        # Label only after every repository add has succeeded.
+        signed_by = config.signed_by
+        for rpm in placed_rpms:
+            client.set_rpm_label(rpm.sha256, "signed_by", signed_by, config.pulp_config_file)
 
     for dist_arch in arches:
         docs.add_distribution(
@@ -489,6 +518,7 @@ def main() -> int:
     config = PushConfig(
         snapshot_path=Path(snapshot_raw) if snapshot_raw else None,
         signed_rpms_oci_artifact=os.environ.get("SIGNED_RPMS_OCI_ARTIFACT", "").strip(),
+        signed_by=os.environ.get("SIGNED_BY", ""),
         pulp_domain=tekton.require_env("PULP_DOMAIN"),
         pulp_config_file=file_helper.path_from_env_variable(
             "PULP_CONFIG_FILE", DEFAULT_PULP_SECRET

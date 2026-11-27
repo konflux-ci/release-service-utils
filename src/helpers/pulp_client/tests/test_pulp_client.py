@@ -567,6 +567,19 @@ class TestPulpClient:
             == pulp_client.PulpDigestStatus.MISMATCH
         )
 
+    def test_digest_count_without_results_stays_strict(self) -> None:
+        """Reject a Pulp response that reports content but omits its entries."""
+        client = self._client(
+            [
+                {"results": [{"repository_version": "/rv/1/"}]},
+                {"count": 1, "results": []},
+            ]
+        )
+        assert (
+            client.check_digest("myrepo", "hello", "0", "1.0", "1.el9", "x86_64", "abc123")
+            is pulp_client.PulpDigestStatus.MISMATCH
+        )
+
     def test_digest_artifacts_list_fallback(self) -> None:
         """Use artifacts[0] when artifact is None."""
         client = self._client(
@@ -640,6 +653,7 @@ class TestPulpClient:
                         }
                     ]
                 },
+                {"results": [{"pulp_href": "/repo/1/"}]},
                 {"latest_version_href": "/rv/latest/"},
                 {"count": 1, "results": [{"pulp_href": "/pkg/1/"}]},
                 {"artifact": "/art/1/"},
@@ -659,6 +673,298 @@ class TestPulpClient:
             )
             == pulp_client.PulpDigestStatus.MATCH
         )
+
+    @pytest.mark.parametrize(
+        ("allow_rebuild", "expected"),
+        [
+            (False, pulp_client.PulpDigestStatus.MISMATCH),
+            (True, pulp_client.PulpDigestStatus.UNPUBLISHED_MISMATCH),
+        ],
+    )
+    def test_unpublished_conflict_requires_opt_in(
+        self, allow_rebuild: bool, expected: pulp_client.PulpDigestStatus
+    ) -> None:
+        """Distinguish an unpublished rebuild from a strict digest mismatch."""
+        client = self._client(
+            [
+                {"results": []},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 1, "results": [{"pulp_href": "/pkg/old/"}]},
+                {"artifact": "/art/old/"},
+                {"sha256": "other"},
+            ]
+        )
+        assert (
+            client.check_digest(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                fallback_to_latest=True,
+                allow_unpublished_rebuild=allow_rebuild,
+            )
+            is expected
+        )
+
+    def test_published_conflict_stays_strict_with_rebuild_enabled(self) -> None:
+        """Reject a published RPM whose digest differs from the incoming RPM."""
+        client = self._client(
+            [
+                {"results": [{"repository_version": "/rv/published/"}]},
+                {"count": 1, "results": [{"pulp_href": "/pkg/old/"}]},
+                {"artifact": "/art/old/"},
+                {"sha256": "other"},
+            ]
+        )
+        assert (
+            client.check_digest(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                fallback_to_latest=True,
+                allow_unpublished_rebuild=True,
+            )
+            is pulp_client.PulpDigestStatus.MISMATCH
+        )
+
+    def test_latest_checked_when_publication_is_stale(self) -> None:
+        """Find a matching RPM added after the published repository version."""
+        client = self._client(
+            [
+                {"results": [{"repository_version": "/rv/published/"}]},
+                {"count": 0, "results": []},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 1, "results": [{"pulp_href": "/pkg/new/"}]},
+                {"artifact": "/art/new/"},
+                {"sha256": "abc123"},
+            ]
+        )
+        assert (
+            client.check_digest(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                fallback_to_latest=True,
+            )
+            is pulp_client.PulpDigestStatus.MATCH
+        )
+
+    def test_latest_equal_to_publication_keeps_published_match(self) -> None:
+        """Avoid rechecking the same version when the publication is current."""
+        client = self._client(
+            [
+                {"results": [{"repository_version": "/rv/published/"}]},
+                {"count": 1, "results": [{"pulp_href": "/pkg/1/"}]},
+                {"artifact": "/art/1/"},
+                {"sha256": "abc123"},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/published/"},
+            ]
+        )
+        assert (
+            client.check_digest(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                fallback_to_latest=True,
+            )
+            is pulp_client.PulpDigestStatus.MATCH
+        )
+
+    def test_stale_publication_allows_only_unpublished_rebuild(self) -> None:
+        """Permit a rebuild when only the latest version has a conflict."""
+        client = self._client(
+            [
+                {"results": [{"repository_version": "/rv/published/"}]},
+                {"count": 0, "results": []},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 1, "results": [{"pulp_href": "/pkg/old/"}]},
+                {"artifact": "/art/old/"},
+                {"sha256": "other"},
+            ]
+        )
+        assert (
+            client.check_digest(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                fallback_to_latest=True,
+                allow_unpublished_rebuild=True,
+            )
+            is pulp_client.PulpDigestStatus.UNPUBLISHED_MISMATCH
+        )
+
+    def test_incomplete_unpublished_metadata_stays_strict(self) -> None:
+        """Avoid replacing a content unit when its digest is unknown."""
+        client = self._client(
+            [
+                {"results": []},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 1, "results": [{"pulp_href": "/pkg/old/"}]},
+                {"artifact": "/art/old/"},
+                {},
+            ]
+        )
+        assert (
+            client.check_digest(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                fallback_to_latest=True,
+                allow_unpublished_rebuild=True,
+            )
+            is pulp_client.PulpDigestStatus.MISMATCH
+        )
+
+    def test_replace_unpublished_conflict_is_atomic(self) -> None:
+        """Remove the old content and add the rebuilt RPM in one Pulp modify."""
+        client = self._client(
+            [
+                {"results": []},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 1, "results": [{"pulp_href": "/pkg/old/"}]},
+                {"artifact": "/art/old/"},
+                {"sha256": "other"},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+            ]
+        )
+        response = client._session.post.return_value
+        response.status_code = 202
+        response.content = b"task"
+        response.json.return_value = {"task": "/tasks/1/"}
+        with patch.object(client, "wait_for_task") as wait_for_task:
+            client.replace_unpublished_rpm(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                "/pkg/new/",
+                30,
+            )
+        assert client._session.post.call_args.kwargs["json"] == {
+            "add_content_units": ["/pkg/new/"],
+            "remove_content_units": ["/pkg/old/"],
+        }
+        wait_for_task.assert_called_once_with("https://pulp.test/tasks/1/", 30)
+
+    def test_replace_refuses_published_conflict(self) -> None:
+        """Never remove a conflicting RPM that users can already access."""
+        client = self._client(
+            [
+                {"results": [{"repository_version": "/rv/published/"}]},
+                {"count": 1, "results": [{"pulp_href": "/pkg/old/"}]},
+                {"artifact": "/art/old/"},
+                {"sha256": "other"},
+            ]
+        )
+        with pytest.raises(RuntimeError, match="Published RPM has a different digest"):
+            client.replace_unpublished_rpm(
+                "myrepo",
+                "hello",
+                "0",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "abc123",
+                "/pkg/new/",
+                30,
+            )
+        client._session.post.assert_not_called()
+
+    def test_replace_requires_unpublished_version(self) -> None:
+        """Fail safely when the repository has no unpublished version."""
+        client = self._client(
+            [
+                {"results": []},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": None},
+            ]
+        )
+        with pytest.raises(RuntimeError, match="No unpublished RPM version"):
+            client.replace_unpublished_rpm(
+                "myrepo", "hello", "0", "1.0", "1.el9", "x86_64", "abc123", "/pkg/new/", 30
+            )
+        client._session.post.assert_not_called()
+
+    def test_replace_skips_rpm_that_now_matches(self) -> None:
+        """Avoid modifying the repository when another push added the RPM."""
+        client = self._client(
+            [
+                {"results": []},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 1, "results": [{"pulp_href": "/pkg/new/"}]},
+                {"artifact": "/art/new/"},
+                {"sha256": "abc123"},
+            ]
+        )
+        client.replace_unpublished_rpm(
+            "myrepo", "hello", "0", "1.0", "1.el9", "x86_64", "abc123", "/pkg/new/", 30
+        )
+        client._session.post.assert_not_called()
+
+    def test_replace_adds_rpm_missing_from_latest(self) -> None:
+        """Add the RPM when another push removed the old conflicting unit."""
+        client = self._client(
+            [
+                {"results": []},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 0, "results": []},
+            ]
+        )
+        with patch.object(client, "add_content") as add_content:
+            client.replace_unpublished_rpm(
+                "myrepo", "hello", "0", "1.0", "1.el9", "x86_64", "abc123", "/pkg/new/", 30
+            )
+        add_content.assert_called_once_with("myrepo", ["/pkg/new/"], 30)
+
+    def test_replace_rejects_unidentifiable_conflict(self) -> None:
+        """Leave the repository alone when Pulp omits the old content href."""
+        client = self._client(
+            [
+                {"results": []},
+                {"results": [{"pulp_href": "/repo/1/"}]},
+                {"latest_version_href": "/rv/latest/"},
+                {"count": 1, "results": [{"pulp_href": ""}]},
+            ]
+        )
+        with pytest.raises(RuntimeError, match="Cannot identify conflicting RPM content"):
+            client.replace_unpublished_rpm(
+                "myrepo", "hello", "0", "1.0", "1.el9", "x86_64", "abc123", "/pkg/new/", 30
+            )
+        client._session.post.assert_not_called()
 
     def test_get_repo_href(self) -> None:
         """Return pulp_href from the repository list response."""
@@ -1198,6 +1504,56 @@ class TestUploadRpm:
         with patch(self._RUN_CMD, return_value=self._completed("")):
             with pytest.raises(RuntimeError, match="href missing"):
                 client.upload_rpm(rpm, "100MB", tmp_path / "cli.toml")
+
+
+class TestSetRpmLabel:
+    """Test the label needed for signed RPM retry detection."""
+
+    _RUN_CMD = "release_service_utils.helpers.pulp_client.pulp_client.subprocess_cmd.run_cmd"
+
+    def test_cli_argv(self, tmp_path: Path) -> None:
+        """Set the label on the exact content digest in the selected domain."""
+        client = pulp_client.PulpClient(MagicMock(), "https://pulp.test", "mydomain")
+        config = tmp_path / "cli.toml"
+        with patch(
+            self._RUN_CMD,
+            return_value=subprocess.CompletedProcess(["pulp"], 0, "", ""),
+        ) as mock_run:
+            client.set_rpm_label("abc", "signed_by", "release4:release2:ima", config)
+        mock_run.assert_called_once_with(
+            [
+                "pulp",
+                "--config",
+                str(config),
+                "--domain",
+                "mydomain",
+                "rpm",
+                "content",
+                "label",
+                "set",
+                "--sha256",
+                "abc",
+                "--key",
+                "signed_by",
+                "--value",
+                "release4:release2:ima",
+            ],
+            check=False,
+        )
+
+    def test_error_raises(self, tmp_path: Path) -> None:
+        """A failed label update fails the push so a retry can repair it."""
+        client = pulp_client.PulpClient(MagicMock(), "https://pulp.test", "mydomain")
+        with (
+            patch(
+                self._RUN_CMD,
+                return_value=subprocess.CompletedProcess(["pulp"], 1, "", "label rejected"),
+            ),
+            pytest.raises(RuntimeError, match="label rejected"),
+        ):
+            client.set_rpm_label(
+                "abc", "signed_by", "release4:release2:ima", tmp_path / "cli.toml"
+            )
 
 
 class TestFileRepositoryCli:
