@@ -180,30 +180,6 @@ def test_write_cert_files_creates_files(
 
 
 # ---------------------------------------------------------------------------
-# _create_exodus_conf
-# ---------------------------------------------------------------------------
-
-
-def test_create_exodus_conf_contains_required_fields(tmp_path: Path) -> None:
-    """Generated exodus-rsync.conf includes gwcert, gwkey, gwurl, gwenv, and profile."""
-    conf = tmp_path / "exodus-rsync.conf"
-    push_artifacts.push_artifacts._create_exodus_conf(
-        conf,
-        Path("/tmp/exodus.crt"),
-        Path("/tmp/exodus.key"),
-        "https://exodus.example.com",
-        "live",
-    )
-    text = conf.read_text()
-    assert "gwcert" in text
-    assert "gwkey" in text
-    assert "gwurl" in text
-    assert "gwenv" in text
-    assert "live" in text
-    assert "exodus" in text
-
-
-# ---------------------------------------------------------------------------
 # _push_component_to_pulp
 # ---------------------------------------------------------------------------
 
@@ -320,35 +296,6 @@ def test_push_component_to_pulp_handles_windows_zip_rename(
         )
 
     mock_pulp.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _push_component_to_cdn
-# ---------------------------------------------------------------------------
-
-
-def test_push_component_to_cdn_calls_rsync(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The rsync command is invoked with a CDN sha256-based destination path per archive."""
-    monkeypatch.setattr(push_artifacts.push_artifacts, "CONTENT_DIR", tmp_path / "artifacts")
-    comp_dir = tmp_path / "artifacts" / "prod" / "ready_for_distribution"
-    comp_dir.mkdir(parents=True)
-    (comp_dir / "file.tar.gz").write_bytes(b"archive")
-
-    rsync_calls = []
-
-    def fake_check_call(cmd, **kwargs):
-        if cmd[0] == "rsync":
-            rsync_calls.append(cmd)
-
-    with mock.patch("subprocess.check_call", side_effect=fake_check_call):
-        push_artifacts.push_artifacts._push_component_to_cdn("prod", tmp_path / "exodus.conf")
-
-    assert len(rsync_calls) == 1
-    # Verify CDN path structure: exodus:/content/origin/files/sha256/xx/sha256hash/filename
-    dest = rsync_calls[0][-1]
-    assert dest.startswith("exodus:/content/origin/files/sha256/")
 
 
 # ---------------------------------------------------------------------------

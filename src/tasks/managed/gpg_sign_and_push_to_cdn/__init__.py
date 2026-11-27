@@ -1,9 +1,9 @@
-"""Sign binary artifacts via the generic-signing pipeline."""
+"""Sign binary artifacts and delegate publishing to an internal task."""
 
 from __future__ import annotations
 
-from . import rh_direct_sign_artifacts  # noqa: F401
-from .rh_direct_sign_artifacts import (  # noqa: F401
+from . import gpg_sign_and_push_to_cdn  # noqa: F401
+from .gpg_sign_and_push_to_cdn import (  # noqa: F401
     SubmitConfig,
     main,
     prepare_all_components,
@@ -11,5 +11,6 @@ from .rh_direct_sign_artifacts import (  # noqa: F401
     pull_and_extract,
     setup_argparser,
     submit_all_signing_requests,
+    submit_publish_request,
     submit_signing_request,
 )

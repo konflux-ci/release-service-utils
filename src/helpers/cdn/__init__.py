@@ -1,9 +1,15 @@
-"""Provide per-environment secret and hostname config for the CDN delivery stack."""
+"""Provide per-environment config and shared CDN delivery helpers."""
 
 from __future__ import annotations
 
-from .cdn import cdn_env_secrets
+from .cdn import (  # noqa: F401
+    cdn_env_secrets,
+    create_exodus_conf,
+    push_files_to_cdn,
+)
 
 __all__ = [
     "cdn_env_secrets",
+    "create_exodus_conf",
+    "push_files_to_cdn",
 ]

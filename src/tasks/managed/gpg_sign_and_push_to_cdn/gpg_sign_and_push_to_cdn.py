@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sign binary artifacts via the generic-signing internal pipeline."""
+"""Sign binary artifacts and delegate publishing to an internal task."""
 
 from __future__ import annotations
 
@@ -8,20 +8,21 @@ import json
 import logging
 import os
 import shlex
+import shutil
 import tempfile
 import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from release_service_utils.helpers import file, skopeo
-from release_service_utils.helpers.internal_request import (
-    InternalRequestWaitError,
-    PIPELINERUN_UID_LABEL,
-    TASK_GROUP_LABEL,
-    create as create_internal_request,
+from release_service_utils.helpers import cdn, file, internal_request, skopeo
+from release_service_utils.helpers.direct_sign_generic import (
+    SigningRequest,
+    submit as submit_signing,
 )
+from release_service_utils.helpers.internal_request import InternalRequestWaitError
 from release_service_utils.helpers.kubectl import get_configmap
 from release_service_utils.helpers.logger import logger
 from release_service_utils.helpers.oras_utils import (
@@ -35,7 +36,16 @@ from release_service_utils.tasks.managed.rh_direct_sign_image import (
     validate_file,
 )
 
-_INTENTION_LABEL = "internal-services.appstudio.openshift.io/intention"
+_SIGNING_PIPELINE_TIMEOUT = "1h0m0s"
+_SIGNING_TASK_TIMEOUT = "0h55m0s"
+
+_IR_PIPELINE_TIMEOUT = "2h0m0s"
+_IR_TASK_TIMEOUT = "1h50m0s"
+_IR_FINALLY_TIMEOUT = "0h10m0s"
+_IR_WAIT_TIMEOUT_SECONDS = (
+    internal_request.duration_to_seconds(_IR_PIPELINE_TIMEOUT)
+    + internal_request.SPAWN_OVERHEAD_SECONDS
+)
 
 
 @dataclass(frozen=True)
@@ -64,7 +74,7 @@ class SubmitConfig:
 def setup_argparser() -> argparse.ArgumentParser:
     """Build and return the CLI argument parser."""
     parser = argparse.ArgumentParser(
-        description="Sign binary artifacts via generic-signing pipeline."
+        description="Sign binary artifacts and delegate publishing to CDN/CGW."
     )
     parser.add_argument(
         "--snapshot",
@@ -146,6 +156,16 @@ def setup_argparser() -> argparse.ArgumentParser:
         help="Secret for TA registry auth (default: %(default)s)",
     )
     parser.add_argument(
+        "--task-git-url",
+        required=True,
+        help="Git URL for the internal task pipeline resolver",
+    )
+    parser.add_argument(
+        "--task-git-revision",
+        required=True,
+        help="Git revision for the internal task pipeline resolver",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -178,35 +198,27 @@ def prepare_component(
     container_image: str,
     oci_storage: str,
     oras_extra_args: list[str] | None,
+    work_root: Path,
 ) -> str:
-    """Pull, extract, and push a TA for one component."""
-    with tempfile.TemporaryDirectory() as tmp:
-        work_dir = Path(tmp)
-        extract_dir = pull_and_extract(container_image, work_dir)
+    """Pull, extract, push a TA for one component, and clean up local files."""
+    work_dir = work_root / component_name
+    work_dir.mkdir(parents=True, exist_ok=True)
+    extract_dir = pull_and_extract(container_image, work_dir)
 
-        files = sorted(f for f in extract_dir.rglob("*") if f.is_file())
-        if not files:
-            raise RuntimeError(
-                f"No files extracted from '{component_name}'" f" ({container_image})"
-            )
+    files = sorted(f for f in extract_dir.rglob("*") if f.is_file())
+    if not files:
+        raise RuntimeError(f"No files extracted from '{component_name}' ({container_image})")
 
-        logger.info(
-            "Extracted %d file(s) from '%s'",
-            len(files),
-            component_name,
-        )
+    logger.info("Extracted %d file(s) from '%s'", len(files), component_name)
 
-        tag = f"{oci_storage}:{component_name}"
-        digest = oras_push(
-            tag,
-            extract_dir,
-            ".",
-            component_name,
-            extra_args=oras_extra_args,
-        )
-        ta_uri = f"oci://{oci_storage}@{digest}"
-        logger.info("Pushed TA for '%s': %s", component_name, ta_uri)
-        return ta_uri
+    tag = f"{oci_storage}:{component_name}"
+    digest = oras_push(tag, extract_dir, ".", component_name, extra_args=oras_extra_args)
+    ta_uri = f"oci://{oci_storage}@{digest}"
+    logger.info("Pushed TA for '%s': %s", component_name, ta_uri)
+
+    shutil.rmtree(work_dir)
+
+    return ta_uri
 
 
 def prepare_all_components(
@@ -214,6 +226,7 @@ def prepare_all_components(
     oci_storage: str,
     oras_extra_args: list[str] | None,
     concurrent_limit: int,
+    work_root: Path,
 ) -> dict[str, str]:
     """Prepare TAs for all components concurrently."""
     logger.info(
@@ -232,6 +245,7 @@ def prepare_all_components(
                 comp["containerImage"],
                 oci_storage,
                 oras_extra_args,
+                work_root,
             ): comp.get("name", "unknown")
             for comp in components
         }
@@ -255,42 +269,35 @@ def submit_signing_request(
     source_data_artifact: str,
     signing_key: str,
     config: SubmitConfig,
-) -> None:
-    """Submit a single signing InternalRequest for one component and key."""
-    params: dict[str, str] = {
-        "sourceDataArtifact": source_data_artifact,
-        "keyname": signing_key,
-        "signMethod": config.sign_method,
-        "onbehalfof": config.requester,
-        "kerberos_keytab_secret": config.kerberos_keytab_secret,
-        "kerberos_keytab": config.kerberos_keytab,
-        "kerberos_principal": config.kerberos_principal,
-        "taskGitUrl": config.signing_repo,
-        "taskGitRevision": config.signing_revision,
-        "ociStorage": config.oci_storage,
-        "orasOptions": config.oras_options,
-        "trusted_artifacts_dockerconfig_secret": config.ta_dockerconfig_secret,
-    }
-
-    labels = {
-        TASK_GROUP_LABEL: config.task_id,
-        PIPELINERUN_UID_LABEL: config.pipelinerun_uid,
-        _INTENTION_LABEL: config.intention,
-        "internal-services.appstudio.openshift.io/rate-limited": "true",
-        "internal-services.appstudio.openshift.io/rate-limiting-group": ("signing-server"),
-    }
+) -> str:
+    """Submit a single signing InternalRequest and return the signed TA URI."""
+    request = SigningRequest(
+        source_data_artifact=source_data_artifact,
+        keyname=signing_key,
+        sign_method=config.sign_method,
+        onbehalfof=config.requester,
+        signing_repo=config.signing_repo,
+        signing_revision=config.signing_revision,
+        pipeline=config.pipeline,
+        oci_storage=config.oci_storage,
+        oras_options=config.oras_options,
+        trusted_artifacts_dockerconfig_secret=config.ta_dockerconfig_secret,
+        kerberos_keytab_secret=config.kerberos_keytab_secret,
+        kerberos_keytab=config.kerberos_keytab,
+        kerberos_principal=config.kerberos_principal,
+        task_id=config.task_id,
+        pipelinerun_uid=config.pipelinerun_uid,
+        intention=config.intention,
+        request_timeout=int(config.request_timeout),
+        pipeline_timeout=_SIGNING_PIPELINE_TIMEOUT,
+        task_timeout=_SIGNING_TASK_TIMEOUT,
+        service_account=config.service_account,
+        cleanup=False,
+    )
 
     start = time.monotonic()
     try:
-        ir_name = create_internal_request(
-            config.pipeline,
-            params=params,
-            labels=labels,
-            sync=True,
-            timeout=int(config.request_timeout),
-            service_account=config.service_account,
-            cleanup=False,
-        )
+        results = submit_signing(request)
     except InternalRequestWaitError as exc:
         duration = time.monotonic() - start
         logger.error(
@@ -301,25 +308,33 @@ def submit_signing_request(
             exc,
         )
         raise RuntimeError(
-            f"Signing failed for '{component_name}'," f" key '{signing_key}': {exc}"
+            f"Signing failed for '{component_name}', key '{signing_key}': {exc}"
         ) from exc
 
     duration = time.monotonic() - start
+    signed_ta_uri = results.get("sourceDataArtifact", "")
+    if not signed_ta_uri:
+        raise RuntimeError(
+            f"No sourceDataArtifact in signing results for '{component_name}',"
+            f" key '{signing_key}'"
+        )
+
     logger.info(
-        "Component '%s' key '%s' signed in %.1fs (InternalRequest: %s)",
+        "Component '%s' key '%s' signed in %.1fs: %s",
         component_name,
         signing_key,
         duration,
-        ir_name,
+        signed_ta_uri,
     )
+    return signed_ta_uri
 
 
 def submit_all_signing_requests(
     prepared_artifacts: dict[str, str],
     signing_keys: list[str],
     config: SubmitConfig,
-) -> None:
-    """Submit signing requests for all component x key combinations."""
+) -> dict[str, list[str]]:
+    """Submit signing requests and return component name to signed TA URIs."""
     work_items = [
         (name, ta_uri, key)
         for name, ta_uri in prepared_artifacts.items()
@@ -334,6 +349,7 @@ def submit_all_signing_requests(
         config.concurrent_limit,
     )
 
+    signed: dict[str, list[str]] = defaultdict(list)
     failures: list[Exception] = []
     with ThreadPoolExecutor(max_workers=config.concurrent_limit) as pool:
         futures = {
@@ -341,9 +357,12 @@ def submit_all_signing_requests(
             for name, ta_uri, key in work_items
         }
         for future in as_completed(futures):
+            name, _key = futures[future]
             exc = future.exception()
             if exc is not None:
                 failures.append(exc)
+            else:
+                signed[name].append(future.result())
 
     succeeded = len(work_items) - len(failures)
     logger.info("Signing summary: %d succeeded, %d failed", succeeded, len(failures))
@@ -352,9 +371,57 @@ def submit_all_signing_requests(
             logger.error("Signing failure %d/%d: %s", i, len(failures), failure)
         raise RuntimeError(f"{len(failures)} signing request(s) failed")
 
+    return dict(signed)
+
+
+def submit_publish_request(
+    snapshot: dict[str, Any],
+    signed: dict[str, list[str]],
+    cdn_config: dict[str, str],
+    task_git_url: str,
+    task_git_revision: str,
+    pipelinerun_uid: str,
+) -> None:
+    """Create an InternalRequest to publish signed artifacts to CDN and CGW."""
+    logger.info("Creating InternalRequest to publish to CDN and CGW...")
+    try:
+        ir_name = internal_request.create(
+            "gpg-sign-and-push-to-cdn",
+            params={
+                "snapshot_json": json.dumps(snapshot, separators=(",", ":")),
+                "signed_artifacts_json": json.dumps(signed, separators=(",", ":")),
+                "exodusGwSecret": cdn_config["exodusGwSecret"],
+                "exodusGwEnv": cdn_config["exodusGwEnv"],
+                "cgwHostname": cdn_config["cgwHostname"],
+                "cgwSecret": cdn_config["cgwSecret"],
+                "taskGitUrl": task_git_url,
+                "taskGitRevision": task_git_revision,
+            },
+            labels={internal_request.PIPELINERUN_UID_LABEL: pipelinerun_uid},
+            sync=True,
+            timeout=_IR_WAIT_TIMEOUT_SECONDS,
+            service_account="release-service-account",
+            pipeline_timeout=_IR_PIPELINE_TIMEOUT,
+            task_timeout=_IR_TASK_TIMEOUT,
+            finally_timeout=_IR_FINALLY_TIMEOUT,
+        )
+    except InternalRequestWaitError as err:
+        raise RuntimeError(str(err)) from err
+
+    logger.info("done (%s)", ir_name)
+
+    results = internal_request.fetch_results(ir_name)
+    if results.get("result") != "Success":
+        logger.error("Publishing failed")
+        logger.error("%s", results.get("result"))
+        raise RuntimeError("Publishing to CDN/CGW failed")
+
+    logger.info("Artifacts published to CDN and CGW")
+    logger.info("%s", json.dumps(results, indent=2))
+
 
 def main() -> None:
-    """Prepare TAs and submit signing requests."""
+    """Sign binary artifacts and delegate publishing to an internal task."""
     parser = setup_argparser()
     args = parser.parse_args()
     logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
@@ -381,7 +448,7 @@ def main() -> None:
         task_id=args.task_id,
         pipelinerun_uid=args.pipelinerun_uid,
         concurrent_limit=args.concurrent_limit,
-        intention=data_file.get("intention", "unknown"),
+        intention=data_file.get("intention", ""),
         oci_storage=args.oci_storage,
         oras_options=args.oras_options,
         sign_method=args.sign_method,
@@ -395,18 +462,34 @@ def main() -> None:
         logger.info("No components to sign")
         return
 
+    env = data_file.get("cdn", {}).get("env", "")
+    cdn_config = cdn.cdn_env_secrets(env)
+
     oras_env = os.environ.get("ORAS_OPTIONS", "")
     oras_extra_args = shlex.split(oras_env) if oras_env else None
 
-    prepared = prepare_all_components(
-        components,
-        config.oci_storage,
-        oras_extra_args,
-        config.concurrent_limit,
-    )
+    with tempfile.TemporaryDirectory() as work_root:
+        work_root_path = Path(work_root)
 
-    submit_all_signing_requests(prepared, signing_keys, config)
+        prepared = prepare_all_components(
+            components,
+            config.oci_storage,
+            oras_extra_args,
+            config.concurrent_limit,
+            work_root_path,
+        )
+
+        signed = submit_all_signing_requests(prepared, signing_keys, config)
+
+    submit_publish_request(
+        snapshot,
+        signed,
+        cdn_config,
+        args.task_git_url,
+        args.task_git_revision,
+        args.pipelinerun_uid,
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover
-    main()
+    raise SystemExit(main())
