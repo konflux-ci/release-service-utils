@@ -310,8 +310,12 @@ def _copy_layered_image_files(
                         (destination / deleted).unlink(missing_ok=True)
                     continue
 
-                if name not in wanted_paths or member.issym() or member.islnk():
+                if name not in wanted_paths:
                     continue
+                if member.issym() or member.islnk():
+                    raise RuntimeError(
+                        f"Archive contains unsupported link for requested path: {name}"
+                    )
                 if member.isdev():
                     continue
                 extracted = tf.extractfile(member)

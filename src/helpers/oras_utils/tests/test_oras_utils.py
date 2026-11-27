@@ -586,10 +586,10 @@ def test_extract_disk_image_files_missing_file_is_skipped(
     assert not (destination / "missing.raw").exists()
 
 
-def test_extract_disk_image_files_skips_symlinks(
+def test_extract_disk_image_files_rejects_requested_symlinks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Symlink tar entries are never extracted, even if the name matches."""
+    """Requested symlink tar entries are rejected instead of silently skipped."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tf:
         info = tarfile.TarInfo(name="releases/disk.raw")
@@ -609,11 +609,10 @@ def test_extract_disk_image_files_skips_symlinks(
 
     destination = tmp_path / "dest"
     destination.mkdir()
-    oras_utils.extract_disk_image_files(
-        "quay.io/org/image@sha256:mno", ["releases/disk.raw"], destination
-    )
-
-    assert not (destination / "releases" / "disk.raw").exists()
+    with pytest.raises(RuntimeError, match="unsupported link"):
+        oras_utils.extract_disk_image_files(
+            "quay.io/org/image@sha256:mno", ["releases/disk.raw"], destination
+        )
 
 
 def test_extract_disk_image_files_rejects_path_traversal(tmp_path: Path) -> None:
