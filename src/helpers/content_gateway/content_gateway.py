@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 _CGW_PRODUCTS_PROD = "https://developers.redhat.com/products"
 _CDN_DOWNLOADS_PROD = "https://access.redhat.com/downloads"
@@ -135,6 +137,50 @@ def windows_zip_filename(filename: str) -> str:
     if filename.endswith(".tar"):
         return filename[: -len(".tar")] + ".zip"
     return filename
+
+
+def validated_short_url_segment(segment: str) -> str:
+    """Return *segment* percent-encoded as one short URL path segment.
+
+    Reject an absolute segment or any ``..`` path part. Callers that insert a
+    Pulp repository into a Content Gateway or Developer Portal URL use this
+    so both flows encode the same way.
+    """
+    if segment.startswith("/") or ".." in segment.split("/"):
+        raise ValueError(
+            f"short URL segment must be a relative path without '..': {segment!r}"
+        )
+    return quote(segment, safe="")
+
+
+def segments_for_shared_names(
+    entries: Sequence[Mapping[str, Any]],
+    key_fn: Callable[[Mapping[str, Any]], str],
+    default_destination: str,
+) -> list[str]:
+    """Return each entry's short URL segment, aligned with *entries*.
+
+    *key_fn* selects the filename that decides whether a name is shared.
+    Each entry's ``destination`` is the repository that publishes it. A name
+    published by one repository gets ``""``. When several repositories
+    publish it, *default_destination* gets ``""`` if it is one of them, and
+    every other repository gets its own destination.
+    """
+    keys = [key_fn(entry) for entry in entries]
+    destinations = [str(entry["destination"]) for entry in entries]
+    owners: dict[str, set[str]] = {}
+    for key, destination in zip(keys, destinations):
+        owners.setdefault(key, set()).add(destination)
+
+    segments: list[str] = []
+    for key, destination in zip(keys, destinations):
+        shared = owners[key]
+        plain = default_destination if default_destination in shared else None
+        if len(shared) >= 2 and destination != plain:
+            segments.append(destination)
+        else:
+            segments.append("")
+    return segments
 
 
 def windows_archive_basename(filename: str, operating_system: str) -> str:

@@ -11,6 +11,7 @@ import logging
 import requests
 from requests.auth import HTTPBasicAuth
 from release_service_utils.helpers.content_gateway import cgw_idempotency
+from release_service_utils.helpers.content_gateway import content_gateway
 
 LOG = logging.getLogger("developer-portal-wrapper")
 DEFAULT_LOG_FMT = "%(asctime)s [%(levelname)-8s] %(message)s"
@@ -41,23 +42,63 @@ def generate_download_url(content_dir, file_name):
 
 
 def generate_metadata(
-    product_name, product_code, product_version_name, content_dir, content_list, file_prefix
+    product_name,
+    product_code,
+    product_version_name,
+    content_dir,
+    content_list,
+    file_prefix,
+    publish_filenames=None,
+    short_url_segment="",
+    segment_filenames=None,
 ):
-    """Generate metadata for each file in content_list that starts with the component name."""
+    """Generate metadata for files in the content directory.
+
+    When *publish_filenames* is set, only those basenames are considered, and
+    each one is published when it exists. Repeated names are kept once, in
+    first-seen order. The ``file_prefix`` filter applies only when the content
+    directory is scanned without that list.
+    ``short_url_segment`` is inserted before a filename listed in
+    ``segment_filenames``, percent-encoded as one URL path segment. Other files
+    keep ``/cgw/<code>/<version>/<file>``.
+    """
     metadata = []
     short_url_prefix = f"/cgw/{product_code}/{product_version_name}"
+    explicit_filenames = publish_filenames is not None
+    if explicit_filenames:
+        candidates = []
+        seen_filenames = set()
+        for name in publish_filenames:
+            if name in seen_filenames:
+                continue
+            seen_filenames.add(name)
+            candidates.append(name)
+    else:
+        candidates = content_list
+    names_with_segment = set(segment_filenames or [])
+    encoded_segment = ""
+    if short_url_segment:
+        encoded_segment = content_gateway.validated_short_url_segment(short_url_segment)
 
-    for order, file in enumerate(content_list, start=1):
-        if not file.startswith(file_prefix):
+    for order, file in enumerate(candidates, start=1):
+        file_path = os.path.join(content_dir, file)
+        if not os.path.isfile(file_path):
+            LOG.warning("Skipping file: %s as it is not in the content directory", file)
+            continue
+        if not explicit_filenames and not file.startswith(file_prefix):
             LOG.warning(
                 "Skipping file: %s as it does not start with the expected prefix", file
             )
             continue
 
         LOG.info("Processing file: %s", file)
+        if encoded_segment and file in names_with_segment:
+            short_url = f"{short_url_prefix}/{encoded_segment}/{file}"
+        else:
+            short_url = f"{short_url_prefix}/{file}"
         metadata.append(
             {
-                "shortURL": f"{short_url_prefix}/{file}",
+                "shortURL": short_url,
                 "downloadURL": generate_download_url(content_dir, file),
                 "label": file,
                 "type": "FILE",
@@ -125,6 +166,23 @@ def parse_args():
         "--file-prefix",
         help="Prefix to use when searching for file in Content Directory",
         required=True,
+    )
+    parser.add_argument(
+        "--publish-filename",
+        action="append",
+        default=[],
+        help="Publish only this staged filename (repeat for multiple files)",
+    )
+    parser.add_argument(
+        "--short-url-segment",
+        default="",
+        help="Extra short URL path for filenames passed with --segment-filename",
+    )
+    parser.add_argument(
+        "--segment-filename",
+        action="append",
+        default=[],
+        help="Filename whose short URL includes --short-url-segment",
     )
 
     return parser.parse_args()
@@ -223,6 +281,7 @@ def main():
     content_dir = args.content_directory
     file_prefix = args.file_prefix
     content_list = os.listdir(content_dir)
+    publish_filenames = args.publish_filename or None
 
     metadata = generate_metadata(
         product_name,
@@ -231,6 +290,9 @@ def main():
         content_dir,
         content_list,
         file_prefix,
+        publish_filenames,
+        args.short_url_segment,
+        args.segment_filename,
     )
     LOG.info("%s files will be published to CGW", len(metadata))
 

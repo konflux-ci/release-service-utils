@@ -546,6 +546,115 @@ def test_run_check_data_keys_malformed_cve_key(
         )
 
 
+def test_schema_accepts_per_file_pulp_destination(
+    tmp_path: Path,
+    schema_path: Path,
+) -> None:
+    """A file destination is valid, and a file without one still matches the schema."""
+    data_dir = tmp_path / "data"
+    data_file = data_dir / "data.json"
+    _write_data(
+        data_file,
+        {
+            "mapping": {
+                "components": [
+                    {
+                        "name": "odf-cli",
+                        "staged": {
+                            "destination": "odf-x86_64-files",
+                            "version": "4.21.0",
+                            "files": [
+                                {
+                                    "filename": "odf-linux-amd64",
+                                    "source": "odf",
+                                    "destination": "odf-x86_64-files",
+                                },
+                                {"filename": "odf-linux-s390x", "source": "odf"},
+                            ],
+                        },
+                    }
+                ]
+            }
+        },
+    )
+    check_data_keys.run_check_data_keys(
+        data_dir=data_dir,
+        data_path=Path("data.json"),
+        schema_path=schema_path,
+        systems_json="[]",
+    )
+
+
+def test_schema_accepts_empty_per_file_pulp_destination(schema_path: Path) -> None:
+    """An explicit empty per-file destination is valid and falls back at publish time."""
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    data = {
+        "systems": [],
+        "mapping": {
+            "components": [
+                {
+                    "name": "odf-cli",
+                    "staged": {
+                        "destination": "odf-x86_64-files",
+                        "version": "4.21.0",
+                        "files": [
+                            {
+                                "filename": "odf-linux-amd64",
+                                "source": "odf",
+                                "destination": "",
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+    }
+    Draft7Validator(schema).validate(data)
+
+
+@pytest.mark.parametrize("destination", [".", "..", "repo/sub"])
+def test_schema_rejects_unsafe_pulp_destination(schema_path: Path, destination: str) -> None:
+    """A Pulp destination must be one path component, not ``.``, ``..``, or a slash."""
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    per_file = {
+        "systems": [],
+        "mapping": {
+            "components": [
+                {
+                    "name": "odf-cli",
+                    "staged": {
+                        "destination": "odf-x86_64-files",
+                        "version": "4.21.0",
+                        "files": [
+                            {
+                                "filename": "odf-linux-amd64",
+                                "source": "odf",
+                                "destination": destination,
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+    }
+    default = {
+        "systems": [],
+        "mapping": {
+            "components": [
+                {
+                    "name": "odf-cli",
+                    "staged": {"destination": destination, "version": "4.21.0"},
+                }
+            ]
+        },
+    }
+
+    with pytest.raises(ValidationError):
+        Draft7Validator(schema).validate(per_file)
+    with pytest.raises(ValidationError):
+        Draft7Validator(schema).validate(default)
+
+
 def test_main_failure_propagates_exception(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

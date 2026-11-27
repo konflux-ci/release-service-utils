@@ -1865,6 +1865,83 @@ def test_apply_mapping_empty_result_with_fail_on_empty_raises(tmp_path: Path) ->
         apply_mapping.apply_mapping(snapshot_path, data_path, fail_on_empty_result=True)
 
 
+def test_apply_mapping_odf_cli_arch_names_do_not_match_snapshot(tmp_path: Path) -> None:
+    """Arch-named mapping components do not match the single ODF CLI snapshot component.
+
+    The failing rhodf-cli pipeline has snapshot component ``odf-cli-4-21`` and a
+    mapping of ``odf-cli-amd64``, ``odf-cli-s390x``, ``odf-cli-ppc64le``, and
+    ``odf-cli-arm64``. Names must be equal, so that admission still yields zero
+    components. A per-file Pulp destination does not create a match.
+    """
+    snapshot_path = tmp_path / "snapshot.json"
+    data_path = tmp_path / "data.json"
+    _write_json(snapshot_path, {"components": [{"name": "odf-cli-4-21"}]})
+    _write_json(
+        data_path,
+        {
+            "mapping": {
+                "components": [
+                    {"name": "odf-cli-amd64"},
+                    {"name": "odf-cli-s390x"},
+                    {"name": "odf-cli-ppc64le"},
+                    {"name": "odf-cli-arm64"},
+                ]
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="Resulting snapshot contains 0 components") as exc:
+        apply_mapping.apply_mapping(snapshot_path, data_path, fail_on_empty_result=True)
+
+    message = str(exc.value)
+    assert "odf-cli-4-21" in message
+    for name in ("odf-cli-amd64", "odf-cli-s390x", "odf-cli-ppc64le", "odf-cli-arm64"):
+        assert name in message
+
+
+def test_merge_components_keeps_odf_cli_file_destinations() -> None:
+    """One snapshot component keeps per-file destinations when the mapping name matches."""
+    original = [{"name": "odf-cli-4-21", "containerImage": "registry.io/odf-cli@sha256:abc"}]
+    mapping = [
+        {
+            "name": "odf-cli-4-21",
+            "staged": {
+                "destination": "rh-odf-4-for-rhel-9-x86_64-files",
+                "version": "4.21",
+                "files": [
+                    {
+                        "source": "/releases/odf-linux-amd64.tar.gz",
+                        "destination": "rh-odf-4-for-rhel-9-x86_64-files",
+                    },
+                    {
+                        "source": "/releases/odf-linux-arm64.tar.gz",
+                        "destination": "rh-odf-4-for-rhel-9-aarch64-files",
+                    },
+                    {"source": "/releases/odf-linux-s390x.tar.gz"},
+                    {
+                        "source": "/releases/odf-linux-ppc64le.tar.gz",
+                        "destination": "",
+                    },
+                ],
+            },
+        }
+    ]
+
+    result = apply_mapping.merge_components(original, mapping)
+
+    assert [component["name"] for component in result] == ["odf-cli-4-21"]
+    staged = result[0]["staged"]
+    assert staged["destination"] == "rh-odf-4-for-rhel-9-x86_64-files"
+    assert staged["version"] == "4.21"
+    assert [entry.get("destination", "") for entry in staged["files"]] == [
+        "rh-odf-4-for-rhel-9-x86_64-files",
+        "rh-odf-4-for-rhel-9-aarch64-files",
+        "",
+        "",
+    ]
+    assert result[0]["containerImage"] == "registry.io/odf-cli@sha256:abc"
+
+
 def test_apply_mapping_full_merge_writes_snapshot(tmp_path: Path) -> None:
     """A full merge processes components and writes the result back to snapshot_path."""
     snapshot_path = tmp_path / "snapshot.json"

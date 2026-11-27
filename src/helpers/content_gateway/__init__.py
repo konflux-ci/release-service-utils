@@ -11,6 +11,8 @@ from .content_gateway import (
     disk_image_file_entries,
     filenames_for_binary_or_generic,
     resolved_filename,
+    segments_for_shared_names,
+    validated_short_url_segment,
     windows_archive_basename,
     windows_zip_filename,
 )
@@ -24,6 +26,8 @@ __all__ = [
     "disk_image_file_entries",
     "filenames_for_binary_or_generic",
     "resolved_filename",
+    "segments_for_shared_names",
+    "validated_short_url_segment",
     "windows_archive_basename",
     "windows_zip_filename",
 ]
