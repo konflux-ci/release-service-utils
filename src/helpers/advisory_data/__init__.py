@@ -1,6 +1,7 @@
 """Decode advisory task payloads and content filtering (idempotency rules)."""
 
 from .advisory_data import (  # noqa: F401
+    ADVISORY_SECRET_E2E,
     ADVISORY_SECRET_PROD,
     ADVISORY_SECRET_STAGE,
     ARTIFACT_CONTENT_TYPES,

@@ -115,6 +115,16 @@ class TestDetermineEnvironment:
             "create-advisory-stage-secret",
         )
 
+    def test_pending_e2e_intention(self) -> None:
+        """Pending e2e releases select the e2e advisory secret."""
+        snapshot = _snapshot(
+            [_component("c1", repositories=[{"url": "quay.io/redhat-pending/foo"}])]
+        )
+        assert task.determine_environment(snapshot, {"intention": "e2e"}) == (
+            "e2e",
+            "create-advisory-e2e-secret",
+        )
+
     def test_prod_only(self) -> None:
         """All-production repositories select the production secret."""
         snapshot = _snapshot(

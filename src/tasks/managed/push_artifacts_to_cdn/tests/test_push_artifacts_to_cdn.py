@@ -177,6 +177,10 @@ class TestResolveQuayUrl:
         """Staging intention resolves to the nonprod Quay URL."""
         assert resolve_quay_url("staging") == "quay.io/konflux-artifacts/nonprod"
 
+    def test_e2e_intention(self) -> None:
+        """E2E intention resolves to the nonprod Quay URL."""
+        assert resolve_quay_url("e2e") == "quay.io/konflux-artifacts/nonprod"
+
     def test_production_intention(self) -> None:
         """A production intention resolves to the prod Quay URL."""
         assert resolve_quay_url("production") == "quay.io/konflux-artifacts/prod"
@@ -379,6 +383,32 @@ class TestRun:
             task_git_url="https://github.com/test/repo",
             task_git_revision="main",
             checksum_map_path=data_dir / sub / "checksum_map",
+        )
+
+        params = mock_ir.create.call_args.kwargs["params"]
+        assert params["quayURL"] == "quay.io/konflux-artifacts/nonprod"
+
+    @patch(f"{TASK}.kubectl.get_configmap")
+    @patch(f"{TASK}.internal_request")
+    def test_run_e2e_intention_uses_nonprod_quay_url(
+        self, mock_ir: MagicMock, mock_get_configmap: MagicMock, tmp_path: Path
+    ) -> None:
+        """An e2e intention resolves quayURL to the nonprod path."""
+        data_dir, release_path, snap_path, data_path, sub = self._setup_files(
+            tmp_path, intention="e2e"
+        )
+        self._configure_mocks(mock_ir, mock_get_configmap)
+
+        run(
+            data_dir=data_dir,
+            release_path=release_path,
+            snapshot_path=snap_path,
+            data_path=data_path,
+            pipeline_run_uid="uid",
+            results_dir_path=f"{sub}/results",
+            task_git_url="url",
+            task_git_revision="rev",
+            checksum_map_path=data_dir / sub / "checksum.txt",
         )
 
         params = mock_ir.create.call_args.kwargs["params"]

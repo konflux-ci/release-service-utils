@@ -69,7 +69,7 @@ def write_results_file(
 
 def resolve_quay_url(intention: str) -> str:
     """Return the shared Quay repository URL to use for a release *intention*."""
-    if intention == "staging":
+    if intention in ("e2e", "staging"):
         return _QUAY_URL_STAGING
     return _QUAY_URL_PRODUCTION
 
