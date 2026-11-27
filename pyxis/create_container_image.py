@@ -44,6 +44,7 @@ so these images are available from both registries
 """
 
 import argparse
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import quote
 from datetime import datetime
@@ -470,9 +471,15 @@ def construct_repository(args, tag_dicts):
     return repo
 
 
-def create_or_update(args) -> str:
+def create_or_update(
+    args,
+    *,
+    before_remote_write: Callable[[], None] | None = None,
+) -> str:
     """Find, create, or update a container image in Pyxis.
 
+    :param before_remote_write: Optional callback invoked immediately before
+        a remote Pyxis write happens
     :return: The ``_id`` of the container image.
     """
     parsed_data = prepare_parsed_data(args)
@@ -490,6 +497,8 @@ def create_or_update(args) -> str:
     image = find_image(args.pyxis_url, args.architecture_digest)
     if image is None:
         LOGGER.info("Image with given docker_image_digest doesn't exist yet.")
+        if before_remote_write is not None:
+            before_remote_write()
         return str(create_container_image(args, parsed_data, tags))
 
     identifier = str(image["_id"])
@@ -502,6 +511,8 @@ def create_or_update(args) -> str:
         )
         constructed_tags = construct_tags(tags)
         repositories.append(construct_repository(args, constructed_tags))
+        if before_remote_write is not None:
+            before_remote_write()
         update_container_image_repositories(args.pyxis_url, identifier, repositories)
         return identifier
 
@@ -518,6 +529,8 @@ def create_or_update(args) -> str:
         else:
             constructed_tags = construct_tags(tags)
         repositories[repo_index] = construct_repository(args, constructed_tags)
+        if before_remote_write is not None:
+            before_remote_write()
         update_container_image_repositories(args.pyxis_url, identifier, repositories)
         return identifier
 
