@@ -24,7 +24,7 @@ import tempfile
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +46,10 @@ from release_service_utils.helpers.logger import logger
 
 _DECOMPRESS_CHUNK_SIZE = 65536
 HELM_CONFIG_MEDIA_TYPE = "application/vnd.cncf.helm.config.v1+json"
+_IMAGE_CONFIG_MEDIA_TYPES = {
+    "application/vnd.oci.image.config.v1+json",
+    "application/vnd.docker.container.image.v1+json",
+}
 
 
 def _get_image_architectures(image: str) -> list[dict[str, Any]]:
@@ -57,6 +61,26 @@ def _get_image_architectures(image: str) -> list[dict[str, Any]]:
         check=True,
     )
     return [json.loads(line) for line in result.stdout.strip().splitlines() if line.strip()]
+
+
+def _architecture_metadata_path(repo_url: str, arch_digest: str) -> Path:
+    """Save the labels and environment from an architecture's image config."""
+    image_ref = f"{repo_url}@{arch_digest}"
+    result = skopeo.inspect(image_ref, no_tags=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"skopeo inspect failed for {image_ref}: {result.stderr.strip()}")
+
+    image_metadata = json.loads(result.stdout)
+    metadata = {
+        "labels": [
+            {"name": name, "value": value}
+            for name, value in (image_metadata.get("Labels") or {}).items()
+        ],
+        "env_variables": image_metadata.get("Env") or [],
+    }
+    return file_helpers.make_tempfile_path(
+        "pyxis-architecture-metadata-", json.dumps(metadata).encode("utf-8")
+    )
 
 
 @dataclass(frozen=True)
@@ -296,18 +320,27 @@ def _process_architecture(
     manifest_file.parent.mkdir(parents=True, exist_ok=True)
     manifest_file.write_text(json.dumps(manifest_data), encoding="utf-8")
 
-    cci_args = _build_cci_args(
-        config=config,
-        component=component,
-        tags=tags_str,
-        oras_manifest_fetch=str(manifest_file),
-        name=repo_url,
-        media_type=media_type,
-        architecture_digest=arch_digest,
-        architecture=arch,
-    )
+    architecture_metadata_path: Path | None = None
+    try:
+        cci_args = _build_cci_args(
+            config=config,
+            component=component,
+            tags=tags_str,
+            oras_manifest_fetch=str(manifest_file),
+            name=repo_url,
+            media_type=media_type,
+            architecture_digest=arch_digest,
+            architecture=arch,
+        )
+        config_media_type = (manifest_data.get("config") or {}).get("mediaType")
+        if config_media_type in _IMAGE_CONFIG_MEDIA_TYPES:
+            architecture_metadata_path = _architecture_metadata_path(repo_url, arch_digest)
+            cci_args = replace(cci_args, metadata=str(architecture_metadata_path))
 
-    image_id = create_or_update(cci_args)
+        image_id = create_or_update(cci_args)
+    finally:
+        if architecture_metadata_path is not None:
+            architecture_metadata_path.unlink(missing_ok=True)
     logger.info("The image id is: %s", image_id)
 
     if config.rh_push == "true":
