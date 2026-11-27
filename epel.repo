@@ -1,0 +1,21 @@
+[epel]
+name = Extra Packages for Enterprise Linux 10 - $basearch
+baseurl = https://dl.fedoraproject.org/pub/epel/10/Everything/$basearch/
+enabled = 1
+gpgcheck = 1
+countme = 1
+gpgkey = file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10
+
+[epel-debuginfo]
+name = Extra Packages for Enterprise Linux 10 - $basearch - Debug
+baseurl = https://dl.fedoraproject.org/pub/epel/10/Everything/$basearch/debug/
+enabled = 0
+gpgkey = file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10
+gpgcheck = 1
+
+[epel-source]
+name = Extra Packages for Enterprise Linux 10 - $basearch - Source
+baseurl = https://dl.fedoraproject.org/pub/epel/10/Everything/source/tree/
+enabled = 0
+gpgkey = file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10
+gpgcheck = 1

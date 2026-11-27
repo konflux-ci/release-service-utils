@@ -1,0 +1,42 @@
+---
+# https://github.com/konflux-ci/rpm-lockfile-prototype
+#
+# Declares all RPM packages installed via dnf in the Dockerfile.
+# Run `rpm-lockfile-prototype rpms.in.yaml` to regenerate rpms.lock.yaml.
+
+contentOrigin:
+  repofiles:
+    - ./ubi.repo
+    - ./epel.repo
+
+context:
+  containerfile: ./Dockerfile
+
+packages:
+  # dnf-command(config-manager) is provided by dnf-plugins-core;
+  # the Dockerfile enables the CRB repo via config-manager.
+  - dnf-plugins-core
+  # Main dnf install (Dockerfile lines 175-195)
+  - diffutils
+  - gcc  # needed at build time for compiling gssapi; removed after install
+  - git
+  - git-lfs
+  - gnupg2
+  - jq
+  - krb5-devel
+  - krb5-libs
+  - krb5-workstation
+  - openssl
+  - python3-devel
+  - python3-pip
+  - python3-qpid-proton
+  - python3-requests
+  - python3-rpm
+  - rpm-build
+  - rsync
+  - skopeo
+  - zip
+
+arches:
+  - x86_64
+  - aarch64
