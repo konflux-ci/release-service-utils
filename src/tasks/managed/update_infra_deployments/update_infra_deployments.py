@@ -5,9 +5,6 @@ from __future__ import annotations
 
 import re
 import shutil
-import subprocess
-import sys
-import warnings
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -87,31 +84,6 @@ def _sandboxed_script_from_data(data: dict[str, Any]) -> str | None:
         return None
     text = str(raw).strip()
     return text or None
-
-
-def _bash_script_from_data(data: dict[str, Any]) -> str | None:
-    """Return the legacy bash update script from *data*, or ``None``."""
-    raw = data.get("infra-deployment-update-script")
-    if raw is None:
-        return None
-    text = str(raw).strip()
-    return text or None
-
-
-def _run_update_script(script: str, repo_dir: Path) -> None:
-    """Execute *script* as bash in *repo_dir* and print its stdout/stderr."""
-    proc = subprocess.run(
-        ["bash", "-euo", "pipefail"],
-        cwd=repo_dir,
-        input=script,
-        text=True,
-        check=True,
-        capture_output=True,
-    )
-    if proc.stdout:
-        print(proc.stdout, end="")
-    if proc.stderr:
-        print(proc.stderr, end="", file=sys.stderr)
 
 
 class InfraReplacementError(Exception):
@@ -417,13 +389,6 @@ def _snapshot_from_params(params: TaskParams) -> SnapshotContext:
     return SnapshotContext(**snapshot.first_component(snapshot_file))
 
 
-def _run_patched_script(script: str, revision: str, clone_dir: Path) -> None:
-    """Patch *script* with *revision* and execute it in *clone_dir*."""
-    patched = script.replace(_REVISION_PLACEHOLDER, revision)
-    logger.info("Running update script in %s", clone_dir)
-    _run_update_script(patched, clone_dir)
-
-
 def _collect_apply_result(snap: SnapshotContext, clone_dir: Path) -> ApplyResult:
     """Read pre-update revision and changed paths from the clone after the script."""
     logger.info("Reading working tree diff in %s", clone_dir)
@@ -526,18 +491,9 @@ def run_update_infra_deployments(params: TaskParams) -> None:
     data = file.load_json_dict(data_path)
 
     sandboxed_script = _sandboxed_script_from_data(data)
-    bash_script = _bash_script_from_data(data)
-
-    if sandboxed_script is None and bash_script is None:
+    if sandboxed_script is None:
         logger.info("No update script configured in data")
         return
-    if bash_script is not None and sandboxed_script is None:
-        warnings.warn(
-            "'infra-deployment-update-script' is deprecated, use"
-            " 'infraDeploymentUpdates' instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
 
     target_repo = str(data.get("targetGHRepo", params.default_target_repo)).strip()
     params.work_dir.mkdir(parents=True, exist_ok=True)
@@ -563,11 +519,8 @@ def run_update_infra_deployments(params: TaskParams) -> None:
         snap.origin_repo,
     )
 
-    if sandboxed_script is not None:
-        snapshot_data = file.load_json_dict(snapshot_file)
-        execute_infra_updates(sandboxed_script, clone_dir, snapshot_data, snap.revision)
-    else:
-        _run_patched_script(bash_script, snap.revision, clone_dir)
+    snapshot_data = file.load_json_dict(snapshot_file)
+    execute_infra_updates(sandboxed_script, clone_dir, snapshot_data, snap.revision)
 
     apply_result = _collect_apply_result(snap, clone_dir)
     _create_or_update_pr(

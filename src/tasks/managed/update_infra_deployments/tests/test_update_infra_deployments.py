@@ -58,17 +58,6 @@ def test_extract_old_revision_ignores_version() -> None:
     assert task.update_infra_deployments._extract_old_revision_from_diff(diff) == ""
 
 
-def test_bash_script_from_data_empty() -> None:
-    """Return `None` when the legacy bash script key is missing or blank."""
-    assert task.update_infra_deployments._bash_script_from_data({}) is None
-    assert (
-        task.update_infra_deployments._bash_script_from_data(
-            {"infra-deployment-update-script": ""}
-        )
-        is None
-    )
-
-
 def test_sandboxed_script_from_data_empty() -> None:
     """Return `None` when the sandboxed script key is missing or blank."""
     assert task.update_infra_deployments._sandboxed_script_from_data({}) is None
@@ -100,22 +89,6 @@ def test_github_app_ids() -> None:
         default_app_id="1",
         default_installation_id="2",
     ) == ("9", "8")
-
-
-def test_run_update_script_prints_output(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Forward bash stdout from the update script to the process stdout."""
-    task.update_infra_deployments._run_update_script("echo hello\n", tmp_path)
-    assert "hello" in capsys.readouterr().out
-
-
-def test_run_update_script_prints_stderr(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Forward bash stderr from the update script to the process stderr."""
-    task.update_infra_deployments._run_update_script("echo err 1>&2\n", tmp_path)
-    assert "err" in capsys.readouterr().err
 
 
 def test_collect_apply_result() -> None:
@@ -275,15 +248,6 @@ def test_snapshot_from_params(tmp_path: Path) -> None:
     snap = task.update_infra_deployments._snapshot_from_params(params)
     assert snap.revision == "rev123"
     assert snap.origin_repo == "https://github.com/org/my-app"
-
-
-def test_run_patched_script(tmp_path: Path) -> None:
-    """Replace `{{ revision }}` and invoke bash in the clone directory."""
-    with mock.patch(f"{TASK}.update_infra_deployments._run_update_script") as run:
-        task.update_infra_deployments._run_patched_script(
-            'echo "{{ revision }}"', "rev123", tmp_path
-        )
-    run.assert_called_once_with('echo "rev123"', tmp_path)
 
 
 def test_create_or_update_pr_no_changed_paths() -> None:
@@ -446,7 +410,7 @@ def test_run_update_infra_deployments_syncs_main(tmp_path: Path) -> None:
     data_dir.mkdir()
     _write_snapshot(data_dir)
     (data_dir / "data.json").write_text(
-        json.dumps({"infra-deployment-update-script": "true"}),
+        json.dumps({"infraDeploymentUpdates": "replace('f', r'x', 'y')"}),
         encoding="utf-8",
     )
     params = _task_params(tmp_path, data_dir)
@@ -457,7 +421,7 @@ def test_run_update_infra_deployments_syncs_main(tmp_path: Path) -> None:
             return_value=clone_dir,
         ),
         mock.patch(f"{TASK}.update_infra_deployments.git.sync_to_origin_main") as sync,
-        mock.patch.object(task.update_infra_deployments, "_run_patched_script"),
+        mock.patch.object(task.update_infra_deployments, "execute_infra_updates"),
         mock.patch.object(
             task.update_infra_deployments,
             "_collect_apply_result",
@@ -468,7 +432,6 @@ def test_run_update_infra_deployments_syncs_main(tmp_path: Path) -> None:
             ),
         ),
         mock.patch.object(task.update_infra_deployments, "_create_or_update_pr"),
-        pytest.warns(DeprecationWarning, match="infra-deployment-update-script"),
     ):
         task.run_update_infra_deployments(params)
     sync.assert_called_once_with(clone_dir)
@@ -480,7 +443,7 @@ def test_run_update_infra_deployments_creates_work_dir(tmp_path: Path) -> None:
     data_dir.mkdir()
     _write_snapshot(data_dir)
     (data_dir / "data.json").write_text(
-        json.dumps({"infra-deployment-update-script": "true"}),
+        json.dumps({"infraDeploymentUpdates": "replace('f', r'x', 'y')"}),
         encoding="utf-8",
     )
     work_dir = tmp_path / "missing" / "work"
@@ -505,7 +468,7 @@ def test_run_update_infra_deployments_creates_work_dir(tmp_path: Path) -> None:
             return_value=clone_dir,
         ) as clone,
         mock.patch(f"{TASK}.update_infra_deployments.git.sync_to_origin_main"),
-        mock.patch.object(task.update_infra_deployments, "_run_patched_script"),
+        mock.patch.object(task.update_infra_deployments, "execute_infra_updates"),
         mock.patch.object(
             task.update_infra_deployments,
             "_collect_apply_result",
@@ -516,7 +479,6 @@ def test_run_update_infra_deployments_creates_work_dir(tmp_path: Path) -> None:
             ),
         ),
         mock.patch.object(task.update_infra_deployments, "_create_or_update_pr"),
-        pytest.warns(DeprecationWarning, match="infra-deployment-update-script"),
     ):
         task.run_update_infra_deployments(params)
     assert work_dir.is_dir()
@@ -541,38 +503,6 @@ def test_run_update_infra_deployments_no_script(tmp_path: Path) -> None:
             task.run_update_infra_deployments(params)
     clone.assert_not_called()
     create_pr.assert_not_called()
-
-
-def test_run_update_infra_deployments_bash_deprecation_warning(
-    tmp_path: Path,
-) -> None:
-    """Emit a deprecation warning when using the legacy bash script field."""
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    _write_snapshot(data_dir)
-    (data_dir / "data.json").write_text(
-        json.dumps({"infra-deployment-update-script": "true"}),
-        encoding="utf-8",
-    )
-    params = _task_params(tmp_path, data_dir)
-    clone_dir = tmp_path / "cloned"
-    with (
-        mock.patch(f"{TASK}.update_infra_deployments.git.clone", return_value=clone_dir),
-        mock.patch(f"{TASK}.update_infra_deployments.git.sync_to_origin_main"),
-        mock.patch.object(task.update_infra_deployments, "_run_patched_script"),
-        mock.patch.object(
-            task.update_infra_deployments,
-            "_collect_apply_result",
-            return_value=task.ApplyResult(
-                snap=task.SnapshotContext("rev", "https://github.com/org/my-app", "img"),
-                old_revision="",
-                changed_paths=[],
-            ),
-        ),
-        mock.patch.object(task.update_infra_deployments, "_create_or_update_pr"),
-        pytest.warns(DeprecationWarning, match="infra-deployment-update-script"),
-    ):
-        task.run_update_infra_deployments(params)
 
 
 def test_run_update_infra_deployments_sandboxed_script(tmp_path: Path) -> None:
@@ -605,52 +535,13 @@ def test_run_update_infra_deployments_sandboxed_script(tmp_path: Path) -> None:
     execute.assert_called_once()
 
 
-def test_run_update_infra_deployments_sandboxed_preferred_over_bash(
-    tmp_path: Path,
-) -> None:
-    """Use the sandboxed script when both fields are present."""
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    _write_snapshot(data_dir)
-    (data_dir / "data.json").write_text(
-        json.dumps(
-            {
-                "infraDeploymentUpdates": "replace('f', r'x', 'y')",
-                "infra-deployment-update-script": "echo hello",
-            }
-        ),
-        encoding="utf-8",
-    )
-    params = _task_params(tmp_path, data_dir)
-    clone_dir = tmp_path / "cloned"
-    with (
-        mock.patch(f"{TASK}.update_infra_deployments.git.clone", return_value=clone_dir),
-        mock.patch(f"{TASK}.update_infra_deployments.git.sync_to_origin_main"),
-        mock.patch.object(task.update_infra_deployments, "execute_infra_updates") as execute,
-        mock.patch.object(task.update_infra_deployments, "_run_patched_script") as run_bash,
-        mock.patch.object(
-            task.update_infra_deployments,
-            "_collect_apply_result",
-            return_value=task.ApplyResult(
-                snap=task.SnapshotContext("rev", "https://github.com/org/my-app", "img"),
-                old_revision="",
-                changed_paths=[],
-            ),
-        ),
-        mock.patch.object(task.update_infra_deployments, "_create_or_update_pr"),
-    ):
-        task.run_update_infra_deployments(params)
-    execute.assert_called_once()
-    run_bash.assert_not_called()
-
-
 def test_run_update_infra_deployments_full_flow(tmp_path: Path) -> None:
     """Run clone, apply, and PR steps when a script is present."""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     _write_snapshot(data_dir)
     (data_dir / "data.json").write_text(
-        json.dumps({"infra-deployment-update-script": "true"}),
+        json.dumps({"infraDeploymentUpdates": "replace('f', r'x', 'y')"}),
         encoding="utf-8",
     )
     params = _task_params(tmp_path, data_dir)
@@ -670,12 +561,11 @@ def test_run_update_infra_deployments_full_flow(tmp_path: Path) -> None:
             "_snapshot_from_params",
             return_value=apply_result.snap,
         ),
-        mock.patch.object(task.update_infra_deployments, "_run_patched_script"),
+        mock.patch.object(task.update_infra_deployments, "execute_infra_updates"),
         mock.patch.object(
             task.update_infra_deployments, "_collect_apply_result", return_value=apply_result
         ),
         mock.patch.object(task.update_infra_deployments, "_create_or_update_pr") as create_pr,
-        pytest.warns(DeprecationWarning, match="infra-deployment-update-script"),
     ):
         task.run_update_infra_deployments(params)
     create_pr.assert_called_once()
@@ -952,41 +842,6 @@ def test_integration_sandboxed_multi_file_loop(tmp_path: Path) -> None:
         text = (clone_dir / f"comp/{env}/k.yaml").read_text(encoding="utf-8")
         assert "newTag: newrev789" in text
         assert "old123" not in text
-
-
-def test_integration_bash_fallback(tmp_path: Path) -> None:
-    """End-to-end: legacy bash path still works when no sandboxed script."""
-    kustomization = "images:\n  - newTag: old123\n"
-    clone_files = {"comp/k.yaml": kustomization}
-    params, clone_dir = _setup_integration(
-        tmp_path,
-        data={"infra-deployment-update-script": ("sed -i 's/old123/newrev789/' comp/k.yaml")},
-        snapshot=_INTEGRATION_SNAPSHOT,
-        clone_files=clone_files,
-    )
-
-    with (
-        mock.patch(
-            f"{TASK}.update_infra_deployments.git.clone",
-            side_effect=_mock_clone(clone_dir, clone_files),
-        ),
-        mock.patch(f"{TASK}.update_infra_deployments.git.sync_to_origin_main"),
-        mock.patch.object(task.update_infra_deployments, "_create_or_update_pr"),
-        mock.patch(
-            f"{TASK}.update_infra_deployments.git.working_tree_diff",
-            return_value="",
-        ),
-        mock.patch(
-            f"{TASK}.update_infra_deployments.git.changed_paths_from_status",
-            return_value=[],
-        ),
-        pytest.warns(DeprecationWarning, match="infra-deployment-update-script"),
-    ):
-        task.run_update_infra_deployments(params)
-
-    text = (clone_dir / "comp/k.yaml").read_text(encoding="utf-8")
-    assert "newTag: newrev789" in text
-    assert "old123" not in text
 
 
 # --- Sandbox tests ---
