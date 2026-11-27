@@ -1149,7 +1149,7 @@ def test_push_merge_request_to_main_merges_directly_when_trains_disabled(
 def test_push_merge_request_to_main_detects_dropped_train(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Fail promptly when a previously observed train entry disappears."""
+    """Fail after two re-enqueues when train entries repeatedly disappear."""
     merge_request = mock.Mock(
         iid=7,
         web_url="https://gitlab.example.com/g/r/-/merge_requests/7",
@@ -1165,7 +1165,7 @@ def test_push_merge_request_to_main_detects_dropped_train(
     client.http_get.side_effect = [
         {"status": "fresh", "pipeline": {"web_url": "https://example.com/p/17"}},
         GitlabError("dropped", response_code=404),
-    ]
+    ] * 3
     with pytest.raises(RuntimeError, match="no longer on the merge train.*p/17"):
         gitlab.push_merge_request_to_main(
             client,
@@ -1176,8 +1176,8 @@ def test_push_merge_request_to_main_detects_dropped_train(
             poll_interval_seconds=1,
             use_merge_train=True,
         )
-    client.http_post.assert_called_once()
-    assert client.http_get.call_count == 2
+    assert client.http_post.call_count == 3
+    assert client.http_get.call_count == 6
 
 
 def test_push_merge_request_waits_for_scheduled_train(
@@ -1224,7 +1224,7 @@ def test_push_merge_request_waits_for_scheduled_train(
 def test_push_merge_request_fails_if_train_never_arms(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Stop promptly when a successful queue request never creates an entry."""
+    """Bound retries when successful queue requests never create entries."""
     merge_request = mock.Mock(
         iid=7,
         web_url="https://gitlab.example.com/g/r/-/merge_requests/7",
@@ -1236,6 +1236,7 @@ def test_push_merge_request_fails_if_train_never_arms(
     )
     _stub_merge_request_reload(merge_request)
     monkeypatch.setattr(gitlab, "_MERGE_TRAIN_ENTRY_GRACE_SECONDS", 0)
+    monkeypatch.setattr(gitlab.time, "sleep", lambda _seconds: None)
     client = _mock_gitlab_client()
     client.http_get.side_effect = GitlabError("missing", response_code=404)
 
@@ -1248,7 +1249,7 @@ def test_push_merge_request_fails_if_train_never_arms(
             timeout_seconds=10,
             use_merge_train=True,
         )
-    client.http_post.assert_called_once()
+    assert client.http_post.call_count == 3
 
 
 def test_push_merge_request_reused_mr_observes_existing_train(
@@ -1391,7 +1392,7 @@ def test_push_merge_request_joiner_does_not_delete_conflicted_branch() -> None:
     cleanup.assert_not_called()
 
 
-@pytest.mark.parametrize("response_code", [500, 403])
+@pytest.mark.parametrize("response_code", [500, 403, 400])
 def test_push_merge_request_to_main_handles_train_queue_errors(
     monkeypatch: pytest.MonkeyPatch, response_code: int
 ) -> None:
@@ -1421,7 +1422,7 @@ def test_push_merge_request_to_main_handles_train_queue_errors(
             gitlab, "get_merge_request_train_entry", return_value={"status": "fresh"}
         ),
     ):
-        if response_code == 403:
+        if response_code in (400, 403):
             with pytest.raises(GitlabError, match="queue failed"):
                 gitlab.push_merge_request_to_main(
                     _mock_gitlab_client(),
@@ -2433,3 +2434,311 @@ def test_wait_until_merged_times_out_after_waiting_log(
             timeout_seconds=2,
             poll_interval_seconds=1,
         )
+
+
+@pytest.mark.parametrize("recover", [True, False])
+def test_train_strategy_readiness_retry(
+    monkeypatch: pytest.MonkeyPatch, recover: bool
+) -> None:
+    """Retry both failed enqueue strategies with backoff within one MR budget."""
+    mr = mock.Mock(
+        iid=7,
+        web_url="https://example.com/mr/7",
+        state="opened",
+        sha="abc",
+        merge_status="cannot_be_merged",
+        detailed_merge_status="checking",
+        head_pipeline=None,
+    )
+    _stub_merge_request_reload(mr)
+    client = _mock_gitlab_client()
+    client.projects.get.return_value.merge_trains_enabled = True
+    error = GitlabError(
+        "400 Bad request - No available merge train strategy", response_code=400
+    )
+    client.http_post.side_effect = [error] * 4 + [None] if recover else error
+    client.http_get.return_value = {"status": "fresh"}
+    elapsed = [0.0]
+    sleeps = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        elapsed[0] += seconds
+        if recover and client.http_post.call_count == 5:
+            mr.state = "merged"
+
+    monkeypatch.setattr(gitlab.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(gitlab.time, "sleep", sleep)
+    attempt = gitlab.MergeTrainAttempt()
+    kwargs = dict(
+        timeout_seconds=10 if recover else 5,
+        poll_interval_seconds=1,
+        use_merge_train=True,
+        train_attempt=attempt,
+    )
+    if recover:
+        assert gitlab.push_merge_request_to_main(client, "g/r", mr, "feat", **kwargs) is mr
+        assert client.http_post.call_count == 5
+        assert attempt.queued_by_this_run
+        assert not attempt.may_merge_without_this_run
+    else:
+        with pytest.raises(TimeoutError, match="No available merge train strategy"):
+            gitlab.push_merge_request_to_main(client, "g/r", mr, "feat", **kwargs)
+    assert sleeps == ([1, 2, 4] if recover else [1, 2, 2])
+    mr.merge.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "outcome", ["merged", "changed", "failed", "closed", "draft", "conflict", "timeout"]
+)
+def test_requeue_dropped_train(monkeypatch: pytest.MonkeyPatch, outcome: str) -> None:
+    """Re-enqueue without inspecting SHA or notes, preserving merge checks and deadline."""
+    mr = mock.Mock(
+        iid=7,
+        web_url="https://example.com/mr/7",
+        state="opened",
+        sha="abc",
+        draft=False,
+        merge_status="cannot_be_merged",
+        detailed_merge_status="ci_must_pass",
+        head_pipeline={"status": "success"},
+        merge_when_pipeline_succeeds=False,
+    )
+    _stub_merge_request_reload(mr)
+    client = _mock_gitlab_client()
+    client.projects.get.return_value.merge_trains_enabled = True
+    client.http_get.side_effect = [
+        {"status": "fresh"},
+        GitlabError("dropped", response_code=404),
+        {"status": "fresh"},
+    ]
+    elapsed = [0.0]
+
+    def sleep(seconds: float) -> None:
+        elapsed[0] += seconds
+        if client.http_get.call_count == 2:
+            if outcome == "changed":
+                mr.sha = "different"
+            elif outcome == "failed":
+                mr.head_pipeline = {"status": "failed"}
+            elif outcome == "closed":
+                mr.state = "closed"
+            elif outcome == "draft":
+                mr.draft = True
+            elif outcome == "conflict":
+                mr.detailed_merge_status = "conflict"
+        if client.http_post.call_count == 2:
+            mr.state = "merged"
+
+    monkeypatch.setattr(gitlab.time, "sleep", sleep)
+    monkeypatch.setattr(gitlab.time, "monotonic", lambda: elapsed[0])
+    kwargs = dict(
+        timeout_seconds=2 if outcome == "timeout" else 10,
+        poll_interval_seconds=1,
+        use_merge_train=True,
+    )
+    if outcome in ("merged", "changed"):
+        assert gitlab.push_merge_request_to_main(client, "g/r", mr, "feat", **kwargs) is mr
+        assert client.http_post.call_count == 2
+    else:
+        error = TimeoutError if outcome == "timeout" else RuntimeError
+        with pytest.raises(error, match="timed out|failed|closed|draft|conflict"):
+            gitlab.push_merge_request_to_main(client, "g/r", mr, "feat", **kwargs)
+        assert client.http_post.call_count == 1
+    mr.notes.list.assert_not_called()
+    mr.merge.assert_not_called()
+
+
+@pytest.mark.parametrize("pipeline_status", ["running", "success"])
+def test_scheduled_train_after_grace(
+    monkeypatch: pytest.MonkeyPatch, pipeline_status: str
+) -> None:
+    """Requeue stale successful schedules, but let genuine long-running CI finish."""
+    mr = mock.Mock(
+        iid=7,
+        web_url="https://example.com/mr/7",
+        state="opened",
+        draft=False,
+        merge_status="cannot_be_merged",
+        detailed_merge_status="ci_must_pass",
+        head_pipeline={"status": pipeline_status},
+        merge_when_pipeline_succeeds=True,
+    )
+    _stub_merge_request_reload(mr)
+    elapsed = [0.0]
+    monkeypatch.setattr(gitlab.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(
+        gitlab.time, "sleep", lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds)
+    )
+    monkeypatch.setattr(gitlab, "_MERGE_TRAIN_ENTRY_GRACE_SECONDS", 2)
+    client = _mock_gitlab_client()
+    client.http_get.side_effect = GitlabError("missing", response_code=404)
+    attempt = gitlab.MergeTrainAttempt()
+    error = TimeoutError if pipeline_status == "running" else RuntimeError
+    with pytest.raises(error):
+        gitlab.push_merge_request_to_main(
+            client,
+            "g/r",
+            mr,
+            "feat",
+            timeout_seconds=100,
+            poll_interval_seconds=1,
+            use_merge_train=True,
+            train_attempt=attempt,
+        )
+    assert client.http_post.call_count == (1 if pipeline_status == "running" else 3)
+    if pipeline_status == "success":
+        assert not attempt.queued_by_this_run
+        assert attempt.may_merge_without_this_run
+
+
+@pytest.mark.parametrize("record_queue_error", [True, False])
+def test_refresh_timeout_keeps_queue_error(
+    monkeypatch: pytest.MonkeyPatch, record_queue_error: bool
+) -> None:
+    """Preserve the queue error and cause when a refresh consumes the remaining budget."""
+    mr = mock.Mock(
+        iid=7,
+        web_url="https://example.com/mr/7",
+        state="opened",
+        draft=False,
+        merge_status="cannot_be_merged",
+        detailed_merge_status="checking",
+        head_pipeline=None,
+    )
+    _stub_merge_request_reload(mr)
+    elapsed = [0.0]
+    reload_mr = mr.manager.get.side_effect
+
+    def refresh(*args: object, **kwargs: object) -> mock.Mock:
+        if not record_queue_error or mr.manager.get.call_count == 2:
+            elapsed[0] = 10
+        return reload_mr(*args, **kwargs)
+
+    mr.manager.get.side_effect = refresh
+    monkeypatch.setattr(gitlab.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(
+        gitlab.time, "sleep", lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds)
+    )
+    error = GitlabError("No available merge train strategy", response_code=400)
+    with mock.patch.object(gitlab, "add_merge_request_to_train", side_effect=error):
+        with pytest.raises(TimeoutError) as caught:
+            gitlab.push_merge_request_to_main(
+                _mock_gitlab_client(),
+                "g/r",
+                mr,
+                "feat",
+                timeout_seconds=10,
+                poll_interval_seconds=1,
+                use_merge_train=True,
+            )
+    if record_queue_error:
+        assert "No available merge train strategy" in str(caught.value)
+        assert caught.value.__cause__ is error
+    else:
+        assert "timed out waiting" in str(caught.value)
+
+
+@pytest.mark.parametrize("expire_during", ["enqueue", "drop"])
+def test_train_request_exhausts_deadline(
+    monkeypatch: pytest.MonkeyPatch, expire_during: str
+) -> None:
+    """Stop immediately when enqueue or missing-entry lookup uses the remaining budget."""
+    mr = mock.Mock(
+        iid=7,
+        web_url="https://example.com/mr/7",
+        state="opened",
+        draft=False,
+        merge_status="cannot_be_merged",
+        detailed_merge_status="ci_must_pass",
+        head_pipeline={"status": "success"},
+        merge_when_pipeline_succeeds=False,
+    )
+    _stub_merge_request_reload(mr)
+    elapsed = [0.0]
+    monkeypatch.setattr(gitlab.time, "monotonic", lambda: elapsed[0])
+    sleep = mock.Mock(side_effect=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds))
+    monkeypatch.setattr(gitlab.time, "sleep", sleep)
+    attempt = gitlab.MergeTrainAttempt()
+
+    def enqueue(*args: object, **kwargs: object) -> bool:
+        if expire_during == "enqueue":
+            elapsed[0] = 10
+        return True
+
+    def lookup(*args: object, **kwargs: object) -> dict | None:
+        if entry.call_count == 1:
+            return {"status": "fresh"}
+        elapsed[0] = 10
+        return None
+
+    with (
+        mock.patch.object(gitlab, "add_merge_request_to_train", side_effect=enqueue) as add,
+        mock.patch.object(
+            gitlab, "get_merge_request_train_entry", side_effect=lookup
+        ) as entry,
+        pytest.raises(TimeoutError),
+    ):
+        gitlab.push_merge_request_to_main(
+            _mock_gitlab_client(),
+            "g/r",
+            mr,
+            "feat",
+            timeout_seconds=10,
+            poll_interval_seconds=1,
+            use_merge_train=True,
+            train_attempt=attempt,
+        )
+    add.assert_called_once()
+    if expire_during == "drop":
+        assert not attempt.queued_by_this_run
+        assert attempt.may_merge_without_this_run
+        sleep.assert_called_once_with(1)
+    else:
+        entry.assert_not_called()
+        sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("ready_to_merge", [True, False])
+def test_direct_merge_timeout_forgets_previous_queue_error(
+    monkeypatch: pytest.MonkeyPatch, ready_to_merge: bool
+) -> None:
+    """Report direct-merge timeouts without chaining a superseded enqueue failure."""
+    mr = mock.Mock(
+        iid=7,
+        web_url="https://example.com/mr/7",
+        state="opened",
+        draft=False,
+        merge_status="can_be_merged" if ready_to_merge else "checking",
+        detailed_merge_status="mergeable" if ready_to_merge else "ci_still_running",
+        head_pipeline={"status": "success" if ready_to_merge else "running"},
+    )
+    _stub_merge_request_reload(mr)
+    elapsed = [0.0]
+    monkeypatch.setattr(gitlab.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(
+        gitlab.time, "sleep", lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds)
+    )
+    queue_error = GitlabError("No available merge train strategy", response_code=400)
+    with (
+        mock.patch.object(
+            gitlab, "add_merge_request_to_train", side_effect=[queue_error, None]
+        ) as enqueue,
+        mock.patch.object(gitlab, "get_merge_request_train_entry") as entry,
+        pytest.raises(TimeoutError, match="timed out waiting") as caught,
+    ):
+        gitlab.push_merge_request_to_main(
+            _mock_gitlab_client(),
+            "g/r",
+            mr,
+            "feat",
+            timeout_seconds=5,
+            poll_interval_seconds=1,
+            use_merge_train=True,
+        )
+    assert enqueue.call_count == 2
+    assert mr.merge.call_count == (1 if ready_to_merge else 0)
+    entry.assert_not_called()
+    assert "enqueue" not in str(caught.value)
+    assert "No available merge train strategy" not in str(caught.value)
+    assert caught.value.__cause__ is None
