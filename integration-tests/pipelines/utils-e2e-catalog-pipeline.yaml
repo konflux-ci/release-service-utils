@@ -269,6 +269,37 @@ spec:
             securityContext:
               runAsUser: 1001
 
+    - name: test-spdx-sbom
+      runAfter:
+        - extract-snapshot
+      when:
+        # Suite gate only makes this run once per PR, not once per scenario.
+        - input: $(params.PIPELINE_TEST_SUITE)
+          operator: in
+          values: [rh-advisories-idempotent]
+      params:
+        - name: utilsImage
+          value: $(tasks.extract-snapshot.results.utilsImage)
+      taskSpec:
+        params:
+          - name: utilsImage
+        volumes:
+          - name: registry-data
+            emptyDir: {}
+        sidecars:
+          - name: registry
+            # v2.1.23
+            image: ghcr.io/project-zot/zot@sha256:9d3de83ac2099e6f4843045b4c9b65b7e8baf40f92d28f54906dee9d4d390fd7
+            volumeMounts:
+              - name: registry-data
+                mountPath: /var/lib/registry
+        steps:
+          - name: verify-spdx-attachments
+            image: $(params.utilsImage)
+            command: [bash, /home/integration-tests/test-spdx-sbom.sh]
+            securityContext:
+              runAsUser: 1001
+
     - name: git-clone-catalog-patch-git-push
       runAfter:
         - extract-snapshot

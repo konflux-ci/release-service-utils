@@ -30,6 +30,7 @@ Implementation details are in `utils-e2e-catalog-pipeline.yaml` and `lib/find_ca
 |------|---------|
 | `pipelines/utils-e2e-catalog-pipeline.yaml` | Params mirror catalog ITS (`PIPELINE_TEST_SUITE`, `PIPELINE_USED`, `PIPELINE_TEST_SUITE_VARS`, secret names, …); optional params and defaults are in the YAML; tasks above. |
 | `run-test.sh` | Submits a `PipelineRun` with the same param names as catalog ITS (`PIPELINE_TEST_SUITE`, `PIPELINE_USED`, `PIPELINE_TEST_SUITE_VARS` …); optional `--wait` (`./run-test.sh --help`). |
+| `test-spdx-sbom.sh` | Checks legacy and signed SPDX SBOM downloads against a disposable registry. |
 | `lib/find_catalog_suite_from_utils_diff.py` | Maps a utils diff to affected suites; `--print-all-pairs` for tooling. |
 | `lib/catalog_clone_patch_push.sh` | Clone catalog, patch image refs, temp repo, push. |
 | `lib/run_single_catalog_e2e_suite.py` | Creates the child catalog `PipelineRun` and waits. |
@@ -74,6 +75,16 @@ Files under `integration-tests/lib/` are copied into the utils image at `/home/i
 names as catalog ITS (**`PIPELINE_TEST_SUITE`**, **`PIPELINE_USED`**,
 **`VAULT_PASSWORD_SECRET_NAME`**, **`PIPELINE_TEST_SUITE_VARS`**, …), plus **`SNAPSHOT`**. Omit
 optional params to use pipeline defaults.
+
+### SPDX SBOM smoke test
+
+The `test-spdx-sbom` task runs in the candidate utils image when `PIPELINE_TEST_SUITE` is
+`rh-advisories-idempotent`, even if the catalog E2E run is skipped. Using a disposable Zot registry,
+it checks that a legacy `.sbom` downloads without a key and that an SBOM attached as a signed OCI
+referrer requires the matching key. A wrong key is rejected without retrying.
+
+The test uses a single-architecture image and local key files. It does not cover multi-arch
+indexes or `k8s://` keys, and it does not contact Pyxis.
 
 ### Run locally (`run-test.sh`)
 
