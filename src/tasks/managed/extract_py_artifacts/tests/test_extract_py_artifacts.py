@@ -181,6 +181,33 @@ def test_extract_sbom_from_wheel_missing(tmp_path: Path) -> None:
         epa.extract_sbom_from_wheel(path, "test_package", "1.0.0")
 
 
+def test_extract_sbom_from_wheel_falls_back_to_fromager(tmp_path: Path) -> None:
+    """Read Fromager's unrenamed SBOM when ``redhat.spdx.json`` is absent."""
+    path = _wheel(
+        tmp_path,
+        sbom={"packages": [], "name": "fromager"},
+        member="test_package-1.0.0.dist-info/sboms/fromager.spdx.json",
+    )
+    sbom = epa.extract_sbom_from_wheel(path, "test_package", "1.0.0")
+    assert sbom == {"packages": [], "name": "fromager"}
+
+
+def test_extract_sbom_from_wheel_prefers_redhat(tmp_path: Path) -> None:
+    """Prefer ``redhat.spdx.json`` when the wheel carries both SBOM names."""
+    path = tmp_path / "test_package-1.0.0-py3-none-any.whl"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            "test_package-1.0.0.dist-info/sboms/fromager.spdx.json",
+            json.dumps({"name": "fromager"}),
+        )
+        archive.writestr(
+            "test_package-1.0.0.dist-info/sboms/redhat.spdx.json",
+            json.dumps({"name": "redhat"}),
+        )
+    sbom = epa.extract_sbom_from_wheel(path, "test_package", "1.0.0")
+    assert sbom == {"name": "redhat"}
+
+
 def test_extract_pypi_purl_returns_first_pypi_locator() -> None:
     """Keep the first ``pkg:pypi/`` locator and ignore the wheel name."""
     sbom = {

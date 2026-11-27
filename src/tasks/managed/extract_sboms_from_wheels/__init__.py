@@ -3,6 +3,7 @@
 Recursively walk ``*.whl`` files under a data directory, pull
 ``redhat.spdx.json`` from each wheel's ``.dist-info/sboms/`` path, and
 write it into ``<data_dir>/sboms`` for a later Atlas/TPA upload step.
+Wheels without ``redhat.spdx.json`` fall back to ``fromager.spdx.json``.
 """
 
 from __future__ import annotations
