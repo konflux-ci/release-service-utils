@@ -1370,7 +1370,7 @@ def test_iter_konflux_open_mrs_rejects_component_group_prefix_collision() -> Non
 
 
 def test_find_existing_mr_with_same_diff(tmp_path: Path) -> None:
-    """Matching staged diff returns existing MR info."""
+    """Matching staged diff returns structured existing-MR info."""
     repo = tmp_path / "repo"
     repo.mkdir()
     existing_mr = mock.Mock()
@@ -1397,7 +1397,10 @@ def test_find_existing_mr_with_same_diff(tmp_path: Path) -> None:
             "org/up", repo, tmp_path, _mock_gitlab_client(), "test-group"
         )
     assert info is not None
-    assert "merge_requests/99" in info
+    assert json.loads(info) == {
+        "merge_request": "https://gitlab.com/org/up/-/merge_requests/99",
+        "str": "There is an existing MR with the same updates in the repo",
+    }
 
 
 def test_commit_and_create_mr(tmp_path: Path) -> None:
