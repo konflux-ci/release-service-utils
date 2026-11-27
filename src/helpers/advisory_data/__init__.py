@@ -1,5 +1,7 @@
 """Decode advisory task payloads and content filtering (idempotency rules)."""
 
+from __future__ import annotations
+
 from .advisory_data import (  # noqa: F401
     ADVISORY_SECRET_PROD,
     ADVISORY_SECRET_STAGE,
@@ -8,6 +10,7 @@ from .advisory_data import (  # noqa: F401
     ERRATA_SECRET_PROD,
     ERRATA_SECRET_STAGE,
     VALID_ADVISORY_TYPES,
+    advisory_base_path,
     advisory_secret_name,
     advisory_url_prefix,
     append_signing_key_to_content,
@@ -22,7 +25,8 @@ from .advisory_data import (  # noqa: F401
     get_advisory_metadata_name,
     get_advisory_spec_type,
     json_dict_to_yaml_text,
-    list_existing_advisory_subdirs,
+    is_advisory_path,
+    list_existing_advisory_files,
     load_advisory_yaml,
     match_rpm_advisory_purl,
     set_decoded_content_array,

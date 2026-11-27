@@ -106,8 +106,8 @@ def test_advisory_yaml_to_pyxis_payload_minimal() -> None:
 def test_advisory_processing_error() -> None:
     """Test AdvisoryProcessingError aggregates failures."""
     failures = [
-        "data/advisories/2024-001/advisory.yaml: Network timeout",
-        "data/advisories/2024-002/advisory.yaml: Invalid YAML",
+        "data/advisories/t/2024/0001/advisory.yaml: Network timeout",
+        "data/advisories/t/2024/0002/advisory.yaml: Invalid YAML",
     ]
     error = AdvisoryProcessingError(failures)
 
@@ -124,6 +124,7 @@ def test_advisory_processing_error() -> None:
     "release_service_utils.tasks.aux.advisory_push.advisory_push.gitlab.configure_git_oauth2_auth"  # noqa: E501
 )
 @patch("release_service_utils.tasks.aux.advisory_push.advisory_push.subprocess.run")
+@pytest.mark.parametrize("flat", [False, True])
 def test_clone_and_find_changes(
     mock_subprocess: MagicMock,
     mock_auth: MagicMock,
@@ -131,6 +132,7 @@ def test_clone_and_find_changes(
     mock_diff: MagicMock,
     mock_clone: MagicMock,
     tmp_path: Path,
+    flat: bool,
 ) -> None:
     """Test clone_and_find_changes function."""
     from release_service_utils.tasks.aux.advisory_push.advisory_push import (
@@ -140,9 +142,17 @@ def test_clone_and_find_changes(
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
     mock_clone.return_value = repo_dir
+    paths = [
+        (
+            f"data/t/2024/{number:04d}.yaml"
+            if flat
+            else f"data/advisories/t/2024/{number:04d}/advisory.yaml"
+        )
+        for number in (1, 2, 3)
+    ]
     mock_diff.side_effect = [
-        ["data/advisories/2024-001/advisory.yaml", "data/advisories/2024-002/advisory.yaml"],
-        ["data/advisories/2024-003/advisory.yaml"],
+        [*paths[:2], "schema/advisory.yaml", "data/t/notes.yaml"],
+        [paths[2], "README.md", "data/t/2024/0004.json"],
     ]
 
     result_dir, new, updated = clone_and_find_changes(
@@ -155,11 +165,8 @@ def test_clone_and_find_changes(
     )
 
     assert result_dir == repo_dir
-    assert new == [
-        "data/advisories/2024-001/advisory.yaml",
-        "data/advisories/2024-002/advisory.yaml",
-    ]
-    assert updated == ["data/advisories/2024-003/advisory.yaml"]
+    assert new == paths[:2]
+    assert updated == paths[2:]
 
     mock_auth.assert_called_once_with("test-token")
     mock_clone.assert_called_once()
@@ -191,7 +198,7 @@ spec:
     send_messages(
         repo_dir,
         "abc123",
-        ["data/advisories/2024-001/advisory.yaml"],
+        ["data/advisories/t/2024/0001/advisory.yaml"],
         [],
         "kafka.topic",
         "/secrets/kafka/user",
@@ -285,7 +292,7 @@ spec:
     update_pyxis(
         repo_dir,
         "abc123",
-        ["data/advisories/2024-001/advisory.yaml"],
+        ["data/advisories/t/2024/0001/advisory.yaml"],
         "https://pyxis.example.com/v1/advisories",
         "https://pyxis.example.com/v1/images",
         "/secrets/pyxis/cert",
@@ -330,8 +337,8 @@ spec:
             repo_dir,
             "abc123",
             [
-                "data/advisories/2024-001/advisory.yaml",
-                "data/advisories/2024-002/advisory.yaml",
+                "data/advisories/t/2024/0001/advisory.yaml",
+                "data/advisories/t/2024/0002/advisory.yaml",
             ],
             "https://pyxis.example.com/v1/advisories",
             "https://pyxis.example.com/v1/images",

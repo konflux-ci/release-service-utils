@@ -925,3 +925,27 @@ def test_last_commit_date(tmp_path: Path) -> None:
         cwd=tmp_path,
         stderr_path=None,
     )
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_tree_has_directory_outside_sparse_checkout(tmp_path: Path, legacy: bool) -> None:
+    """Detect the repository layout even when sparse checkout hides all advisories."""
+
+    def run(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    run("init")
+    relative = (
+        "data/advisories/other/2025/0042/advisory.yaml"
+        if legacy
+        else "data/other/2025/0042.yaml"
+    )
+    advisory = tmp_path / relative
+    advisory.parent.mkdir(parents=True)
+    advisory.write_text("spec: {}\n")
+    run("add", ".")
+    run("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "test")
+    run("update-ref", "refs/remotes/origin/main", "HEAD")
+    run("sparse-checkout", "set", "data/advisories/new", "data/new")
+    assert not advisory.exists()
+    assert git.tree_has_directory(tmp_path, "data/advisories") is legacy

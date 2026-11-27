@@ -191,20 +191,22 @@ def test_reserve_errata_live_id_missing_live_id(tmp_path: Path) -> None:
             )
 
 
-def test_clone_advisory_repo(tmp_path: Path, creds: gitlab.GitLabCredentials) -> None:
+@pytest.mark.parametrize("legacy", [True, False])
+def test_clone_advisory_repo(
+    tmp_path: Path, creds: gitlab.GitLabCredentials, legacy: bool
+) -> None:
     """Sparse-clone the advisory repo and return its root and tenant base path."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "data" / "advisories" / "tenant").mkdir(parents=True)
-    with mock.patch(
-        f"{TASK}.create_advisory.gitlab.clone_project_sparse",
-        return_value=repo,
+    with (
+        mock.patch(f"{TASK}.create_advisory.git.tree_has_directory", return_value=legacy),
+        mock.patch(f"{TASK}.create_advisory.gitlab.clone_project_sparse", return_value=repo),
     ):
         out_repo_root, base = create_advisory.create_advisory._clone_advisory_repo(
             creds, "tenant", tmp_path, stderr_path=tmp_path / "e.log"
         )
     assert out_repo_root == repo
-    assert base == repo / "data" / "advisories" / "tenant"
+    assert base == repo / ("data/advisories" if legacy else "data") / "tenant"
 
 
 def test_write_initial_content_file(tmp_path: Path) -> None:
@@ -242,12 +244,14 @@ def test_write_success_results(tmp_path: Path) -> None:
     assert paths["advisory_url"].read_text(encoding="utf-8") == "https://portal/x"
 
 
-def test_finish_if_all_content_already_published_true(tmp_path: Path) -> None:
+@pytest.mark.parametrize("legacy", [True, False])
+def test_finish_if_all_content_already_published_true(tmp_path: Path, legacy: bool) -> None:
     """Return True and write results when all content is already published."""
     repo = tmp_path / "repo"
-    base = repo / "data" / "advisories" / "t" / "2025" / "0001"
-    base.mkdir(parents=True)
-    (base / "advisory.yaml").write_text(
+    tenant_base = repo / ("data/advisories" if legacy else "data") / "t"
+    advisory = tenant_base / ("2025/0001/advisory.yaml" if legacy else "2025/0001.yaml")
+    advisory.parent.mkdir(parents=True)
+    advisory.write_text(
         "metadata:\n  name: '2025:0001'\nspec:\n  type: RHSA\n  content:\n"
         "    images:\n      - containerImage: q.io/i\n        tags: ['t']\n"
         "        repository: r\n",
@@ -267,7 +271,7 @@ def test_finish_if_all_content_already_published_true(tmp_path: Path) -> None:
     }
     assert create_advisory.create_advisory._finish_if_all_content_already_published(
         repo_root=repo,
-        advisory_base=repo / "data" / "advisories" / "t",
+        advisory_base=tenant_base,
         content_file=content,
         content_list_path=".content.images",
         content_type="image",
@@ -277,6 +281,10 @@ def test_finish_if_all_content_already_published_true(tmp_path: Path) -> None:
         result_paths=results,
     )
     assert results["result"].read_text(encoding="utf-8") == "Success"
+
+    assert results["advisory_internal_url"].read_text() == (
+        "https://gitlab.example.com/g/r/-/raw/main/" + advisory.relative_to(repo).as_posix()
+    )
 
 
 def test_finish_if_all_content_already_published_false(tmp_path: Path) -> None:
@@ -465,7 +473,7 @@ def test_render_and_validate_advisory_yaml(tmp_path: Path) -> None:
     ):
         rel = create_advisory.create_advisory._render_and_validate_advisory_yaml(
             repo_root=repo,
-            new_advisory_dir=new_dir,
+            new_advisory_yaml_path=new_dir / "advisory.yaml",
             merged={"type": "RHSA", "content": {"images": []}},
             portal_advisory_id="2025:0042",
             ship_date="2025-01-01T00:00:00Z",
@@ -497,7 +505,7 @@ def test_render_and_validate_schema_failure(tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="schema validation failed"):
             create_advisory.create_advisory._render_and_validate_advisory_yaml(
                 repo_root=repo,
-                new_advisory_dir=new_dir,
+                new_advisory_yaml_path=new_dir / "advisory.yaml",
                 merged={"type": "RHSA", "content": {"images": []}},
                 portal_advisory_id="2025:0042",
                 ship_date="2025-01-01T00:00:00Z",
@@ -516,18 +524,22 @@ def test_advisory_source_branch_is_stable(tmp_path: Path) -> None:
     assert len(branch.split("-")[-1]) == 12
 
 
-def test_advisory_yaml_path_from_merge_request() -> None:
+@pytest.mark.parametrize(
+    "path", ["data/advisories/t/2025/0001/advisory.yaml", "data/t/2025/0001.yaml"]
+)
+def test_advisory_yaml_path_from_merge_request(path: str) -> None:
     """Extract the advisory YAML path from MR file changes."""
     merge_request = mock.Mock()
     merge_request.changes.return_value = {
         "changes": [
-            {"new_path": "data/advisories/t/2025/0001/advisory.yaml"},
+            {"new_path": "schema/advisory.yaml"},
+            {"new_path": path},
         ]
     }
-    path = create_advisory.create_advisory._advisory_yaml_path_from_merge_request(
+    actual = create_advisory.create_advisory._advisory_yaml_path_from_merge_request(
         merge_request
     )
-    assert path == "data/advisories/t/2025/0001/advisory.yaml"
+    assert actual == path
 
 
 def test_commit_and_merge_new_advisory(
@@ -587,19 +599,27 @@ def test_commit_and_merge_new_advisory(
     assert out == "data/2025/0001/advisory.yaml"
 
 
-def test_create_new_advisory(tmp_path: Path, creds: gitlab.GitLabCredentials) -> None:
+@pytest.mark.parametrize("legacy", [True, False])
+def test_create_new_advisory(
+    tmp_path: Path, creds: gitlab.GitLabCredentials, legacy: bool
+) -> None:
     """Render, commit, and write success results for a new advisory."""
     repo = tmp_path / "repo"
-    base = repo / "data" / "advisories" / "t"
+    base = repo / ("data/advisories" if legacy else "data") / "t"
     base.mkdir(parents=True)
     results = {
         "result": tmp_path / "r",
         "advisory_url": tmp_path / "u",
         "advisory_internal_url": tmp_path / "i",
     }
+    (repo / "schema").mkdir()
+    (repo / "schema" / "advisory.json").write_text(json.dumps(_minimal_schema()))
+
+    def fake_render(out_path: Path, _tpl: Path, _vars: dict, **_: object) -> None:
+        out_path.write_text(json.dumps(_valid_advisory_yaml_dict()))
+
     with mock.patch(
-        f"{TASK}.create_advisory._render_and_validate_advisory_yaml",
-        return_value="data/2025/0042/advisory.yaml",
+        f"{TASK}.create_advisory.render_template_to_json_file", side_effect=fake_render
     ):
         with mock.patch(
             f"{TASK}.create_advisory._commit_and_merge_new_advisory"
@@ -629,6 +649,11 @@ def test_create_new_advisory(tmp_path: Path, creds: gitlab.GitLabCredentials) ->
             )
     assert commit_merge.call_args.kwargs["advisory_type"] == "RHSA"
     assert commit_merge.call_args.kwargs["advisory_name"] == "2025:0042"
+
+    expected = base / ("2025/0042/advisory.yaml" if legacy else "2025/0042.yaml")
+    assert expected.is_file()
+    assert commit_merge.call_args.args[3] == expected.relative_to(repo).as_posix()
+    assert list(repo.rglob("*.json")) == [repo / "schema" / "advisory.json"]
 
 
 def test_create_new_advisory_stage_portal_url(
@@ -1516,7 +1541,7 @@ def test_render_schema_failure_wrong_type_and_severity(tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="schema validation failed"):
             create_advisory.create_advisory._render_and_validate_advisory_yaml(
                 repo_root=repo,
-                new_advisory_dir=new_dir,
+                new_advisory_yaml_path=new_dir / "advisory.yaml",
                 merged={"type": "RHSA", "content": {"images": []}},
                 portal_advisory_id="2025:0042",
                 ship_date="2025-01-01T00:00:00Z",
@@ -2072,7 +2097,7 @@ def test_render_preserves_tags_and_product_version(tmp_path: Path) -> None:
     ):
         create_advisory.create_advisory._render_and_validate_advisory_yaml(
             repo_root=repo,
-            new_advisory_dir=new_dir,
+            new_advisory_yaml_path=new_dir / "advisory.yaml",
             merged=merged,
             portal_advisory_id="2025:0001",
             ship_date="2025-01-01T00:00:00Z",
@@ -2135,7 +2160,7 @@ def test_render_jinja_cross_field_references(tmp_path: Path) -> None:
     ):
         create_advisory.create_advisory._render_and_validate_advisory_yaml(
             repo_root=repo,
-            new_advisory_dir=new_dir,
+            new_advisory_yaml_path=new_dir / "advisory.yaml",
             merged=merged,
             portal_advisory_id="2025:0001",
             ship_date="2025-01-01T00:00:00Z",
@@ -4298,3 +4323,36 @@ def test_finish_from_merged_passes_remaining_timeout(
             deadline=90.0,
         )
     assert push_merge.call_args.kwargs["timeout_seconds"] == 40.0
+
+
+@pytest.mark.parametrize(
+    ("path", "duplicate"),
+    [
+        ("data/advisories/other/2025/0042/advisory.yaml", True),
+        ("data/other/2025/0042.yaml", True),
+        ("data/other/2025/00420.yaml", False),
+        ("data/other/2024/0042.yaml", False),
+        ("data/other/2025/0042.json", False),
+    ],
+)
+def test_ensure_advisory_number_unused_both_layouts(
+    tmp_path: Path, path: str, duplicate: bool
+) -> None:
+    """Reject reused numbers across tenants in either repository layout."""
+    import re
+
+    def matches(_repo: Path, pattern: str, _listing: Path, **_: object) -> bool:
+        return re.search(pattern, path + "\n") is not None
+
+    with mock.patch(
+        f"{TASK}.create_advisory.git.origin_main_has_path_matching", side_effect=matches
+    ):
+        if duplicate:
+            with pytest.raises(ValueError, match="already exists"):
+                create_advisory.create_advisory._ensure_advisory_number_unused(
+                    tmp_path, "2025", "0042", tmp_path / "listing", stderr_path=tmp_path / "e"
+                )
+        else:
+            create_advisory.create_advisory._ensure_advisory_number_unused(
+                tmp_path, "2025", "0042", tmp_path / "listing", stderr_path=tmp_path / "e"
+            )

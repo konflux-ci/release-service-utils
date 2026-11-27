@@ -151,24 +151,26 @@ def test_json_dict_to_yaml_text_int_bool_unaffected() -> None:
     assert "skip_customer_notifications: false" in lines
 
 
-def test_list_existing_advisory_subdirs_order(tmp_path: Path) -> None:
+def test_list_existing_advisory_files_order(tmp_path: Path) -> None:
     """List advisory subdirs with newest leaf mtime first."""
     base = tmp_path / "t"
     d_old = base / "2024" / "0001"
     d_new = base / "2025" / "0002"
     d_old.mkdir(parents=True)
     d_new.mkdir(parents=True)
+    (d_old / "advisory.yaml").touch()
+    (d_new / "advisory.yaml").touch()
     t_old = time.time() - 100
     t_new = time.time()
     os.utime(d_old, (t_old, t_old))
     os.utime(d_new, (t_new, t_new))
-    rel = advisory_data.list_existing_advisory_subdirs(base)
-    assert rel == ["2025/0002", "2024/0001"]
+    rel = advisory_data.list_existing_advisory_files(base)
+    assert rel == [d_new / "advisory.yaml", d_old / "advisory.yaml"]
 
 
-def test_list_existing_advisory_subdirs_missing(tmp_path: Path) -> None:
+def test_list_existing_advisory_files_missing(tmp_path: Path) -> None:
     """Return an empty list when the advisory base path is absent."""
-    assert advisory_data.list_existing_advisory_subdirs(tmp_path / "nope") == []
+    assert advisory_data.list_existing_advisory_files(tmp_path / "nope") == []
 
 
 def test_filter_content_by_existing_image(tmp_path: Path) -> None:
@@ -473,13 +475,13 @@ def test_template_data_for_apply() -> None:
     }
 
 
-def test_list_existing_advisory_subdirs_skips_files(tmp_path: Path) -> None:
+def test_list_existing_advisory_files_skips_files(tmp_path: Path) -> None:
     """Ignore plain files when listing advisory subdirectories."""
     base = tmp_path / "t"
     (base / "2024").mkdir(parents=True)
     (base / "2024" / "notadir.txt").write_text("x", encoding="utf-8")
     (base / "file.txt").write_text("y", encoding="utf-8")
-    assert advisory_data.list_existing_advisory_subdirs(base) == []
+    assert advisory_data.list_existing_advisory_files(base) == []
 
 
 def test_encode_advisory_param_round_trips_decode() -> None:
@@ -743,8 +745,7 @@ def test_build_purl_to_advisory_map_oldest_wins(tmp_path: Path) -> None:
     (root / "2025" / "1599").mkdir(parents=True)
     mapping = advisory_data.build_purl_to_advisory_map(
         repo,
-        root,
-        ["2025/1602", "2025/1601", "2025/1599"],
+        [newer / "advisory.yaml", older / "advisory.yaml", root / "missing.yaml"],
     )
     assert mapping["pkg:rpm/redhat/a@1-1?arch=x86_64"].endswith("2025/1601/advisory.yaml")
     assert mapping["pkg:rpm/redhat/b@1-1?arch=x86_64"].endswith("2025/1601/advisory.yaml")
@@ -773,8 +774,52 @@ def test_build_purl_to_advisory_map_logs_scan_stats(
     with caplog.at_level(logging.INFO, logger="release"):
         mapping = advisory_data.build_purl_to_advisory_map(
             repo,
-            root,
-            ["2025/1602", "2025/1601", "2025/1599"],
+            [newer / "advisory.yaml", older / "advisory.yaml", root / "missing.yaml"],
         )
     assert len(mapping) == 2
     assert "Scanned 2 advisories and found 2 unique purls in" in caplog.text
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_advisory_base_path_missing_tenant(tmp_path: Path, legacy: bool) -> None:
+    """Select the repository layout when the requested tenant is new."""
+    data = tmp_path / "data"
+    (data / ("advisories/other" if legacy else "other")).mkdir(parents=True)
+    expected = data / ("advisories/new" if legacy else "new")
+    assert advisory_data.advisory_base_path(tmp_path, "new") == expected
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("data/advisories/t/2025/0042/advisory.yaml", True),
+        ("data/t/2025/0042.yaml", True),
+        ("data/t/2025/10000.yaml", True),
+        ("schema/advisory.yaml", False),
+        ("data/t/2025/advisory.yaml", False),
+        ("data/t/2025/0042.json", False),
+        ("data/t/2025/nested/0042.yaml", False),
+        ("other/data/t/2025/0042.yaml", False),
+    ],
+)
+def test_is_advisory_path(path: str, expected: bool) -> None:
+    """Accept both layouts and ignore unrelated repository files."""
+    assert advisory_data.is_advisory_path(path) is expected
+
+
+@pytest.mark.parametrize("flat", [False, True])
+def test_list_existing_advisory_files_order_and_noise(tmp_path: Path, flat: bool) -> None:
+    """Order advisory files by the appropriate mtime and skip unrelated files."""
+    base = tmp_path / "tenant"
+    old = base / ("2025/0001.yaml" if flat else "2025/0001/advisory.yaml")
+    new = base / ("2025/0002.yaml" if flat else "2025/0002/advisory.yaml")
+    for path in (old, new):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    (base / "2025" / "notes.txt").touch()
+    (base / "2025" / "notes.yaml").touch()
+    (base / "2025" / "advisory.yaml").touch()
+    (base / "unrelated.yaml").touch()
+    os.utime(old if flat else old.parent, (100, 100))
+    os.utime(new if flat else new.parent, (200, 200))
+    assert advisory_data.list_existing_advisory_files(base) == [new, old]
