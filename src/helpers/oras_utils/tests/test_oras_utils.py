@@ -175,6 +175,9 @@ def test_oras_pull_runs_select_oci_auth_and_oras(
     # The actual pull streams its progress live instead of being buffered until exit.
     assert kwargs_list[1]["stream_stdout"] is True
 
+    oras_utils.oras_pull("quay.io/org/image@sha256:abc", tmp_path, stream_stdout=False)
+    assert kwargs_list[-1]["stream_stdout"] is False
+
 
 def test_oras_pull_select_oci_auth_failure_is_logged_to_stderr_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

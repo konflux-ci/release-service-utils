@@ -138,3 +138,20 @@ optional params to use pipeline defaults.
    ```
 
    The child catalog e2e step uses the git resolver in **`lib/run_single_catalog_e2e_suite.py`** (upstream catalog `development` today); overriding that for a fork requires changing that script.
+
+### Published versus unpublished RPM conflicts
+
+`pulp_unpublished_rebuild.py` is a focused live Pulp test. It is separate from
+`run-test.sh` because the catalog suite's repositories auto-publish every update.
+Run it with a Pulp CLI config whose credentials can create repositories in a test
+domain, and with `rpmbuild` and `pulp` installed:
+
+```bash
+python3 integration-tests/pulp_unpublished_rebuild.py \
+  --config /path/to/cli.toml --domain my-test-domain
+```
+
+The script builds two RPMs with the same NEVRA and different digests. It checks
+that an unpublished conflict is replaced and a published conflict is rejected,
+then deletes its uniquely named repositories and distributions. It leaves
+shared catalog E2E repositories untouched.
