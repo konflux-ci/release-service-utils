@@ -1,6 +1,6 @@
 FROM quay.io/konflux-ci/oras:latest@sha256:6cea0b9e142c2e18429f5cd30d716715d932047cbf1631334c5c31f7e47c3a19 as oras
 
-FROM --platform=linux/amd64 registry.redhat.io/rhtas/ec-rhel9:0.7@sha256:301b4698e01e532aa0e2ad36568d5849cf777b0d6108b185b3e7879db8179122 as conforma-cli
+FROM --platform=linux/amd64 registry.redhat.io/rhtas/ec-rhel9:0.9-1795347151@sha256:7a6d45c6b21357fa858e26732de5f2959ce6bb87f8c5560d16ada05fe17ff92e as conforma-cli
 
 FROM --platform=linux/amd64 registry.redhat.io/rhtas/cosign-rhel9:1.3.3-1773309431 as cosign
 
